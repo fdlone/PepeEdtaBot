@@ -35,6 +35,7 @@ class RuntimeState:
     backoff_min_order: int
     last_reply_ts: dict[int, float] = field(default_factory=dict)
     pending_seed: dict[int, list[str]] = field(default_factory=dict)
+    learned_messages: dict[int, int] = field(default_factory=dict)
 
 
 def is_group_message(message: Message) -> bool:
@@ -127,6 +128,7 @@ async def run_bot() -> None:
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
     logger = logging.getLogger("chat_markov")
+    logging.getLogger("aiogram").setLevel(logging.WARNING)
 
     db = Database(settings.db_path)
     await db.init()
@@ -426,13 +428,6 @@ async def run_bot() -> None:
             return
         if message.from_user.is_bot:
             return
-        logger.info(
-            "Message received chat=%s user=%s text_len=%s",
-            message.chat.id,
-            message.from_user.id,
-            len(message.text or ""),
-        )
-
         raw_text = message.text or ""
         if raw_text.startswith("/"):
             return
@@ -449,6 +444,15 @@ async def run_bot() -> None:
             raw_text=raw_text,
             tokens=tokens,
         )
+        learned = state.learned_messages.get(message.chat.id, 0) + 1
+        state.learned_messages[message.chat.id] = learned
+        if learned == 1 or learned % 25 == 0:
+            logger.info(
+                "Прогресс обучения: chat_id=%s, сообщений=%s, объём_модели=%s",
+                message.chat.id,
+                learned,
+                token_volume,
+            )
         generator.invalidate_chat_cache(message.chat.id)
 
         now = time.time()
@@ -522,12 +526,15 @@ async def run_bot() -> None:
         state.last_reply_ts[message.chat.id] = now
         await reply_humanized(message, reply_text, state.typing_min_ms, state.typing_max_ms)
 
-    logger.info("Bot %s started in polling mode", me.username)
+    logger.info("Бот %s запущен (polling).", me.username)
+    logger.info("Статус: работает.")
     try:
         await dp.start_polling(bot)
     finally:
+        logger.info("Статус: остановка...")
         await db.close()
         await bot.session.close()
+        logger.info("Статус: остановлен.")
 
 
 if __name__ == "__main__":
