@@ -10,7 +10,7 @@ Telegram-бот для группового чата с генерацией р�
 Это снижает копипаст и улучшает связность ответов по сравнению с чистыми биграммами.
 
 ## Стек
-- Python 3.11+
+- Python 3.14.0 (CPython)
 - aiogram v3 (async, long polling)
 - SQLite + aiosqlite
 - Конфиг через `.env`
@@ -27,6 +27,17 @@ pip install -r requirements.txt
 3. Запустите:
 ```bash
 python main.py
+```
+
+## Docker
+### Сборка образа
+```bash
+docker build -t pepe-edta-bot .
+```
+
+### Запуск контейнера
+```bash
+docker run -d --name pepe-edta-bot --env-file .env -v ${PWD}/markov.db:/app/markov.db pepe-edta-bot
 ```
 
 ## Конфигурация (`.env`)

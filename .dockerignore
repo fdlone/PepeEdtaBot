@@ -1,0 +1,16 @@
+.git
+.idea
+.venv
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.env
+markov.db
+markov.db-shm
+markov.db-wal
+*.pyc
+*.pyo
+*.pyd
+tests
+docs
