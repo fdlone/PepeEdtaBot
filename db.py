@@ -8,7 +8,7 @@ import aiosqlite
 
 
 class Database:
-    """SQLite gateway for message storage and variable-order Markov statistics."""
+    """Слой доступа к SQLite для хранения сообщений и статистики variable-order Markov."""
 
     def __init__(self, path: str) -> None:
         self.path = path
@@ -42,7 +42,7 @@ class Database:
             """
         )
 
-        # Legacy/fallback n=2 tables.
+        # Таблицы n=2 (legacy + fallback слой).
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS starts (
@@ -67,7 +67,7 @@ class Database:
             """
         )
 
-        # New n=3 tables.
+        # Новые таблицы n=3.
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS starts3 (
@@ -94,7 +94,7 @@ class Database:
             """
         )
 
-        # n=1 backoff table: (w1 -> w2)
+        # Таблица n=1 для backoff: (w1 -> w2)
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS transitions1 (
@@ -133,7 +133,7 @@ class Database:
     async def save_message_and_update_model(
         self, chat_id: int, author_id: int, raw_text: str, tokens: list[str]
     ) -> int:
-        """Store raw message and update n=3/n=2/n=1 transition counters atomically."""
+        """Атомарно сохраняет raw-сообщение и обновляет счётчики переходов n=3/n=2/n=1."""
         starts2_pair: Optional[tuple[str, str]] = None
         starts3_triplet: Optional[tuple[str, str, str]] = None
 

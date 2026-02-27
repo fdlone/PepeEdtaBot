@@ -101,7 +101,7 @@ async def reply_humanized(
         delay_ms = random.randint(typing_min_ms, typing_max_ms)
         await asyncio.sleep(delay_ms / 1000)
     except Exception:
-        # Chat action failure should never block sending the actual reply.
+        # Ошибка chat action не должна блокировать отправку обычного ответа.
         pass
     await message.reply(text)
 
@@ -472,7 +472,7 @@ async def run_bot() -> None:
 
         seed = state.pending_seed.pop(message.chat.id, None)
         reply_text = ""
-        # Retry generation a few times to avoid silent "AFK" behavior on sparse chains.
+        # Повторяем генерацию несколько раз, чтобы не уходить в "молчание" на разреженной модели.
         for _ in range(4):
             reply_text = await generator.generate_text(
                 chat_id=message.chat.id,

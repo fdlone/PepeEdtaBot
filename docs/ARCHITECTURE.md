@@ -1,20 +1,20 @@
-# Architecture Notes
+# Архитектура Проекта
 
-## Overview
-- `main.py`: bot runtime, handlers, trigger policy, runtime config commands.
-- `db.py`: SQLite schema, migrations, atomic writes, stats/queries.
-- `markov.py`: tokenization + variable-order generation (`3 -> 2 -> 1`).
-- `text_utils.py`: text sanitation pipeline.
-- `settings.py`: `.env` loading and validation.
+## Обзор
+- `main.py`: runtime бота, хендлеры, политика триггеров, runtime-команды конфигурации.
+- `db.py`: схема SQLite, миграция, атомарные записи, статистика/запросы.
+- `markov.py`: токенизация и генерация variable-order (`3 -> 2 -> 1`).
+- `text_utils.py`: пайплайн очистки текста.
+- `settings.py`: загрузка и валидация `.env`.
 
-## Data Model
-- `messages`: raw incoming messages for audit/debug.
-- `starts3` / `transitions3`: primary trigram model.
-- `starts` / `transitions`: bigram fallback model.
-- `transitions1`: unigram fallback model.
+## Модель Данных
+- `messages`: сырые входящие сообщения для аудита/отладки.
+- `starts3` / `transitions3`: основная триграммная модель.
+- `starts` / `transitions`: биграммный fallback-слой.
+- `transitions1`: униграммный fallback-слой.
 
-## Runtime Controls
-All runtime overrides are process-local and reset on restart:
+## Runtime-Управление
+Все изменения через runtime-команды действуют только в текущем процессе и сбрасываются после перезапуска:
 - `/set reply_probability ...`
 - `/set min_cooldown_sec ...`
 - `/set min_tokens_for_model ...`
@@ -27,7 +27,7 @@ All runtime overrides are process-local and reset on restart:
 - `/set enable_backoff ...`
 - `/set backoff_min_order ...`
 
-## Safety
-- SQL queries are parameterized.
-- `.env` is ignored by git.
-- message deduplication guard prevents exact copy replies.
+## Безопасность
+- SQL-запросы параметризованы.
+- `.env` игнорируется git.
+- Защита от дубликатов не даёт отправлять дословные копии сообщений.
