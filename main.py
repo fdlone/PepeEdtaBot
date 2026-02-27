@@ -53,6 +53,20 @@ async def is_chat_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
     return False
 
 
+async def can_manage_settings(
+    message: Message, bot: Bot, owner_id: Optional[int], logger: logging.Logger
+) -> bool:
+    if is_owner(message, owner_id):
+        return True
+    if message.from_user is None:
+        return False
+    try:
+        return await is_chat_admin(bot, message.chat.id, message.from_user.id)
+    except Exception as exc:
+        logger.warning("Cannot verify chat admins for settings command: %s", exc)
+        return False
+
+
 def extract_command_arg(text: str) -> str:
     parts = text.split(maxsplit=1)
     if len(parts) < 2:
@@ -160,11 +174,11 @@ async def run_bot() -> None:
             "/help - показать эту справку\n"
             "/ping - проверка, что бот онлайн и видит чат в реальном времени\n"
             "/config - показать текущие runtime-настройки\n"
-            "/set <key> <value> - изменить runtime-настройку (только OWNER_ID)\n"
+            "/set <key> <value> - изменить runtime-настройку (OWNER_ID или админ)\n"
             "/stats - статистика модели по текущему чату\n"
             "/clear - очистить данные чата (OWNER_ID или админ чата)\n"
-            "/setprob 0.2 - изменить вероятность ответов (только OWNER_ID)\n"
-            '/seed "текст" - одноразово задать старт генерации (только OWNER_ID)'
+            "/setprob 0.2 - изменить вероятность ответов (OWNER_ID или админ)\n"
+            '/seed "текст" - одноразово задать старт генерации (OWNER_ID или админ)'
         )
         await reply_humanized(message, text, state.typing_min_ms, state.typing_max_ms)
 
@@ -193,10 +207,10 @@ async def run_bot() -> None:
 
     @dp.message(Command("set"))
     async def cmd_set(message: Message) -> None:
-        if not is_owner(message, settings.owner_id):
+        if not await can_manage_settings(message, bot, settings.owner_id, logger):
             await reply_humanized(
                 message,
-                "Команда только для OWNER_ID.",
+                "Команда доступна OWNER_ID и администраторам чата.",
                 state.typing_min_ms,
                 state.typing_max_ms,
             )
@@ -334,9 +348,12 @@ async def run_bot() -> None:
 
     @dp.message(Command("setprob"))
     async def cmd_setprob(message: Message) -> None:
-        if not is_owner(message, settings.owner_id):
+        if not await can_manage_settings(message, bot, settings.owner_id, logger):
             await reply_humanized(
-                message, "Команда только для OWNER_ID.", state.typing_min_ms, state.typing_max_ms
+                message,
+                "Команда доступна OWNER_ID и администраторам чата.",
+                state.typing_min_ms,
+                state.typing_max_ms,
             )
             return
 
@@ -370,9 +387,12 @@ async def run_bot() -> None:
 
     @dp.message(Command("seed"))
     async def cmd_seed(message: Message) -> None:
-        if not is_owner(message, settings.owner_id):
+        if not await can_manage_settings(message, bot, settings.owner_id, logger):
             await reply_humanized(
-                message, "Команда только для OWNER_ID.", state.typing_min_ms, state.typing_max_ms
+                message,
+                "Команда доступна OWNER_ID и администраторам чата.",
+                state.typing_min_ms,
+                state.typing_max_ms,
             )
             return
         raw = extract_command_arg(message.text or "")
