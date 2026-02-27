@@ -23,6 +23,9 @@ class Settings:
     owner_id: Optional[int]
     normalize_lower: bool
     db_path: str
+    typing_min_ms: int
+    typing_max_ms: int
+    randomness_strength: float
 
 
 def load_settings() -> Settings:
@@ -43,6 +46,13 @@ def load_settings() -> Settings:
     owner_id = int(owner_raw) if owner_raw else None
     normalize_lower = _to_bool(os.getenv("NORMALIZE_LOWER", "false"), default=False)
     db_path = os.getenv("DB_PATH", "markov.db")
+    typing_min_ms = int(os.getenv("TYPING_MIN_MS", "350"))
+    typing_max_ms = int(os.getenv("TYPING_MAX_MS", "1100"))
+    if typing_min_ms < 0 or typing_max_ms < 0 or typing_min_ms > typing_max_ms:
+        raise ValueError("TYPING_MIN_MS/TYPING_MAX_MS are invalid")
+    randomness_strength = float(os.getenv("RANDOMNESS_STRENGTH", "2.0"))
+    if not 0.0 <= randomness_strength <= 3.0:
+        raise ValueError("RANDOMNESS_STRENGTH must be in range [0..3]")
 
     return Settings(
         bot_token=bot_token,
@@ -53,4 +63,7 @@ def load_settings() -> Settings:
         owner_id=owner_id,
         normalize_lower=normalize_lower,
         db_path=db_path,
+        typing_min_ms=typing_min_ms,
+        typing_max_ms=typing_max_ms,
+        randomness_strength=randomness_strength,
     )

@@ -25,3 +25,9 @@ Thumbs.db
 
 # Local agent instructions
 AGENTS.md
+
+# Local test temp data
+.test_tmp/
+test_*.sqlite
+test_*.sqlite-shm
+test_*.sqlite-wal
