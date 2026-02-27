@@ -26,6 +26,9 @@ class Settings:
     typing_min_ms: int
     typing_max_ms: int
     randomness_strength: float
+    markov_order: int
+    enable_backoff: bool
+    backoff_min_order: int
 
 
 def load_settings() -> Settings:
@@ -53,6 +56,15 @@ def load_settings() -> Settings:
     randomness_strength = float(os.getenv("RANDOMNESS_STRENGTH", "2.0"))
     if not 0.0 <= randomness_strength <= 3.0:
         raise ValueError("RANDOMNESS_STRENGTH must be in range [0..3]")
+    markov_order = int(os.getenv("MARKOV_ORDER", "3"))
+    if markov_order not in {2, 3}:
+        raise ValueError("MARKOV_ORDER must be 2 or 3")
+    enable_backoff = _to_bool(os.getenv("ENABLE_BACKOFF", "true"), default=True)
+    backoff_min_order = int(os.getenv("BACKOFF_MIN_ORDER", "1"))
+    if backoff_min_order not in {1, 2}:
+        raise ValueError("BACKOFF_MIN_ORDER must be 1 or 2")
+    if backoff_min_order >= markov_order:
+        raise ValueError("BACKOFF_MIN_ORDER must be lower than MARKOV_ORDER")
 
     return Settings(
         bot_token=bot_token,
@@ -66,4 +78,7 @@ def load_settings() -> Settings:
         typing_min_ms=typing_min_ms,
         typing_max_ms=typing_max_ms,
         randomness_strength=randomness_strength,
+        markov_order=markov_order,
+        enable_backoff=enable_backoff,
+        backoff_min_order=backoff_min_order,
     )

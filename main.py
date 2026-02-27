@@ -30,6 +30,9 @@ class RuntimeState:
     typing_min_ms: int
     typing_max_ms: int
     randomness_strength: float
+    markov_order: int
+    enable_backoff: bool
+    backoff_min_order: int
     last_reply_ts: dict[int, float] = field(default_factory=dict)
     pending_seed: dict[int, list[str]] = field(default_factory=dict)
 
@@ -123,6 +126,9 @@ async def run_bot() -> None:
         typing_min_ms=settings.typing_min_ms,
         typing_max_ms=settings.typing_max_ms,
         randomness_strength=settings.randomness_strength,
+        markov_order=settings.markov_order,
+        enable_backoff=settings.enable_backoff,
+        backoff_min_order=settings.backoff_min_order,
     )
 
     bot = Bot(token=settings.bot_token)
@@ -140,9 +146,10 @@ async def run_bot() -> None:
         text = (
             "Статистика модели:\n"
             f"messages: {stats['messages']}\n"
-            f"start pairs: {stats['starts']}\n"
-            f"transition edges: {stats['transitions']}\n"
-            f"volume(sum cnt): {stats['volume']}"
+            f"starts2: {stats['starts2']} | starts3: {stats['starts3']}\n"
+            f"edges2: {stats['transitions2']} | edges3: {stats['transitions3']} | edges1: {stats['transitions1']}\n"
+            f"volume2: {stats['volume2']} | volume3: {stats['volume3']} | volume1: {stats['volume1']}\n"
+            f"effective_volume: {stats['volume']}"
         )
         await reply_humanized(message, text, state.typing_min_ms, state.typing_max_ms)
 
@@ -177,6 +184,9 @@ async def run_bot() -> None:
             f"typing_min_ms={state.typing_min_ms}\n"
             f"typing_max_ms={state.typing_max_ms}\n"
             f"randomness_strength={state.randomness_strength}\n"
+            f"markov_order={state.markov_order}\n"
+            f"enable_backoff={state.enable_backoff}\n"
+            f"backoff_min_order={state.backoff_min_order}\n"
             "Изменения через /set действуют до перезапуска."
         )
         await reply_humanized(message, text, state.typing_min_ms, state.typing_max_ms)
@@ -252,6 +262,23 @@ async def run_bot() -> None:
                 if not 0.0 <= v <= 3.0:
                     raise ValueError
                 state.randomness_strength = v
+            elif key == "markov_order":
+                v = int(value)
+                if v not in {2, 3}:
+                    raise ValueError
+                if state.backoff_min_order >= v:
+                    raise ValueError
+                state.markov_order = v
+            elif key == "enable_backoff":
+                v_bool = parse_bool(value)
+                if v_bool is None:
+                    raise ValueError
+                state.enable_backoff = v_bool
+            elif key == "backoff_min_order":
+                v = int(value)
+                if v not in {1, 2} or v >= state.markov_order:
+                    raise ValueError
+                state.backoff_min_order = v
             else:
                 await reply_humanized(
                     message,
@@ -259,7 +286,8 @@ async def run_bot() -> None:
                         "Неизвестный ключ.\n"
                         "Доступно: reply_probability, min_cooldown_sec, "
                         "min_tokens_for_model, max_reply_chars, normalize_lower, "
-                        "typing_min_ms, typing_max_ms, randomness_strength"
+                        "typing_min_ms, typing_max_ms, randomness_strength, "
+                        "markov_order, enable_backoff, backoff_min_order"
                     ),
                     state.typing_min_ms,
                     state.typing_max_ms,
@@ -362,7 +390,7 @@ async def run_bot() -> None:
             )
             return
 
-        state.pending_seed[message.chat.id] = tokens[:2]
+        state.pending_seed[message.chat.id] = tokens[:3]
         await reply_humanized(
             message,
             "Seed сохранен для следующей генерации (одноразово).",
@@ -451,6 +479,9 @@ async def run_bot() -> None:
                 max_chars=state.max_reply_chars,
                 seed_tokens=seed,
                 randomness_strength=state.randomness_strength,
+                markov_order=state.markov_order,
+                enable_backoff=state.enable_backoff,
+                backoff_min_order=state.backoff_min_order,
             )
             if reply_text:
                 break
