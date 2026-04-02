@@ -51,6 +51,13 @@ docker run -d --name pepe-edta-bot --env-file .env -v ${PWD}/markov.db:/app/mark
 - `MARKOV_ORDER` (`2`/`3`) — основной порядок модели.
 - `ENABLE_BACKOFF` (`true`/`false`) — включить откат на низшие порядки.
 - `BACKOFF_MIN_ORDER` (`1`/`2`) — минимальный порядок такого отката.
+- `USE_REPLY_CONTEXT` — включить контекст reply-сообщения при генерации.
+- `REPLY_CONTEXT_MAX_TOKENS` — максимум токенов, которые бот берёт из reply-контекста.
+- `REPLY_CONTEXT_LAST_TOKENS` (`2`/`3`) — сколько последних токенов контекста использовать как приоритетный seed.
+- `REPLY_CONTEXT_BIAS` — сила смещения на токены из контекста во время генерации.
+- `REPLY_CONTEXT_START_BIAS` — сила смещения на стартовые цепочки, найденные в контексте.
+- `REPLY_CONTEXT_ONLY_FOR_REPLIES` — применять контекст только для Telegram reply.
+- `REPLY_CONTEXT_INCLUDE_CURRENT_MESSAGE` — добавлять токены текущего сообщения к reply-контексту.
 
 ## Логика обучения
 Для каждого `chat_id` бот:
@@ -75,6 +82,7 @@ docker run -d --name pepe-edta-bot --env-file .env -v ${PWD}/markov.db:/app/mark
    - если нет и разрешено — `transitions1` (n=1).
 3. Применяются:
    - взвешенный random с управлением `RANDOMNESS_STRENGTH`,
+   - контекстное смещение по `reply_to_message`, если включен `USE_REPLY_CONTEXT`,
    - анти-циклы,
    - анти-копипаст (отбрасывание ответа, если он дословно совпал с историческим сообщением).
 
@@ -89,6 +97,10 @@ docker run -d --name pepe-edta-bot --env-file .env -v ${PWD}/markov.db:/app/mark
 - `/stats` — статистика модели по чату.
 - `/config` — текущие настройки процесса во время работы.
 - `/set <key> <value>` — изменение параметров во время работы (`OWNER_ID` или админ чата).
+- Через `/set` можно менять и reply-context настройки:
+  `use_reply_context`, `reply_context_max_tokens`, `reply_context_last_tokens`,
+  `reply_context_bias`, `reply_context_start_bias`,
+  `reply_context_only_for_replies`, `reply_context_include_current_message`.
 - `/setprob 0.2` — быстрый сеттер вероятности ответа (`OWNER_ID` или админ чата).
 - `/seed "текст"` — одноразовый seed для следующей генерации (`OWNER_ID` или админ чата).
 - `/clear` — очистка данных текущего чата (`OWNER_ID` или админ чата).

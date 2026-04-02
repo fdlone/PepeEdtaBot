@@ -4,6 +4,8 @@ import unittest
 import uuid
 from pathlib import Path
 
+import aiosqlite
+
 from db import Database
 
 
@@ -96,3 +98,43 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(await self.db.message_exists(4004, "hello world"))
         self.assertFalse(await self.db.message_exists(4004, "hello"))
+
+    async def test_reopen_existing_database_preserves_chat_data(self) -> None:
+        await self.db.save_message_and_update_model(
+            chat_id=5005,
+            author_id=21,
+            raw_text="кофе утром бодрит",
+            tokens=["кофе", "утром", "бодрит"],
+        )
+        before = await self.db.get_stats(5005)
+        await self.db.close()
+
+        reopened = Database(str(self.db_path))
+        await reopened.init()
+        try:
+            after = await reopened.get_stats(5005)
+            self.assertEqual(after, before)
+        finally:
+            await reopened.close()
+            self.db = reopened
+
+    async def test_schema_stays_compatible_without_new_tables(self) -> None:
+        await self.db.close()
+        async with aiosqlite.connect(str(self.db_path)) as conn:
+            cursor = await conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                ORDER BY name
+                """
+            )
+            tables = [row[0] for row in await cursor.fetchall()]
+
+        self.assertEqual(
+            tables,
+            ["messages", "starts", "starts3", "transitions", "transitions1", "transitions3"],
+        )
+
+        self.db = Database(str(self.db_path))
+        await self.db.init()

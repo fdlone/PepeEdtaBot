@@ -33,6 +33,13 @@ class RuntimeState:
     markov_order: int
     enable_backoff: bool
     backoff_min_order: int
+    use_reply_context: bool
+    reply_context_max_tokens: int
+    reply_context_last_tokens: int
+    reply_context_bias: float
+    reply_context_start_bias: float
+    reply_context_only_for_replies: bool
+    reply_context_include_current_message: bool
     last_reply_ts: dict[int, float] = field(default_factory=dict)
     pending_seed: dict[int, list[str]] = field(default_factory=dict)
     learned_messages: dict[int, int] = field(default_factory=dict)
@@ -108,6 +115,34 @@ def bot_is_mentioned(message: Message, bot_username: str, bot_id: int) -> bool:
     return False
 
 
+def extract_context_tokens(
+    message: Message,
+    current_text: str,
+    normalize_lower: bool,
+    max_tokens: int,
+    only_for_replies: bool,
+    include_current_message: bool,
+) -> list[str]:
+    if only_for_replies and message.reply_to_message is None:
+        return []
+
+    context_parts: list[str] = []
+    if message.reply_to_message and message.reply_to_message.text:
+        context_parts.append(message.reply_to_message.text)
+    if include_current_message and current_text:
+        context_parts.append(current_text)
+
+    if not context_parts:
+        return []
+
+    clean = sanitize_text(" ".join(context_parts))
+    if not clean:
+        return []
+
+    tokens = tokenize(clean, normalize_lower=normalize_lower)
+    return tokens[-max_tokens:] if len(tokens) > max_tokens else tokens
+
+
 async def reply_humanized(
     message: Message, text: str, typing_min_ms: int, typing_max_ms: int
 ) -> None:
@@ -145,6 +180,13 @@ async def run_bot() -> None:
         markov_order=settings.markov_order,
         enable_backoff=settings.enable_backoff,
         backoff_min_order=settings.backoff_min_order,
+        use_reply_context=settings.use_reply_context,
+        reply_context_max_tokens=settings.reply_context_max_tokens,
+        reply_context_last_tokens=settings.reply_context_last_tokens,
+        reply_context_bias=settings.reply_context_bias,
+        reply_context_start_bias=settings.reply_context_start_bias,
+        reply_context_only_for_replies=settings.reply_context_only_for_replies,
+        reply_context_include_current_message=settings.reply_context_include_current_message,
     )
 
     bot = Bot(token=settings.bot_token)
@@ -203,6 +245,13 @@ async def run_bot() -> None:
             f"markov_order={state.markov_order}\n"
             f"enable_backoff={state.enable_backoff}\n"
             f"backoff_min_order={state.backoff_min_order}\n"
+            f"use_reply_context={state.use_reply_context}\n"
+            f"reply_context_max_tokens={state.reply_context_max_tokens}\n"
+            f"reply_context_last_tokens={state.reply_context_last_tokens}\n"
+            f"reply_context_bias={state.reply_context_bias}\n"
+            f"reply_context_start_bias={state.reply_context_start_bias}\n"
+            f"reply_context_only_for_replies={state.reply_context_only_for_replies}\n"
+            f"reply_context_include_current_message={state.reply_context_include_current_message}\n"
             "Изменения через /set действуют до перезапуска."
         )
         await reply_humanized(message, text, state.typing_min_ms, state.typing_max_ms)
@@ -295,6 +344,41 @@ async def run_bot() -> None:
                 if v not in {1, 2} or v >= state.markov_order:
                     raise ValueError
                 state.backoff_min_order = v
+            elif key == "use_reply_context":
+                v_bool = parse_bool(value)
+                if v_bool is None:
+                    raise ValueError
+                state.use_reply_context = v_bool
+            elif key == "reply_context_max_tokens":
+                v = int(value)
+                if v < 2 or v < state.reply_context_last_tokens:
+                    raise ValueError
+                state.reply_context_max_tokens = v
+            elif key == "reply_context_last_tokens":
+                v = int(value)
+                if v not in {2, 3} or v > state.reply_context_max_tokens:
+                    raise ValueError
+                state.reply_context_last_tokens = v
+            elif key == "reply_context_bias":
+                v = float(value)
+                if not 1.0 <= v <= 4.0:
+                    raise ValueError
+                state.reply_context_bias = v
+            elif key == "reply_context_start_bias":
+                v = float(value)
+                if not 1.0 <= v <= 4.0:
+                    raise ValueError
+                state.reply_context_start_bias = v
+            elif key == "reply_context_only_for_replies":
+                v_bool = parse_bool(value)
+                if v_bool is None:
+                    raise ValueError
+                state.reply_context_only_for_replies = v_bool
+            elif key == "reply_context_include_current_message":
+                v_bool = parse_bool(value)
+                if v_bool is None:
+                    raise ValueError
+                state.reply_context_include_current_message = v_bool
             else:
                 await reply_humanized(
                     message,
@@ -303,7 +387,11 @@ async def run_bot() -> None:
                         "Доступно: reply_probability, min_cooldown_sec, "
                         "min_tokens_for_model, max_reply_chars, normalize_lower, "
                         "typing_min_ms, typing_max_ms, randomness_strength, "
-                        "markov_order, enable_backoff, backoff_min_order"
+                        "markov_order, enable_backoff, backoff_min_order, "
+                        "use_reply_context, reply_context_max_tokens, "
+                        "reply_context_last_tokens, reply_context_bias, "
+                        "reply_context_start_bias, reply_context_only_for_replies, "
+                        "reply_context_include_current_message"
                     ),
                     state.typing_min_ms,
                     state.typing_max_ms,
@@ -494,14 +582,36 @@ async def run_bot() -> None:
             )
             return
 
+        context_tokens: list[str] = []
+        if state.use_reply_context:
+            context_tokens = extract_context_tokens(
+                message=message,
+                current_text=raw_text,
+                normalize_lower=state.normalize_lower,
+                max_tokens=state.reply_context_max_tokens,
+                only_for_replies=state.reply_context_only_for_replies,
+                include_current_message=state.reply_context_include_current_message,
+            )
+
         seed = state.pending_seed.pop(message.chat.id, None)
+        if seed is None and context_tokens:
+            seed = context_tokens[-state.reply_context_last_tokens :]
+            logger.debug(
+                "Reply context prepared: chat=%s context_tokens=%s seed=%s",
+                message.chat.id,
+                len(context_tokens),
+                seed,
+            )
         reply_text = ""
         # Повторяем генерацию несколько раз, чтобы не уходить в "молчание" на разреженной модели.
-        for _ in range(4):
+        for attempt in range(4):
             reply_text = await generator.generate_text(
                 chat_id=message.chat.id,
                 max_chars=state.max_reply_chars,
                 seed_tokens=seed,
+                context_tokens=context_tokens if attempt < 2 else None,
+                context_bias=state.reply_context_bias,
+                context_start_bias=state.reply_context_start_bias,
                 randomness_strength=state.randomness_strength,
                 markov_order=state.markov_order,
                 enable_backoff=state.enable_backoff,
@@ -509,7 +619,10 @@ async def run_bot() -> None:
             )
             if reply_text:
                 break
-            seed = None
+            if attempt == 0 and context_tokens:
+                seed = context_tokens[-state.reply_context_last_tokens :]
+            else:
+                seed = None
 
         if not reply_text:
             if mentioned:

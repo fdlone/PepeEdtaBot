@@ -27,6 +27,19 @@
 - `/set markov_order ...`
 - `/set enable_backoff ...`
 - `/set backoff_min_order ...`
+- `/set use_reply_context ...`
+- `/set reply_context_max_tokens ...`
+- `/set reply_context_last_tokens ...`
+- `/set reply_context_bias ...`
+- `/set reply_context_start_bias ...`
+- `/set reply_context_only_for_replies ...`
+- `/set reply_context_include_current_message ...`
+
+## Контекст Reply
+- Reply-контекст не требует отдельной БД и не меняет схему SQLite.
+- Текст `reply_to_message` очищается и токенизируется тем же пайплайном, что и обычные сообщения.
+- Контекст влияет на выбор старта генерации и на веса переходов между токенами.
+- Если контекст не подходит к накопленной модели чата, генератор откатывается к базовой Markov-логике.
 
 ## Безопасность
 - SQL-запросы параметризованы.

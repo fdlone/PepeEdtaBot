@@ -29,6 +29,13 @@ class Settings:
     markov_order: int
     enable_backoff: bool
     backoff_min_order: int
+    use_reply_context: bool
+    reply_context_max_tokens: int
+    reply_context_last_tokens: int
+    reply_context_bias: float
+    reply_context_start_bias: float
+    reply_context_only_for_replies: bool
+    reply_context_include_current_message: bool
 
 
 def load_settings() -> Settings:
@@ -65,6 +72,27 @@ def load_settings() -> Settings:
         raise ValueError("BACKOFF_MIN_ORDER must be 1 or 2")
     if backoff_min_order >= markov_order:
         raise ValueError("BACKOFF_MIN_ORDER must be lower than MARKOV_ORDER")
+    use_reply_context = _to_bool(os.getenv("USE_REPLY_CONTEXT", "true"), default=True)
+    reply_context_max_tokens = int(os.getenv("REPLY_CONTEXT_MAX_TOKENS", "12"))
+    if reply_context_max_tokens < 2:
+        raise ValueError("REPLY_CONTEXT_MAX_TOKENS must be >= 2")
+    reply_context_last_tokens = int(os.getenv("REPLY_CONTEXT_LAST_TOKENS", "3"))
+    if reply_context_last_tokens not in {2, 3}:
+        raise ValueError("REPLY_CONTEXT_LAST_TOKENS must be 2 or 3")
+    if reply_context_last_tokens > reply_context_max_tokens:
+        raise ValueError("REPLY_CONTEXT_LAST_TOKENS must be <= REPLY_CONTEXT_MAX_TOKENS")
+    reply_context_bias = float(os.getenv("REPLY_CONTEXT_BIAS", "1.8"))
+    if not 1.0 <= reply_context_bias <= 4.0:
+        raise ValueError("REPLY_CONTEXT_BIAS must be in range [1.0..4.0]")
+    reply_context_start_bias = float(os.getenv("REPLY_CONTEXT_START_BIAS", "2.2"))
+    if not 1.0 <= reply_context_start_bias <= 4.0:
+        raise ValueError("REPLY_CONTEXT_START_BIAS must be in range [1.0..4.0]")
+    reply_context_only_for_replies = _to_bool(
+        os.getenv("REPLY_CONTEXT_ONLY_FOR_REPLIES", "true"), default=True
+    )
+    reply_context_include_current_message = _to_bool(
+        os.getenv("REPLY_CONTEXT_INCLUDE_CURRENT_MESSAGE", "true"), default=True
+    )
 
     return Settings(
         bot_token=bot_token,
@@ -81,4 +109,11 @@ def load_settings() -> Settings:
         markov_order=markov_order,
         enable_backoff=enable_backoff,
         backoff_min_order=backoff_min_order,
+        use_reply_context=use_reply_context,
+        reply_context_max_tokens=reply_context_max_tokens,
+        reply_context_last_tokens=reply_context_last_tokens,
+        reply_context_bias=reply_context_bias,
+        reply_context_start_bias=reply_context_start_bias,
+        reply_context_only_for_replies=reply_context_only_for_replies,
+        reply_context_include_current_message=reply_context_include_current_message,
     )
