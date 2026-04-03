@@ -30,6 +30,7 @@ class RuntimeState:
     typing_min_ms: int
     typing_max_ms: int
     randomness_strength: float
+    repetition_penalty_strength: float
     markov_order: int
     enable_backoff: bool
     backoff_min_order: int
@@ -177,6 +178,7 @@ async def run_bot() -> None:
         typing_min_ms=settings.typing_min_ms,
         typing_max_ms=settings.typing_max_ms,
         randomness_strength=settings.randomness_strength,
+        repetition_penalty_strength=settings.repetition_penalty_strength,
         markov_order=settings.markov_order,
         enable_backoff=settings.enable_backoff,
         backoff_min_order=settings.backoff_min_order,
@@ -242,6 +244,7 @@ async def run_bot() -> None:
             f"typing_min_ms={state.typing_min_ms}\n"
             f"typing_max_ms={state.typing_max_ms}\n"
             f"randomness_strength={state.randomness_strength}\n"
+            f"repetition_penalty_strength={state.repetition_penalty_strength}\n"
             f"markov_order={state.markov_order}\n"
             f"enable_backoff={state.enable_backoff}\n"
             f"backoff_min_order={state.backoff_min_order}\n"
@@ -327,6 +330,11 @@ async def run_bot() -> None:
                 if not 0.0 <= v <= 3.0:
                     raise ValueError
                 state.randomness_strength = v
+            elif key == "repetition_penalty_strength":
+                v = float(value)
+                if not 0.0 <= v <= 3.0:
+                    raise ValueError
+                state.repetition_penalty_strength = v
             elif key == "markov_order":
                 v = int(value)
                 if v not in {2, 3}:
@@ -387,6 +395,7 @@ async def run_bot() -> None:
                         "Доступно: reply_probability, min_cooldown_sec, "
                         "min_tokens_for_model, max_reply_chars, normalize_lower, "
                         "typing_min_ms, typing_max_ms, randomness_strength, "
+                        "repetition_penalty_strength, "
                         "markov_order, enable_backoff, backoff_min_order, "
                         "use_reply_context, reply_context_max_tokens, "
                         "reply_context_last_tokens, reply_context_bias, "
@@ -613,6 +622,7 @@ async def run_bot() -> None:
                 context_bias=state.reply_context_bias,
                 context_start_bias=state.reply_context_start_bias,
                 randomness_strength=state.randomness_strength,
+                repetition_penalty_strength=state.repetition_penalty_strength,
                 markov_order=state.markov_order,
                 enable_backoff=state.enable_backoff,
                 backoff_min_order=state.backoff_min_order,

@@ -61,12 +61,18 @@ def weighted_next_choice(
     current_state: Optional[tuple[str, ...]] = None,
     context_bias: float = 1.0,
     step_index: int = 0,
+    recent_tokens: Optional[list[str]] = None,
+    seen_pairs: Optional[set[tuple[str, str]]] = None,
+    seen_triplets: Optional[set[tuple[str, str, str]]] = None,
+    repetition_penalty_strength: float = 1.0,
 ) -> str:
     population = [token for token, _ in items]
     if random.random() < explore_probability:
         return random.choice(population)
 
     step_bias = 1.0 + (max(1.0, context_bias) - 1.0) * context_decay(step_index)
+    penalty_strength = max(0.0, repetition_penalty_strength)
+    recent_tokens = recent_tokens or []
     weights: list[float] = []
     for token, cnt in items:
         weight = max(cnt, 1) ** power
@@ -78,6 +84,26 @@ def weighted_next_choice(
         if current_state and context_triplets and len(current_state) >= 2:
             if (current_state[-2], current_state[-1], token) in context_triplets:
                 weight *= 1.0 + (step_bias - 1.0) * 1.25
+
+        # Penalize local loops and repeated n-grams so reply-context bias does not
+        # collapse into token spam.
+        if recent_tokens:
+            repeat_count = recent_tokens.count(token)
+            if repeat_count > 0:
+                weight /= 1.0 + repeat_count * 0.85 * penalty_strength
+            if token == recent_tokens[-1]:
+                weight *= max(0.01, 1.0 - 0.96 * penalty_strength)
+            elif len(recent_tokens) >= 2 and token == recent_tokens[-2]:
+                weight *= max(0.05, 1.0 - 0.70 * penalty_strength)
+
+        if current_state and seen_pairs and len(current_state) >= 1:
+            if (current_state[-1], token) in seen_pairs:
+                weight *= max(0.05, 1.0 - 0.65 * penalty_strength)
+        if current_state and seen_triplets and len(current_state) >= 2:
+            if (current_state[-2], current_state[-1], token) in seen_triplets:
+                weight *= max(0.01, 1.0 - 0.94 * penalty_strength)
+
+        weight = max(weight, 0.01)
         weights.append(weight)
     return random.choices(population=population, weights=weights, k=1)[0]
 
@@ -199,6 +225,7 @@ class MarkovGenerator:
         context_token_set: set[str],
         context_pairs: set[tuple[str, str]],
         context_triplets: set[tuple[str, str, str]],
+        repetition_penalty_strength: float,
     ) -> Optional[tuple[str, str, str]]:
         windows = build_windows(context_tokens, 2)
         if not windows:
@@ -238,6 +265,7 @@ class MarkovGenerator:
             current_state=(w1, w2),
             context_bias=context_start_bias,
             step_index=0,
+            repetition_penalty_strength=repetition_penalty_strength,
         )
         return (w1, w2, w3)
 
@@ -250,6 +278,7 @@ class MarkovGenerator:
         context_bias: float = 1.0,
         context_start_bias: float = 1.0,
         randomness_strength: float = 1.0,
+        repetition_penalty_strength: float = 1.0,
         markov_order: int = 3,
         enable_backoff: bool = True,
         backoff_min_order: int = 1,
@@ -295,6 +324,7 @@ class MarkovGenerator:
                         current_state=(w1, w2),
                         context_bias=context_bias,
                         step_index=0,
+                        repetition_penalty_strength=repetition_penalty_strength,
                     )
                     start3 = (w1, w2, w3)
 
@@ -315,6 +345,7 @@ class MarkovGenerator:
                     context_token_set=context_token_set,
                     context_pairs=context_pairs,
                     context_triplets=context_triplets,
+                    repetition_penalty_strength=repetition_penalty_strength,
                 )
 
         if start3 is None:
@@ -335,6 +366,7 @@ class MarkovGenerator:
                     current_state=(w1, w2),
                     context_bias=context_bias,
                     step_index=0,
+                    repetition_penalty_strength=repetition_penalty_strength,
                 )
                 start3 = (w1, w2, w3)
 
@@ -344,6 +376,8 @@ class MarkovGenerator:
         w1, w2, w3 = start3
         generated: list[str] = [w1, w2, w3]
         visited_triplets: set[tuple[str, str, str]] = {(w1, w2, w3)}
+        seen_pairs = set(build_windows(generated, 2))
+        seen_triplets = set(build_windows(generated, 3))
         jump_count = 0
 
         for step_index in range(self.max_steps):
@@ -375,6 +409,10 @@ class MarkovGenerator:
                     current_state=(w2, w3),
                     context_bias=context_bias,
                     step_index=step_index,
+                    recent_tokens=generated,
+                    seen_pairs=seen_pairs,
+                    seen_triplets=seen_triplets,
+                    repetition_penalty_strength=repetition_penalty_strength,
                 )
             else:
                 if not enable_backoff and order >= 3:
@@ -392,6 +430,10 @@ class MarkovGenerator:
                         current_state=(w2, w3),
                         context_bias=context_bias,
                         step_index=step_index,
+                        recent_tokens=generated,
+                        seen_pairs=seen_pairs,
+                        seen_triplets=seen_triplets,
+                        repetition_penalty_strength=repetition_penalty_strength,
                     )
                 else:
                     if not enable_backoff or backoff_min_order > 1:
@@ -408,6 +450,9 @@ class MarkovGenerator:
                         current_state=(w3,),
                         context_bias=context_bias,
                         step_index=step_index,
+                        recent_tokens=generated,
+                        seen_pairs=seen_pairs,
+                        repetition_penalty_strength=repetition_penalty_strength,
                     )
 
             generated.append(w4)
@@ -417,8 +462,16 @@ class MarkovGenerator:
 
             w1, w2, w3 = w2, w3, w4
             visited_triplets.add((w1, w2, w3))
+            if len(generated) >= 2:
+                seen_pairs.add((generated[-2], generated[-1]))
+            if len(generated) >= 3:
+                seen_triplets.add((generated[-3], generated[-2], generated[-1]))
             if len(visited_triplets) > 40:
                 visited_triplets.pop()
+            if len(seen_pairs) > 80:
+                seen_pairs.pop()
+            if len(seen_triplets) > 80:
+                seen_triplets.pop()
 
         result = detokenize(generated, max_chars=max_chars)
         if len(result) < 5:

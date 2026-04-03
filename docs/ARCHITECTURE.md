@@ -24,6 +24,7 @@
 - `/set typing_min_ms ...`
 - `/set typing_max_ms ...`
 - `/set randomness_strength ...`
+- `/set repetition_penalty_strength ...`
 - `/set markov_order ...`
 - `/set enable_backoff ...`
 - `/set backoff_min_order ...`

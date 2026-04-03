@@ -57,6 +57,27 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
 
         self.assertGreater(tea_count, coffee_count)
 
+    def test_repetition_penalty_avoids_immediate_loop(self) -> None:
+        random.seed(17)
+        same_count = 0
+        other_count = 0
+        for _ in range(400):
+            choice = weighted_next_choice(
+                items=[("эхо", 4), ("ответ", 4)],
+                explore_probability=0.0,
+                power=1.0,
+                current_state=("скажи", "эхо"),
+                recent_tokens=["скажи", "эхо", "эхо"],
+                seen_pairs={("эхо", "эхо")},
+                seen_triplets={("скажи", "эхо", "эхо")},
+            )
+            if choice == "эхо":
+                same_count += 1
+            else:
+                other_count += 1
+
+        self.assertGreater(other_count, same_count)
+
     def test_extract_context_tokens_uses_reply_and_current_message(self) -> None:
         message = SimpleNamespace(reply_to_message=SimpleNamespace(text="Люблю кофе!!! @bot"))
         tokens = extract_context_tokens(
@@ -208,3 +229,52 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(text)
         self.assertTrue(text.startswith("утром люблю"))
+
+    def test_context_bias_does_not_override_repetition_penalty(self) -> None:
+        random.seed(23)
+        repeated_count = 0
+        fresh_count = 0
+        for _ in range(400):
+            choice = weighted_next_choice(
+                items=[("кофе", 3), ("бодрит", 3)],
+                explore_probability=0.0,
+                power=1.0,
+                context_token_set={"кофе"},
+                context_pairs={("утром", "кофе")},
+                context_triplets={("люблю", "утром", "кофе")},
+                current_state=("люблю", "утром"),
+                context_bias=3.0,
+                step_index=0,
+                recent_tokens=["люблю", "утром", "кофе", "кофе"],
+                seen_pairs={("кофе", "кофе")},
+                seen_triplets={("утром", "кофе", "кофе")},
+            )
+            if choice == "кофе":
+                repeated_count += 1
+            else:
+                fresh_count += 1
+
+        self.assertGreater(fresh_count, repeated_count)
+
+    def test_repetition_penalty_strength_zero_disables_loop_penalty(self) -> None:
+        random.seed(29)
+        repeated_count = 0
+        fresh_count = 0
+        for _ in range(400):
+            choice = weighted_next_choice(
+                items=[("эхо", 4), ("ответ", 4)],
+                explore_probability=0.0,
+                power=1.0,
+                current_state=("скажи", "эхо"),
+                recent_tokens=["скажи", "эхо", "эхо"],
+                seen_pairs={("эхо", "эхо")},
+                seen_triplets={("скажи", "эхо", "эхо")},
+                repetition_penalty_strength=0.0,
+            )
+            if choice == "эхо":
+                repeated_count += 1
+            else:
+                fresh_count += 1
+
+        self.assertGreater(repeated_count, 0)
+        self.assertGreater(fresh_count, 0)

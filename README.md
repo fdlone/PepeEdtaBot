@@ -53,6 +53,7 @@ docker run -d --name pepe-edta-bot --env-file .env -v ${PWD}/data:/app/data pepe
 - `MIN_TOKENS_FOR_MODEL` — минимальный объём модели для генерации.
 - `MAX_REPLY_CHARS` — ограничение длины ответа.
 - `RANDOMNESS_STRENGTH` — сила вариативности генерации.
+- `REPETITION_PENALTY_STRENGTH` — насколько сильно подавлять повторы токенов и n-грамм в одном ответе.
 - `MARKOV_ORDER` — основной порядок модели: `2` или `3`.
 - `ENABLE_BACKOFF` — разрешить откат на более низкий порядок.
 - `BACKOFF_MIN_ORDER` — минимальный порядок такого отката.
@@ -104,6 +105,7 @@ docker run -d --name pepe-edta-bot --env-file .env -v ${PWD}/data:/app/data pepe
 - `reply_context_start_bias`
 - `reply_context_only_for_replies`
 - `reply_context_include_current_message`
+- `repetition_penalty_strength`
 
 ## Совместимость БД
 Текущая версия не требует новой схемы БД для reply-контекста.
