@@ -41,7 +41,7 @@ docker build -t pepe-edta-bot .
 Запуск:
 
 ```bash
-docker run -d --name pepe-edta-bot --env-file .env -v ${PWD}/markov.db:/app/markov.db pepe-edta-bot
+docker run -d --name pepe-edta-bot --env-file .env -v ${PWD}/data:/app/data pepe-edta-bot
 ```
 
 ## Основные настройки
@@ -110,12 +110,13 @@ docker run -d --name pepe-edta-bot --env-file .env -v ${PWD}/markov.db:/app/mark
 
 Важно:
 - существующие `markov.db` остаются совместимыми;
+- по умолчанию база хранится в `data/markov.db`;
 - новые настройки живут в `.env` и runtime state;
 - reply-context влияет только на логику генерации, а не на структуру SQLite.
 
 Если нужен полностью чистый старт:
 1. остановите бота;
-2. удалите `markov.db`, `markov.db-wal`, `markov.db-shm`;
+2. удалите `data/markov.db`, `data/markov.db-wal`, `data/markov.db-shm`;
 3. запустите бота снова.
 
 ## Важно для групп

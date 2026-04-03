@@ -55,7 +55,10 @@ def load_settings() -> Settings:
     owner_raw = os.getenv("OWNER_ID", "").strip()
     owner_id = int(owner_raw) if owner_raw else None
     normalize_lower = _to_bool(os.getenv("NORMALIZE_LOWER", "false"), default=False)
-    db_path = os.getenv("DB_PATH", "markov.db")
+    db_path = os.getenv("DB_PATH", os.path.join("data", "markov.db"))
+    db_dir = os.path.dirname(db_path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
     typing_min_ms = int(os.getenv("TYPING_MIN_MS", "350"))
     typing_max_ms = int(os.getenv("TYPING_MAX_MS", "1100"))
     if typing_min_ms < 0 or typing_max_ms < 0 or typing_min_ms > typing_max_ms:
