@@ -10,7 +10,10 @@ from db import Database
 from markov import (
     MarkovGenerator,
     detokenize,
+    has_degraded_recent_window,
     is_context_heavy_reply,
+    is_low_diversity_reply,
+    trim_repetitive_tail,
     tokenize,
     weighted_next_choice,
 )
@@ -61,6 +64,50 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             is_context_heavy_reply(
                 generated_tokens=["Люблю", "кофе", "но", "сегодня", "чай", "лучше"],
                 context_tokens=["Люблю", "кофе", "утром"],
+            )
+        )
+
+    def test_has_degraded_recent_window_detects_repetitive_recent_loop(self) -> None:
+        self.assertTrue(
+            has_degraded_recent_window(
+                ["нормальный", "ответ", "но", "потом", "курлык", "курлык", "курлык", "курлык"]
+            )
+        )
+
+    def test_has_degraded_recent_window_allows_short_moderate_repetition(self) -> None:
+        self.assertFalse(
+            has_degraded_recent_window(
+                ["малафить", "курлык", "братишка", "вечно", "курлык", "курлык"]
+            )
+        )
+
+    def test_trim_repetitive_tail_keeps_good_prefix(self) -> None:
+        trimmed = trim_repetitive_tail(
+            [
+                "малафить",
+                "курлык",
+                "братишка",
+                "вечно",
+                "курлык",
+                "курлык",
+                "курлык",
+                "курлык",
+                "курлык",
+            ]
+        )
+        self.assertEqual(trimmed, ["малафить", "курлык", "братишка", "вечно"])
+
+    def test_is_low_diversity_reply_detects_near_monotone_reply(self) -> None:
+        self.assertTrue(
+            is_low_diversity_reply(
+                ["курлык", "курлык", "курлык", "я", "курлык", "курлык", "курлык", "курлык"]
+            )
+        )
+
+    def test_is_low_diversity_reply_allows_mixed_reply(self) -> None:
+        self.assertFalse(
+            is_low_diversity_reply(
+                ["малафить", "курлык", "братишка", "вечно", "ты", "че", "ку", "ку"]
             )
         )
 

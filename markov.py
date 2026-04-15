@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 import re
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -47,6 +47,10 @@ def content_tokens(tokens: list[str]) -> list[str]:
     return [token for token in tokens if token not in PUNCT_SET]
 
 
+def content_token_indexes(tokens: list[str]) -> list[int]:
+    return [index for index, token in enumerate(tokens) if token not in PUNCT_SET]
+
+
 def longest_shared_run(tokens_a: list[str], tokens_b: list[str]) -> int:
     best = 0
     for idx_a in range(len(tokens_a)):
@@ -61,6 +65,89 @@ def longest_shared_run(tokens_a: list[str], tokens_b: list[str]) -> int:
             if run > best:
                 best = run
     return best
+
+
+def max_consecutive_run(tokens: list[str]) -> int:
+    if not tokens:
+        return 0
+
+    best = 1
+    current = 1
+    for index in range(1, len(tokens)):
+        if tokens[index] == tokens[index - 1]:
+            current += 1
+            if current > best:
+                best = current
+        else:
+            current = 1
+    return best
+
+
+def has_degraded_recent_window(
+    tokens: list[str],
+    window_size: int = 8,
+    min_window_tokens: int = 6,
+    dominance_threshold: float = 0.75,
+) -> bool:
+    recent_content = content_tokens(tokens)[-window_size:]
+    if len(recent_content) < min_window_tokens:
+        return False
+
+    if max_consecutive_run(recent_content) >= 4:
+        return True
+
+    counts = Counter(recent_content)
+    return len(counts) <= 2 and (max(counts.values()) / len(recent_content)) >= dominance_threshold
+
+
+def find_repetitive_tail_start(
+    tokens: list[str],
+    min_tail_tokens: int = 5,
+    min_prefix_tokens: int = 4,
+    tail_scan_limit: int = 12,
+    dominance_threshold: float = 0.7,
+) -> Optional[int]:
+    content_indexes = content_token_indexes(tokens)
+    if len(content_indexes) < min_prefix_tokens + min_tail_tokens:
+        return None
+
+    content = [tokens[index] for index in content_indexes]
+    first_candidate = max(min_prefix_tokens, len(content) - tail_scan_limit)
+    last_candidate = len(content) - min_tail_tokens
+    for start_content_idx in range(first_candidate, last_candidate + 1):
+        tail = content[start_content_idx:]
+        counts = Counter(tail)
+        if max_consecutive_run(tail) >= 4:
+            return content_indexes[start_content_idx]
+        if len(counts) <= 2 and (max(counts.values()) / len(tail)) >= dominance_threshold:
+            return content_indexes[start_content_idx]
+    return None
+
+
+def trim_repetitive_tail(tokens: list[str]) -> list[str]:
+    trim_start = find_repetitive_tail_start(tokens)
+    if trim_start is None:
+        return tokens
+
+    trimmed = tokens[:trim_start]
+    while trimmed and trimmed[-1] in PUNCT_SET:
+        trimmed.pop()
+    return trimmed if len(content_tokens(trimmed)) >= 4 else tokens
+
+
+def is_low_diversity_reply(
+    tokens: list[str],
+    min_total_tokens: int = 8,
+    dominance_threshold: float = 0.8,
+) -> bool:
+    content = content_tokens(tokens)
+    if len(content) < min_total_tokens:
+        return False
+
+    counts = Counter(content)
+    if max_consecutive_run(content) >= 5:
+        return True
+    return len(counts) <= 2 and (max(counts.values()) / len(content)) >= dominance_threshold
 
 
 def is_context_heavy_reply(generated_tokens: list[str], context_tokens: list[str]) -> bool:
@@ -501,6 +588,8 @@ class MarkovGenerator:
                     )
 
             generated.append(w4)
+            if has_degraded_recent_window(generated):
+                break
             maybe_text = detokenize(generated, max_chars=max_chars)
             if len(maybe_text) >= max_chars:
                 break
@@ -518,8 +607,11 @@ class MarkovGenerator:
             if len(seen_triplets) > 80:
                 seen_triplets.pop()
 
+        generated = trim_repetitive_tail(generated)
         result = detokenize(generated, max_chars=max_chars)
         if len(result) < 5:
+            return ""
+        if is_low_diversity_reply(generated):
             return ""
         if is_context_heavy_reply(generated, context_tokens):
             return ""
