@@ -32,17 +32,26 @@ python main.py
 ```
 
 ## Docker
-Сборка:
+Разовый запуск через `docker run`:
 
 ```bash
 docker build -t pepe-edta-bot .
-```
-
-Запуск:
-
-```bash
 docker run -d --name pepe-edta-bot --env-file .env -v ${PWD}/data:/app/data pepe-edta-bot
 ```
+
+Удобная пересборка и перезапуск через Docker Compose:
+
+```bash
+docker compose up -d --build
+```
+
+Остановка:
+
+```bash
+docker compose down
+```
+
+Файл конфигурации: [compose.yaml](/D:/test/PepeEdtaBot/compose.yaml)
 
 ## Основные настройки
 Все параметры документированы в [.env.example](/D:/test/PepeEdtaBot/.env.example).

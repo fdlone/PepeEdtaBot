@@ -7,7 +7,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from db import Database
-from markov import MarkovGenerator, detokenize, tokenize, weighted_next_choice
+from markov import (
+    MarkovGenerator,
+    detokenize,
+    is_context_heavy_reply,
+    tokenize,
+    weighted_next_choice,
+)
 from main import extract_context_tokens
 from text_utils import sanitize_text
 
@@ -33,6 +39,30 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
     def test_detokenize(self) -> None:
         text = detokenize(["Привет", ",", "мир", "!", "Как", "дела", "?"], max_chars=100)
         self.assertEqual(text, "Привет, мир! Как дела?")
+
+    def test_context_heavy_reply_detects_loop_on_parent_tokens(self) -> None:
+        self.assertTrue(
+            is_context_heavy_reply(
+                generated_tokens=["кофе", "утром", "кофе", "утром", "кофе"],
+                context_tokens=["Люблю", "кофе", "утром"],
+            )
+        )
+
+    def test_context_heavy_reply_detects_near_copy_of_parent_context(self) -> None:
+        self.assertTrue(
+            is_context_heavy_reply(
+                generated_tokens=["Люблю", "кофе", "утром", "всегда", "дома"],
+                context_tokens=["сегодня", "Люблю", "кофе", "утром", "всегда"],
+            )
+        )
+
+    def test_context_heavy_reply_allows_contextual_but_new_reply(self) -> None:
+        self.assertFalse(
+            is_context_heavy_reply(
+                generated_tokens=["Люблю", "кофе", "но", "сегодня", "чай", "лучше"],
+                context_tokens=["Люблю", "кофе", "утром"],
+            )
+        )
 
     def test_context_bias_prefers_context_tokens(self) -> None:
         random.seed(7)

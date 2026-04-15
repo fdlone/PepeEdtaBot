@@ -43,6 +43,51 @@ def build_windows(tokens: list[str], size: int) -> list[tuple[str, ...]]:
     return [tuple(tokens[idx : idx + size]) for idx in range(len(tokens) - size + 1)]
 
 
+def content_tokens(tokens: list[str]) -> list[str]:
+    return [token for token in tokens if token not in PUNCT_SET]
+
+
+def longest_shared_run(tokens_a: list[str], tokens_b: list[str]) -> int:
+    best = 0
+    for idx_a in range(len(tokens_a)):
+        for idx_b in range(len(tokens_b)):
+            run = 0
+            while (
+                idx_a + run < len(tokens_a)
+                and idx_b + run < len(tokens_b)
+                and tokens_a[idx_a + run] == tokens_b[idx_b + run]
+            ):
+                run += 1
+            if run > best:
+                best = run
+    return best
+
+
+def is_context_heavy_reply(generated_tokens: list[str], context_tokens: list[str]) -> bool:
+    if len(generated_tokens) < 4 or not context_tokens:
+        return False
+
+    generated_content = content_tokens(generated_tokens)
+    context_content = content_tokens(context_tokens)
+    if len(generated_content) < 4 or len(context_content) < 3:
+        return False
+
+    context_token_set = set(context_content)
+    overlap_count = sum(1 for token in generated_content if token in context_token_set)
+    overlap_ratio = overlap_count / len(generated_content)
+    shared_run = longest_shared_run(generated_content, context_content)
+    uses_only_context_tokens = all(token in context_token_set for token in generated_content)
+    has_local_loops = len(set(generated_content)) <= max(2, len(generated_content) // 2)
+
+    if uses_only_context_tokens and has_local_loops:
+        return True
+    if overlap_ratio >= 0.85 and shared_run >= 4:
+        return True
+    if shared_run >= max(4, len(generated_content) - 1):
+        return True
+    return False
+
+
 def context_decay(step_index: int) -> float:
     if step_index <= 4:
         return 1.0
@@ -475,6 +520,8 @@ class MarkovGenerator:
 
         result = detokenize(generated, max_chars=max_chars)
         if len(result) < 5:
+            return ""
+        if is_context_heavy_reply(generated, context_tokens):
             return ""
         if await self.db.message_exists(chat_id, result):
             return ""
