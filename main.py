@@ -92,6 +92,16 @@ def parse_bool(value: str) -> Optional[bool]:
     return None
 
 
+BOT_TEXT_ALIASES = {"pepe", "пепе"}
+
+
+def text_contains_bot_alias(text: str, bot_aliases: set[str]) -> bool:
+    for chunk in tokenize(text, normalize_lower=True):
+        if chunk in bot_aliases:
+            return True
+    return False
+
+
 def bot_is_mentioned(message: Message, bot_username: str, bot_id: int) -> bool:
     if not message.text:
         return (
@@ -102,6 +112,8 @@ def bot_is_mentioned(message: Message, bot_username: str, bot_id: int) -> bool:
 
     username_mention = f"@{bot_username}".lower()
     if username_mention in message.text.lower():
+        return True
+    if text_contains_bot_alias(message.text, BOT_TEXT_ALIASES):
         return True
 
     if message.entities:

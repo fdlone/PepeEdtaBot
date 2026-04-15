@@ -14,7 +14,7 @@ from markov import (
     tokenize,
     weighted_next_choice,
 )
-from main import extract_context_tokens
+from main import bot_is_mentioned, extract_context_tokens
 from text_utils import sanitize_text
 
 
@@ -131,6 +131,27 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             include_current_message=True,
         )
         self.assertEqual(tokens, [])
+
+    def test_bot_is_mentioned_by_plain_text_pepe(self) -> None:
+        message = SimpleNamespace(text="Pepe, ответь что-нибудь", entities=None, reply_to_message=None)
+        self.assertTrue(bot_is_mentioned(message, "PepeEdtaBot", 777))
+
+    def test_bot_is_mentioned_by_plain_text_pepe_case_insensitive(self) -> None:
+        message = SimpleNamespace(text="ПеПе, ответь что-нибудь", entities=None, reply_to_message=None)
+        self.assertTrue(bot_is_mentioned(message, "PepeEdtaBot", 777))
+
+    def test_bot_is_mentioned_by_plain_text_pepe_cyrillic(self) -> None:
+        message = SimpleNamespace(text="пЕпЕ ты тут?", entities=None, reply_to_message=None)
+        self.assertTrue(bot_is_mentioned(message, "PepeEdtaBot", 777))
+
+    def test_bot_is_not_mentioned_by_substring_only(self) -> None:
+        message = SimpleNamespace(text="pepega сегодня победил", entities=None, reply_to_message=None)
+        self.assertFalse(bot_is_mentioned(message, "PepeEdtaBot", 777))
+
+    def test_bot_is_mentioned_by_reply_to_bot_message(self) -> None:
+        reply_to_message = SimpleNamespace(from_user=SimpleNamespace(id=777))
+        message = SimpleNamespace(text="слушай", entities=None, reply_to_message=reply_to_message)
+        self.assertTrue(bot_is_mentioned(message, "PepeEdtaBot", 777))
 
     async def test_generate_text_with_seed(self) -> None:
         await self.db.save_message_and_update_model(
