@@ -99,6 +99,47 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.db.message_exists(4004, "hello world"))
         self.assertFalse(await self.db.message_exists(4004, "hello"))
 
+    async def test_message_exists_uses_normalized_text(self) -> None:
+        await self.db.save_message_and_update_model(
+            chat_id=4104,
+            author_id=12,
+            raw_text="Привеееет   @PepeBot https://example.com",
+            tokens=["Привеет"],
+        )
+
+        self.assertTrue(await self.db.message_exists(4104, "Привеет"))
+        self.assertTrue(await self.db.message_exists(4104, "Привеееет @AnotherBot"))
+
+    async def test_init_migrates_legacy_messages_without_normalized_text(self) -> None:
+        await self.db.close()
+        self.db_path.unlink(missing_ok=True)
+
+        async with aiosqlite.connect(str(self.db_path)) as conn:
+            await conn.execute(
+                """
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    author_id INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                """
+            )
+            await conn.execute(
+                """
+                INSERT INTO messages(chat_id, author_id, text)
+                VALUES (?, ?, ?)
+                """,
+                (4204, 13, "Стаааарый   текст @bot https://example.com"),
+            )
+            await conn.commit()
+
+        self.db = Database(str(self.db_path))
+        await self.db.init()
+
+        self.assertTrue(await self.db.message_exists(4204, "Стаарый текст"))
+
     async def test_reopen_existing_database_preserves_chat_data(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=5005,

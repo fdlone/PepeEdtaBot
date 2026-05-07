@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+import unittest
+from types import SimpleNamespace
+
+from bot_messages import (
+    format_clear_confirmation_message,
+    format_config_message,
+    format_help_message,
+    format_set_help_message,
+    format_stats_message,
+)
+
+
+def make_state() -> SimpleNamespace:
+    return SimpleNamespace(
+        reply_probability=0.08,
+        min_cooldown_sec=45,
+        min_tokens_for_model=200,
+        max_reply_chars=280,
+        max_reply_tokens=45,
+        normalize_lower=False,
+        typing_min_ms=350,
+        typing_max_ms=1100,
+        randomness_strength=2.0,
+        repetition_penalty_strength=1.0,
+        markov_order=3,
+        enable_backoff=True,
+        backoff_min_order=1,
+        use_reply_context=True,
+        reply_context_max_tokens=12,
+        reply_context_last_tokens=3,
+        reply_context_bias=1.8,
+        reply_context_start_bias=2.2,
+        reply_context_only_for_replies=True,
+        reply_context_include_current_message=True,
+    )
+
+
+class TestBotMessages(unittest.TestCase):
+    def test_help_message_groups_commands(self) -> None:
+        text = format_help_message()
+
+        self.assertIn("Основное:", text)
+        self.assertIn("Настройки:", text)
+        self.assertIn("Админское:", text)
+        self.assertIn("/set help", text)
+
+    def test_stats_message_is_compact_and_readable(self) -> None:
+        text = format_stats_message(
+            {"messages": 10, "volume": 250},
+            min_tokens_for_model=200,
+        )
+
+        self.assertIn("сообщений: 10", text)
+        self.assertIn("объём модели: 250/200", text)
+        self.assertIn("готовность: достаточно", text)
+        self.assertNotIn("transitions", text)
+
+    def test_config_message_defaults_to_short_view(self) -> None:
+        text = format_config_message(make_state())
+
+        self.assertIn("шанс ответа: 0.08", text)
+        self.assertIn("длина ответа: 45 токенов", text)
+        self.assertNotIn("reply_context_start_bias", text)
+
+    def test_config_message_full_includes_advanced_values(self) -> None:
+        text = format_config_message(make_state(), full=True)
+
+        self.assertIn("Дополнительно:", text)
+        self.assertIn("reply_context_start_bias=2.2", text)
+
+    def test_set_help_message_shows_common_keys(self) -> None:
+        text = format_set_help_message()
+
+        self.assertIn("/set reply_probability 0.08", text)
+        self.assertIn("/set max_reply_tokens 45", text)
+        self.assertIn("/config full", text)
+
+    def test_clear_confirmation_message_requires_confirm(self) -> None:
+        self.assertIn("/clear confirm", format_clear_confirmation_message())
+
+
+if __name__ == "__main__":
+    unittest.main()

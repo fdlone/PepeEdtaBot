@@ -4,46 +4,38 @@ import asyncio
 import logging
 import random
 import time
-from dataclasses import dataclass, field
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ChatType
-from aiogram.enums import MessageEntityType
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.enums import ChatAction
 
+from bot_messages import (
+    format_clear_confirmation_message,
+    format_config_message,
+    format_help_message,
+    format_set_help_message,
+    format_stats_message,
+)
+from bot_policy import (
+    bot_is_mentioned,
+    cooldown_allows_reply,
+    has_enough_model_data,
+    should_reply_to_message,
+)
 from db import Database
 from markov import MarkovGenerator, tokenize
+from runtime_config import (
+    InvalidRuntimeSettingValueError,
+    UNKNOWN_RUNTIME_KEY_MESSAGE,
+    UnknownRuntimeSettingError,
+    apply_runtime_setting,
+)
+from runtime_state import runtime_state_from_settings
 from settings import Settings, load_settings
 from text_utils import sanitize_text
-
-
-@dataclass(slots=True)
-class RuntimeState:
-    reply_probability: float
-    min_cooldown_sec: int
-    min_tokens_for_model: int
-    max_reply_chars: int
-    normalize_lower: bool
-    typing_min_ms: int
-    typing_max_ms: int
-    randomness_strength: float
-    repetition_penalty_strength: float
-    markov_order: int
-    enable_backoff: bool
-    backoff_min_order: int
-    use_reply_context: bool
-    reply_context_max_tokens: int
-    reply_context_last_tokens: int
-    reply_context_bias: float
-    reply_context_start_bias: float
-    reply_context_only_for_replies: bool
-    reply_context_include_current_message: bool
-    last_reply_ts: dict[int, float] = field(default_factory=dict)
-    pending_seed: dict[int, list[str]] = field(default_factory=dict)
-    learned_messages: dict[int, int] = field(default_factory=dict)
 
 
 def is_group_message(message: Message) -> bool:
@@ -81,51 +73,6 @@ def extract_command_arg(text: str) -> str:
     if len(parts) < 2:
         return ""
     return parts[1].strip()
-
-
-def parse_bool(value: str) -> Optional[bool]:
-    val = value.strip().lower()
-    if val in {"1", "true", "yes", "on"}:
-        return True
-    if val in {"0", "false", "no", "off"}:
-        return False
-    return None
-
-
-BOT_TEXT_ALIASES = {"pepe", "пепе"}
-
-
-def text_contains_bot_alias(text: str, bot_aliases: set[str]) -> bool:
-    for chunk in tokenize(text, normalize_lower=True):
-        if chunk in bot_aliases:
-            return True
-    return False
-
-
-def bot_is_mentioned(message: Message, bot_username: str, bot_id: int) -> bool:
-    if not message.text:
-        return (
-            message.reply_to_message is not None
-            and message.reply_to_message.from_user is not None
-            and message.reply_to_message.from_user.id == bot_id
-        )
-
-    username_mention = f"@{bot_username}".lower()
-    if username_mention in message.text.lower():
-        return True
-    if text_contains_bot_alias(message.text, BOT_TEXT_ALIASES):
-        return True
-
-    if message.entities:
-        for ent in message.entities:
-            if ent.type == MessageEntityType.MENTION:
-                mention = message.text[ent.offset : ent.offset + ent.length]
-                if mention.lower() == username_mention:
-                    return True
-    if message.reply_to_message and message.reply_to_message.from_user:
-        if message.reply_to_message.from_user.id == bot_id:
-            return True
-    return False
 
 
 def extract_context_tokens(
@@ -181,27 +128,7 @@ async def run_bot() -> None:
     db = Database(settings.db_path)
     await db.init()
     generator = MarkovGenerator(db=db)
-    state = RuntimeState(
-        reply_probability=settings.reply_probability,
-        min_cooldown_sec=settings.min_cooldown_sec,
-        min_tokens_for_model=settings.min_tokens_for_model,
-        max_reply_chars=settings.max_reply_chars,
-        normalize_lower=settings.normalize_lower,
-        typing_min_ms=settings.typing_min_ms,
-        typing_max_ms=settings.typing_max_ms,
-        randomness_strength=settings.randomness_strength,
-        repetition_penalty_strength=settings.repetition_penalty_strength,
-        markov_order=settings.markov_order,
-        enable_backoff=settings.enable_backoff,
-        backoff_min_order=settings.backoff_min_order,
-        use_reply_context=settings.use_reply_context,
-        reply_context_max_tokens=settings.reply_context_max_tokens,
-        reply_context_last_tokens=settings.reply_context_last_tokens,
-        reply_context_bias=settings.reply_context_bias,
-        reply_context_start_bias=settings.reply_context_start_bias,
-        reply_context_only_for_replies=settings.reply_context_only_for_replies,
-        reply_context_include_current_message=settings.reply_context_include_current_message,
-    )
+    state = runtime_state_from_settings(settings)
 
     bot = Bot(token=settings.bot_token)
     me = await bot.get_me()
@@ -215,30 +142,14 @@ async def run_bot() -> None:
         if not is_group_message(message):
             return
         stats = await db.get_stats(message.chat.id)
-        text = (
-            "Статистика модели:\n"
-            f"messages: {stats['messages']}\n"
-            f"starts2: {stats['starts2']} | starts3: {stats['starts3']}\n"
-            f"edges2: {stats['transitions2']} | edges3: {stats['transitions3']} | edges1: {stats['transitions1']}\n"
-            f"volume2: {stats['volume2']} | volume3: {stats['volume3']} | volume1: {stats['volume1']}\n"
-            f"effective_volume: {stats['volume']}"
-        )
+        text = format_stats_message(stats, state.min_tokens_for_model)
         await reply_humanized(message, text, state.typing_min_ms, state.typing_max_ms)
 
     @dp.message(Command("help"))
     async def cmd_help(message: Message) -> None:
-        text = (
-            "Доступные команды:\n"
-            "/help - показать эту справку\n"
-            "/ping - проверка, что бот онлайн и видит чат в реальном времени\n"
-            "/config - показать текущие runtime-настройки\n"
-            "/set <key> <value> - изменить runtime-настройку (OWNER_ID или админ)\n"
-            "/stats - статистика модели по текущему чату\n"
-            "/clear - очистить данные чата (OWNER_ID или админ чата)\n"
-            "/setprob 0.2 - изменить вероятность ответов (OWNER_ID или админ)\n"
-            '/seed "текст" - одноразово задать старт генерации (OWNER_ID или админ)'
+        await reply_humanized(
+            message, format_help_message(), state.typing_min_ms, state.typing_max_ms
         )
-        await reply_humanized(message, text, state.typing_min_ms, state.typing_max_ms)
 
     @dp.message(Command("ping"))
     async def cmd_ping(message: Message) -> None:
@@ -246,29 +157,8 @@ async def run_bot() -> None:
 
     @dp.message(Command("config"))
     async def cmd_config(message: Message) -> None:
-        text = (
-            "Текущие runtime-настройки:\n"
-            f"reply_probability={state.reply_probability}\n"
-            f"min_cooldown_sec={state.min_cooldown_sec}\n"
-            f"min_tokens_for_model={state.min_tokens_for_model}\n"
-            f"max_reply_chars={state.max_reply_chars}\n"
-            f"normalize_lower={state.normalize_lower}\n"
-            f"typing_min_ms={state.typing_min_ms}\n"
-            f"typing_max_ms={state.typing_max_ms}\n"
-            f"randomness_strength={state.randomness_strength}\n"
-            f"repetition_penalty_strength={state.repetition_penalty_strength}\n"
-            f"markov_order={state.markov_order}\n"
-            f"enable_backoff={state.enable_backoff}\n"
-            f"backoff_min_order={state.backoff_min_order}\n"
-            f"use_reply_context={state.use_reply_context}\n"
-            f"reply_context_max_tokens={state.reply_context_max_tokens}\n"
-            f"reply_context_last_tokens={state.reply_context_last_tokens}\n"
-            f"reply_context_bias={state.reply_context_bias}\n"
-            f"reply_context_start_bias={state.reply_context_start_bias}\n"
-            f"reply_context_only_for_replies={state.reply_context_only_for_replies}\n"
-            f"reply_context_include_current_message={state.reply_context_include_current_message}\n"
-            "Изменения через /set действуют до перезапуска."
-        )
+        raw = extract_command_arg(message.text or "")
+        text = format_config_message(state, full=raw.strip().lower() == "full")
         await reply_humanized(message, text, state.typing_min_ms, state.typing_max_ms)
 
     @dp.message(Command("set"))
@@ -282,10 +172,18 @@ async def run_bot() -> None:
             )
             return
         raw = extract_command_arg(message.text or "")
+        if raw.strip().lower() == "help":
+            await reply_humanized(
+                message,
+                format_set_help_message(),
+                state.typing_min_ms,
+                state.typing_max_ms,
+            )
+            return
         if not raw:
             await reply_humanized(
                 message,
-                "Использование: /set <key> <value>",
+                "Использование: /set <key> <value>\nПодсказка: /set help",
                 state.typing_min_ms,
                 state.typing_max_ms,
             )
@@ -294,7 +192,7 @@ async def run_bot() -> None:
         if len(parts) != 2:
             await reply_humanized(
                 message,
-                "Использование: /set <key> <value>",
+                "Использование: /set <key> <value>\nПодсказка: /set help",
                 state.typing_min_ms,
                 state.typing_max_ms,
             )
@@ -302,123 +200,16 @@ async def run_bot() -> None:
 
         key, value = parts[0].strip().lower(), parts[1].strip()
         try:
-            if key == "reply_probability":
-                v = float(value)
-                if not 0.0 <= v <= 1.0:
-                    raise ValueError
-                state.reply_probability = v
-            elif key == "min_cooldown_sec":
-                v = int(value)
-                if v < 0:
-                    raise ValueError
-                state.min_cooldown_sec = v
-            elif key == "min_tokens_for_model":
-                v = int(value)
-                if v < 0:
-                    raise ValueError
-                state.min_tokens_for_model = v
-            elif key == "max_reply_chars":
-                v = int(value)
-                if v < 20 or v > 4000:
-                    raise ValueError
-                state.max_reply_chars = v
-            elif key == "normalize_lower":
-                v_bool = parse_bool(value)
-                if v_bool is None:
-                    raise ValueError
-                state.normalize_lower = v_bool
-            elif key == "typing_min_ms":
-                v = int(value)
-                if v < 0 or v > state.typing_max_ms:
-                    raise ValueError
-                state.typing_min_ms = v
-            elif key == "typing_max_ms":
-                v = int(value)
-                if v < state.typing_min_ms:
-                    raise ValueError
-                state.typing_max_ms = v
-            elif key == "randomness_strength":
-                v = float(value)
-                if not 0.0 <= v <= 3.0:
-                    raise ValueError
-                state.randomness_strength = v
-            elif key == "repetition_penalty_strength":
-                v = float(value)
-                if not 0.0 <= v <= 3.0:
-                    raise ValueError
-                state.repetition_penalty_strength = v
-            elif key == "markov_order":
-                v = int(value)
-                if v not in {2, 3}:
-                    raise ValueError
-                if state.backoff_min_order >= v:
-                    raise ValueError
-                state.markov_order = v
-            elif key == "enable_backoff":
-                v_bool = parse_bool(value)
-                if v_bool is None:
-                    raise ValueError
-                state.enable_backoff = v_bool
-            elif key == "backoff_min_order":
-                v = int(value)
-                if v not in {1, 2} or v >= state.markov_order:
-                    raise ValueError
-                state.backoff_min_order = v
-            elif key == "use_reply_context":
-                v_bool = parse_bool(value)
-                if v_bool is None:
-                    raise ValueError
-                state.use_reply_context = v_bool
-            elif key == "reply_context_max_tokens":
-                v = int(value)
-                if v < 2 or v < state.reply_context_last_tokens:
-                    raise ValueError
-                state.reply_context_max_tokens = v
-            elif key == "reply_context_last_tokens":
-                v = int(value)
-                if v not in {2, 3} or v > state.reply_context_max_tokens:
-                    raise ValueError
-                state.reply_context_last_tokens = v
-            elif key == "reply_context_bias":
-                v = float(value)
-                if not 1.0 <= v <= 4.0:
-                    raise ValueError
-                state.reply_context_bias = v
-            elif key == "reply_context_start_bias":
-                v = float(value)
-                if not 1.0 <= v <= 4.0:
-                    raise ValueError
-                state.reply_context_start_bias = v
-            elif key == "reply_context_only_for_replies":
-                v_bool = parse_bool(value)
-                if v_bool is None:
-                    raise ValueError
-                state.reply_context_only_for_replies = v_bool
-            elif key == "reply_context_include_current_message":
-                v_bool = parse_bool(value)
-                if v_bool is None:
-                    raise ValueError
-                state.reply_context_include_current_message = v_bool
-            else:
-                await reply_humanized(
-                    message,
-                    (
-                        "Неизвестный ключ.\n"
-                        "Доступно: reply_probability, min_cooldown_sec, "
-                        "min_tokens_for_model, max_reply_chars, normalize_lower, "
-                        "typing_min_ms, typing_max_ms, randomness_strength, "
-                        "repetition_penalty_strength, "
-                        "markov_order, enable_backoff, backoff_min_order, "
-                        "use_reply_context, reply_context_max_tokens, "
-                        "reply_context_last_tokens, reply_context_bias, "
-                        "reply_context_start_bias, reply_context_only_for_replies, "
-                        "reply_context_include_current_message"
-                    ),
-                    state.typing_min_ms,
-                    state.typing_max_ms,
-                )
-                return
-        except ValueError:
+            apply_runtime_setting(state, key, value)
+        except UnknownRuntimeSettingError:
+            await reply_humanized(
+                message,
+                f"{UNKNOWN_RUNTIME_KEY_MESSAGE}\n\nПодсказка: /set help",
+                state.typing_min_ms,
+                state.typing_max_ms,
+            )
+            return
+        except InvalidRuntimeSettingValueError:
             await reply_humanized(
                 message,
                 "Некорректное значение для этого ключа.",
@@ -449,6 +240,15 @@ async def run_bot() -> None:
             await reply_humanized(
                 message,
                 "Недостаточно прав. Нужен OWNER_ID или права админа чата.",
+                state.typing_min_ms,
+                state.typing_max_ms,
+            )
+            return
+        raw = extract_command_arg(message.text or "")
+        if raw.strip().lower() != "confirm":
+            await reply_humanized(
+                message,
+                format_clear_confirmation_message(),
                 state.typing_min_ms,
                 state.typing_max_ms,
             )
@@ -567,7 +367,7 @@ async def run_bot() -> None:
         now = time.time()
         mentioned = bot_is_mentioned(message, bot_username, me.id)
 
-        enough_data = token_volume >= state.min_tokens_for_model
+        enough_data = has_enough_model_data(token_volume, state.min_tokens_for_model)
 
         if mentioned and not enough_data:
             await reply_humanized(
@@ -585,13 +385,13 @@ async def run_bot() -> None:
             return
 
         last_ts = state.last_reply_ts.get(message.chat.id, 0.0)
-        cooldown_ok = now - last_ts >= state.min_cooldown_sec
-
-        should_reply = False
-        if mentioned:
-            should_reply = True
-        elif cooldown_ok and random.random() < state.reply_probability:
-            should_reply = True
+        cooldown_ok = cooldown_allows_reply(now, last_ts, state.min_cooldown_sec)
+        should_reply = should_reply_to_message(
+            mentioned=mentioned,
+            cooldown_ok=cooldown_ok,
+            reply_probability=state.reply_probability,
+            random_value=random.random(),
+        )
 
         if not should_reply:
             logger.debug(
@@ -626,11 +426,13 @@ async def run_bot() -> None:
         reply_text = ""
         # Повторяем генерацию несколько раз, чтобы не уходить в "молчание" на разреженной модели.
         for attempt in range(4):
+            attempt_context_tokens = context_tokens if attempt < 2 else None
             reply_text = await generator.generate_text(
                 chat_id=message.chat.id,
                 max_chars=state.max_reply_chars,
+                max_tokens=state.max_reply_tokens,
                 seed_tokens=seed,
-                context_tokens=context_tokens if attempt < 2 else None,
+                context_tokens=attempt_context_tokens,
                 context_bias=state.reply_context_bias,
                 context_start_bias=state.reply_context_start_bias,
                 randomness_strength=state.randomness_strength,
@@ -641,6 +443,13 @@ async def run_bot() -> None:
             )
             if reply_text:
                 break
+            logger.debug(
+                "Generation attempt failed: chat=%s attempt=%s context=%s seed_len=%s",
+                message.chat.id,
+                attempt + 1,
+                bool(attempt_context_tokens),
+                len(seed or []),
+            )
             if attempt == 0 and context_tokens:
                 seed = context_tokens[-state.reply_context_last_tokens :]
             else:

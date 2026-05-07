@@ -6,6 +6,8 @@ from typing import Optional
 
 import aiosqlite
 
+from text_utils import sanitize_text
+
 
 class Database:
     """Слой доступа к SQLite для хранения сообщений и статистики variable-order Markov."""
@@ -37,10 +39,12 @@ class Database:
                 chat_id INTEGER NOT NULL,
                 author_id INTEGER NOT NULL,
                 text TEXT NOT NULL,
+                normalized_text TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             """
         )
+        await self._ensure_messages_normalized_text_column(db)
 
         # Таблицы n=2 (legacy + fallback слой).
         await db.execute(
@@ -109,6 +113,9 @@ class Database:
 
         await db.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);")
         await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_normalized_lookup ON messages(chat_id, normalized_text);"
+        )
+        await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_starts_lookup ON starts(chat_id, w1, w2);"
         )
         await db.execute(
@@ -124,6 +131,23 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_transitions1_lookup ON transitions1(chat_id, w1);"
         )
         await db.commit()
+
+    async def _ensure_messages_normalized_text_column(self, db: aiosqlite.Connection) -> None:
+        cursor = await db.execute("PRAGMA table_info(messages);")
+        columns = {str(row[1]) for row in await cursor.fetchall()}
+        if "normalized_text" not in columns:
+            await db.execute(
+                "ALTER TABLE messages ADD COLUMN normalized_text TEXT NOT NULL DEFAULT '';"
+            )
+        cursor = await db.execute(
+            "SELECT id, text FROM messages WHERE normalized_text = ''"
+        )
+        rows = await cursor.fetchall()
+        if rows:
+            await db.executemany(
+                "UPDATE messages SET normalized_text = ? WHERE id = ?",
+                [(sanitize_text(str(text)), int(row_id)) for row_id, text in rows],
+            )
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -160,10 +184,10 @@ class Database:
 
             await db.execute(
                 """
-                INSERT INTO messages(chat_id, author_id, text)
-                VALUES (?, ?, ?)
+                INSERT INTO messages(chat_id, author_id, text, normalized_text)
+                VALUES (?, ?, ?, ?)
                 """,
-                (chat_id, author_id, raw_text),
+                (chat_id, author_id, raw_text, sanitize_text(raw_text)),
             )
 
             if starts2_pair:
@@ -446,11 +470,18 @@ class Database:
             await db.commit()
 
     async def message_exists(self, chat_id: int, text: str) -> bool:
+        normalized_text = sanitize_text(text)
         async with self._lock:
             db = await self._get_conn()
             cursor = await db.execute(
-                "SELECT 1 FROM messages WHERE chat_id = ? AND text = ? LIMIT 1",
-                (chat_id, text),
+                """
+                SELECT 1
+                FROM messages
+                WHERE chat_id = ?
+                  AND (text = ? OR normalized_text = ?)
+                LIMIT 1
+                """,
+                (chat_id, text, normalized_text),
             )
             row = await cursor.fetchone()
         return row is not None

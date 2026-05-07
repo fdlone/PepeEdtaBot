@@ -21,20 +21,20 @@ def detokenize(tokens: list[str], max_chars: int) -> str:
     if not tokens:
         return ""
 
-    parts: list[str] = []
+    text = ""
     for token in tokens:
-        if not parts:
-            parts.append(token)
-            continue
-        if token in PUNCT_SET:
-            parts[-1] = parts[-1] + token
+        if not text:
+            candidate = token
+        elif token in PUNCT_SET:
+            candidate = text + token
         else:
-            parts.append(" " + token)
+            candidate = text + " " + token
 
-    text = "".join(parts).strip()
-    if len(text) > max_chars:
-        text = text[:max_chars].rstrip()
-    return text
+        if len(candidate) > max_chars:
+            break
+        text = candidate
+
+    return text.strip()
 
 
 def build_windows(tokens: list[str], size: int) -> list[tuple[str, ...]]:
@@ -405,6 +405,7 @@ class MarkovGenerator:
         self,
         chat_id: int,
         max_chars: int,
+        max_tokens: int = 45,
         seed_tokens: Optional[list[str]] = None,
         context_tokens: Optional[list[str]] = None,
         context_bias: float = 1.0,
@@ -505,14 +506,19 @@ class MarkovGenerator:
         if start3 is None:
             return ""
 
+        token_limit = max(3, max_tokens)
         w1, w2, w3 = start3
-        generated: list[str] = [w1, w2, w3]
+        generated: list[str] = [w1, w2, w3][:token_limit]
+        if len(generated) < 3:
+            return ""
         visited_triplets: set[tuple[str, str, str]] = {(w1, w2, w3)}
         seen_pairs = set(build_windows(generated, 2))
         seen_triplets = set(build_windows(generated, 3))
         jump_count = 0
 
         for step_index in range(self.max_steps):
+            if len(generated) >= token_limit:
+                break
             if len(generated) > 8 and random.random() < jump_probability and starts3 and order >= 3:
                 contextual_jump = None
                 if context_tokens:
@@ -591,7 +597,7 @@ class MarkovGenerator:
             if has_degraded_recent_window(generated):
                 break
             maybe_text = detokenize(generated, max_chars=max_chars)
-            if len(maybe_text) >= max_chars:
+            if len(generated) >= token_limit or len(maybe_text) >= max_chars:
                 break
 
             w1, w2, w3 = w2, w3, w4

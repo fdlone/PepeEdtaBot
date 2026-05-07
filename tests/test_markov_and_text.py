@@ -43,6 +43,10 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         text = detokenize(["Привет", ",", "мир", "!", "Как", "дела", "?"], max_chars=100)
         self.assertEqual(text, "Привет, мир! Как дела?")
 
+    def test_detokenize_does_not_cut_words_by_char_limit(self) -> None:
+        text = detokenize(["Очень", "длинноеслово", "дальше"], max_chars=12)
+        self.assertEqual(text, "Очень")
+
     def test_context_heavy_reply_detects_loop_on_parent_tokens(self) -> None:
         self.assertTrue(
             is_context_heavy_reply(
