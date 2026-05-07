@@ -1,6 +1,17 @@
 from __future__ import annotations
 
 
+TELEGRAM_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("help", "Список команд"),
+    ("ping", "Проверить, что бот онлайн"),
+    ("stats", "Краткая статистика модели"),
+    ("config", "Основные настройки"),
+    ("set", "Изменить настройку до перезапуска"),
+    ("setprob", "Быстро изменить шанс ответа"),
+    ("clear", "Очистка данных чата с подтверждением"),
+)
+
+
 def format_help_message() -> str:
     return (
         "Команды:\n"
@@ -18,7 +29,6 @@ def format_help_message() -> str:
         "/setprob 0.2 - быстро изменить шанс ответа\n"
         "\n"
         "Админское:\n"
-        '/seed "текст" - seed для следующей генерации\n'
         "/clear - инструкция по очистке данных чата"
     )
 
@@ -29,7 +39,7 @@ def format_stats_message(stats: dict[str, int], min_tokens_for_model: int) -> st
     return (
         "Статистика:\n"
         f"сообщений: {stats['messages']}\n"
-        f"объём модели: {effective_volume}/{min_tokens_for_model}\n"
+        f"объём модели: {effective_volume}\n"
         f"готовность: {ready_text}"
     )
 

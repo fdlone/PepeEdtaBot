@@ -9,10 +9,11 @@ from typing import Optional
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ChatType
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import BotCommand, Message
 from aiogram.enums import ChatAction
 
 from bot_messages import (
+    TELEGRAM_COMMANDS,
     format_clear_confirmation_message,
     format_config_message,
     format_help_message,
@@ -134,6 +135,9 @@ async def run_bot() -> None:
     me = await bot.get_me()
     bot_username = (me.username or "").lower()
     await bot.delete_webhook(drop_pending_updates=False)
+    await bot.set_my_commands(
+        [BotCommand(command=command, description=description) for command, description in TELEGRAM_COMMANDS]
+    )
 
     dp = Dispatcher()
 
@@ -296,39 +300,6 @@ async def run_bot() -> None:
             message, f"REPLY_PROBABILITY теперь: {value}", state.typing_min_ms, state.typing_max_ms
         )
 
-    @dp.message(Command("seed"))
-    async def cmd_seed(message: Message) -> None:
-        if not await can_manage_settings(message, bot, settings.owner_id, logger):
-            await reply_humanized(
-                message,
-                "Команда доступна OWNER_ID и администраторам чата.",
-                state.typing_min_ms,
-                state.typing_max_ms,
-            )
-            return
-        raw = extract_command_arg(message.text or "")
-        if not raw:
-            await reply_humanized(
-                message, 'Использование: /seed "ваш текст"', state.typing_min_ms, state.typing_max_ms
-            )
-            return
-
-        clean = sanitize_text(raw)
-        tokens = tokenize(clean, normalize_lower=state.normalize_lower)
-        if not tokens:
-            await reply_humanized(
-                message, "Не удалось извлечь токены из seed.", state.typing_min_ms, state.typing_max_ms
-            )
-            return
-
-        state.pending_seed[message.chat.id] = tokens[:3]
-        await reply_humanized(
-            message,
-            "Seed сохранен для следующей генерации (одноразово).",
-            state.typing_min_ms,
-            state.typing_max_ms,
-        )
-
     @dp.message(F.text)
     async def on_text_message(message: Message) -> None:
         if not is_group_message(message):
@@ -414,7 +385,7 @@ async def run_bot() -> None:
                 include_current_message=state.reply_context_include_current_message,
             )
 
-        seed = state.pending_seed.pop(message.chat.id, None)
+        seed = None
         if seed is None and context_tokens:
             seed = context_tokens[-state.reply_context_last_tokens :]
             logger.debug(

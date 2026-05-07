@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from bot_messages import (
+    TELEGRAM_COMMANDS,
     format_clear_confirmation_message,
     format_config_message,
     format_help_message,
@@ -45,6 +46,15 @@ class TestBotMessages(unittest.TestCase):
         self.assertIn("Настройки:", text)
         self.assertIn("Админское:", text)
         self.assertIn("/set help", text)
+        self.assertNotIn("/seed", text)
+
+    def test_telegram_commands_are_registered_without_seed(self) -> None:
+        command_names = {command for command, _ in TELEGRAM_COMMANDS}
+
+        self.assertIn("help", command_names)
+        self.assertIn("set", command_names)
+        self.assertIn("clear", command_names)
+        self.assertNotIn("seed", command_names)
 
     def test_stats_message_is_compact_and_readable(self) -> None:
         text = format_stats_message(
@@ -53,7 +63,8 @@ class TestBotMessages(unittest.TestCase):
         )
 
         self.assertIn("сообщений: 10", text)
-        self.assertIn("объём модели: 250/200", text)
+        self.assertIn("объём модели: 250", text)
+        self.assertNotIn("250/200", text)
         self.assertIn("готовность: достаточно", text)
         self.assertNotIn("transitions", text)
 

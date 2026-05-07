@@ -28,7 +28,6 @@ class RuntimeState:
     reply_context_only_for_replies: bool
     reply_context_include_current_message: bool
     last_reply_ts: dict[int, float] = field(default_factory=dict)
-    pending_seed: dict[int, list[str]] = field(default_factory=dict)
     learned_messages: dict[int, int] = field(default_factory=dict)
 
 
