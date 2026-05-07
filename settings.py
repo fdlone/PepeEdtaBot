@@ -86,7 +86,7 @@ def load_settings(load_env: bool = True) -> Settings:
     max_reply_chars = _read_int("MAX_REPLY_CHARS", "280")
     _validate_int_range("MAX_REPLY_CHARS", max_reply_chars, 20, 4000)
     max_reply_tokens = _read_int("MAX_REPLY_TOKENS", "45")
-    _validate_int_range("MAX_REPLY_TOKENS", max_reply_tokens, 3, 300)
+    _validate_int_range("MAX_REPLY_TOKENS", max_reply_tokens, 1, 300)
     owner_raw = os.getenv("OWNER_ID", "").strip()
     try:
         owner_id = int(owner_raw) if owner_raw else None

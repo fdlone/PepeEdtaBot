@@ -506,11 +506,9 @@ class MarkovGenerator:
         if start3 is None:
             return ""
 
-        token_limit = max(3, max_tokens)
+        token_limit = max(1, max_tokens)
         w1, w2, w3 = start3
         generated: list[str] = [w1, w2, w3][:token_limit]
-        if len(generated) < 3:
-            return ""
         visited_triplets: set[tuple[str, str, str]] = {(w1, w2, w3)}
         seen_pairs = set(build_windows(generated, 2))
         seen_triplets = set(build_windows(generated, 3))

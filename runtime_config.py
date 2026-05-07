@@ -86,7 +86,7 @@ def apply_runtime_setting(state: object, key: str, value: str) -> None:
             setattr(state, normalized_key, parsed)
         elif normalized_key == "max_reply_tokens":
             parsed = int(value)
-            if parsed < 3 or parsed > 300:
+            if parsed < 1 or parsed > 300:
                 raise InvalidRuntimeSettingValueError
             setattr(state, normalized_key, parsed)
         elif normalized_key == "normalize_lower":

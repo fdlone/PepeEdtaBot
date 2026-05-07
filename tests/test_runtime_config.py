@@ -75,7 +75,7 @@ class TestRuntimeConfig(unittest.TestCase):
         state = make_state()
 
         with self.assertRaises(InvalidRuntimeSettingValueError):
-            apply_runtime_setting(state, "max_reply_tokens", "2")
+            apply_runtime_setting(state, "max_reply_tokens", "0")
 
         self.assertEqual(state.max_reply_tokens, 45)
 

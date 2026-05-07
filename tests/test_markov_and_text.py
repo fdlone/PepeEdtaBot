@@ -238,6 +238,27 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(text.startswith("Я очень"))
         self.assertGreaterEqual(len(text), 5)
 
+    async def test_generate_text_respects_one_token_limit(self) -> None:
+        await self.db.save_message_and_update_model(
+            chat_id=4445,
+            author_id=1,
+            raw_text="Привет мир снова",
+            tokens=["Привет", "мир", "снова"],
+        )
+
+        random.seed(42)
+        text = await self.generator.generate_text(
+            chat_id=4445,
+            max_chars=100,
+            max_tokens=1,
+            randomness_strength=0.0,
+            markov_order=3,
+            enable_backoff=True,
+            backoff_min_order=1,
+        )
+
+        self.assertEqual(text, "Привет")
+
     async def test_generate_text_uses_context_windows_for_start(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=5555,
