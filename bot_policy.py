@@ -25,7 +25,10 @@ def bot_is_mentioned(message: object, bot_username: str, bot_id: int) -> bool:
 
     if not text:
         reply_from_user = getattr(reply_to_message, "from_user", None)
-        return reply_from_user is not None and getattr(reply_from_user, "id", None) == bot_id
+        return (
+            reply_from_user is not None
+            and getattr(reply_from_user, "id", None) == bot_id
+        )
 
     username_mention = f"@{bot_username}".lower()
     if username_mention in text.lower():
@@ -51,7 +54,9 @@ def has_enough_model_data(token_volume: int, min_tokens_for_model: int) -> bool:
     return token_volume >= min_tokens_for_model
 
 
-def cooldown_allows_reply(now_ts: float, last_reply_ts: float, min_cooldown_sec: int) -> bool:
+def cooldown_allows_reply(
+    now_ts: float, last_reply_ts: float, min_cooldown_sec: int
+) -> bool:
     return now_ts - last_reply_ts >= min_cooldown_sec
 
 

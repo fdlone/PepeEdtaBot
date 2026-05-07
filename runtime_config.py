@@ -26,9 +26,8 @@ ALLOWED_RUNTIME_KEYS = (
     "reply_context_include_current_message",
 )
 
-UNKNOWN_RUNTIME_KEY_MESSAGE = (
-    "Неизвестный ключ.\n"
-    "Доступно: " + ", ".join(ALLOWED_RUNTIME_KEYS)
+UNKNOWN_RUNTIME_KEY_MESSAGE = "Неизвестный ключ.\n" "Доступно: " + ", ".join(
+    ALLOWED_RUNTIME_KEYS
 )
 
 

@@ -36,7 +36,9 @@ def _validate_int_range(name: str, value: int, min_value: int, max_value: int) -
         raise ValueError(f"{name} must be in range [{min_value}..{max_value}]")
 
 
-def _validate_float_range(name: str, value: float, min_value: float, max_value: float) -> None:
+def _validate_float_range(
+    name: str, value: float, min_value: float, max_value: float
+) -> None:
     if value < min_value or value > max_value:
         raise ValueError(f"{name} must be in range [{min_value}..{max_value}]")
 
@@ -106,7 +108,9 @@ def load_settings(load_env: bool = True) -> Settings:
     randomness_strength = _read_float("RANDOMNESS_STRENGTH", "2.0")
     _validate_float_range("RANDOMNESS_STRENGTH", randomness_strength, 0.0, 3.0)
     repetition_penalty_strength = _read_float("REPETITION_PENALTY_STRENGTH", "1.0")
-    _validate_float_range("REPETITION_PENALTY_STRENGTH", repetition_penalty_strength, 0.0, 3.0)
+    _validate_float_range(
+        "REPETITION_PENALTY_STRENGTH", repetition_penalty_strength, 0.0, 3.0
+    )
     markov_order = _read_int("MARKOV_ORDER", "3")
     if markov_order not in {2, 3}:
         raise ValueError("MARKOV_ORDER must be 2 or 3")
@@ -123,11 +127,15 @@ def load_settings(load_env: bool = True) -> Settings:
     if reply_context_last_tokens not in {2, 3}:
         raise ValueError("REPLY_CONTEXT_LAST_TOKENS must be 2 or 3")
     if reply_context_last_tokens > reply_context_max_tokens:
-        raise ValueError("REPLY_CONTEXT_LAST_TOKENS must be <= REPLY_CONTEXT_MAX_TOKENS")
+        raise ValueError(
+            "REPLY_CONTEXT_LAST_TOKENS must be <= REPLY_CONTEXT_MAX_TOKENS"
+        )
     reply_context_bias = _read_float("REPLY_CONTEXT_BIAS", "1.8")
     _validate_float_range("REPLY_CONTEXT_BIAS", reply_context_bias, 1.0, 4.0)
     reply_context_start_bias = _read_float("REPLY_CONTEXT_START_BIAS", "2.2")
-    _validate_float_range("REPLY_CONTEXT_START_BIAS", reply_context_start_bias, 1.0, 4.0)
+    _validate_float_range(
+        "REPLY_CONTEXT_START_BIAS", reply_context_start_bias, 1.0, 4.0
+    )
     reply_context_only_for_replies = _to_bool(
         os.getenv("REPLY_CONTEXT_ONLY_FOR_REPLIES", "true"), default=True
     )

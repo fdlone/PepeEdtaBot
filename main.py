@@ -44,7 +44,11 @@ def is_group_message(message: Message) -> bool:
 
 
 def is_owner(message: Message, owner_id: Optional[int]) -> bool:
-    return owner_id is not None and message.from_user is not None and message.from_user.id == owner_id
+    return (
+        owner_id is not None
+        and message.from_user is not None
+        and message.from_user.id == owner_id
+    )
 
 
 async def is_chat_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
@@ -108,7 +112,9 @@ async def reply_humanized(
     message: Message, text: str, typing_min_ms: int, typing_max_ms: int
 ) -> None:
     try:
-        await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+        await message.bot.send_chat_action(
+            chat_id=message.chat.id, action=ChatAction.TYPING
+        )
         delay_ms = random.randint(typing_min_ms, typing_max_ms)
         await asyncio.sleep(delay_ms / 1000)
     except Exception:
@@ -136,7 +142,10 @@ async def run_bot() -> None:
     bot_username = (me.username or "").lower()
     await bot.delete_webhook(drop_pending_updates=False)
     await bot.set_my_commands(
-        [BotCommand(command=command, description=description) for command, description in TELEGRAM_COMMANDS]
+        [
+            BotCommand(command=command, description=description)
+            for command, description in TELEGRAM_COMMANDS
+        ]
     )
 
     dp = Dispatcher()
@@ -236,7 +245,9 @@ async def run_bot() -> None:
         allowed = is_owner(message, settings.owner_id)
         if not allowed and message.from_user is not None:
             try:
-                allowed = await is_chat_admin(bot, message.chat.id, message.from_user.id)
+                allowed = await is_chat_admin(
+                    bot, message.chat.id, message.from_user.id
+                )
             except Exception as exc:
                 logger.warning("Cannot verify chat admins for /clear: %s", exc)
                 allowed = False
@@ -259,7 +270,9 @@ async def run_bot() -> None:
             return
         await db.clear_chat(message.chat.id)
         generator.invalidate_chat_cache(message.chat.id)
-        await reply_humanized(message, "Данные чата очищены.", state.typing_min_ms, state.typing_max_ms)
+        await reply_humanized(
+            message, "Данные чата очищены.", state.typing_min_ms, state.typing_max_ms
+        )
 
     @dp.message(Command("setprob"))
     async def cmd_setprob(message: Message) -> None:
@@ -275,14 +288,20 @@ async def run_bot() -> None:
         raw = extract_command_arg(message.text or "")
         if not raw:
             await reply_humanized(
-                message, "Использование: /setprob 0.2", state.typing_min_ms, state.typing_max_ms
+                message,
+                "Использование: /setprob 0.2",
+                state.typing_min_ms,
+                state.typing_max_ms,
             )
             return
         try:
             value = float(raw)
         except ValueError:
             await reply_humanized(
-                message, "Нужно число в диапазоне 0..1", state.typing_min_ms, state.typing_max_ms
+                message,
+                "Нужно число в диапазоне 0..1",
+                state.typing_min_ms,
+                state.typing_max_ms,
             )
             return
 
@@ -297,7 +316,10 @@ async def run_bot() -> None:
 
         state.reply_probability = value
         await reply_humanized(
-            message, f"REPLY_PROBABILITY теперь: {value}", state.typing_min_ms, state.typing_max_ms
+            message,
+            f"REPLY_PROBABILITY теперь: {value}",
+            state.typing_min_ms,
+            state.typing_max_ms,
         )
 
     @dp.message(F.text)
@@ -314,7 +336,9 @@ async def run_bot() -> None:
 
         clean = sanitize_text(raw_text)
         if len(clean) < 3 or len(clean) > 500:
-            logger.debug("Skip message by length: chat=%s len=%s", message.chat.id, len(clean))
+            logger.debug(
+                "Skip message by length: chat=%s len=%s", message.chat.id, len(clean)
+            )
             return
 
         tokens = tokenize(clean, normalize_lower=state.normalize_lower)
@@ -342,7 +366,10 @@ async def run_bot() -> None:
 
         if mentioned and not enough_data:
             await reply_humanized(
-                message, "Пока мало материала, поболтайте ещё 🙂", state.typing_min_ms, state.typing_max_ms
+                message,
+                "Пока мало материала, поболтайте ещё 🙂",
+                state.typing_min_ms,
+                state.typing_max_ms,
             )
             return
 
@@ -435,11 +462,15 @@ async def run_bot() -> None:
                     state.typing_max_ms,
                 )
                 state.last_reply_ts[message.chat.id] = now
-            logger.debug("Generation failed: chat=%s mentioned=%s", message.chat.id, mentioned)
+            logger.debug(
+                "Generation failed: chat=%s mentioned=%s", message.chat.id, mentioned
+            )
             return
 
         state.last_reply_ts[message.chat.id] = now
-        await reply_humanized(message, reply_text, state.typing_min_ms, state.typing_max_ms)
+        await reply_humanized(
+            message, reply_text, state.typing_min_ms, state.typing_max_ms
+        )
 
     logger.info("Бот %s запущен (polling).", me.username)
     logger.info("Статус: работает.")

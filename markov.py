@@ -97,7 +97,10 @@ def has_degraded_recent_window(
         return True
 
     counts = Counter(recent_content)
-    return len(counts) <= 2 and (max(counts.values()) / len(recent_content)) >= dominance_threshold
+    return (
+        len(counts) <= 2
+        and (max(counts.values()) / len(recent_content)) >= dominance_threshold
+    )
 
 
 def find_repetitive_tail_start(
@@ -119,7 +122,10 @@ def find_repetitive_tail_start(
         counts = Counter(tail)
         if max_consecutive_run(tail) >= 4:
             return content_indexes[start_content_idx]
-        if len(counts) <= 2 and (max(counts.values()) / len(tail)) >= dominance_threshold:
+        if (
+            len(counts) <= 2
+            and (max(counts.values()) / len(tail)) >= dominance_threshold
+        ):
             return content_indexes[start_content_idx]
     return None
 
@@ -147,10 +153,15 @@ def is_low_diversity_reply(
     counts = Counter(content)
     if max_consecutive_run(content) >= 5:
         return True
-    return len(counts) <= 2 and (max(counts.values()) / len(content)) >= dominance_threshold
+    return (
+        len(counts) <= 2
+        and (max(counts.values()) / len(content)) >= dominance_threshold
+    )
 
 
-def is_context_heavy_reply(generated_tokens: list[str], context_tokens: list[str]) -> bool:
+def is_context_heavy_reply(
+    generated_tokens: list[str], context_tokens: list[str]
+) -> bool:
     if len(generated_tokens) < 4 or not context_tokens:
         return False
 
@@ -163,7 +174,9 @@ def is_context_heavy_reply(generated_tokens: list[str], context_tokens: list[str
     overlap_count = sum(1 for token in generated_content if token in context_token_set)
     overlap_ratio = overlap_count / len(generated_content)
     shared_run = longest_shared_run(generated_content, context_content)
-    uses_only_context_tokens = all(token in context_token_set for token in generated_content)
+    uses_only_context_tokens = all(
+        token in context_token_set for token in generated_content
+    )
     has_local_loops = len(set(generated_content)) <= max(2, len(generated_content) // 2)
 
     if uses_only_context_tokens and has_local_loops:
@@ -240,7 +253,9 @@ def weighted_next_choice(
     return random.choices(population=population, weights=weights, k=1)[0]
 
 
-def weighted_start2_choice(items: list[tuple[str, str, int]], explore_probability: float, power: float) -> tuple[str, str]:
+def weighted_start2_choice(
+    items: list[tuple[str, str, int]], explore_probability: float, power: float
+) -> tuple[str, str]:
     population = [(w1, w2) for w1, w2, _ in items]
     if random.random() < explore_probability:
         return random.choice(population)
@@ -280,13 +295,17 @@ class MarkovGenerator:
             for key in keys:
                 cache.pop(key, None)
 
-    def _touch_cache(self, cache: OrderedDict, key: tuple, value: list[tuple[str, int]]) -> None:
+    def _touch_cache(
+        self, cache: OrderedDict, key: tuple, value: list[tuple[str, int]]
+    ) -> None:
         cache[key] = value
         cache.move_to_end(key)
         if len(cache) > self.cache_limit:
             cache.popitem(last=False)
 
-    async def _get3(self, chat_id: int, w1: str, w2: str, w3: str) -> list[tuple[str, int]]:
+    async def _get3(
+        self, chat_id: int, w1: str, w2: str, w3: str
+    ) -> list[tuple[str, int]]:
         key = (chat_id, w1, w2, w3)
         if key in self._cache3:
             self._cache3.move_to_end(key)
@@ -328,11 +347,17 @@ class MarkovGenerator:
         candidates: list[tuple[tuple[str, str, str], float]] = []
         total = len(windows)
         for index, window in enumerate(windows):
-            seeded3 = await self.db.get_start3_if_exists(chat_id, window[0], window[1], window[2])
+            seeded3 = await self.db.get_start3_if_exists(
+                chat_id, window[0], window[1], window[2]
+            )
             if not seeded3:
                 continue
             recency_bonus = 1.0 + ((index + 1) / total) * 0.35
-            weight = (max(seeded3[3], 1) ** power) * max(1.0, context_start_bias) * recency_bonus
+            weight = (
+                (max(seeded3[3], 1) ** power)
+                * max(1.0, context_start_bias)
+                * recency_bonus
+            )
             candidates.append(((seeded3[0], seeded3[1], seeded3[2]), weight))
 
         if not candidates:
@@ -370,7 +395,11 @@ class MarkovGenerator:
             if not seeded2:
                 continue
             recency_bonus = 1.0 + ((index + 1) / total) * 0.30
-            weight = (max(seeded2[2], 1) ** power) * max(1.0, context_start_bias) * recency_bonus
+            weight = (
+                (max(seeded2[2], 1) ** power)
+                * max(1.0, context_start_bias)
+                * recency_bonus
+            )
             candidates.append(((seeded2[0], seeded2[1]), weight))
 
         if not candidates:
@@ -442,7 +471,9 @@ class MarkovGenerator:
             if seeded3:
                 start3 = (seeded3[0], seeded3[1], seeded3[2])
         if start3 is None and seed_tokens and len(seed_tokens) >= 2:
-            seeded2 = await self.db.get_start_if_exists(chat_id, seed_tokens[0], seed_tokens[1])
+            seeded2 = await self.db.get_start_if_exists(
+                chat_id, seed_tokens[0], seed_tokens[1]
+            )
             if seeded2:
                 w1, w2 = seeded2[0], seeded2[1]
                 variants = await self._get2(chat_id, w1, w2)
@@ -464,7 +495,11 @@ class MarkovGenerator:
         if start3 is None and context_tokens:
             if order >= 3:
                 start3 = await self._select_contextual_start3(
-                    chat_id, context_tokens, start_explore, start_power, context_start_bias
+                    chat_id,
+                    context_tokens,
+                    start_explore,
+                    start_power,
+                    context_start_bias,
                 )
             if start3 is None:
                 start3 = await self._select_contextual_start2(
@@ -517,14 +552,25 @@ class MarkovGenerator:
         for step_index in range(self.max_steps):
             if len(generated) >= token_limit:
                 break
-            if len(generated) > 8 and random.random() < jump_probability and starts3 and order >= 3:
+            if (
+                len(generated) > 8
+                and random.random() < jump_probability
+                and starts3
+                and order >= 3
+            ):
                 contextual_jump = None
                 if context_tokens:
                     contextual_jump = await self._select_contextual_start3(
-                        chat_id, context_tokens, start_explore, start_power, context_start_bias
+                        chat_id,
+                        context_tokens,
+                        start_explore,
+                        start_power,
+                        context_start_bias,
                     )
                 if contextual_jump is None:
-                    contextual_jump = weighted_start3_choice(starts3, start_explore, start_power)
+                    contextual_jump = weighted_start3_choice(
+                        starts3, start_explore, start_power
+                    )
                 w1, w2, w3 = contextual_jump
                 jump_count += 1
                 continue
@@ -532,7 +578,9 @@ class MarkovGenerator:
             pool3 = await self._get3(chat_id, w1, w2, w3) if order >= 3 else []
             if pool3 and order >= 3:
                 candidates = [
-                    (cand, cnt) for cand, cnt in pool3 if (w2, w3, cand) not in visited_triplets
+                    (cand, cnt)
+                    for cand, cnt in pool3
+                    if (w2, w3, cand) not in visited_triplets
                 ]
                 pool = candidates or pool3
                 w4 = weighted_next_choice(

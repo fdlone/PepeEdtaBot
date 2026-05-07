@@ -43,12 +43,24 @@ class TestBotPolicy(unittest.TestCase):
         )
 
     def test_cooldown_allows_reply_after_min_interval(self) -> None:
-        self.assertTrue(cooldown_allows_reply(now_ts=145.0, last_reply_ts=100.0, min_cooldown_sec=45))
-        self.assertFalse(cooldown_allows_reply(now_ts=144.9, last_reply_ts=100.0, min_cooldown_sec=45))
+        self.assertTrue(
+            cooldown_allows_reply(
+                now_ts=145.0, last_reply_ts=100.0, min_cooldown_sec=45
+            )
+        )
+        self.assertFalse(
+            cooldown_allows_reply(
+                now_ts=144.9, last_reply_ts=100.0, min_cooldown_sec=45
+            )
+        )
 
     def test_has_enough_model_data_at_threshold(self) -> None:
-        self.assertTrue(has_enough_model_data(token_volume=200, min_tokens_for_model=200))
-        self.assertFalse(has_enough_model_data(token_volume=199, min_tokens_for_model=200))
+        self.assertTrue(
+            has_enough_model_data(token_volume=200, min_tokens_for_model=200)
+        )
+        self.assertFalse(
+            has_enough_model_data(token_volume=199, min_tokens_for_model=200)
+        )
 
     def test_bot_is_mentioned_by_entity_like_value(self) -> None:
         message = SimpleNamespace(

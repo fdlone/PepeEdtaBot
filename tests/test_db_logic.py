@@ -174,7 +174,14 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             tables,
-            ["messages", "starts", "starts3", "transitions", "transitions1", "transitions3"],
+            [
+                "messages",
+                "starts",
+                "starts3",
+                "transitions",
+                "transitions1",
+                "transitions3",
+            ],
         )
 
         self.db = Database(str(self.db_path))

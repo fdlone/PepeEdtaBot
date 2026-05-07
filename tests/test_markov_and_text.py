@@ -33,14 +33,18 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.db_path.unlink(missing_ok=True)
 
     def test_sanitize_and_tokenize(self) -> None:
-        clean = sanitize_text("Привееееет!!!   https://x.y  @PepeEdta_Bot  Как   дела??")
+        clean = sanitize_text(
+            "Привееееет!!!   https://x.y  @PepeEdta_Bot  Как   дела??"
+        )
         self.assertEqual(clean, "Привеет!! Как дела??")
 
         tokens = tokenize(clean)
         self.assertEqual(tokens, ["Привеет", "!", "!", "Как", "дела", "?", "?"])
 
     def test_detokenize(self) -> None:
-        text = detokenize(["Привет", ",", "мир", "!", "Как", "дела", "?"], max_chars=100)
+        text = detokenize(
+            ["Привет", ",", "мир", "!", "Как", "дела", "?"], max_chars=100
+        )
         self.assertEqual(text, "Привет, мир! Как дела?")
 
     def test_detokenize_does_not_cut_words_by_char_limit(self) -> None:
@@ -74,7 +78,16 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
     def test_has_degraded_recent_window_detects_repetitive_recent_loop(self) -> None:
         self.assertTrue(
             has_degraded_recent_window(
-                ["нормальный", "ответ", "но", "потом", "курлык", "курлык", "курлык", "курлык"]
+                [
+                    "нормальный",
+                    "ответ",
+                    "но",
+                    "потом",
+                    "курлык",
+                    "курлык",
+                    "курлык",
+                    "курлык",
+                ]
             )
         )
 
@@ -104,7 +117,16 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
     def test_is_low_diversity_reply_detects_near_monotone_reply(self) -> None:
         self.assertTrue(
             is_low_diversity_reply(
-                ["курлык", "курлык", "курлык", "я", "курлык", "курлык", "курлык", "курлык"]
+                [
+                    "курлык",
+                    "курлык",
+                    "курлык",
+                    "я",
+                    "курлык",
+                    "курлык",
+                    "курлык",
+                    "курлык",
+                ]
             )
         )
 
@@ -160,7 +182,9 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(other_count, same_count)
 
     def test_extract_context_tokens_uses_reply_and_current_message(self) -> None:
-        message = SimpleNamespace(reply_to_message=SimpleNamespace(text="Люблю кофе!!! @bot"))
+        message = SimpleNamespace(
+            reply_to_message=SimpleNamespace(text="Люблю кофе!!! @bot")
+        )
         tokens = extract_context_tokens(
             message=message,
             current_text="А я утром",
@@ -184,24 +208,34 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tokens, [])
 
     def test_bot_is_mentioned_by_plain_text_pepe(self) -> None:
-        message = SimpleNamespace(text="Pepe, ответь что-нибудь", entities=None, reply_to_message=None)
+        message = SimpleNamespace(
+            text="Pepe, ответь что-нибудь", entities=None, reply_to_message=None
+        )
         self.assertTrue(bot_is_mentioned(message, "PepeEdtaBot", 777))
 
     def test_bot_is_mentioned_by_plain_text_pepe_case_insensitive(self) -> None:
-        message = SimpleNamespace(text="ПеПе, ответь что-нибудь", entities=None, reply_to_message=None)
+        message = SimpleNamespace(
+            text="ПеПе, ответь что-нибудь", entities=None, reply_to_message=None
+        )
         self.assertTrue(bot_is_mentioned(message, "PepeEdtaBot", 777))
 
     def test_bot_is_mentioned_by_plain_text_pepe_cyrillic(self) -> None:
-        message = SimpleNamespace(text="пЕпЕ ты тут?", entities=None, reply_to_message=None)
+        message = SimpleNamespace(
+            text="пЕпЕ ты тут?", entities=None, reply_to_message=None
+        )
         self.assertTrue(bot_is_mentioned(message, "PepeEdtaBot", 777))
 
     def test_bot_is_not_mentioned_by_substring_only(self) -> None:
-        message = SimpleNamespace(text="pepega сегодня победил", entities=None, reply_to_message=None)
+        message = SimpleNamespace(
+            text="pepega сегодня победил", entities=None, reply_to_message=None
+        )
         self.assertFalse(bot_is_mentioned(message, "PepeEdtaBot", 777))
 
     def test_bot_is_mentioned_by_reply_to_bot_message(self) -> None:
         reply_to_message = SimpleNamespace(from_user=SimpleNamespace(id=777))
-        message = SimpleNamespace(text="слушай", entities=None, reply_to_message=reply_to_message)
+        message = SimpleNamespace(
+            text="слушай", entities=None, reply_to_message=reply_to_message
+        )
         self.assertTrue(bot_is_mentioned(message, "PepeEdtaBot", 777))
 
     async def test_generate_text_with_seed(self) -> None:

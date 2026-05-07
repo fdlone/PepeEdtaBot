@@ -87,7 +87,9 @@ class TestRuntimeConfig(unittest.TestCase):
 
         self.assertEqual(state.typing_min_ms, 350)
 
-    def test_apply_runtime_setting_rejects_backoff_min_order_equal_to_markov_order(self) -> None:
+    def test_apply_runtime_setting_rejects_backoff_min_order_equal_to_markov_order(
+        self,
+    ) -> None:
         state = make_state()
         state.markov_order = 2
 
@@ -96,7 +98,9 @@ class TestRuntimeConfig(unittest.TestCase):
 
         self.assertEqual(state.backoff_min_order, 1)
 
-    def test_apply_runtime_setting_rejects_markov_order_when_backoff_conflicts(self) -> None:
+    def test_apply_runtime_setting_rejects_markov_order_when_backoff_conflicts(
+        self,
+    ) -> None:
         state = make_state()
         state.backoff_min_order = 2
 
@@ -105,7 +109,9 @@ class TestRuntimeConfig(unittest.TestCase):
 
         self.assertEqual(state.markov_order, 3)
 
-    def test_apply_runtime_setting_rejects_reply_context_last_tokens_above_max(self) -> None:
+    def test_apply_runtime_setting_rejects_reply_context_last_tokens_above_max(
+        self,
+    ) -> None:
         state = make_state()
         state.reply_context_max_tokens = 2
 
@@ -122,7 +128,9 @@ class TestRuntimeConfig(unittest.TestCase):
 
     def test_unknown_key_message_lists_known_keys(self) -> None:
         self.assertIn("reply_probability", UNKNOWN_RUNTIME_KEY_MESSAGE)
-        self.assertIn("reply_context_include_current_message", UNKNOWN_RUNTIME_KEY_MESSAGE)
+        self.assertIn(
+            "reply_context_include_current_message", UNKNOWN_RUNTIME_KEY_MESSAGE
+        )
 
 
 if __name__ == "__main__":

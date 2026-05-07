@@ -111,7 +111,9 @@ class Database:
             """
         )
 
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);"
+        )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_messages_normalized_lookup ON messages(chat_id, normalized_text);"
         )
@@ -132,7 +134,9 @@ class Database:
         )
         await db.commit()
 
-    async def _ensure_messages_normalized_text_column(self, db: aiosqlite.Connection) -> None:
+    async def _ensure_messages_normalized_text_column(
+        self, db: aiosqlite.Connection
+    ) -> None:
         cursor = await db.execute("PRAGMA table_info(messages);")
         columns = {str(row[1]) for row in await cursor.fetchall()}
         if "normalized_text" not in columns:
@@ -167,11 +171,14 @@ class Database:
 
         if len(tokens) >= 2:
             starts2_pair = (tokens[0], tokens[1])
-            trans1_counter = Counter((tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1))
+            trans1_counter = Counter(
+                (tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1)
+            )
         if len(tokens) >= 3:
             starts3_triplet = (tokens[0], tokens[1], tokens[2])
             trans2_counter = Counter(
-                (tokens[i], tokens[i + 1], tokens[i + 2]) for i in range(len(tokens) - 2)
+                (tokens[i], tokens[i + 1], tokens[i + 2])
+                for i in range(len(tokens) - 2)
             )
         if len(tokens) >= 4:
             trans3_counter = Counter(
@@ -208,7 +215,12 @@ class Database:
                     ON CONFLICT(chat_id, w1, w2, w3)
                     DO UPDATE SET cnt = cnt + 1
                     """,
-                    (chat_id, starts3_triplet[0], starts3_triplet[1], starts3_triplet[2]),
+                    (
+                        chat_id,
+                        starts3_triplet[0],
+                        starts3_triplet[1],
+                        starts3_triplet[2],
+                    ),
                 )
             if trans1_counter:
                 await db.executemany(
@@ -218,7 +230,10 @@ class Database:
                     ON CONFLICT(chat_id, w1, w2)
                     DO UPDATE SET cnt = cnt + excluded.cnt
                     """,
-                    [(chat_id, w1, w2, cnt) for (w1, w2), cnt in trans1_counter.items()],
+                    [
+                        (chat_id, w1, w2, cnt)
+                        for (w1, w2), cnt in trans1_counter.items()
+                    ],
                 )
             if trans2_counter:
                 await db.executemany(
@@ -313,7 +328,9 @@ class Database:
             return None
         return str(row[0]), str(row[1]), str(row[2]), int(row[3])
 
-    async def get_transitions(self, chat_id: int, w1: str, w2: str) -> list[tuple[str, int]]:
+    async def get_transitions(
+        self, chat_id: int, w1: str, w2: str
+    ) -> list[tuple[str, int]]:
         async with self._lock:
             db = await self._get_conn()
             cursor = await db.execute(
@@ -380,34 +397,58 @@ class Database:
             msg_count = int(
                 (
                     await (
-                        await db.execute("SELECT COUNT(*) FROM messages WHERE chat_id = ?", (chat_id,))
+                        await db.execute(
+                            "SELECT COUNT(*) FROM messages WHERE chat_id = ?",
+                            (chat_id,),
+                        )
                     ).fetchone()
                 )[0]
             )
             starts2_count = int(
-                (await (await db.execute("SELECT COUNT(*) FROM starts WHERE chat_id = ?", (chat_id,))).fetchone())[0]
+                (
+                    await (
+                        await db.execute(
+                            "SELECT COUNT(*) FROM starts WHERE chat_id = ?", (chat_id,)
+                        )
+                    ).fetchone()
+                )[0]
             )
             starts3_count = int(
-                (await (await db.execute("SELECT COUNT(*) FROM starts3 WHERE chat_id = ?", (chat_id,))).fetchone())[0]
+                (
+                    await (
+                        await db.execute(
+                            "SELECT COUNT(*) FROM starts3 WHERE chat_id = ?", (chat_id,)
+                        )
+                    ).fetchone()
+                )[0]
             )
             trans2_count = int(
                 (
                     await (
-                        await db.execute("SELECT COUNT(*) FROM transitions WHERE chat_id = ?", (chat_id,))
+                        await db.execute(
+                            "SELECT COUNT(*) FROM transitions WHERE chat_id = ?",
+                            (chat_id,),
+                        )
                     ).fetchone()
                 )[0]
             )
             trans3_count = int(
                 (
                     await (
-                        await db.execute("SELECT COUNT(*) FROM transitions3 WHERE chat_id = ?", (chat_id,))
+                        await db.execute(
+                            "SELECT COUNT(*) FROM transitions3 WHERE chat_id = ?",
+                            (chat_id,),
+                        )
                     ).fetchone()
                 )[0]
             )
             trans1_count = int(
                 (
                     await (
-                        await db.execute("SELECT COUNT(*) FROM transitions1 WHERE chat_id = ?", (chat_id,))
+                        await db.execute(
+                            "SELECT COUNT(*) FROM transitions1 WHERE chat_id = ?",
+                            (chat_id,),
+                        )
                     ).fetchone()
                 )[0]
             )
