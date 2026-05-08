@@ -44,14 +44,14 @@ docker compose up -d --build
 docker compose down
 ```
 
-Файл конфигурации: [compose.yaml](/D:/test/PepeEdtaBot/compose.yaml)
+Файл конфигурации: [compose.yaml](compose.yaml)
 
 В Docker по умолчанию используется база `data/markov.db`, подключенная через volume
 `./data:/app/data`. Файл `markov.db` в корне репозитория является локальной
 тестовой базой и не считается боевым хранилищем.
 
 ## Основные настройки
-Все параметры перечислены в [.env.example](/D:/test/PepeEdtaBot/.env.example).
+Все параметры перечислены в [.env.example](.env.example).
 
 Чаще всего меняются:
 - `REPLY_PROBABILITY` — вероятность случайного ответа без прямого обращения.
