@@ -77,65 +77,73 @@ class TestMigratorFreshDb(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(names, EXPECTED_MIGRATIONS)
 
 
+_LEGACY_DDL = """
+    CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id INTEGER NOT NULL,
+        author_id INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        normalized_text TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS starts (
+        chat_id INTEGER NOT NULL,
+        w1 TEXT NOT NULL, w2 TEXT NOT NULL,
+        cnt INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(chat_id, w1, w2)
+    );
+    CREATE TABLE IF NOT EXISTS transitions (
+        chat_id INTEGER NOT NULL,
+        w1 TEXT NOT NULL, w2 TEXT NOT NULL, w3 TEXT NOT NULL,
+        cnt INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(chat_id, w1, w2, w3)
+    );
+    CREATE TABLE IF NOT EXISTS starts3 (
+        chat_id INTEGER NOT NULL,
+        w1 TEXT NOT NULL, w2 TEXT NOT NULL, w3 TEXT NOT NULL,
+        cnt INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(chat_id, w1, w2, w3)
+    );
+    CREATE TABLE IF NOT EXISTS transitions3 (
+        chat_id INTEGER NOT NULL,
+        w1 TEXT NOT NULL, w2 TEXT NOT NULL, w3 TEXT NOT NULL, w4 TEXT NOT NULL,
+        cnt INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(chat_id, w1, w2, w3, w4)
+    );
+    CREATE TABLE IF NOT EXISTS transitions1 (
+        chat_id INTEGER NOT NULL,
+        w1 TEXT NOT NULL, w2 TEXT NOT NULL,
+        cnt INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(chat_id, w1, w2)
+    );
+    CREATE TABLE IF NOT EXISTS pivo_chat_members (
+        chat_hash TEXT NOT NULL,
+        user_hash TEXT NOT NULL,
+        encrypted_user_id TEXT NOT NULL,
+        encrypted_username TEXT NOT NULL DEFAULT '',
+        encrypted_display_name TEXT NOT NULL DEFAULT '',
+        is_bot INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY(chat_hash, user_hash)
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_normalized_lookup ON messages(chat_id, normalized_text);
+    CREATE INDEX IF NOT EXISTS idx_starts_lookup ON starts(chat_id, w1, w2);
+    CREATE INDEX IF NOT EXISTS idx_transitions_lookup ON transitions(chat_id, w1, w2);
+    CREATE INDEX IF NOT EXISTS idx_starts3_chat_id ON starts3(chat_id);
+    CREATE INDEX IF NOT EXISTS idx_transitions3_lookup ON transitions3(chat_id, w1, w2, w3);
+    CREATE INDEX IF NOT EXISTS idx_transitions1_lookup ON transitions1(chat_id, w1);
+    CREATE INDEX IF NOT EXISTS idx_pivo_chat_members_chat_hash ON pivo_chat_members(chat_hash);
+"""
+
+
 class TestMigratorExistingDb(unittest.IsolatedAsyncioTestCase):
     """Simulates a pre-existing database created by the old inline-DDL init()."""
 
     async def asyncSetUp(self) -> None:
         self.conn = await aiosqlite.connect(":memory:")
-        # Reproduce what the old Database.init() would create
-        await self.conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER NOT NULL,
-                author_id INTEGER NOT NULL,
-                text TEXT NOT NULL,
-                normalized_text TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            CREATE TABLE IF NOT EXISTS starts (
-                chat_id INTEGER NOT NULL,
-                w1 TEXT NOT NULL, w2 TEXT NOT NULL,
-                cnt INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, w1, w2)
-            );
-            CREATE TABLE IF NOT EXISTS transitions (
-                chat_id INTEGER NOT NULL,
-                w1 TEXT NOT NULL, w2 TEXT NOT NULL, w3 TEXT NOT NULL,
-                cnt INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, w1, w2, w3)
-            );
-            CREATE TABLE IF NOT EXISTS starts3 (
-                chat_id INTEGER NOT NULL,
-                w1 TEXT NOT NULL, w2 TEXT NOT NULL, w3 TEXT NOT NULL,
-                cnt INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, w1, w2, w3)
-            );
-            CREATE TABLE IF NOT EXISTS transitions3 (
-                chat_id INTEGER NOT NULL,
-                w1 TEXT NOT NULL, w2 TEXT NOT NULL, w3 TEXT NOT NULL, w4 TEXT NOT NULL,
-                cnt INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, w1, w2, w3, w4)
-            );
-            CREATE TABLE IF NOT EXISTS transitions1 (
-                chat_id INTEGER NOT NULL,
-                w1 TEXT NOT NULL, w2 TEXT NOT NULL,
-                cnt INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, w1, w2)
-            );
-            CREATE TABLE IF NOT EXISTS pivo_chat_members (
-                chat_hash TEXT NOT NULL,
-                user_hash TEXT NOT NULL,
-                encrypted_user_id TEXT NOT NULL,
-                encrypted_username TEXT NOT NULL DEFAULT '',
-                encrypted_display_name TEXT NOT NULL DEFAULT '',
-                is_bot INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY(chat_hash, user_hash)
-            );
-            """
-        )
+        await self.conn.executescript(_LEGACY_DDL)
 
     async def asyncTearDown(self) -> None:
         await self.conn.close()
@@ -162,3 +170,210 @@ class TestMigratorExistingDb(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(row)
         self.assertEqual(row[0], 0, "author_id should be anonymized")
         self.assertEqual(row[1], "hello", "normalized_text should be backfilled")
+
+
+class TestMigratorFullCompatibility(unittest.IsolatedAsyncioTestCase):
+    """
+    Soak test: seeds ALL tables with realistic data, runs migrator on the legacy
+    schema (including the old idx_messages_normalized_lookup index), then asserts
+    every row in every table is intact.
+    """
+
+    async def asyncSetUp(self) -> None:
+        self.conn = await aiosqlite.connect(":memory:")
+        await self.conn.executescript(_LEGACY_DDL)
+
+        # messages: one with already-filled normalized_text, one with empty (needs backfill),
+        # one with non-zero author_id (needs anonymization).
+        await self.conn.executemany(
+            "INSERT INTO messages(chat_id, author_id, text, normalized_text) VALUES (?,?,?,?)",
+            [
+                (100, 0, "кофе утром бодрит", "кофе утром бодрит"),   # already normalized
+                (100, 0, "Привет @bot !", ""),                         # needs backfill
+                (100, 42, "старый автор", "старый автор"),             # needs anonymization
+            ],
+        )
+
+        # Markov n=2
+        await self.conn.executemany(
+            "INSERT INTO starts(chat_id, w1, w2, cnt) VALUES (?,?,?,?)",
+            [(100, "кофе", "утром", 3), (100, "привет", "мир", 1)],
+        )
+        await self.conn.executemany(
+            "INSERT INTO transitions(chat_id, w1, w2, w3, cnt) VALUES (?,?,?,?,?)",
+            [(100, "кофе", "утром", "бодрит", 3)],
+        )
+
+        # Markov n=3
+        await self.conn.executemany(
+            "INSERT INTO starts3(chat_id, w1, w2, w3, cnt) VALUES (?,?,?,?,?)",
+            [(100, "кофе", "утром", "бодрит", 2)],
+        )
+        await self.conn.executemany(
+            "INSERT INTO transitions3(chat_id, w1, w2, w3, w4, cnt) VALUES (?,?,?,?,?,?)",
+            [(100, "а", "кофе", "утром", "бодрит", 1)],
+        )
+
+        # Markov n=1
+        await self.conn.executemany(
+            "INSERT INTO transitions1(chat_id, w1, w2, cnt) VALUES (?,?,?,?)",
+            [(100, "кофе", "утром", 5), (100, "утром", "бодрит", 5)],
+        )
+
+        # pivo members
+        await self.conn.executemany(
+            "INSERT INTO pivo_chat_members"
+            "(chat_hash, user_hash, encrypted_user_id, encrypted_username, encrypted_display_name, is_bot)"
+            " VALUES (?,?,?,?,?,?)",
+            [
+                ("chash1", "uhash1", "enc_uid_1", "enc_uname_1", "enc_dname_1", 0),
+                ("chash1", "uhash2", "enc_uid_2", "", "enc_dname_2", 0),
+            ],
+        )
+
+        await self.conn.commit()
+
+    async def asyncTearDown(self) -> None:
+        await self.conn.close()
+
+    async def _count(self, table: str) -> int:
+        cur = await self.conn.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
+        return (await cur.fetchone())[0]
+
+    async def test_row_counts_unchanged_in_all_tables(self) -> None:
+        counts_before = {
+            t: await self._count(t)
+            for t in ("messages", "starts", "transitions", "starts3",
+                      "transitions3", "transitions1", "pivo_chat_members")
+        }
+        await migrator.run(self.conn)
+        for table, before in counts_before.items():
+            after = await self._count(table)
+            self.assertEqual(after, before, f"{table}: row count changed after migration")
+
+    async def test_markov_data_intact(self) -> None:
+        await migrator.run(self.conn)
+
+        cur = await self.conn.execute(
+            "SELECT cnt FROM starts WHERE chat_id=100 AND w1='кофе' AND w2='утром'"
+        )
+        self.assertEqual((await cur.fetchone())[0], 3)
+
+        cur = await self.conn.execute(
+            "SELECT cnt FROM transitions WHERE chat_id=100 AND w1='кофе' AND w2='утром' AND w3='бодрит'"
+        )
+        self.assertEqual((await cur.fetchone())[0], 3)
+
+        cur = await self.conn.execute(
+            "SELECT cnt FROM starts3 WHERE chat_id=100 AND w1='кофе' AND w2='утром' AND w3='бодрит'"
+        )
+        self.assertEqual((await cur.fetchone())[0], 2)
+
+        cur = await self.conn.execute(
+            "SELECT cnt FROM transitions3 WHERE chat_id=100 AND w1='а' AND w2='кофе' AND w3='утром' AND w4='бодрит'"
+        )
+        self.assertEqual((await cur.fetchone())[0], 1)
+
+        cur = await self.conn.execute(
+            "SELECT SUM(cnt) FROM transitions1 WHERE chat_id=100"
+        )
+        self.assertEqual((await cur.fetchone())[0], 10)
+
+    async def test_pivo_members_intact(self) -> None:
+        await migrator.run(self.conn)
+
+        cur = await self.conn.execute(
+            "SELECT encrypted_user_id, encrypted_display_name"
+            " FROM pivo_chat_members WHERE chat_hash='chash1' ORDER BY user_hash"
+        )
+        rows = await cur.fetchall()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0][0], "enc_uid_1")
+        self.assertEqual(rows[1][1], "enc_dname_2")
+
+    async def test_original_text_column_not_modified(self) -> None:
+        await migrator.run(self.conn)
+
+        cur = await self.conn.execute(
+            "SELECT text FROM messages WHERE chat_id=100 ORDER BY id"
+        )
+        texts = [row[0] for row in await cur.fetchall()]
+        self.assertEqual(texts, ["кофе утром бодрит", "Привет @bot !", "старый автор"])
+
+    async def test_already_normalized_text_not_overwritten(self) -> None:
+        await migrator.run(self.conn)
+
+        cur = await self.conn.execute(
+            "SELECT normalized_text FROM messages WHERE text='кофе утром бодрит'"
+        )
+        self.assertEqual((await cur.fetchone())[0], "кофе утром бодрит")
+
+    async def test_empty_normalized_text_backfilled(self) -> None:
+        await migrator.run(self.conn)
+
+        cur = await self.conn.execute(
+            "SELECT normalized_text FROM messages WHERE text='Привет @bot !'"
+        )
+        result = (await cur.fetchone())[0]
+        self.assertNotEqual(result, "", "normalized_text must be backfilled from text")
+
+    async def test_author_ids_anonymized(self) -> None:
+        await migrator.run(self.conn)
+
+        cur = await self.conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE author_id != 0"
+        )
+        self.assertEqual((await cur.fetchone())[0], 0)
+
+    async def test_existing_index_not_dropped(self) -> None:
+        """The old init created idx_messages_normalized_lookup; migrator must not remove it."""
+        await migrator.run(self.conn)
+
+        cur = await self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+            " AND name='idx_messages_normalized_lookup'"
+        )
+        self.assertIsNotNone(await cur.fetchone(), "index must still exist after migration")
+
+    async def test_very_old_db_without_normalized_text_column(self) -> None:
+        """
+        Edge case: DB created before normalized_text was added (no column at all).
+        Migration 002 must add the column, backfill it, and leave the rest untouched.
+        """
+        conn = await aiosqlite.connect(":memory:")
+        try:
+            await conn.executescript(
+                """
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    author_id INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE TABLE starts (
+                    chat_id INTEGER NOT NULL,
+                    w1 TEXT NOT NULL, w2 TEXT NOT NULL,
+                    cnt INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(chat_id, w1, w2)
+                );
+                INSERT INTO messages(chat_id, author_id, text) VALUES (200, 7, 'старый текст');
+                INSERT INTO starts(chat_id, w1, w2, cnt) VALUES (200, 'старый', 'текст', 1);
+                """
+            )
+            await migrator.run(conn)
+
+            cur = await conn.execute(
+                "SELECT normalized_text, author_id FROM messages WHERE chat_id=200"
+            )
+            row = await cur.fetchone()
+            self.assertIsNotNone(row)
+            self.assertNotEqual(row[0], "", "normalized_text must be backfilled")
+            self.assertEqual(row[1], 0, "author_id must be anonymized")
+
+            cur = await conn.execute(
+                "SELECT cnt FROM starts WHERE chat_id=200 AND w1='старый' AND w2='текст'"
+            )
+            self.assertEqual((await cur.fetchone())[0], 1, "starts data must be preserved")
+        finally:
+            await conn.close()
