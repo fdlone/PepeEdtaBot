@@ -17,7 +17,8 @@ from markov import (
     tokenize,
     weighted_next_choice,
 )
-from main import bot_is_mentioned, extract_context_tokens
+from app.handlers.learning import extract_context_tokens
+from bot_policy import bot_is_mentioned
 from text_utils import sanitize_text
 
 
