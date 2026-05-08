@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 import aiosqlite
 
 from app.infrastructure import migrator
+
+_FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 EXPECTED_MIGRATIONS = [
@@ -377,3 +380,115 @@ class TestMigratorFullCompatibility(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await cur.fetchone())[0], 1, "starts data must be preserved")
         finally:
             await conn.close()
+
+
+class TestMigratorRealSchemaFixture(unittest.IsolatedAsyncioTestCase):
+    """
+    Loads tests/fixtures/legacy_real_schema.sql — an exact replica of the schema
+    found in a real production markov.db (no normalized_text column, no
+    pivo_chat_members table, idx_starts_chat_id index instead of the current set).
+    Verifies that migrator handles this without data loss.
+    """
+
+    async def asyncSetUp(self) -> None:
+        self.conn = await aiosqlite.connect(":memory:")
+        ddl = (_FIXTURES_DIR / "legacy_real_schema.sql").read_text(encoding="utf-8")
+        await self.conn.executescript(ddl)
+
+    async def asyncTearDown(self) -> None:
+        await self.conn.close()
+
+    async def _count(self, table: str) -> int:
+        cur = await self.conn.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
+        return (await cur.fetchone())[0]
+
+    async def test_migrator_runs_without_error(self) -> None:
+        await migrator.run(self.conn)
+
+    async def test_all_migrations_recorded(self) -> None:
+        await migrator.run(self.conn)
+        self.assertEqual(await _applied_names(self.conn), EXPECTED_MIGRATIONS)
+
+    async def test_message_count_unchanged(self) -> None:
+        before = await self._count("messages")
+        await migrator.run(self.conn)
+        self.assertEqual(await self._count("messages"), before)
+
+    async def test_markov_row_counts_unchanged(self) -> None:
+        counts = {
+            t: await self._count(t)
+            for t in ("starts", "starts3", "transitions", "transitions1", "transitions3")
+        }
+        await migrator.run(self.conn)
+        for table, before in counts.items():
+            self.assertEqual(await self._count(table), before, f"{table} count changed")
+
+    async def test_normalized_text_backfilled_for_all_messages(self) -> None:
+        await migrator.run(self.conn)
+        cur = await self.conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE normalized_text = ''"
+        )
+        self.assertEqual((await cur.fetchone())[0], 0)
+
+    async def test_all_author_ids_anonymized(self) -> None:
+        # Fixture has non-zero author_ids (396273827, 249369775, 111222333)
+        before = await self._count("messages")
+        self.assertGreater(before, 0)
+        await migrator.run(self.conn)
+        cur = await self.conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE author_id != 0"
+        )
+        self.assertEqual((await cur.fetchone())[0], 0)
+
+    async def test_markov_chain_values_intact(self) -> None:
+        await migrator.run(self.conn)
+        cur = await self.conn.execute(
+            "SELECT cnt FROM starts WHERE chat_id=-1003736119498 AND w1='пойдём' AND w2='пить'"
+        )
+        self.assertEqual((await cur.fetchone())[0], 1)
+
+        cur = await self.conn.execute(
+            "SELECT cnt FROM transitions WHERE chat_id=-1003736119498"
+            " AND w1='пойдём' AND w2='пить' AND w3='кофе'"
+        )
+        self.assertEqual((await cur.fetchone())[0], 1)
+
+        cur = await self.conn.execute(
+            "SELECT SUM(cnt) FROM transitions1 WHERE chat_id=-1003736119498"
+        )
+        self.assertEqual((await cur.fetchone())[0], 5)
+
+    async def test_original_text_not_modified(self) -> None:
+        await migrator.run(self.conn)
+        cur = await self.conn.execute(
+            "SELECT text FROM messages ORDER BY id"
+        )
+        texts = [r[0] for r in await cur.fetchall()]
+        self.assertEqual(texts, [
+            "привет всем",
+            "как дела",
+            "всё хорошо",
+            "пойдём пить кофе",
+            "другой чат тоже здесь",
+        ])
+
+    async def test_pivo_chat_members_created_empty(self) -> None:
+        await migrator.run(self.conn)
+        cur = await self.conn.execute("SELECT COUNT(*) FROM pivo_chat_members")
+        self.assertEqual((await cur.fetchone())[0], 0)
+
+    async def test_legacy_index_preserved(self) -> None:
+        """idx_starts_chat_id existed in old DB and must survive migration."""
+        await migrator.run(self.conn)
+        cur = await self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_starts_chat_id'"
+        )
+        self.assertIsNotNone(await cur.fetchone())
+
+    async def test_multi_chat_isolation(self) -> None:
+        """Data from two different chat_ids must remain separate after migration."""
+        await migrator.run(self.conn)
+        cur = await self.conn.execute(
+            "SELECT COUNT(DISTINCT chat_id) FROM messages"
+        )
+        self.assertEqual((await cur.fetchone())[0], 2)
