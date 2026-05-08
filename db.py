@@ -7,7 +7,7 @@ from typing import Optional
 import aiosqlite
 
 from app.infrastructure import migrator
-from app.repositories import MarkovRepo, MessagesRepo, PivoRepo
+from app.repositories import MarkovRepo, MembersRepo, MessagesRepo, PivoRepo
 from text_utils import sanitize_text
 
 
@@ -19,6 +19,7 @@ class Database:
         self._conn: Optional[aiosqlite.Connection] = None
         self._lock = asyncio.Lock()
         self.markov: Optional[MarkovRepo] = None
+        self.members: Optional[MembersRepo] = None
         self.messages: Optional[MessagesRepo] = None
         self.pivo: Optional[PivoRepo] = None
 
@@ -40,6 +41,7 @@ class Database:
         await migrator.run(db)
 
         self.markov = MarkovRepo(self._get_conn, self._lock)
+        self.members = MembersRepo(self._get_conn, self._lock)
         self.messages = MessagesRepo(self._get_conn, self._lock)
         self.pivo = PivoRepo(self._get_conn, self._lock)
 
@@ -48,6 +50,7 @@ class Database:
             await self._conn.close()
             self._conn = None
         self.markov = None
+        self.members = None
         self.messages = None
         self.pivo = None
 
