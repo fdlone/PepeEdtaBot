@@ -7,7 +7,7 @@ from typing import Optional
 import aiosqlite
 
 from app.infrastructure import migrator
-from app.repositories import MarkovRepo, MembersRepo, MessagesRepo, PivoRepo
+from app.repositories import MarkovRepo, MembersRepo, MessagesRepo, PivoRepo, PivoUsageRepo
 from text_utils import sanitize_text
 
 
@@ -22,6 +22,7 @@ class Database:
         self.members: Optional[MembersRepo] = None
         self.messages: Optional[MessagesRepo] = None
         self.pivo: Optional[PivoRepo] = None
+        self.pivo_usage: Optional[PivoUsageRepo] = None
 
     async def _get_conn(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -44,6 +45,7 @@ class Database:
         self.members = MembersRepo(self._get_conn, self._lock)
         self.messages = MessagesRepo(self._get_conn, self._lock)
         self.pivo = PivoRepo(self._get_conn, self._lock)
+        self.pivo_usage = PivoUsageRepo(self._get_conn, self._lock)
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -53,6 +55,7 @@ class Database:
         self.members = None
         self.messages = None
         self.pivo = None
+        self.pivo_usage = None
 
     async def save_message_and_update_model(
         self, chat_id: int, raw_text: str, tokens: list[str]
@@ -250,6 +253,22 @@ class Database:
     async def get_pivo_members(self, chat_hash: str) -> list[dict[str, object]]:
         assert self.pivo is not None
         return await self.pivo.list_members(chat_hash)
+
+    async def consume_pivo_daily_call(
+        self,
+        *,
+        chat_hash: str,
+        user_hash: str,
+        usage_day: str,
+        limit: int,
+    ) -> tuple[bool, int]:
+        assert self.pivo_usage is not None
+        return await self.pivo_usage.consume_daily_call(
+            chat_hash=chat_hash,
+            user_hash=user_hash,
+            usage_day=usage_day,
+            limit=limit,
+        )
 
     # --- Кросс-доменные операции ---
 

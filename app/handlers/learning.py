@@ -22,6 +22,14 @@ from text_utils import sanitize_text
 router = Router(name="learning")
 logger = logging.getLogger("chat_markov")
 
+MIN_LEARN_MESSAGE_CHARS = 3
+MAX_LEARN_MESSAGE_CHARS = 500
+
+
+def is_learnable_message_length(clean_text: str) -> bool:
+    length = len(clean_text)
+    return MIN_LEARN_MESSAGE_CHARS <= length <= MAX_LEARN_MESSAGE_CHARS
+
 
 def extract_context_tokens(
     message: Message,
@@ -71,7 +79,7 @@ async def on_text_message(
         return
 
     clean = sanitize_text(raw_text)
-    if len(clean) < 3 or len(clean) > 500:
+    if not is_learnable_message_length(clean):
         logger.debug(
             "Skip message by length: chat=%s len=%s", message.chat.id, len(clean)
         )
@@ -182,11 +190,11 @@ async def on_text_message(
                 bool(attempt_context_tokens),
                 len(seed or []),
             )
-        elif await learning_service.is_duplicate(
+        elif await learning_service.looks_too_close_to_training_sample(
             message.chat.id, candidate, state.normalize_lower
         ):
             logger.debug(
-                "Generated duplicate, retrying: chat=%s attempt=%s",
+                "Generated text is too close to training sample, retrying: chat=%s attempt=%s",
                 message.chat.id,
                 attempt + 1,
             )

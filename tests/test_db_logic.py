@@ -234,6 +234,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
                 "chat_member_profiles",
                 "messages",
                 "pivo_chat_members",
+                "pivo_daily_usage",
                 "schema_migrations",
                 "starts",
                 "starts3",
@@ -245,3 +246,28 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
 
         self.db = Database(str(self.db_path))
         await self.db.init()
+
+    async def test_pivo_daily_usage_limit(self) -> None:
+        result = await self.db.consume_pivo_daily_call(
+            chat_hash="chat-hash",
+            user_hash="user-hash",
+            usage_day="2026-05-08",
+            limit=1,
+        )
+        self.assertEqual(result, (True, 1))
+
+        result = await self.db.consume_pivo_daily_call(
+            chat_hash="chat-hash",
+            user_hash="user-hash",
+            usage_day="2026-05-08",
+            limit=1,
+        )
+        self.assertEqual(result, (False, 1))
+
+        result = await self.db.consume_pivo_daily_call(
+            chat_hash="chat-hash",
+            user_hash="user-hash",
+            usage_day="2026-05-09",
+            limit=1,
+        )
+        self.assertEqual(result, (True, 1))

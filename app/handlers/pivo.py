@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import logging
 
-from aiogram import Router
+from aiogram import Bot, Router
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from app.filters import is_admin_or_owner
 from app.handlers._helpers import reply_humanized
 from app.services import PivoService
 from pivo import PIVO_PRIVACY_MESSAGE
 from runtime_state import RuntimeState
+from settings import Settings
 
 router = Router(name="pivo")
 logger = logging.getLogger("chat_markov")
@@ -18,10 +20,34 @@ logger = logging.getLogger("chat_markov")
 
 @router.message(Command("pivo"))
 async def cmd_pivo(
-    message: Message, pivo_service: PivoService, state: RuntimeState
+    message: Message,
+    pivo_service: PivoService,
+    state: RuntimeState,
+    bot: Bot,
+    settings: Settings,
 ) -> None:
     if message.from_user is None:
         return
+    is_privileged = await is_admin_or_owner(message, bot, settings)
+    quota = await pivo_service.consume_daily_call_quota(
+        chat_id=message.chat.id,
+        user_id=message.from_user.id,
+        is_admin_or_owner=is_privileged,
+    )
+    if not quota.allowed:
+        await reply_humanized(
+            message,
+            f"Лимит /pivo на сегодня исчерпан: {quota.limit} раз(а) в сутки.",
+            state.typing_min_ms,
+            state.typing_max_ms,
+        )
+        logger.info(
+            "pivo command rejected by daily quota: limit=%s day=%s",
+            quota.limit,
+            quota.usage_day,
+        )
+        return
+
     text, mentions_count = await pivo_service.build_call_message(
         chat_id=message.chat.id,
         caller_user_id=message.from_user.id,

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from datetime import date
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from pivo import (
     PIVO_FALLBACK_MENTIONS,
@@ -146,6 +147,52 @@ class TestPivo(unittest.TestCase):
         self.assertIn("/pivo_off", PIVO_PRIVACY_MESSAGE)
         self.assertNotIn("HMAC", PIVO_PRIVACY_MESSAGE)
         self.assertNotIn("таблиц", PIVO_PRIVACY_MESSAGE.lower())
+
+
+class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
+    async def test_regular_user_has_one_daily_call(self) -> None:
+        from app.services.pivo_service import PIVO_DAILY_LIMIT_USER, PivoService
+
+        security = make_security()
+        db = AsyncMock()
+        db.consume_pivo_daily_call = AsyncMock(return_value=(True, 1))
+        service = PivoService(db=db, security=security)
+
+        result = await service.consume_daily_call_quota(
+            chat_id=100,
+            user_id=200,
+            is_admin_or_owner=False,
+            today=date(2026, 5, 8),
+        )
+
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.limit, PIVO_DAILY_LIMIT_USER)
+        self.assertEqual(result.usage_day, "2026-05-08")
+        db.consume_pivo_daily_call.assert_awaited_once_with(
+            chat_hash=security.hmac_value(100),
+            user_hash=security.hmac_value(200),
+            usage_day="2026-05-08",
+            limit=PIVO_DAILY_LIMIT_USER,
+        )
+
+    async def test_admin_has_three_daily_calls(self) -> None:
+        from app.services.pivo_service import PIVO_DAILY_LIMIT_ADMIN, PivoService
+
+        security = make_security()
+        db = AsyncMock()
+        db.consume_pivo_daily_call = AsyncMock(return_value=(True, 3))
+        service = PivoService(db=db, security=security)
+
+        result = await service.consume_daily_call_quota(
+            chat_id=100,
+            user_id=200,
+            is_admin_or_owner=True,
+            today=date(2026, 5, 8),
+        )
+
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.used_count, 3)
+        self.assertEqual(result.limit, PIVO_DAILY_LIMIT_ADMIN)
 
 
 if __name__ == "__main__":
