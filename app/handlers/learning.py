@@ -183,7 +183,9 @@ async def on_text_message(
                 bool(attempt_context_tokens),
                 len(seed or []),
             )
-        elif await learning_service.is_duplicate(message.chat.id, candidate):
+        elif await learning_service.is_duplicate(
+            message.chat.id, candidate, state.normalize_lower
+        ):
             logger.debug(
                 "Generated duplicate, retrying: chat=%s attempt=%s",
                 message.chat.id,
