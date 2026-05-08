@@ -26,6 +26,7 @@ Thumbs.db
 
 # Local agent instructions
 AGENTS.md
+.claude/
 
 # Local test temp data
 .test_tmp/
