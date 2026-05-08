@@ -33,6 +33,16 @@ def _extract_command_arg(text: str) -> str:
     return parts[1].strip() if len(parts) >= 2 else ""
 
 
+async def _reply_no_permission(message: Message, state: RuntimeState) -> None:
+    """Отказ для команд, требующих OWNER_ID или прав админа чата."""
+    await reply_humanized(
+        message,
+        "Команда доступна OWNER_ID и администраторам чата.",
+        state.typing_min_ms,
+        state.typing_max_ms,
+    )
+
+
 @router.message(Command("config"))
 async def cmd_config(message: Message, state: RuntimeState) -> None:
     raw = _extract_command_arg(message.text or "")
@@ -97,6 +107,12 @@ async def cmd_set(message: Message, state: RuntimeState, settings: Settings) -> 
     )
 
 
+@router.message(Command("set"), GroupOnly())
+async def cmd_set_denied(message: Message, state: RuntimeState) -> None:
+    """Fallback: вызывается, когда AdminOrOwner отказал в правах для /set."""
+    await _reply_no_permission(message, state)
+
+
 @router.message(Command("setprob"), GroupOnly(), AdminOrOwner())
 async def cmd_setprob(message: Message, state: RuntimeState, settings: Settings) -> None:
     raw = _extract_command_arg(message.text or "")
@@ -137,6 +153,12 @@ async def cmd_setprob(message: Message, state: RuntimeState, settings: Settings)
     )
 
 
+@router.message(Command("setprob"), GroupOnly())
+async def cmd_setprob_denied(message: Message, state: RuntimeState) -> None:
+    """Fallback: вызывается, когда AdminOrOwner отказал в правах для /setprob."""
+    await _reply_no_permission(message, state)
+
+
 @router.message(Command("clear"), GroupOnly(), AdminOrOwner())
 async def cmd_clear(
     message: Message,
@@ -158,4 +180,15 @@ async def cmd_clear(
     generator.invalidate_chat_cache(message.chat.id)
     await reply_humanized(
         message, "Данные чата очищены.", state.typing_min_ms, state.typing_max_ms
+    )
+
+
+@router.message(Command("clear"), GroupOnly())
+async def cmd_clear_denied(message: Message, state: RuntimeState) -> None:
+    """Fallback: вызывается, когда AdminOrOwner отказал в правах для /clear."""
+    await reply_humanized(
+        message,
+        "Недостаточно прав. Нужен OWNER_ID или права админа чата.",
+        state.typing_min_ms,
+        state.typing_max_ms,
     )

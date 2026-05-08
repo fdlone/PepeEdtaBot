@@ -151,6 +151,67 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         db.clear_chat.assert_awaited_once_with(msg.chat.id)
         msg.reply.assert_awaited_once()
 
+    # --- fallback handlers для unauthorized админ-команд ---
+
+    async def test_set_denied_replies_with_explanation(self) -> None:
+        from app.handlers.admin import cmd_set_denied
+        msg = _fake_message(text="/set foo bar")
+        state = _fake_state()
+        await cmd_set_denied(msg, state)
+        msg.reply.assert_awaited_once()
+        text = msg.reply.call_args[0][0]
+        assert "OWNER_ID" in text
+        assert "админ" in text.lower()
+
+    async def test_setprob_denied_replies_with_explanation(self) -> None:
+        from app.handlers.admin import cmd_setprob_denied
+        msg = _fake_message(text="/setprob 0.5")
+        state = _fake_state()
+        await cmd_setprob_denied(msg, state)
+        msg.reply.assert_awaited_once()
+        assert "OWNER_ID" in msg.reply.call_args[0][0]
+
+    async def test_clear_denied_replies_with_explanation(self) -> None:
+        from app.handlers.admin import cmd_clear_denied
+        msg = _fake_message(text="/clear confirm")
+        state = _fake_state()
+        await cmd_clear_denied(msg, state)
+        msg.reply.assert_awaited_once()
+        text = msg.reply.call_args[0][0]
+        assert "Недостаточно прав" in text
+        # /clear имеет специфичный текст, отличный от общего «доступна OWNER_ID...»
+        assert "OWNER_ID" in text or "админ" in text.lower()
+
+    def test_admin_router_handler_registration_order(self) -> None:
+        """
+        Защита от случайной перестановки fallback-handlers.
+
+        Aiogram перебирает handlers Router'а в порядке регистрации
+        (см. aiogram/dispatcher/event/telegram.py:111-130: for handler
+        in self.handlers с return на первом match). Если cmd_set_denied
+        окажется зарегистрирован раньше cmd_set, fallback всегда будет
+        выигрывать — admin-команда никогда не выполнится для реальных
+        админов, и баг тихо пройдёт CI.
+        """
+        from app.handlers.admin import router
+
+        callbacks = [h.callback for h in router.message.handlers]
+        names = [cb.__name__ for cb in callbacks]
+
+        pairs = [
+            ("cmd_set", "cmd_set_denied"),
+            ("cmd_setprob", "cmd_setprob_denied"),
+            ("cmd_clear", "cmd_clear_denied"),
+        ]
+        for protected, fallback in pairs:
+            assert protected in names, f"{protected} not registered"
+            assert fallback in names, f"{fallback} not registered"
+            assert names.index(protected) < names.index(fallback), (
+                f"{fallback} зарегистрирован раньше {protected}: "
+                f"fallback всегда будет выигрывать, защищённый handler "
+                f"никогда не вызовется. Поменяйте порядок в admin.py."
+            )
+
 
 # ---------------------------------------------------------------------------
 # pivo.py
