@@ -233,6 +233,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
             [
                 "messages",
                 "pivo_chat_members",
+                "schema_migrations",
                 "starts",
                 "starts3",
                 "transitions",
