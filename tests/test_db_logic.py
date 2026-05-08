@@ -25,7 +25,6 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
 
         volume = await self.db.save_message_and_update_model(
             chat_id=1001,
-            author_id=77,
             raw_text=raw_text,
             tokens=tokens,
         )
@@ -40,11 +39,28 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["transitions1"], 0)
         self.assertEqual(stats["volume"], 0)
 
+    async def test_save_message_does_not_store_real_author_id(self) -> None:
+        await self.db.save_message_and_update_model(
+            chat_id=1002,
+            raw_text="privacy first",
+            tokens=["privacy", "first"],
+        )
+
+        async with aiosqlite.connect(str(self.db_path)) as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT author_id FROM messages WHERE chat_id = ?",
+                    (1002,),
+                )
+            ).fetchone()
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row[0], 0)
+
     async def test_transitions_and_starts_are_counted_for_3_2_1(self) -> None:
         tokens = ["Я", "очень", "люблю", "чат", "!"]
         volume = await self.db.save_message_and_update_model(
             chat_id=2002,
-            author_id=88,
             raw_text="Я очень люблю чат!",
             tokens=tokens,
         )
@@ -73,7 +89,6 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
     async def test_clear_chat(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=3003,
-            author_id=99,
             raw_text="a b c d",
             tokens=["a", "b", "c", "d"],
         )
@@ -92,7 +107,6 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
     async def test_message_exists(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=4004,
-            author_id=11,
             raw_text="hello world",
             tokens=["hello", "world"],
         )
@@ -102,7 +116,6 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
     async def test_message_exists_uses_normalized_text(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=4104,
-            author_id=12,
             raw_text="Привеееет   @PepeBot https://example.com",
             tokens=["Привеет"],
         )
@@ -139,11 +152,19 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         await self.db.init()
 
         self.assertTrue(await self.db.message_exists(4204, "Стаарый текст"))
+        async with aiosqlite.connect(str(self.db_path)) as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT author_id FROM messages WHERE chat_id = ?",
+                    (4204,),
+                )
+            ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row[0], 0)
 
     async def test_reopen_existing_database_preserves_chat_data(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=5005,
-            author_id=21,
             raw_text="кофе утром бодрит",
             tokens=["кофе", "утром", "бодрит"],
         )
@@ -159,7 +180,42 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
             await reopened.close()
             self.db = reopened
 
-    async def test_schema_stays_compatible_without_new_tables(self) -> None:
+    async def test_pivo_member_upsert_get_and_remove(self) -> None:
+        await self.db.upsert_pivo_member(
+            chat_hash="chat-hash",
+            user_hash="user-hash",
+            encrypted_user_id="encrypted-user-id",
+            encrypted_username="encrypted-username",
+            encrypted_display_name="encrypted-display-name",
+            is_bot=False,
+        )
+
+        members = await self.db.get_pivo_members("chat-hash")
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0]["encrypted_user_id"], "encrypted-user-id")
+        self.assertEqual(members[0]["encrypted_username"], "encrypted-username")
+        self.assertEqual(
+            members[0]["encrypted_display_name"], "encrypted-display-name"
+        )
+        self.assertFalse(members[0]["is_bot"])
+
+        await self.db.upsert_pivo_member(
+            chat_hash="chat-hash",
+            user_hash="user-hash",
+            encrypted_user_id="encrypted-user-id-2",
+            encrypted_username="encrypted-username-2",
+            encrypted_display_name="encrypted-display-name-2",
+            is_bot=True,
+        )
+        members = await self.db.get_pivo_members("chat-hash")
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0]["encrypted_user_id"], "encrypted-user-id-2")
+        self.assertTrue(members[0]["is_bot"])
+
+        await self.db.remove_pivo_member("chat-hash", "user-hash")
+        self.assertEqual(await self.db.get_pivo_members("chat-hash"), [])
+
+    async def test_schema_contains_expected_tables(self) -> None:
         await self.db.close()
         async with aiosqlite.connect(str(self.db_path)) as conn:
             cursor = await conn.execute(
@@ -176,6 +232,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
             tables,
             [
                 "messages",
+                "pivo_chat_members",
                 "starts",
                 "starts3",
                 "transitions",

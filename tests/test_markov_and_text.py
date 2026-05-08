@@ -241,19 +241,16 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
     async def test_generate_text_with_seed(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=4444,
-            author_id=1,
             raw_text="Я очень люблю питон",
             tokens=["Я", "очень", "люблю", "питон"],
         )
         await self.db.save_message_and_update_model(
             chat_id=4444,
-            author_id=2,
             raw_text="Я очень люблю кофе",
             tokens=["Я", "очень", "люблю", "кофе"],
         )
         await self.db.save_message_and_update_model(
             chat_id=4444,
-            author_id=3,
             raw_text="Люблю кофе утром",
             tokens=["Люблю", "кофе", "утром"],
         )
@@ -275,7 +272,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
     async def test_generate_text_respects_one_token_limit(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=4445,
-            author_id=1,
             raw_text="Привет мир снова",
             tokens=["Привет", "мир", "снова"],
         )
@@ -296,13 +292,11 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
     async def test_generate_text_uses_context_windows_for_start(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=5555,
-            author_id=1,
             raw_text="Люблю кофе утром всегда",
             tokens=["Люблю", "кофе", "утром", "всегда"],
         )
         await self.db.save_message_and_update_model(
             chat_id=5555,
-            author_id=2,
             raw_text="Люблю кофе вечером иногда",
             tokens=["Люблю", "кофе", "вечером", "иногда"],
         )
@@ -326,19 +320,16 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
     async def test_generate_text_falls_back_when_context_not_found(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=6666,
-            author_id=1,
             raw_text="кошка любит солнце ярко",
             tokens=["кошка", "любит", "солнце", "ярко"],
         )
         await self.db.save_message_and_update_model(
             chat_id=6666,
-            author_id=2,
             raw_text="кошка любит дождь тихо",
             tokens=["кошка", "любит", "дождь", "тихо"],
         )
         await self.db.save_message_and_update_model(
             chat_id=6666,
-            author_id=3,
             raw_text="солнце ярко греет дом",
             tokens=["солнце", "ярко", "греет", "дом"],
         )
@@ -363,13 +354,11 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
     async def test_generate_text_without_context_matches_legacy_path(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=7777,
-            author_id=1,
             raw_text="утром люблю чай дома",
             tokens=["утром", "люблю", "чай", "дома"],
         )
         await self.db.save_message_and_update_model(
             chat_id=7777,
-            author_id=2,
             raw_text="утром люблю кофе дома",
             tokens=["утром", "люблю", "кофе", "дома"],
         )

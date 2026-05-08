@@ -4,6 +4,8 @@
 - `main.py`: Telegram runtime, хендлеры команд и сообщений.
 - `bot_messages.py`: тексты ответов для команд чата.
 - `bot_policy.py`: решение, должен ли бот отвечать.
+- `pivo.py`: opt-in логика `/pivo`, HMAC, шифрование и сборка упоминаний.
+- `pivo_templates.py`: цельные шаблоны сообщений для `/pivo`.
 - `runtime_config.py`: валидация и применение runtime-настроек для `/set`.
 - `runtime_state.py`: runtime-состояние процесса, собранное из `.env`.
 - `db.py`: схема SQLite, миграция, атомарные записи, статистика/запросы.
@@ -16,6 +18,7 @@
 - `starts3` / `transitions3`: основная триграммная модель.
 - `starts` / `transitions`: биграммный fallback-слой.
 - `transitions1`: униграммный fallback-слой.
+- `pivo_chat_members`: отдельные opt-in подписки для `/pivo`; поиск по HMAC, чувствительные значения зашифрованы.
 
 ## Окружения БД
 - `data/markov.db`: runtime-база по умолчанию, рассчитанная на Docker volume.

@@ -46,12 +46,20 @@ class TestBotMessages(unittest.TestCase):
         self.assertIn("Настройки:", text)
         self.assertIn("Админское:", text)
         self.assertIn("/set help", text)
+        self.assertIn("/pivo", text)
+        self.assertIn("/pivo_on", text)
+        self.assertIn("/pivo_off", text)
+        self.assertIn("/pivo_privacy", text)
         self.assertNotIn("/seed", text)
 
-    def test_telegram_commands_are_registered_without_seed(self) -> None:
+    def test_telegram_commands_are_registered(self) -> None:
         command_names = {command for command, _ in TELEGRAM_COMMANDS}
 
         self.assertIn("help", command_names)
+        self.assertIn("pivo", command_names)
+        self.assertIn("pivo_on", command_names)
+        self.assertIn("pivo_off", command_names)
+        self.assertIn("pivo_privacy", command_names)
         self.assertIn("set", command_names)
         self.assertIn("clear", command_names)
         self.assertNotIn("seed", command_names)

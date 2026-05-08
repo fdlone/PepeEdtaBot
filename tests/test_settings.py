@@ -11,6 +11,8 @@ def minimal_env(db_path: str = "test_settings.db") -> dict[str, str]:
     return {
         "BOT_TOKEN": "123:token",
         "DB_PATH": db_path,
+        "PIVO_HMAC_SECRET": "test-pivo-hmac-secret",
+        "PIVO_ENCRYPTION_SECRET": "test-pivo-encryption-secret",
     }
 
 
@@ -24,8 +26,24 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(settings.max_reply_tokens, 45)
 
     def test_load_settings_rejects_missing_bot_token(self) -> None:
-        with patch.dict(os.environ, {}, clear=True):
+        env = minimal_env()
+        env.pop("BOT_TOKEN")
+        with patch.dict(os.environ, env, clear=True):
             with self.assertRaisesRegex(ValueError, "BOT_TOKEN"):
+                load_settings(load_env=False)
+
+    def test_load_settings_rejects_missing_pivo_hmac_secret(self) -> None:
+        env = minimal_env()
+        env.pop("PIVO_HMAC_SECRET")
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "PIVO_HMAC_SECRET"):
+                load_settings(load_env=False)
+
+    def test_load_settings_rejects_missing_pivo_encryption_secret(self) -> None:
+        env = minimal_env()
+        env.pop("PIVO_ENCRYPTION_SECRET")
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "PIVO_ENCRYPTION_SECRET"):
                 load_settings(load_env=False)
 
     def test_load_settings_rejects_invalid_bool(self) -> None:

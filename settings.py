@@ -68,6 +68,8 @@ class Settings:
     reply_context_start_bias: float
     reply_context_only_for_replies: bool
     reply_context_include_current_message: bool
+    pivo_hmac_secret: str
+    pivo_encryption_secret: str
 
 
 def load_settings(load_env: bool = True) -> Settings:
@@ -142,6 +144,12 @@ def load_settings(load_env: bool = True) -> Settings:
     reply_context_include_current_message = _to_bool(
         os.getenv("REPLY_CONTEXT_INCLUDE_CURRENT_MESSAGE", "true"), default=True
     )
+    pivo_hmac_secret = os.getenv("PIVO_HMAC_SECRET", "").strip()
+    if len(pivo_hmac_secret) < 16:
+        raise ValueError("PIVO_HMAC_SECRET must be at least 16 characters")
+    pivo_encryption_secret = os.getenv("PIVO_ENCRYPTION_SECRET", "").strip()
+    if len(pivo_encryption_secret) < 16:
+        raise ValueError("PIVO_ENCRYPTION_SECRET must be at least 16 characters")
 
     return Settings(
         bot_token=bot_token,
@@ -167,4 +175,6 @@ def load_settings(load_env: bool = True) -> Settings:
         reply_context_start_bias=reply_context_start_bias,
         reply_context_only_for_replies=reply_context_only_for_replies,
         reply_context_include_current_message=reply_context_include_current_message,
+        pivo_hmac_secret=pivo_hmac_secret,
+        pivo_encryption_secret=pivo_encryption_secret,
     )

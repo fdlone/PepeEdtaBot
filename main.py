@@ -7,7 +7,7 @@ import time
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.enums import ChatType
+from aiogram.enums import ChatType, ParseMode
 from aiogram.filters import Command
 from aiogram.types import BotCommand, Message
 from aiogram.enums import ChatAction
@@ -28,6 +28,15 @@ from bot_policy import (
 )
 from db import Database
 from markov import MarkovGenerator, tokenize
+from pivo import (
+    PIVO_FALLBACK_MENTIONS,
+    PIVO_PRIVACY_MESSAGE,
+    PivoMember,
+    PivoSecurity,
+    collect_pivo_mentions,
+    display_name_from_user,
+    get_random_pivo_message,
+)
 from runtime_config import (
     InvalidRuntimeSettingValueError,
     UNKNOWN_RUNTIME_KEY_MESSAGE,
@@ -135,6 +144,10 @@ async def run_bot() -> None:
     db = Database(settings.db_path)
     await db.init()
     generator = MarkovGenerator(db=db)
+    pivo_security = PivoSecurity(
+        hmac_secret=settings.pivo_hmac_secret,
+        encryption_secret=settings.pivo_encryption_secret,
+    )
     state = runtime_state_from_settings(settings)
 
     bot = Bot(token=settings.bot_token)
@@ -167,6 +180,92 @@ async def run_bot() -> None:
     @dp.message(Command("ping"))
     async def cmd_ping(message: Message) -> None:
         await message.reply("pong")
+
+    @dp.message(Command("pivo"))
+    async def cmd_pivo(message: Message) -> None:
+        if message.from_user is None:
+            return
+
+        chat_hash = pivo_security.hmac_value(message.chat.id)
+        rows = await db.get_pivo_members(chat_hash)
+        members = [
+            PivoMember(
+                encrypted_user_id=str(row["encrypted_user_id"]),
+                encrypted_username=str(row["encrypted_username"]),
+                encrypted_display_name=str(row["encrypted_display_name"]),
+                is_bot=bool(row["is_bot"]),
+            )
+            for row in rows
+        ]
+        mention_items = collect_pivo_mentions(
+            members=members,
+            caller_user_id=message.from_user.id,
+            security=pivo_security,
+        )
+        mentions = " ".join(mention_items) if mention_items else PIVO_FALLBACK_MENTIONS
+        logger.info("pivo command executed")
+        logger.info("mentions count: %s", len(mention_items))
+        await message.reply(
+            get_random_pivo_message(mentions),
+            parse_mode=ParseMode.HTML,
+        )
+
+    @dp.message(Command("pivo_on"))
+    async def cmd_pivo_on(message: Message) -> None:
+        if message.from_user is None:
+            return
+        if message.from_user.is_bot:
+            await reply_humanized(
+                message,
+                "Ботов в пивной список не добавляю.",
+                state.typing_min_ms,
+                state.typing_max_ms,
+            )
+            return
+
+        await db.upsert_pivo_member(
+            chat_hash=pivo_security.hmac_value(message.chat.id),
+            user_hash=pivo_security.hmac_value(message.from_user.id),
+            encrypted_user_id=pivo_security.encrypt_value(message.from_user.id),
+            encrypted_username=pivo_security.encrypt_value(message.from_user.username or ""),
+            encrypted_display_name=pivo_security.encrypt_value(
+                display_name_from_user(message.from_user)
+            ),
+            is_bot=message.from_user.is_bot,
+        )
+        logger.info("pivo member subscribed")
+        await reply_humanized(
+            message,
+            "Готово, теперь я буду звать тебя через /pivo.",
+            state.typing_min_ms,
+            state.typing_max_ms,
+        )
+
+    @dp.message(Command("pivo_off"))
+    async def cmd_pivo_off(message: Message) -> None:
+        if message.from_user is None:
+            return
+
+        await db.remove_pivo_member(
+            chat_hash=pivo_security.hmac_value(message.chat.id),
+            user_hash=pivo_security.hmac_value(message.from_user.id),
+        )
+        logger.info("pivo member removed")
+        await reply_humanized(
+            message,
+            "Готово, больше не буду звать тебя через /pivo.",
+            state.typing_min_ms,
+            state.typing_max_ms,
+        )
+
+    @dp.message(Command("pivo_privacy"))
+    async def cmd_pivo_privacy(message: Message) -> None:
+        await reply_humanized(
+            message,
+            PIVO_PRIVACY_MESSAGE,
+            state.typing_min_ms,
+            state.typing_max_ms,
+        )
 
     @dp.message(Command("config"))
     async def cmd_config(message: Message) -> None:
@@ -344,7 +443,6 @@ async def run_bot() -> None:
         tokens = tokenize(clean, normalize_lower=state.normalize_lower)
         token_volume = await db.save_message_and_update_model(
             chat_id=message.chat.id,
-            author_id=message.from_user.id,
             raw_text=raw_text,
             tokens=tokens,
         )

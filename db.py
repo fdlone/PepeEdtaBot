@@ -45,6 +45,7 @@ class Database:
             """
         )
         await self._ensure_messages_normalized_text_column(db)
+        await self._anonymize_message_author_ids(db)
 
         # Таблицы n=2 (legacy + fallback слой).
         await db.execute(
@@ -110,6 +111,21 @@ class Database:
             );
             """
         )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pivo_chat_members (
+                chat_hash TEXT NOT NULL,
+                user_hash TEXT NOT NULL,
+                encrypted_user_id TEXT NOT NULL,
+                encrypted_username TEXT NOT NULL DEFAULT '',
+                encrypted_display_name TEXT NOT NULL DEFAULT '',
+                is_bot INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY(chat_hash, user_hash)
+            );
+            """
+        )
 
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);"
@@ -132,6 +148,9 @@ class Database:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_transitions1_lookup ON transitions1(chat_id, w1);"
         )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pivo_chat_members_chat_hash ON pivo_chat_members(chat_hash);"
+        )
         await db.commit()
 
     async def _ensure_messages_normalized_text_column(
@@ -153,13 +172,16 @@ class Database:
                 [(sanitize_text(str(text)), int(row_id)) for row_id, text in rows],
             )
 
+    async def _anonymize_message_author_ids(self, db: aiosqlite.Connection) -> None:
+        await db.execute("UPDATE messages SET author_id = 0 WHERE author_id != 0")
+
     async def close(self) -> None:
         if self._conn is not None:
             await self._conn.close()
             self._conn = None
 
     async def save_message_and_update_model(
-        self, chat_id: int, author_id: int, raw_text: str, tokens: list[str]
+        self, chat_id: int, raw_text: str, tokens: list[str]
     ) -> int:
         """Атомарно сохраняет raw-сообщение и обновляет счётчики переходов n=3/n=2/n=1."""
         starts2_pair: Optional[tuple[str, str]] = None
@@ -194,7 +216,7 @@ class Database:
                 INSERT INTO messages(chat_id, author_id, text, normalized_text)
                 VALUES (?, ?, ?, ?)
                 """,
-                (chat_id, author_id, raw_text, sanitize_text(raw_text)),
+                (chat_id, 0, raw_text, sanitize_text(raw_text)),
             )
 
             if starts2_pair:
@@ -526,3 +548,80 @@ class Database:
             )
             row = await cursor.fetchone()
         return row is not None
+
+    async def upsert_pivo_member(
+        self,
+        *,
+        chat_hash: str,
+        user_hash: str,
+        encrypted_user_id: str,
+        encrypted_username: str,
+        encrypted_display_name: str,
+        is_bot: bool,
+    ) -> None:
+        async with self._lock:
+            db = await self._get_conn()
+            await db.execute(
+                """
+                INSERT INTO pivo_chat_members(
+                    chat_hash,
+                    user_hash,
+                    encrypted_user_id,
+                    encrypted_username,
+                    encrypted_display_name,
+                    is_bot
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_hash, user_hash)
+                DO UPDATE SET
+                    encrypted_user_id = excluded.encrypted_user_id,
+                    encrypted_username = excluded.encrypted_username,
+                    encrypted_display_name = excluded.encrypted_display_name,
+                    is_bot = excluded.is_bot,
+                    updated_at = datetime('now')
+                """,
+                (
+                    chat_hash,
+                    user_hash,
+                    encrypted_user_id,
+                    encrypted_username,
+                    encrypted_display_name,
+                    1 if is_bot else 0,
+                ),
+            )
+            await db.commit()
+
+    async def remove_pivo_member(self, chat_hash: str, user_hash: str) -> None:
+        async with self._lock:
+            db = await self._get_conn()
+            await db.execute(
+                """
+                DELETE FROM pivo_chat_members
+                WHERE chat_hash = ? AND user_hash = ?
+                """,
+                (chat_hash, user_hash),
+            )
+            await db.commit()
+
+    async def get_pivo_members(self, chat_hash: str) -> list[dict[str, object]]:
+        async with self._lock:
+            db = await self._get_conn()
+            cursor = await db.execute(
+                """
+                SELECT encrypted_user_id, encrypted_username, encrypted_display_name, is_bot
+                FROM pivo_chat_members
+                WHERE chat_hash = ?
+                ORDER BY created_at, user_hash
+                """,
+                (chat_hash,),
+            )
+            rows = await cursor.fetchall()
+        return [
+            {
+                "encrypted_user_id": str(row[0]),
+                "encrypted_username": str(row[1]),
+                "encrypted_display_name": str(row[2]),
+                "is_bot": bool(row[3]),
+            }
+            for row in rows
+        ]
