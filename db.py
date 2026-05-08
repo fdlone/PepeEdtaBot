@@ -6,6 +6,7 @@ from typing import Optional
 
 import aiosqlite
 
+from app.infrastructure import migrator
 from app.repositories import MarkovRepo, MessagesRepo, PivoRepo
 from text_utils import sanitize_text
 
@@ -36,152 +37,11 @@ class Database:
         await db.execute("PRAGMA journal_mode=WAL;")
         await db.execute("PRAGMA foreign_keys=ON;")
 
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER NOT NULL,
-                author_id INTEGER NOT NULL,
-                text TEXT NOT NULL,
-                normalized_text TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            """
-        )
-        await self._ensure_messages_normalized_text_column(db)
-        await self._anonymize_message_author_ids(db)
-
-        # Таблицы n=2 (legacy + fallback слой).
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS starts (
-                chat_id INTEGER NOT NULL,
-                w1 TEXT NOT NULL,
-                w2 TEXT NOT NULL,
-                cnt INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, w1, w2)
-            );
-            """
-        )
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS transitions (
-                chat_id INTEGER NOT NULL,
-                w1 TEXT NOT NULL,
-                w2 TEXT NOT NULL,
-                w3 TEXT NOT NULL,
-                cnt INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, w1, w2, w3)
-            );
-            """
-        )
-
-        # Новые таблицы n=3.
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS starts3 (
-                chat_id INTEGER NOT NULL,
-                w1 TEXT NOT NULL,
-                w2 TEXT NOT NULL,
-                w3 TEXT NOT NULL,
-                cnt INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, w1, w2, w3)
-            );
-            """
-        )
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS transitions3 (
-                chat_id INTEGER NOT NULL,
-                w1 TEXT NOT NULL,
-                w2 TEXT NOT NULL,
-                w3 TEXT NOT NULL,
-                w4 TEXT NOT NULL,
-                cnt INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, w1, w2, w3, w4)
-            );
-            """
-        )
-
-        # Таблица n=1 для backoff: (w1 -> w2)
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS transitions1 (
-                chat_id INTEGER NOT NULL,
-                w1 TEXT NOT NULL,
-                w2 TEXT NOT NULL,
-                cnt INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, w1, w2)
-            );
-            """
-        )
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS pivo_chat_members (
-                chat_hash TEXT NOT NULL,
-                user_hash TEXT NOT NULL,
-                encrypted_user_id TEXT NOT NULL,
-                encrypted_username TEXT NOT NULL DEFAULT '',
-                encrypted_display_name TEXT NOT NULL DEFAULT '',
-                is_bot INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY(chat_hash, user_hash)
-            );
-            """
-        )
-
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);"
-        )
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_messages_normalized_lookup ON messages(chat_id, normalized_text);"
-        )
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_starts_lookup ON starts(chat_id, w1, w2);"
-        )
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_transitions_lookup ON transitions(chat_id, w1, w2);"
-        )
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_starts3_chat_id ON starts3(chat_id);"
-        )
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_transitions3_lookup ON transitions3(chat_id, w1, w2, w3);"
-        )
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_transitions1_lookup ON transitions1(chat_id, w1);"
-        )
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_pivo_chat_members_chat_hash ON pivo_chat_members(chat_hash);"
-        )
-        await db.commit()
+        await migrator.run(db)
 
         self.markov = MarkovRepo(self._get_conn, self._lock)
         self.messages = MessagesRepo(self._get_conn, self._lock)
         self.pivo = PivoRepo(self._get_conn, self._lock)
-
-    async def _ensure_messages_normalized_text_column(
-        self, db: aiosqlite.Connection
-    ) -> None:
-        cursor = await db.execute("PRAGMA table_info(messages);")
-        columns = {str(row[1]) for row in await cursor.fetchall()}
-        if "normalized_text" not in columns:
-            await db.execute(
-                "ALTER TABLE messages ADD COLUMN normalized_text TEXT NOT NULL DEFAULT '';"
-            )
-        cursor = await db.execute(
-            "SELECT id, text FROM messages WHERE normalized_text = ''"
-        )
-        rows = await cursor.fetchall()
-        if rows:
-            await db.executemany(
-                "UPDATE messages SET normalized_text = ? WHERE id = ?",
-                [(sanitize_text(str(text)), int(row_id)) for row_id, text in rows],
-            )
-
-    async def _anonymize_message_author_ids(self, db: aiosqlite.Connection) -> None:
-        await db.execute("UPDATE messages SET author_id = 0 WHERE author_id != 0")
 
     async def close(self) -> None:
         if self._conn is not None:
