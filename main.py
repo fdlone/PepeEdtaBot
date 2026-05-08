@@ -7,11 +7,13 @@ import time
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.enums import ChatType, ParseMode
+from aiogram.enums import ChatType
 from aiogram.filters import Command
 from aiogram.types import BotCommand, Message
-from aiogram.enums import ChatAction
 
+from app.handlers import pivo as pivo_handlers
+from app.handlers._helpers import reply_humanized
+from app.services import PivoService
 from bot_messages import (
     TELEGRAM_COMMANDS,
     format_clear_confirmation_message,
@@ -26,10 +28,9 @@ from bot_policy import (
     has_enough_model_data,
     should_reply_to_message,
 )
-from app.services import PivoService
 from db import Database
 from markov import MarkovGenerator, tokenize
-from pivo import PIVO_PRIVACY_MESSAGE, PivoSecurity
+from pivo import PivoSecurity
 from runtime_config import (
     InvalidRuntimeSettingValueError,
     UNKNOWN_RUNTIME_KEY_MESSAGE,
@@ -110,21 +111,6 @@ def extract_context_tokens(
     return tokens[-max_tokens:] if len(tokens) > max_tokens else tokens
 
 
-async def reply_humanized(
-    message: Message, text: str, typing_min_ms: int, typing_max_ms: int
-) -> None:
-    try:
-        await message.bot.send_chat_action(
-            chat_id=message.chat.id, action=ChatAction.TYPING
-        )
-        delay_ms = random.randint(typing_min_ms, typing_max_ms)
-        await asyncio.sleep(delay_ms / 1000)
-    except Exception:
-        # Ошибка chat action не должна блокировать отправку обычного ответа.
-        pass
-    await message.reply(text)
-
-
 async def run_bot() -> None:
     settings: Settings = load_settings()
     logging.basicConfig(
@@ -156,6 +142,9 @@ async def run_bot() -> None:
     )
 
     dp = Dispatcher()
+    dp["pivo_service"] = pivo_service
+    dp["state"] = state
+    dp.include_router(pivo_handlers.router)
 
     @dp.message(Command("stats"))
     async def cmd_stats(message: Message) -> None:
@@ -174,63 +163,6 @@ async def run_bot() -> None:
     @dp.message(Command("ping"))
     async def cmd_ping(message: Message) -> None:
         await message.reply("pong")
-
-    @dp.message(Command("pivo"))
-    async def cmd_pivo(message: Message) -> None:
-        if message.from_user is None:
-            return
-        text, mentions_count = await pivo_service.build_call_message(
-            chat_id=message.chat.id,
-            caller_user_id=message.from_user.id,
-        )
-        logger.info("pivo command executed")
-        logger.info("mentions count: %s", mentions_count)
-        await message.reply(text, parse_mode=ParseMode.HTML)
-
-    @dp.message(Command("pivo_on"))
-    async def cmd_pivo_on(message: Message) -> None:
-        if message.from_user is None:
-            return
-        if message.from_user.is_bot:
-            await reply_humanized(
-                message,
-                "Ботов в пивной список не добавляю.",
-                state.typing_min_ms,
-                state.typing_max_ms,
-            )
-            return
-
-        await pivo_service.subscribe(message.chat.id, message.from_user)
-        logger.info("pivo member subscribed")
-        await reply_humanized(
-            message,
-            "Готово, теперь я буду звать тебя через /pivo.",
-            state.typing_min_ms,
-            state.typing_max_ms,
-        )
-
-    @dp.message(Command("pivo_off"))
-    async def cmd_pivo_off(message: Message) -> None:
-        if message.from_user is None:
-            return
-
-        await pivo_service.unsubscribe(message.chat.id, message.from_user.id)
-        logger.info("pivo member removed")
-        await reply_humanized(
-            message,
-            "Готово, больше не буду звать тебя через /pivo.",
-            state.typing_min_ms,
-            state.typing_max_ms,
-        )
-
-    @dp.message(Command("pivo_privacy"))
-    async def cmd_pivo_privacy(message: Message) -> None:
-        await reply_humanized(
-            message,
-            PIVO_PRIVACY_MESSAGE,
-            state.typing_min_ms,
-            state.typing_max_ms,
-        )
 
     @dp.message(Command("config"))
     async def cmd_config(message: Message) -> None:
