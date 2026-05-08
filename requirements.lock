@@ -1,3 +1,29 @@
+# Lock-файл runtime-зависимостей PepeEdtaBot.
+#
+# Стратегия: pip freeze в чистом venv. Это простой подход без pip-tools,
+# с осознанными ограничениями:
+#   - этот заголовок восстанавливается вручную после регенерации
+#     (pip freeze его сотрёт);
+#   - hash-pin не используется;
+#   - закрепляется только runtime; ruff и mypy остаются диапазонами
+#     в requirements-dev.txt.
+#
+# Используется:
+#   - Dockerfile (production-runtime);
+#   - requirements-dev.txt (CI и локальная разработка) через -r requirements.lock.
+#
+# Регенерация (нужен Python той же мажорной/минорной версии, что и Dockerfile —
+# сейчас 3.14):
+#   python -m venv .venv-fresh
+#   .venv-fresh/Scripts/activate           # Windows
+#   . .venv-fresh/bin/activate              # Linux/macOS
+#   pip install --upgrade pip
+#   pip install -r requirements.txt
+#   pip freeze > requirements.lock
+#   # Восстановить этот заголовок.
+#   # Убедиться, что mypy/ruff/ast_serialize/librt/pathspec не попали:
+#   # они только в requirements-dev.txt.
+
 aiofiles==25.1.0
 aiogram==3.27.0
 aiohappyeyeballs==2.6.1
@@ -5,7 +31,6 @@ aiohttp==3.13.5
 aiosignal==1.4.0
 aiosqlite==0.22.1
 annotated-types==0.7.0
-ast_serialize==0.3.0
 attrs==26.1.0
 certifi==2026.4.22
 cffi==2.0.0
