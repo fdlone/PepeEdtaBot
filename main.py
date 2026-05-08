@@ -26,17 +26,10 @@ from bot_policy import (
     has_enough_model_data,
     should_reply_to_message,
 )
+from app.services import PivoService
 from db import Database
 from markov import MarkovGenerator, tokenize
-from pivo import (
-    PIVO_FALLBACK_MENTIONS,
-    PIVO_PRIVACY_MESSAGE,
-    PivoMember,
-    PivoSecurity,
-    collect_pivo_mentions,
-    display_name_from_user,
-    get_random_pivo_message,
-)
+from pivo import PIVO_PRIVACY_MESSAGE, PivoSecurity
 from runtime_config import (
     InvalidRuntimeSettingValueError,
     UNKNOWN_RUNTIME_KEY_MESSAGE,
@@ -148,6 +141,7 @@ async def run_bot() -> None:
         hmac_secret=settings.pivo_hmac_secret,
         encryption_secret=settings.pivo_encryption_secret,
     )
+    pivo_service = PivoService(db=db, security=pivo_security)
     state = runtime_state_from_settings(settings)
 
     bot = Bot(token=settings.bot_token)
@@ -185,30 +179,13 @@ async def run_bot() -> None:
     async def cmd_pivo(message: Message) -> None:
         if message.from_user is None:
             return
-
-        chat_hash = pivo_security.hmac_value(message.chat.id)
-        rows = await db.get_pivo_members(chat_hash)
-        members = [
-            PivoMember(
-                encrypted_user_id=str(row["encrypted_user_id"]),
-                encrypted_username=str(row["encrypted_username"]),
-                encrypted_display_name=str(row["encrypted_display_name"]),
-                is_bot=bool(row["is_bot"]),
-            )
-            for row in rows
-        ]
-        mention_items = collect_pivo_mentions(
-            members=members,
+        text, mentions_count = await pivo_service.build_call_message(
+            chat_id=message.chat.id,
             caller_user_id=message.from_user.id,
-            security=pivo_security,
         )
-        mentions = " ".join(mention_items) if mention_items else PIVO_FALLBACK_MENTIONS
         logger.info("pivo command executed")
-        logger.info("mentions count: %s", len(mention_items))
-        await message.reply(
-            get_random_pivo_message(mentions),
-            parse_mode=ParseMode.HTML,
-        )
+        logger.info("mentions count: %s", mentions_count)
+        await message.reply(text, parse_mode=ParseMode.HTML)
 
     @dp.message(Command("pivo_on"))
     async def cmd_pivo_on(message: Message) -> None:
@@ -223,16 +200,7 @@ async def run_bot() -> None:
             )
             return
 
-        await db.upsert_pivo_member(
-            chat_hash=pivo_security.hmac_value(message.chat.id),
-            user_hash=pivo_security.hmac_value(message.from_user.id),
-            encrypted_user_id=pivo_security.encrypt_value(message.from_user.id),
-            encrypted_username=pivo_security.encrypt_value(message.from_user.username or ""),
-            encrypted_display_name=pivo_security.encrypt_value(
-                display_name_from_user(message.from_user)
-            ),
-            is_bot=message.from_user.is_bot,
-        )
+        await pivo_service.subscribe(message.chat.id, message.from_user)
         logger.info("pivo member subscribed")
         await reply_humanized(
             message,
@@ -246,10 +214,7 @@ async def run_bot() -> None:
         if message.from_user is None:
             return
 
-        await db.remove_pivo_member(
-            chat_hash=pivo_security.hmac_value(message.chat.id),
-            user_hash=pivo_security.hmac_value(message.from_user.id),
-        )
+        await pivo_service.unsubscribe(message.chat.id, message.from_user.id)
         logger.info("pivo member removed")
         await reply_humanized(
             message,
