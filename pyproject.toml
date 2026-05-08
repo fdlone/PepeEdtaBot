@@ -1,0 +1,30 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "app.*"
+strict = true
+
+# Модули, помеченные «НЕ ТРОГАТЬ» или содержащие legacy-код без аннотаций
+[[tool.mypy.overrides]]
+module = [
+    "markov",
+    "bot_messages",
+    "runtime_config",
+    "runtime_state",
+    "bot_policy",
+    "text_utils",
+    "pivo",
+    "pivo_templates",
+    "settings",
+    "db",
+]
+ignore_errors = true

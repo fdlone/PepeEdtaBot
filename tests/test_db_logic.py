@@ -231,8 +231,10 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             tables,
             [
+                "chat_member_profiles",
                 "messages",
                 "pivo_chat_members",
+                "schema_migrations",
                 "starts",
                 "starts3",
                 "transitions",

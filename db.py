@@ -6,16 +6,22 @@ from typing import Optional
 
 import aiosqlite
 
+from app.infrastructure import migrator
+from app.repositories import MarkovRepo, MembersRepo, MessagesRepo, PivoRepo
 from text_utils import sanitize_text
 
 
 class Database:
-    """Слой доступа к SQLite для хранения сообщений и статистики variable-order Markov."""
+    """Фасад над SQLite: владеет соединением, миграциями и репозиториями."""
 
     def __init__(self, path: str) -> None:
         self.path = path
         self._conn: Optional[aiosqlite.Connection] = None
         self._lock = asyncio.Lock()
+        self.markov: Optional[MarkovRepo] = None
+        self.members: Optional[MembersRepo] = None
+        self.messages: Optional[MessagesRepo] = None
+        self.pivo: Optional[PivoRepo] = None
 
     async def _get_conn(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -32,153 +38,21 @@ class Database:
         await db.execute("PRAGMA journal_mode=WAL;")
         await db.execute("PRAGMA foreign_keys=ON;")
 
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER NOT NULL,
-                author_id INTEGER NOT NULL,
-                text TEXT NOT NULL,
-                normalized_text TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            """
-        )
-        await self._ensure_messages_normalized_text_column(db)
-        await self._anonymize_message_author_ids(db)
+        await migrator.run(db)
 
-        # Таблицы n=2 (legacy + fallback слой).
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS starts (
-                chat_id INTEGER NOT NULL,
-                w1 TEXT NOT NULL,
-                w2 TEXT NOT NULL,
-                cnt INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, w1, w2)
-            );
-            """
-        )
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS transitions (
-                chat_id INTEGER NOT NULL,
-                w1 TEXT NOT NULL,
-                w2 TEXT NOT NULL,
-                w3 TEXT NOT NULL,
-                cnt INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, w1, w2, w3)
-            );
-            """
-        )
-
-        # Новые таблицы n=3.
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS starts3 (
-                chat_id INTEGER NOT NULL,
-                w1 TEXT NOT NULL,
-                w2 TEXT NOT NULL,
-                w3 TEXT NOT NULL,
-                cnt INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, w1, w2, w3)
-            );
-            """
-        )
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS transitions3 (
-                chat_id INTEGER NOT NULL,
-                w1 TEXT NOT NULL,
-                w2 TEXT NOT NULL,
-                w3 TEXT NOT NULL,
-                w4 TEXT NOT NULL,
-                cnt INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, w1, w2, w3, w4)
-            );
-            """
-        )
-
-        # Таблица n=1 для backoff: (w1 -> w2)
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS transitions1 (
-                chat_id INTEGER NOT NULL,
-                w1 TEXT NOT NULL,
-                w2 TEXT NOT NULL,
-                cnt INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(chat_id, w1, w2)
-            );
-            """
-        )
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS pivo_chat_members (
-                chat_hash TEXT NOT NULL,
-                user_hash TEXT NOT NULL,
-                encrypted_user_id TEXT NOT NULL,
-                encrypted_username TEXT NOT NULL DEFAULT '',
-                encrypted_display_name TEXT NOT NULL DEFAULT '',
-                is_bot INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY(chat_hash, user_hash)
-            );
-            """
-        )
-
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);"
-        )
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_messages_normalized_lookup ON messages(chat_id, normalized_text);"
-        )
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_starts_lookup ON starts(chat_id, w1, w2);"
-        )
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_transitions_lookup ON transitions(chat_id, w1, w2);"
-        )
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_starts3_chat_id ON starts3(chat_id);"
-        )
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_transitions3_lookup ON transitions3(chat_id, w1, w2, w3);"
-        )
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_transitions1_lookup ON transitions1(chat_id, w1);"
-        )
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_pivo_chat_members_chat_hash ON pivo_chat_members(chat_hash);"
-        )
-        await db.commit()
-
-    async def _ensure_messages_normalized_text_column(
-        self, db: aiosqlite.Connection
-    ) -> None:
-        cursor = await db.execute("PRAGMA table_info(messages);")
-        columns = {str(row[1]) for row in await cursor.fetchall()}
-        if "normalized_text" not in columns:
-            await db.execute(
-                "ALTER TABLE messages ADD COLUMN normalized_text TEXT NOT NULL DEFAULT '';"
-            )
-        cursor = await db.execute(
-            "SELECT id, text FROM messages WHERE normalized_text = ''"
-        )
-        rows = await cursor.fetchall()
-        if rows:
-            await db.executemany(
-                "UPDATE messages SET normalized_text = ? WHERE id = ?",
-                [(sanitize_text(str(text)), int(row_id)) for row_id, text in rows],
-            )
-
-    async def _anonymize_message_author_ids(self, db: aiosqlite.Connection) -> None:
-        await db.execute("UPDATE messages SET author_id = 0 WHERE author_id != 0")
+        self.markov = MarkovRepo(self._get_conn, self._lock)
+        self.members = MembersRepo(self._get_conn, self._lock)
+        self.messages = MessagesRepo(self._get_conn, self._lock)
+        self.pivo = PivoRepo(self._get_conn, self._lock)
 
     async def close(self) -> None:
         if self._conn is not None:
             await self._conn.close()
             self._conn = None
+        self.markov = None
+        self.members = None
+        self.messages = None
+        self.pivo = None
 
     async def save_message_and_update_model(
         self, chat_id: int, raw_text: str, tokens: list[str]
@@ -212,11 +86,8 @@ class Database:
             db = await self._get_conn()
 
             await db.execute(
-                """
-                INSERT INTO messages(chat_id, author_id, text, normalized_text)
-                VALUES (?, ?, ?, ?)
-                """,
-                (chat_id, 0, raw_text, sanitize_text(raw_text)),
+                "INSERT INTO messages(chat_id, author_id, normalized_text) VALUES (?, ?, ?)",
+                (chat_id, 0, sanitize_text(raw_text)),
             )
 
             if starts2_pair:
@@ -298,120 +169,89 @@ class Database:
             await db.commit()
             return volume3 if volume3 > 0 else volume2
 
+    # --- Делегаты к MarkovRepo (сохраняем публичный API) ---
+
     async def get_starts(self, chat_id: int) -> list[tuple[str, str, int]]:
-        async with self._lock:
-            db = await self._get_conn()
-            cursor = await db.execute(
-                "SELECT w1, w2, cnt FROM starts WHERE chat_id = ?",
-                (chat_id,),
-            )
-            rows = await cursor.fetchall()
-        return [(str(r[0]), str(r[1]), int(r[2])) for r in rows]
+        assert self.markov is not None
+        return await self.markov.get_starts(chat_id)
 
     async def get_starts3(self, chat_id: int) -> list[tuple[str, str, str, int]]:
-        async with self._lock:
-            db = await self._get_conn()
-            cursor = await db.execute(
-                "SELECT w1, w2, w3, cnt FROM starts3 WHERE chat_id = ?",
-                (chat_id,),
-            )
-            rows = await cursor.fetchall()
-        return [(str(r[0]), str(r[1]), str(r[2]), int(r[3])) for r in rows]
+        assert self.markov is not None
+        return await self.markov.get_starts3(chat_id)
 
     async def get_start_if_exists(
         self, chat_id: int, w1: str, w2: str
     ) -> Optional[tuple[str, str, int]]:
-        async with self._lock:
-            db = await self._get_conn()
-            cursor = await db.execute(
-                "SELECT w1, w2, cnt FROM starts WHERE chat_id = ? AND w1 = ? AND w2 = ?",
-                (chat_id, w1, w2),
-            )
-            row = await cursor.fetchone()
-        if not row:
-            return None
-        return str(row[0]), str(row[1]), int(row[2])
+        assert self.markov is not None
+        return await self.markov.get_start_if_exists(chat_id, w1, w2)
 
     async def get_start3_if_exists(
         self, chat_id: int, w1: str, w2: str, w3: str
     ) -> Optional[tuple[str, str, str, int]]:
-        async with self._lock:
-            db = await self._get_conn()
-            cursor = await db.execute(
-                """
-                SELECT w1, w2, w3, cnt
-                FROM starts3
-                WHERE chat_id = ? AND w1 = ? AND w2 = ? AND w3 = ?
-                """,
-                (chat_id, w1, w2, w3),
-            )
-            row = await cursor.fetchone()
-        if not row:
-            return None
-        return str(row[0]), str(row[1]), str(row[2]), int(row[3])
+        assert self.markov is not None
+        return await self.markov.get_start3_if_exists(chat_id, w1, w2, w3)
 
     async def get_transitions(
         self, chat_id: int, w1: str, w2: str
     ) -> list[tuple[str, int]]:
-        async with self._lock:
-            db = await self._get_conn()
-            cursor = await db.execute(
-                """
-                SELECT w3, cnt
-                FROM transitions
-                WHERE chat_id = ? AND w1 = ? AND w2 = ?
-                """,
-                (chat_id, w1, w2),
-            )
-            rows = await cursor.fetchall()
-        return [(str(r[0]), int(r[1])) for r in rows]
+        assert self.markov is not None
+        return await self.markov.get_transitions(chat_id, w1, w2)
 
     async def get_transitions3(
         self, chat_id: int, w1: str, w2: str, w3: str
     ) -> list[tuple[str, int]]:
-        async with self._lock:
-            db = await self._get_conn()
-            cursor = await db.execute(
-                """
-                SELECT w4, cnt
-                FROM transitions3
-                WHERE chat_id = ? AND w1 = ? AND w2 = ? AND w3 = ?
-                """,
-                (chat_id, w1, w2, w3),
-            )
-            rows = await cursor.fetchall()
-        return [(str(r[0]), int(r[1])) for r in rows]
+        assert self.markov is not None
+        return await self.markov.get_transitions3(chat_id, w1, w2, w3)
 
     async def get_transitions1(self, chat_id: int, w1: str) -> list[tuple[str, int]]:
-        async with self._lock:
-            db = await self._get_conn()
-            cursor = await db.execute(
-                """
-                SELECT w2, cnt
-                FROM transitions1
-                WHERE chat_id = ? AND w1 = ?
-                """,
-                (chat_id, w1),
-            )
-            rows = await cursor.fetchall()
-        return [(str(r[0]), int(r[1])) for r in rows]
+        assert self.markov is not None
+        return await self.markov.get_transitions1(chat_id, w1)
 
     async def get_chat_token_volume(self, chat_id: int) -> int:
-        async with self._lock:
-            db = await self._get_conn()
-            cursor3 = await db.execute(
-                "SELECT COALESCE(SUM(cnt), 0) FROM transitions3 WHERE chat_id = ?",
-                (chat_id,),
-            )
-            volume3 = int((await cursor3.fetchone())[0] or 0)
-            if volume3 > 0:
-                return volume3
+        assert self.markov is not None
+        return await self.markov.get_chat_token_volume(chat_id)
 
-            cursor2 = await db.execute(
-                "SELECT COALESCE(SUM(cnt), 0) FROM transitions WHERE chat_id = ?",
-                (chat_id,),
-            )
-            return int((await cursor2.fetchone())[0] or 0)
+    # --- Делегаты к MessagesRepo ---
+
+    async def message_exists(self, chat_id: int, text: str) -> bool:
+        assert self.messages is not None
+        return await self.messages.exists(chat_id, text)
+
+    async def get_all_normalized_messages(self, chat_id: int) -> list[str]:
+        assert self.messages is not None
+        return await self.messages.get_all_normalized(chat_id)
+
+    # --- Делегаты к PivoRepo ---
+
+    async def upsert_pivo_member(
+        self,
+        *,
+        chat_hash: str,
+        user_hash: str,
+        encrypted_user_id: str,
+        encrypted_username: str,
+        encrypted_display_name: str,
+        is_bot: bool,
+    ) -> None:
+        assert self.pivo is not None
+        await self.pivo.upsert(
+            chat_hash=chat_hash,
+            user_hash=user_hash,
+            encrypted_user_id=encrypted_user_id,
+            encrypted_username=encrypted_username,
+            encrypted_display_name=encrypted_display_name,
+            is_bot=is_bot,
+        )
+
+    async def remove_pivo_member(self, chat_hash: str, user_hash: str) -> None:
+        assert self.pivo is not None
+        await self.pivo.remove(chat_hash, user_hash)
+
+    async def get_pivo_members(self, chat_hash: str) -> list[dict[str, object]]:
+        assert self.pivo is not None
+        return await self.pivo.list_members(chat_hash)
+
+    # --- Кросс-доменные операции ---
 
     async def get_stats(self, chat_id: int) -> dict[str, int]:
         async with self._lock:
@@ -531,97 +371,3 @@ class Database:
             await db.execute("DELETE FROM transitions3 WHERE chat_id = ?", (chat_id,))
             await db.execute("DELETE FROM transitions1 WHERE chat_id = ?", (chat_id,))
             await db.commit()
-
-    async def message_exists(self, chat_id: int, text: str) -> bool:
-        normalized_text = sanitize_text(text)
-        async with self._lock:
-            db = await self._get_conn()
-            cursor = await db.execute(
-                """
-                SELECT 1
-                FROM messages
-                WHERE chat_id = ?
-                  AND (text = ? OR normalized_text = ?)
-                LIMIT 1
-                """,
-                (chat_id, text, normalized_text),
-            )
-            row = await cursor.fetchone()
-        return row is not None
-
-    async def upsert_pivo_member(
-        self,
-        *,
-        chat_hash: str,
-        user_hash: str,
-        encrypted_user_id: str,
-        encrypted_username: str,
-        encrypted_display_name: str,
-        is_bot: bool,
-    ) -> None:
-        async with self._lock:
-            db = await self._get_conn()
-            await db.execute(
-                """
-                INSERT INTO pivo_chat_members(
-                    chat_hash,
-                    user_hash,
-                    encrypted_user_id,
-                    encrypted_username,
-                    encrypted_display_name,
-                    is_bot
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(chat_hash, user_hash)
-                DO UPDATE SET
-                    encrypted_user_id = excluded.encrypted_user_id,
-                    encrypted_username = excluded.encrypted_username,
-                    encrypted_display_name = excluded.encrypted_display_name,
-                    is_bot = excluded.is_bot,
-                    updated_at = datetime('now')
-                """,
-                (
-                    chat_hash,
-                    user_hash,
-                    encrypted_user_id,
-                    encrypted_username,
-                    encrypted_display_name,
-                    1 if is_bot else 0,
-                ),
-            )
-            await db.commit()
-
-    async def remove_pivo_member(self, chat_hash: str, user_hash: str) -> None:
-        async with self._lock:
-            db = await self._get_conn()
-            await db.execute(
-                """
-                DELETE FROM pivo_chat_members
-                WHERE chat_hash = ? AND user_hash = ?
-                """,
-                (chat_hash, user_hash),
-            )
-            await db.commit()
-
-    async def get_pivo_members(self, chat_hash: str) -> list[dict[str, object]]:
-        async with self._lock:
-            db = await self._get_conn()
-            cursor = await db.execute(
-                """
-                SELECT encrypted_user_id, encrypted_username, encrypted_display_name, is_bot
-                FROM pivo_chat_members
-                WHERE chat_hash = ?
-                ORDER BY created_at, user_hash
-                """,
-                (chat_hash,),
-            )
-            rows = await cursor.fetchall()
-        return [
-            {
-                "encrypted_user_id": str(row[0]),
-                "encrypted_username": str(row[1]),
-                "encrypted_display_name": str(row[2]),
-                "is_bot": bool(row[3]),
-            }
-            for row in rows
-        ]

@@ -1,0 +1,83 @@
+from __future__ import annotations
+
+import logging
+
+from aiogram import Router
+from aiogram.enums import ParseMode
+from aiogram.filters import Command
+from aiogram.types import Message
+
+from app.handlers._helpers import reply_humanized
+from app.services import PivoService
+from pivo import PIVO_PRIVACY_MESSAGE
+from runtime_state import RuntimeState
+
+router = Router(name="pivo")
+logger = logging.getLogger("chat_markov")
+
+
+@router.message(Command("pivo"))
+async def cmd_pivo(
+    message: Message, pivo_service: PivoService, state: RuntimeState
+) -> None:
+    if message.from_user is None:
+        return
+    text, mentions_count = await pivo_service.build_call_message(
+        chat_id=message.chat.id,
+        caller_user_id=message.from_user.id,
+    )
+    logger.info("pivo command executed")
+    logger.info("mentions count: %s", mentions_count)
+    await message.reply(text, parse_mode=ParseMode.HTML)
+
+
+@router.message(Command("pivo_on"))
+async def cmd_pivo_on(
+    message: Message, pivo_service: PivoService, state: RuntimeState
+) -> None:
+    if message.from_user is None:
+        return
+    if message.from_user.is_bot:
+        await reply_humanized(
+            message,
+            "Ботов в пивной список не добавляю.",
+            state.typing_min_ms,
+            state.typing_max_ms,
+        )
+        return
+
+    await pivo_service.subscribe(message.chat.id, message.from_user)
+    logger.info("pivo member subscribed")
+    await reply_humanized(
+        message,
+        "Готово, теперь я буду звать тебя через /pivo.",
+        state.typing_min_ms,
+        state.typing_max_ms,
+    )
+
+
+@router.message(Command("pivo_off"))
+async def cmd_pivo_off(
+    message: Message, pivo_service: PivoService, state: RuntimeState
+) -> None:
+    if message.from_user is None:
+        return
+
+    await pivo_service.unsubscribe(message.chat.id, message.from_user.id)
+    logger.info("pivo member removed")
+    await reply_humanized(
+        message,
+        "Готово, больше не буду звать тебя через /pivo.",
+        state.typing_min_ms,
+        state.typing_max_ms,
+    )
+
+
+@router.message(Command("pivo_privacy"))
+async def cmd_pivo_privacy(message: Message, state: RuntimeState) -> None:
+    await reply_humanized(
+        message,
+        PIVO_PRIVACY_MESSAGE,
+        state.typing_min_ms,
+        state.typing_max_ms,
+    )

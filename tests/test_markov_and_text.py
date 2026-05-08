@@ -6,6 +6,8 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.handlers.learning import extract_context_tokens
+from bot_policy import bot_is_mentioned
 from db import Database
 from markov import (
     MarkovGenerator,
@@ -13,11 +15,10 @@ from markov import (
     has_degraded_recent_window,
     is_context_heavy_reply,
     is_low_diversity_reply,
-    trim_repetitive_tail,
     tokenize,
+    trim_repetitive_tail,
     weighted_next_choice,
 )
-from main import bot_is_mentioned, extract_context_tokens
 from text_utils import sanitize_text
 
 
