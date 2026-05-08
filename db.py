@@ -217,6 +217,10 @@ class Database:
         assert self.messages is not None
         return await self.messages.exists(chat_id, text)
 
+    async def get_all_normalized_messages(self, chat_id: int) -> list[str]:
+        assert self.messages is not None
+        return await self.messages.get_all_normalized(chat_id)
+
     # --- Делегаты к PivoRepo ---
 
     async def upsert_pivo_member(
