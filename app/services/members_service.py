@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from typing import Optional
 
 from aiogram.types import User
 from cryptography.fernet import Fernet
@@ -57,7 +56,7 @@ class MembersService:
 
     async def get_profile(
         self, chat_id: int, user_id: int
-    ) -> Optional[dict[str, object]]:
+    ) -> dict[str, object] | None:
         """Возвращает расшифрованный payload или None если участник не найден."""
         row = await self._repo.get(self._hmac(chat_id), self._hmac(user_id))
         if row is None:
@@ -77,7 +76,11 @@ class MembersService:
         return self._fernet.encrypt(str(value).encode("utf-8")).decode("utf-8")
 
     def _encrypt_json(self, data: dict[str, object]) -> str:
-        return self._fernet.encrypt(json.dumps(data, ensure_ascii=False).encode("utf-8")).decode("utf-8")
+        raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        return self._fernet.encrypt(raw).decode("utf-8")
 
     def _decrypt_json(self, token: str) -> dict[str, object]:
-        return json.loads(self._fernet.decrypt(token.encode("utf-8")).decode("utf-8"))
+        result: dict[str, object] = json.loads(
+            self._fernet.decrypt(token.encode("utf-8")).decode("utf-8")
+        )
+        return result

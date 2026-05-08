@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
 
 import aiosqlite
-
 
 ConnProvider = Callable[[], Awaitable[aiosqlite.Connection]]
 
@@ -49,7 +48,7 @@ class MembersRepo:
             )
             await db.commit()
 
-    async def get(self, chat_hash: str, user_hash: str) -> Optional[dict[str, object]]:
+    async def get(self, chat_hash: str, user_hash: str) -> dict[str, object] | None:
         async with self._lock:
             db = await self._conn_provider()
             cur = await db.execute(

@@ -28,5 +28,6 @@ async def apply(conn: aiosqlite.Connection) -> None:
         )
 
     await conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_messages_normalized_lookup ON messages(chat_id, normalized_text)"
+        "CREATE INDEX IF NOT EXISTS idx_messages_normalized_lookup"
+        " ON messages(chat_id, normalized_text)"
     )

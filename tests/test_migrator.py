@@ -163,7 +163,8 @@ class TestMigratorExistingDb(unittest.IsolatedAsyncioTestCase):
 
     async def test_existing_data_preserved(self) -> None:
         await self.conn.execute(
-            "INSERT INTO messages(chat_id, author_id, text, normalized_text) VALUES (1, 5, 'hello', '')"
+            "INSERT INTO messages(chat_id, author_id, text, normalized_text)"
+            " VALUES (1, 5, 'hello', '')"
         )
         await self.conn.commit()
 
@@ -229,7 +230,8 @@ class TestMigratorFullCompatibility(unittest.IsolatedAsyncioTestCase):
         # pivo members
         await self.conn.executemany(
             "INSERT INTO pivo_chat_members"
-            "(chat_hash, user_hash, encrypted_user_id, encrypted_username, encrypted_display_name, is_bot)"
+            "(chat_hash, user_hash, encrypted_user_id,"
+            " encrypted_username, encrypted_display_name, is_bot)"
             " VALUES (?,?,?,?,?,?)",
             [
                 ("chash1", "uhash1", "enc_uid_1", "enc_uname_1", "enc_dname_1", 0),
@@ -266,7 +268,8 @@ class TestMigratorFullCompatibility(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await cur.fetchone())[0], 3)
 
         cur = await self.conn.execute(
-            "SELECT cnt FROM transitions WHERE chat_id=100 AND w1='кофе' AND w2='утром' AND w3='бодрит'"
+            "SELECT cnt FROM transitions"
+            " WHERE chat_id=100 AND w1='кофе' AND w2='утром' AND w3='бодрит'"
         )
         self.assertEqual((await cur.fetchone())[0], 3)
 
@@ -276,7 +279,8 @@ class TestMigratorFullCompatibility(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await cur.fetchone())[0], 2)
 
         cur = await self.conn.execute(
-            "SELECT cnt FROM transitions3 WHERE chat_id=100 AND w1='а' AND w2='кофе' AND w3='утром' AND w4='бодрит'"
+            "SELECT cnt FROM transitions3"
+            " WHERE chat_id=100 AND w1='а' AND w2='кофе' AND w3='утром' AND w4='бодрит'"
         )
         self.assertEqual((await cur.fetchone())[0], 1)
 

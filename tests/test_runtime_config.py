@@ -4,8 +4,8 @@ import unittest
 from types import SimpleNamespace
 
 from runtime_config import (
-    InvalidRuntimeSettingValueError,
     UNKNOWN_RUNTIME_KEY_MESSAGE,
+    InvalidRuntimeSettingValueError,
     UnknownRuntimeSettingError,
     apply_runtime_setting,
     parse_bool,

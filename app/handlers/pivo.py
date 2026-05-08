@@ -12,7 +12,6 @@ from app.services import PivoService
 from pivo import PIVO_PRIVACY_MESSAGE
 from runtime_state import RuntimeState
 
-
 router = Router(name="pivo")
 logger = logging.getLogger("chat_markov")
 

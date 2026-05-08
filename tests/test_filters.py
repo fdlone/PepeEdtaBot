@@ -1,8 +1,6 @@
 """Tests for GroupOnly, AdminOrOwner filters and ThrottlingMiddleware."""
 from __future__ import annotations
 
-import asyncio
-import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
@@ -102,7 +100,9 @@ class TestAdminOrOwner(unittest.IsolatedAsyncioTestCase):
 
 class TestThrottlingMiddleware(unittest.IsolatedAsyncioTestCase):
     def _make_cmd_message(self, text: str, user_id: int = 1, chat_id: int = 100) -> MagicMock:
+        from aiogram.types import Message
         msg = MagicMock()
+        msg.__class__ = Message  # isinstance(msg, Message) == True
         msg.text = text
         msg.from_user = MagicMock()
         msg.from_user.id = user_id

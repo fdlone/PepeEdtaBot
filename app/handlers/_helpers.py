@@ -16,9 +16,10 @@ async def reply_humanized(
 ) -> None:
     """Имитация «печатает...»: chat action + случайная пауза, затем reply."""
     try:
-        await message.bot.send_chat_action(
-            chat_id=message.chat.id, action=ChatAction.TYPING
-        )
+        if message.bot is not None:
+            await message.bot.send_chat_action(
+                chat_id=message.chat.id, action=ChatAction.TYPING
+            )
         delay_ms = random.randint(typing_min_ms, typing_max_ms)
         await asyncio.sleep(delay_ms / 1000)
     except Exception:

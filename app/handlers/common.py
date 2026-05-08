@@ -10,7 +10,6 @@ from bot_messages import format_help_message, format_stats_message
 from db import Database
 from runtime_state import RuntimeState
 
-
 router = Router(name="common")
 
 

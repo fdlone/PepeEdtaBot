@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 import aiosqlite
 
 from text_utils import sanitize_text
-
 
 ConnProvider = Callable[[], Awaitable[aiosqlite.Connection]]
 
