@@ -4,7 +4,8 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.handlers._helpers import is_group_message, reply_humanized
+from app.filters import GroupOnly
+from app.handlers._helpers import reply_humanized
 from bot_messages import format_help_message, format_stats_message
 from db import Database
 from runtime_state import RuntimeState
@@ -25,10 +26,8 @@ async def cmd_help(message: Message, state: RuntimeState) -> None:
     )
 
 
-@router.message(Command("stats"))
+@router.message(Command("stats"), GroupOnly())
 async def cmd_stats(message: Message, db: Database, state: RuntimeState) -> None:
-    if not is_group_message(message):
-        return
     stats = await db.get_stats(message.chat.id)
     text = format_stats_message(stats, state.min_tokens_for_model)
     await reply_humanized(message, text, state.typing_min_ms, state.typing_max_ms)
