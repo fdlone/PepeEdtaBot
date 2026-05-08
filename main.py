@@ -7,20 +7,18 @@ import time
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.enums import ChatType
 from aiogram.filters import Command
 from aiogram.types import BotCommand, Message
 
+from app.handlers import common as common_handlers
 from app.handlers import pivo as pivo_handlers
-from app.handlers._helpers import reply_humanized
+from app.handlers._helpers import is_group_message, reply_humanized
 from app.services import PivoService
 from bot_messages import (
     TELEGRAM_COMMANDS,
     format_clear_confirmation_message,
     format_config_message,
-    format_help_message,
     format_set_help_message,
-    format_stats_message,
 )
 from bot_policy import (
     bot_is_mentioned,
@@ -40,10 +38,6 @@ from runtime_config import (
 from runtime_state import runtime_state_from_settings
 from settings import Settings, load_settings
 from text_utils import sanitize_text
-
-
-def is_group_message(message: Message) -> bool:
-    return message.chat.type in {ChatType.GROUP, ChatType.SUPERGROUP}
 
 
 def is_owner(message: Message, owner_id: Optional[int]) -> bool:
@@ -142,27 +136,11 @@ async def run_bot() -> None:
     )
 
     dp = Dispatcher()
+    dp["db"] = db
     dp["pivo_service"] = pivo_service
     dp["state"] = state
+    dp.include_router(common_handlers.router)
     dp.include_router(pivo_handlers.router)
-
-    @dp.message(Command("stats"))
-    async def cmd_stats(message: Message) -> None:
-        if not is_group_message(message):
-            return
-        stats = await db.get_stats(message.chat.id)
-        text = format_stats_message(stats, state.min_tokens_for_model)
-        await reply_humanized(message, text, state.typing_min_ms, state.typing_max_ms)
-
-    @dp.message(Command("help"))
-    async def cmd_help(message: Message) -> None:
-        await reply_humanized(
-            message, format_help_message(), state.typing_min_ms, state.typing_max_ms
-        )
-
-    @dp.message(Command("ping"))
-    async def cmd_ping(message: Message) -> None:
-        await message.reply("pong")
 
     @dp.message(Command("config"))
     async def cmd_config(message: Message) -> None:

@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 import random
 
-from aiogram.enums import ChatAction
+from aiogram.enums import ChatAction, ChatType
 from aiogram.types import Message
+
+
+def is_group_message(message: Message) -> bool:
+    return message.chat.type in {ChatType.GROUP, ChatType.SUPERGROUP}
 
 
 async def reply_humanized(
