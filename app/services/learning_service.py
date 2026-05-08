@@ -25,3 +25,7 @@ class LearningService:
         )
         self._generator.invalidate_chat_cache(chat_id)
         return token_volume
+
+    async def is_duplicate(self, chat_id: int, text: str) -> bool:
+        """True если normalized_text уже есть в messages для данного чата."""
+        return await self._db.message_exists(chat_id, text)
