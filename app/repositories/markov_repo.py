@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
 
 import aiosqlite
-
 
 ConnProvider = Callable[[], Awaitable[aiosqlite.Connection]]
 
@@ -38,7 +37,7 @@ class MarkovRepo:
 
     async def get_start_if_exists(
         self, chat_id: int, w1: str, w2: str
-    ) -> Optional[tuple[str, str, int]]:
+    ) -> tuple[str, str, int] | None:
         async with self._lock:
             db = await self._conn_provider()
             cursor = await db.execute(
@@ -52,7 +51,7 @@ class MarkovRepo:
 
     async def get_start3_if_exists(
         self, chat_id: int, w1: str, w2: str, w3: str
-    ) -> Optional[tuple[str, str, str, int]]:
+    ) -> tuple[str, str, str, int] | None:
         async with self._lock:
             db = await self._conn_provider()
             cursor = await db.execute(
@@ -121,7 +120,9 @@ class MarkovRepo:
                 "SELECT COALESCE(SUM(cnt), 0) FROM transitions3 WHERE chat_id = ?",
                 (chat_id,),
             )
-            volume3 = int((await cursor3.fetchone())[0] or 0)
+            row3 = await cursor3.fetchone()
+            assert row3 is not None
+            volume3 = int(row3[0] or 0)
             if volume3 > 0:
                 return volume3
 
@@ -129,4 +130,6 @@ class MarkovRepo:
                 "SELECT COALESCE(SUM(cnt), 0) FROM transitions WHERE chat_id = ?",
                 (chat_id,),
             )
-            return int((await cursor2.fetchone())[0] or 0)
+            row2 = await cursor2.fetchone()
+            assert row2 is not None
+            return int(row2[0] or 0)

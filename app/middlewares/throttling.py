@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from aiogram import BaseMiddleware
-from aiogram.types import Message
+from aiogram.types import Message, TelegramObject
 
 
 class ThrottlingMiddleware(BaseMiddleware):
@@ -18,10 +19,13 @@ class ThrottlingMiddleware(BaseMiddleware):
 
     async def __call__(
         self,
-        handler: Callable[[Message, dict[str, Any]], Awaitable[Any]],
-        event: Message,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
+        if not isinstance(event, Message):
+            return await handler(event, data)
+
         text = event.text or ""
         if not text.startswith("/") or event.from_user is None:
             return await handler(event, data)

@@ -8,7 +8,6 @@ from aiogram.types import Message
 
 from settings import Settings
 
-
 logger = logging.getLogger("chat_markov")
 
 

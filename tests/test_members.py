@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import unittest
 from unittest.mock import MagicMock
 
@@ -59,7 +58,8 @@ class TestKeyDerivation(unittest.TestCase):
 
     def test_pivo_raw_hmac_differs_from_derived(self) -> None:
         """Убеждаемся что HKDF-ключ для members не совпадает с raw-секретом pivo."""
-        import hashlib, hmac as hmac_mod
+        import hashlib
+        import hmac as hmac_mod
         pivo_hmac = hmac_mod.new(
             _HMAC_SECRET.encode(), b"12345", hashlib.sha256
         ).digest()
@@ -195,7 +195,9 @@ class TestMembersService(unittest.IsolatedAsyncioTestCase):
         """Данные в БД должны быть зашифрованы — не читаться как открытый текст."""
         user = _fake_user(user_id=500)
         secret_payload = {"secret": "не должно быть видно"}
-        await self.svc.record_consent(chat_id=1, user=user, payload=secret_payload, consent_version=1)
+        await self.svc.record_consent(
+            chat_id=1, user=user, payload=secret_payload, consent_version=1
+        )
 
         cur = await self.conn.execute("SELECT encrypted_payload FROM chat_member_profiles")
         raw = (await cur.fetchone())[0]
@@ -203,7 +205,9 @@ class TestMembersService(unittest.IsolatedAsyncioTestCase):
 
     async def test_members_keys_differ_from_pivo_keys(self) -> None:
         """HKDF-ключи для members не совпадают с raw pivo-секретами."""
-        import hashlib, hmac as hmac_mod
+        import hashlib
+        import hmac as hmac_mod
+
         from app.security.key_derivation import derive_key
 
         members_key = derive_key(_HMAC_SECRET, "members:hmac")

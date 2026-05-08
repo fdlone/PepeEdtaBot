@@ -16,14 +16,13 @@ from bot_messages import (
 from db import Database
 from markov import MarkovGenerator
 from runtime_config import (
-    InvalidRuntimeSettingValueError,
     UNKNOWN_RUNTIME_KEY_MESSAGE,
+    InvalidRuntimeSettingValueError,
     UnknownRuntimeSettingError,
     apply_runtime_setting,
 )
 from runtime_state import RuntimeState
 from settings import Settings
-
 
 router = Router(name="admin")
 logger = logging.getLogger("chat_markov")

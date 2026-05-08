@@ -19,7 +19,6 @@ from markov import MarkovGenerator, tokenize
 from runtime_state import RuntimeState
 from text_utils import sanitize_text
 
-
 router = Router(name="learning")
 logger = logging.getLogger("chat_markov")
 
