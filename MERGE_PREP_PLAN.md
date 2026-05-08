@@ -11,7 +11,7 @@
 | # | Блокер | Файл(ы) | Усилия | Риск |
 |---|---|---|---|---|
 | **B1** | UX-регрессия: unauthorized админ-команды молча игнорируются | `app/handlers/admin.py`, `tests/test_handlers.py` | ~40 мин | низкий |
-| **B2** | `requirements.lock` декоративен, не используется | `Dockerfile`, `requirements-dev.txt`, `requirements.lock` (header) | ~25 мин | низкий |
+| **B2** | `requirements.lock` декоративен, не используется | `Dockerfile`, `requirements-dev.txt`, `requirements.lock` (header); `.github/workflows/ci.yml` — не меняется, косвенно использует lock через `requirements-dev.txt` | ~25 мин | низкий |
 | **B3** | README: 2 абсолютные ссылки `/D:/test/...` | `README.md` | ~5 мин | нулевой |
 
 **Итого:** ~70 минут чистого времени + ~10 минут на CI.
@@ -86,19 +86,22 @@ Closes B3 from MERGE_PREP_PLAN.md.
 
 ### Решение
 
-**Вариант A (выбран):** lock становится единственным источником runtime-зависимостей.
+**Вариант A (выбран):** lock становится единственным источником **runtime**-зависимостей. Стратегия — простая: `pip freeze` в чистом venv, без `pip-tools`/`pip-compile`. Это **прагматично для размера проекта**, но честно говоря, имеет ограничения, которые нужно осознавать:
 
-- `Dockerfile` ставит `requirements.lock` (production-runtime).
-- `requirements-dev.txt` ссылается на `requirements.lock` (`-r requirements.lock`) и добавляет `ruff`/`mypy`.
-- В шапке `requirements.lock` — инструкция по обновлению.
-- `requirements.txt` остаётся как «верхнеуровневые диапазоны» — справочный файл для разработчика, желающего понять прямые зависимости.
+- header регенерируется вручную после `pip freeze` (хрупко, легко забыть);
+- нет hash-pin'а, нет автоматической верификации совместимости при апгрейде;
+- dev-tools (`mypy`, `ruff`) **остаются диапазонами** в `requirements-dev.txt` — закреплён только runtime, не tooling.
 
-Это даёт:
-- одна точка для production (Dockerfile);
-- одна точка для CI и локальной разработки (requirements-dev.txt);
-- возможность регенерировать lock при апгрейде через `pip freeze`.
+Если в будущем потребуется более строгая воспроизводимость, можно перейти на `pip-tools` (`requirements.in` → `pip-compile` → `requirements.txt`) или `uv lock`. Пока — `pip freeze` достаточно.
 
-**Вариант B и C** (переименовать или удалить) отвергнуты: P1-5 в исходном аудите явно требовал воспроизводимости; имеющийся lock-файл достаточно подключить к консумерам, чтобы он начал выполнять свою роль.
+Что делаем:
+- `Dockerfile` устанавливает `requirements.lock` (production-runtime, всё закреплено).
+- `requirements-dev.txt` ссылается на `requirements.lock` и добавляет `ruff>=0.15.0` / `mypy>=2.0.0` диапазонами (CI и локальная разработка).
+- `.github/workflows/ci.yml` **не меняется** — он уже ставит `requirements-dev.txt`, который теперь косвенно использует lock.
+- В шапке `requirements.lock` — комментарий о том, что это `pip freeze`-snapshot и как его регенерировать.
+- `requirements.txt` остаётся как «верхнеуровневые диапазоны» — справочный файл для разработчика, желающего увидеть прямые зависимости без транзитивных.
+
+**Вариант B и C** (переименовать или удалить) отвергнуты: P1-5 в исходном аудите явно требовал воспроизводимости; имеющийся lock-файл достаточно подключить к консумерам, чтобы он начал выполнять свою роль для runtime — это закрывает 80% риска при минимальных усилиях.
 
 ### Изменения
 
@@ -172,7 +175,7 @@ aiofiles==25.1.0
 
 2. **CI:**
    - Запушить → проверить, что workflow проходит.
-   - Шаг `pip install -r requirements-dev.txt` теперь использует lock — должна быть та же скорость или быстрее (нет резолвера, всё закреплено).
+   - Шаг `pip install -r requirements-dev.txt` теперь ставит закреплённый runtime через lock + диапазоны для `ruff`/`mypy`. Резолвер всё ещё работает (для dev-tools), но runtime больше не требует его.
 
 3. **Docker (опционально, если есть Docker под рукой):**
    ```bash
@@ -181,10 +184,11 @@ aiofiles==25.1.0
 
 ### Acceptance
 
-- `Dockerfile` ставит `requirements.lock`.
-- `requirements-dev.txt` ссылается на `requirements.lock`.
-- В `requirements.lock` есть header с инструкцией обновления.
-- CI зелёный.
+- `Dockerfile` содержит `RUN pip install --no-cache-dir -r requirements.lock` (вместо прежнего `requirements.txt`).
+- `requirements-dev.txt` начинается с `-r requirements.lock` (вместо прежнего `-r requirements.txt`).
+- В `requirements.lock` добавлен header-комментарий: характеристика стратегии (`pip freeze`-snapshot без `pip-tools`), куда подключён, как регенерировать.
+- `requirements.txt` оставлен без изменений — остаётся справочным файлом верхнеуровневых диапазонов.
+- CI зелёный (использует lock косвенно через `requirements-dev.txt`).
 - Локальный прогон тестов зелёный.
 
 ### Коммит
@@ -232,7 +236,32 @@ Closes B2 from MERGE_PREP_PLAN.md.
 
 ### Логика порядка регистрации
 
-В одном `Router` aiogram перебирает handlers по порядку. Поведение для `/set`:
+В одном `Router` aiogram перебирает handlers по порядку. **Проверено в исходниках aiogram** ([`aiogram/dispatcher/event/telegram.py:111-130`](https://github.com/aiogram/aiogram/blob/dev-3.x/aiogram/dispatcher/event/telegram.py)):
+
+```python
+async def trigger(self, event: TelegramObject, **kwargs: Any) -> Any:
+    """
+    Propagate event to handlers and stops propagation on first match.
+    Handler will be called when all its filters are pass.
+    """
+    for handler in self.handlers:
+        ...
+        if result:                  # все фильтры прошли
+            ...
+            return await wrapped_inner(event, kwargs)
+    return UNHANDLED
+```
+
+Поведение однозначно:
+- handlers перебираются `for handler in self.handlers` — то есть в порядке регистрации;
+- на первом, у которого `check()` вернул True (все фильтры прошли), выполняется handler и `return`;
+- если ни один не прошёл — `UNHANDLED`.
+
+Это значит: **порядок регистрации в `app/handlers/admin.py` критичен.** Защищённый `cmd_set` должен быть зарегистрирован **до** `cmd_set_denied`. Если поменять местами — fallback всегда будет выигрывать (у него меньше фильтров, проходит чаще), и админы не смогут пользоваться командами.
+
+Для защиты от случайной перестановки — добавляется smoke-тест порядка handlers (см. секцию «Тесты» ниже).
+
+Поведение для `/set`:
 
 | Кто отправил | `GroupOnly` | `AdminOrOwner` | Защищённый `cmd_set` | Fallback `cmd_set_denied` |
 |---|---|---|---|---|
@@ -332,9 +361,9 @@ Closes B2 from MERGE_PREP_PLAN.md.
 
 ### Тесты
 
-#### `tests/test_handlers.py`
+#### `tests/test_handlers.py` — проверка текстов отказа
 
-Добавить три теста в `class TestAdminHandlers`:
+Три теста в `class TestAdminHandlers`:
 
 ```python
 async def test_set_denied_replies_with_explanation(self) -> None:
@@ -371,6 +400,53 @@ async def test_clear_denied_replies_with_explanation(self) -> None:
 - разделяют поведение `/clear` (специфичный текст) и `/set`/`/setprob` (общий текст);
 - работают через прямой вызов handler-функций, как остальные тесты в файле.
 
+#### `tests/test_handlers.py` — smoke-тест порядка handlers
+
+Это **самый важный** тест в B1: он защищает от случайной перестановки handlers, которая бы сломала всю логику без видимых ошибок.
+
+Добавить в `class TestAdminHandlers`:
+
+```python
+def test_admin_router_handler_registration_order(self) -> None:
+    """
+    Защита от случайной перестановки fallback-handlers.
+
+    Порядок критичен: aiogram перебирает handlers Router'а в порядке
+    регистрации и останавливается на первом, у которого все фильтры
+    прошли. Если cmd_set_denied (без AdminOrOwner) окажется зарегистри-
+    рован раньше cmd_set, то admin-команда никогда не выполнится для
+    реальных админов — fallback всегда будет выигрывать.
+
+    Проверяем, что для каждой защищённой команды защищённый handler
+    зарегистрирован раньше fallback'а.
+    """
+    from app.handlers.admin import router
+
+    # Извлекаем callbacks в порядке регистрации
+    callbacks = [h.callback for h in router.message.handlers]
+    names = [cb.__name__ for cb in callbacks]
+
+    # Для каждой пары (защищённый, fallback) проверяем что защищённый
+    # идёт раньше.
+    pairs = [
+        ("cmd_set", "cmd_set_denied"),
+        ("cmd_setprob", "cmd_setprob_denied"),
+        ("cmd_clear", "cmd_clear_denied"),
+    ]
+    for protected, fallback in pairs:
+        assert protected in names, f"{protected} not registered"
+        assert fallback in names, f"{fallback} not registered"
+        assert names.index(protected) < names.index(fallback), (
+            f"{fallback} зарегистрирован раньше {protected} — "
+            f"fallback будет всегда выигрывать, защищённый handler "
+            f"никогда не вызовется. Поменяйте порядок в admin.py."
+        )
+```
+
+Тест работает через `router.message.handlers` (это публичное API aiogram, см. `TelegramEventObserver`); не запускает dispatcher, не требует Bot.
+
+**Почему этого достаточно:** мы уже верифицировали в исходниках aiogram, что `for handler in self.handlers` идёт в порядке регистрации с `return` на первом match. Если порядок регистрации правильный — поведение фреймворка обеспечивает остальное. Тестировать сам цикл `for handler in...` — это тестировать чужую библиотеку.
+
 ### Что **не** тестируется (и почему)
 
 Полный flow «aiogram dispatcher решает, какой handler вызвать на основе `AdminOrOwner=False`» — не тестируем. Это поведение фреймворка, оно покрывается:
@@ -382,10 +458,10 @@ async def test_clear_denied_replies_with_explanation(self) -> None:
 ### Acceptance
 
 - В `app/handlers/admin.py` есть три новых handler'а: `cmd_set_denied`, `cmd_setprob_denied`, `cmd_clear_denied`.
-- Каждый зарегистрирован **после** защищённого с тем же `Command(...)` и `GroupOnly()`.
-- Три новых теста в `tests/test_handlers.py` зелёные.
+- Каждый зарегистрирован **после** защищённого с тем же `Command(...)` и `GroupOnly()` (проверяется новым smoke-тестом порядка).
+- Четыре новых теста в `tests/test_handlers.py` зелёные (3 на тексты + 1 на порядок регистрации).
 - Существующий `test_non_admin_blocked` в `test_filters.py` не сломан (он тестирует только сам фильтр).
-- Полный прогон 184 тестов (181 + 3) зелёный.
+- Полный прогон 185 тестов (181 + 4) зелёный.
 - `mypy app/` зелёный.
 - `ruff check app/ tests/` зелёный.
 
@@ -403,12 +479,17 @@ OWNER_ID или права админа чата.»
 
 Возвращаем исходное поведение через fallback-handlers с тем же Command
 и GroupOnly, но без AdminOrOwner. Aiogram перебирает handlers Router-а
-по порядку: первый защищённый handler пропускается при AdminOrOwner=False,
-дальше срабатывает fallback. /clear сохраняет свой специфичный текст
-отказа.
+по порядку (verified по исходникам aiogram, telegram.py:111-130) и
+останавливается на первом match: защищённый handler пропускается при
+AdminOrOwner=False, дальше срабатывает fallback. /clear сохраняет
+свой специфичный текст отказа.
 
-В тестах добавлены три проверки, что denied-handlers возвращают
-ожидаемые сообщения. Покрытие выросло до 184 тестов.
+В тестах добавлены четыре проверки:
+- три на тексты denied-handlers;
+- одна smoke-проверка порядка регистрации (защита от случайной
+  перестановки, которая бы сломала всю логику без видимых ошибок).
+
+Покрытие выросло до 185 тестов.
 
 Closes B1 from MERGE_PREP_PLAN.md.
 ```
@@ -421,17 +502,40 @@ Closes B1 from MERGE_PREP_PLAN.md.
 
 | # | Проверка | Команда | Ожидание |
 |---|---|---|---|
-| 1 | Все тесты проходят | `python -m unittest discover tests` | `Ran 184 tests ... OK` |
+| 1 | Все тесты проходят | `python -m unittest discover tests` | `Ran 185 tests ... OK` |
 | 2 | Ruff без замечаний | `python -m ruff check app/ tests/` | `All checks passed!` |
 | 3 | Mypy без замечаний | `python -m mypy app/` | `Success: no issues found` |
 | 4 | CI зелёный на 3.12/3.13/3.14 | GitHub Actions | все три прогонa зелёные |
 | 5 | README не содержит абсолютных ссылок | `git grep "/D:/test" README.md` | пусто |
-| 6 | `requirements.lock` используется | проверить `Dockerfile` и `requirements-dev.txt` | `-r requirements.lock` в обоих |
-| 7 | `MERGE_PREP_PLAN.md` удалён | `ls MERGE_PREP_PLAN.md` | `not found` |
-| 8 | `PROJECT_AUDIT.md` помечен как актуальный | в разделе 13.4 — «можно мёржить» | да |
+| 6 | `Dockerfile` устанавливает lock | `git grep "requirements.lock" Dockerfile` | `RUN pip install --no-cache-dir -r requirements.lock` |
+| 7 | `requirements-dev.txt` ссылается на lock | первая строка файла | `-r requirements.lock` |
+| 8 | `requirements.lock` имеет header | первые строки файла | комментарии с инструкцией регенерации |
+| 9 | smoke-тест порядка handlers зелёный | имя теста | `test_admin_router_handler_registration_order` |
+| 10 | `MERGE_PREP_PLAN.md` удалён | `ls MERGE_PREP_PLAN.md` | `not found` |
+| 11 | `PROJECT_AUDIT.md` отражает закрытие блокеров | раздел 13 и таблица 15 | блокеры B1/B2/B3 помечены как закрытые с указанием коммитов |
 
-После пунктов 1–7:
-- финальный коммит: `docs(audit): mark refactor branch ready for merge` — обновляет раздел 13.4 в `PROJECT_AUDIT.md` (с «не мёржить до B1/B2/B3» на «готово к merge»), удаляет этот файл (`MERGE_PREP_PLAN.md`).
+После пунктов 1–10 — финальный коммит, который:
+
+1. **Обновляет `PROJECT_AUDIT.md`** — не просто заменяет «не мёржить» на «можно», а **фиксирует факт закрытия каждого блокера**:
+   - в разделе 13.2 каждая строка таблицы блокеров получает столбец «Закрыто в коммите» с SHA;
+   - раздел 13.4 переписывается: «Блокеры B1/B2/B3 закрыты коммитами `<sha1>`, `<sha2>`, `<sha3>`. CI зелёный, 185 тестов проходят, ruff/mypy чистые. Ветка готова к merge.»;
+   - в разделе 15 (сводная таблица) строки P1-A/P1-B/P1-C получают пометку «✅ закрыто в `<sha>`».
+2. **Удаляет `MERGE_PREP_PLAN.md`** (этот файл).
+3. **Сообщение коммита:**
+   ```
+   docs(audit): mark blockers B1/B2/B3 as closed; ready to merge
+
+   Все три P1-блокера из второй редакции PROJECT_AUDIT.md закрыты:
+   - B1 (UX-регрессия в админ-командах) — коммит <sha1>
+   - B2 (requirements.lock не используется) — коммит <sha2>
+   - B3 (README absolute links) — коммит <sha3>
+
+   CI зелёный на 3.12/3.13/3.14, 185 тестов проходят,
+   ruff и mypy без замечаний.
+
+   Ветка refactor/structure готова к merge в main.
+   MERGE_PREP_PLAN.md удалён как выполненный.
+   ```
 
 ---
 
