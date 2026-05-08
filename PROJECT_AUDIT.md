@@ -1,8 +1,10 @@
 # Технический аудит проекта PepeEdtaBot
 
-Дата аудита: 2026-05-08
-Ветка: `refactor/structure`, последний коммит `27b2195 feat(phase-6): ruff + mypy, requirements.lock, handler tests`
+Дата аудита: 2026-05-08 (вторая редакция)
+Ветка: `refactor/structure`, последний коммит `f523de7 docs: refresh audit, drop completed refactor plan`
 Предыдущая редакция аудита: 2026-05-08 (до рефакторинга, ветка `main`, коммит `a261a6d`).
+
+**Изменения второй редакции:** дополнен по результатам независимой ревизии (`PROJECT_AUDIT_CODEX.md`). Добавлены ранее упущенные пункты: UX-регрессия в админ-командах, неэффективность `requirements.lock`, хрупкость SQL-splitter в migrator, концептуальная неоднозначность dedup-фильтра. Пересмотрена готовность к merge: рекомендация изменена с «можно мёржить» на «после фикса P1».
 
 ---
 
@@ -148,7 +150,7 @@ PepeEdtaBot/
 | **P1-2** | `db.py` смешивает миграции, бизнес-запросы, статистику | ✅ Введены репозитории `MarkovRepo`, `MessagesRepo`, `PivoRepo`, `MembersRepo`. `db.py` оставлен как фасад с делегатами + кросс-доменными транзакциями (`save_message_and_update_model`, `clear_chat`, `get_stats`). Объём `db.py` сократился с ~620 до 373 строк. |
 | **P1-3** | Нет фильтров авторизации | ✅ [`GroupOnly`](app/filters/group_only.py) и [`AdminOrOwner`](app/filters/admin_or_owner.py) применяются декларативно в декораторе `@router.message(...)`. Старые хелперы `_is_owner` / `_is_chat_admin` / `_can_manage_settings` удалены. |
 | **P1-4** | Throttling/rate-limit отсутствует | ✅ [`ThrottlingMiddleware`](app/middlewares/throttling.py) с per-user-per-command cooldown; `pivo`=30 сек, `clear`=10 сек. Регистрируется на `dp.message` в `main.py`. |
-| **P1-5** | Нет lock-файла | ✅ [`requirements.lock`](requirements.lock) (24 закреплённых пакета); [`requirements-dev.txt`](requirements-dev.txt) добавляет ruff+mypy для CI. |
+| **P1-5** | Нет lock-файла | ⚠️ **Декоративно — файл создан, но не используется.** [`requirements.lock`](requirements.lock) содержит 24 пакета, но `Dockerfile` ставит `requirements.txt`, CI ставит `requirements-dev.txt`, в самом lock'е нет `mypy`/`ruff`. Реальной воспроизводимости не даёт. См. п.9.4 — требует решения до merge. |
 | **P1-6** | Нет CI | ✅ [`.github/workflows/ci.yml`](.github/workflows/ci.yml) на матрице `python-version: [3.12, 3.13, 3.14]`, шаги `ruff check` → `mypy app/` → `unittest discover`. |
 | **P1-7** | Нет линтеров и mypy | ✅ [`pyproject.toml`](pyproject.toml) с `ruff` (E/F/I/UP, line-length=100) и `mypy strict для app.*`; legacy-модули вынесены в `[[tool.mypy.overrides]] ignore_errors = true`. |
 | **P1-8** | Нет тестов хендлеров | ✅ [`tests/test_handlers.py`](tests/test_handlers.py) — 18 happy-path тестов, по одному-двум на каждую команду каждого роутера; покрытие через прямой вызов функций с `MagicMock`/`AsyncMock`. |
@@ -169,6 +171,28 @@ PepeEdtaBot/
 - Магические числа (`range(4)` в `learning.py`, `len(clean) < 3 or > 500`) → константы.
 - Удалить неиспользуемое поле `is_bot` в `pivo_chat_members` (пишется при `subscribe`, нигде не читается; уже фильтруется до записи).
 - Структурированные логи (JSON) — отложить до выбора системы агрегации.
+
+### Известные регрессии относительно `main`
+
+Эти изменения **не были отмечены в первой редакции аудита**, найдены при независимой ревизии. Это поведенческие изменения, которые в коде проходят как нормальные, но для пользователя выглядят как регресс.
+
+#### R1. Админ-команды без прав теперь молча игнорируются (P1)
+
+**Где:** [`app/handlers/admin.py:43,100,140`](app/handlers/admin.py:43), [`app/filters/admin_or_owner.py:14-26`](app/filters/admin_or_owner.py:14).
+**Было в `main`:** `/set` и `/setprob` отвечали «Команда доступна OWNER_ID и администраторам чата.»; `/clear` — «Недостаточно прав. Нужен OWNER_ID или права админа чата.»
+**Стало:** `AdminOrOwner()` filter возвращает `False` → handler не вызывается → пользователь не получает ничего. Для `/clear` это особенно неприятно: пользователь думает, что бот сломан или не видит команду.
+**Как исправить:**
+- вариант A — fallback handler с тем же `Command(...)` без `AdminOrOwner()` после защищённого, отвечающий «нет прав»;
+- вариант B — вернуть проверку в handler с явным `reply` при отказе, оставив `GroupOnly()` как фильтр.
+
+В фазе 5 этот случай был осознанно проигнорирован под формулировкой «behavior change is acceptable» — это была ошибка суждения, перед merge должно быть исправлено.
+
+#### R2. `/clear` молча сбрасывается throttling-middleware (P3)
+
+**Где:** [`app/middlewares/throttling.py:35-37`](app/middlewares/throttling.py:35).
+**Было в `main`:** rate-limit отсутствовал (`/clear` всегда выполнялся).
+**Стало:** при попытке повторить `/clear` в течение 10 секунд middleware возвращает `None`, ответа нет. Для `/pivo` (шумная команда) это OK, но для админской `/clear` — пользователь не понимает, почему бот молчит.
+**Как исправить:** для админ-команд возвращать короткий ответ «слишком часто, подождите N секунд» вместо silent drop. Для `/pivo` оставить silent drop.
 
 ---
 
@@ -219,6 +243,18 @@ handlers (aiogram Router'ы) → services (бизнес-логика) → reposi
 Колонка `messages.text` удалена. Хранится только `normalized_text` (нужен для `is_duplicate` SQL-fallback при <3 токенах). Это уже **не сырой текст пользователя** — `sanitize_text` убирает `@mentions` и приводит пробелы к одиночным. Tokenizable-но не идентично исходному. Это резкое улучшение privacy-постуры.
 
 **Что не сделано:** нет команды `/learn_off` / `/privacy` для opt-out на уровне чата. Это не было в скоупе фаз 1–6 (фаза 4 была про устранение хранения сырого текста, а не про opt-out flow). Можно вынести в P2.
+
+#### Уточнение: `is_duplicate` — эвристика разнообразия, а не privacy-guard
+
+В фазе 4 фильтр был сделан **намеренно вероятностным**: `random.randint(3, min(5, len(tokens)))` выбирает длину префикса для проверки. Одно и то же сгенерированное сообщение может пройти один раз и быть отклонено в другой. Цель — снизить «занудность» бота, а не гарантировать защиту от копирования обучающих фраз.
+
+Это создаёт концептуальную неоднозначность:
+- если читать имя метода **`is_duplicate`** и комментарий **«дедупликация»**, это звучит как защита от утечки обучающих сообщений (privacy-guard);
+- по реализации — это **эвристика разнообразия генерации**: гарантий нет, near-copy с длинным префиксом могут пройти.
+
+**Что нужно сделать:** либо явно зафиксировать в комментариях/docstring, что это эвристика разнообразия (и переименовать, например, в `looks_like_known_text`), либо сделать детерминированной — проверять **все** длины префикса от 3 до `min(5, len(tokens))` и отклонять при любом совпадении. Текущая полу-формулировка вводит в заблуждение читателя кода.
+
+**Срочность:** P3 (концептуальная чистка).
 
 ### 6.2. Авторизация и throttling
 
@@ -294,15 +330,29 @@ def derive_key(master_secret: str, domain: str, length: int = 32) -> bytes:
 
 ### 8.1. Миграции
 
-- 5 версионированных миграций, каждая запускается ровно один раз. `migrator._apply` оборачивает каждую в собственную транзакцию.
+- 5 версионированных миграций, каждая запускается ровно один раз.
 - Резюм через таблицу `schema_migrations(name, applied_at)`.
-- Тесты на miгratoр (`tests/test_migrator.py`, 495 строк) покрывают:
+- Тесты на migrator (`tests/test_migrator.py`, 495 строк) покрывают:
   - чистая БД → все миграции применяются по порядку;
   - повторный init → ничего не делает;
   - legacy-БД (фикстура `tests/fixtures/legacy_real_schema.sql` со схемой реальной prod-БД пользователя) → корректно проходит миграции 002–005 без потери данных;
   - INSERT после миграций кладёт данные в правильные новые столбцы.
 
-Это самая прочная часть рефакторинга — есть чёткий тест на реальной prod-схеме.
+**Слабое место — SQL splitter (P2).** [`migrator._split_sql`](app/infrastructure/migrator.py:58) сейчас:
+
+```python
+return [s.strip() for s in sql.split(";") if s.strip()]
+```
+
+Для текущих 5 простых миграций (`CREATE TABLE`, `CREATE INDEX`) этого достаточно, и тесты подтверждают. Но splitter сломается на:
+- `;` внутри строковых литералов (`INSERT ... VALUES ('foo;bar')`);
+- триггерах с `BEGIN ... END;` блоками;
+- views с подзапросами;
+- комментариях с `;`.
+
+Дополнительно — `_apply` не оборачивает миграцию в явную транзакцию с rollback. Для DDL в SQLite в большинстве случаев работает терпимо (DDL коммитится автоматически), но это слабая инфраструктура.
+
+**Рекомендация:** для `.sql`-миграций перейти на `conn.executescript(sql)` (SQLite сам разбирает многооператорные скрипты) внутри `BEGIN...COMMIT/ROLLBACK`. Текущий splitter оставить только если будет ограничение «один statement на файл».
 
 ### 8.2. Индексы
 
@@ -340,6 +390,8 @@ def derive_key(master_secret: str, domain: str, length: int = 32) -> bytes:
 | Упоминание `requirements.lock` для воспроизводимости | ❌ отсутствует |
 | Абсолютная ссылка `[compose.yaml](/D:/test/PepeEdtaBot/compose.yaml)` (строка 47) | ❌ **сломанная ссылка**, ведёт на чужую машину |
 | Абсолютная ссылка `[.env.example](/D:/test/PepeEdtaBot/.env.example)` (строка 54) | ❌ **сломанная ссылка** |
+| Версия Python: указано `Python 3.14` (строка 6), но CI поддерживает `3.12/3.13/3.14` | ❌ противоречие, лучше `Python 3.12+` |
+| Инструкция «как запустить локальные проверки» (`ruff`, `mypy`, `unittest discover`) | ❌ отсутствует |
 
 **Срочность:** P2. Не блокирует merge технически, но первая внешняя impression проекта — это README.
 
@@ -387,6 +439,27 @@ CMD ["python", "main.py"]      # ❌ работает от root
 ```
 
 Матрица — 3.12/3.13/3.14. Triggers — push в main, PR в main. Branch protection пока не настроен (см. рекомендацию в п.13).
+
+### 9.5. `requirements.lock` — декоративное наличие (P1)
+
+Файл [`requirements.lock`](requirements.lock) был создан в фазе 6 как закрытие пункта P1-5 из старого аудита. **Реально он не используется ни одним консумером** — это формальная галочка, не дающая воспроизводимости:
+
+| Где должен использоваться | Что используется фактически |
+|---|---|
+| `Dockerfile` (production-сборка) | `requirements.txt` (диапазоны) |
+| CI (`.github/workflows/ci.yml`) | `requirements-dev.txt` → `-r requirements.txt` (диапазоны) |
+| Документация по локальной установке | `requirements.txt` (диапазоны) |
+
+Дополнительно: в `requirements.lock` нет `mypy` и `ruff`, хотя CI без них упадёт. Нет процедуры обновления (когда и кто перегенерирует lock). Нет указания, какой Python-version он отражает.
+
+**Это не безобидная мелочь.** Если оставить как есть, документация ниже (этот файл, README в будущем) будет утверждать, что у проекта есть lock-файл — но воспроизводимости не будет, и при апгрейде какой-нибудь зависимости это всплывёт на проде.
+
+**Что нужно решить до merge:**
+- **Вариант A** (предпочтительный) — `Dockerfile` ставит `requirements.lock`, CI ставит `requirements.lock` + `mypy/ruff` отдельно (или включить их в lock). Документировать процедуру `pip-compile`/`pip freeze` для обновления.
+- **Вариант B** — переименовать в `requirements.constraints` и явно описать как «справочный snapshot, не lock». Удалить упоминания «lock» в коммитах/документации.
+- **Вариант C** — удалить файл и вернуться к диапазонам. Если воспроизводимость не цель — это честнее декорации.
+
+**Срочность:** P1, должно быть решено перед merge.
 
 ---
 
@@ -441,11 +514,13 @@ CMD ["python", "main.py"]      # ❌ работает от root
 ### 11.3. Дыры в покрытии
 
 - **E2E `/pivo`-flow** (subscribe → call → mention render → unsubscribe) — нет интеграционного теста, есть только разрозненные unit-тесты компонентов.
+- **Smoke-тест на wiring `main.py`** — нет теста, который проверял бы, что `dp.include_router(...)` действительно регистрирует все 4 роутера, что middleware подключён, что нужные ключи положены в `dp[...]`. Если кто-то случайно удалит строку `dp.include_router(pivo_handlers.router)` — тесты пройдут, бот сломается.
 - **`PivoService.build_call_message`** в реальной комбинации с `MembersRepo` через DB — не покрыт целиком.
 - **Поведение хендлеров при ошибках Telegram API** (`bot.get_me()` падает, `bot.send_chat_action` 5xx) — не покрыто.
+- **Тесты на отказ авторизации с явным ответом** — отсутствуют (см. R1 в разделе «Известные регрессии»). Если регрессия будет исправлена, тест на «неавторизованный `/clear` получает понятное сообщение» должен быть добавлен сразу.
 - **Реальная гонка throttling** (одновременные вызовы) — не тестируется, но in-memory dict не имеет race conditions в asyncio (single-threaded).
 
-Это всё P2/P3, не блокирует merge.
+E2E `/pivo` и smoke `main.py` — P2. Тест на denied auth — приходит вместе с R1-фиксом.
 
 ---
 
@@ -470,73 +545,90 @@ CMD ["python", "main.py"]      # ❌ работает от root
 
 ## 13. Готовность к merge в `main`
 
-### 13.1. Чек-лист до слияния
+### 13.1. Чек-лист технической готовности
 
 | # | Что | Статус |
 |---|---|---|
-| 1 | CI зелёный на ветке `refactor/structure` | ✅ (последний коммит `27b2195`) |
+| 1 | CI зелёный на ветке `refactor/structure` | ✅ (последний коммит `f523de7`) |
 | 2 | Все 181 тест проходит локально | ✅ |
 | 3 | `ruff check app/ tests/` без замечаний | ✅ |
 | 4 | `mypy app/` без замечаний | ✅ |
 | 5 | Нет `TODO`/`FIXME` в `app/` | ✅ |
 | 6 | Нет коммита временных файлов (`.env`, `*.sqlite` тестов) | ✅ |
-| 7 | `requirements.lock` зафиксирован | ✅ |
-| 8 | `REFACTOR_PLAN.md` удалён (план выполнен) | ⚠️ см. пункт 13.3 |
-| 9 | `PROJECT_AUDIT.md` обновлён до текущего состояния | ⚠️ этот документ |
+| 7 | `REFACTOR_PLAN.md` удалён (план выполнен) | ✅ |
+| 8 | `PROJECT_AUDIT.md` обновлён до текущего состояния | ✅ (вторая редакция) |
 
-### 13.2. Что не блокирует merge, но желательно сразу после
+### 13.2. Блокеры P1 — должны быть исправлены до merge
 
-1. **README.md** — починить две абсолютные ссылки (`/D:/test/...`) и добавить раздел «Privacy».
-2. **Branch protection** для `main` в GitHub:
+| # | Блокер | Усилия | Где |
+|---|---|---|---|
+| **B1** | UX-регрессия: `/set`/`/setprob`/`/clear` без прав молча игнорируются (R1) | ~30 мин | [`app/handlers/admin.py`](app/handlers/admin.py) — добавить fallback handler или вернуть проверку в handler |
+| **B2** | `requirements.lock` не выполняет роль lock-файла (см. п.9.5) | ~30 мин | Подключить в `Dockerfile` + CI, ИЛИ переименовать, ИЛИ удалить |
+| **B3** | README: 2 абсолютные ссылки ведут в `/D:/test/...` | ~5 мин | Заменить на относительные `compose.yaml`, `.env.example` |
+
+Б1 и Б2 — это поведенческие/инфраструктурные блокеры. Б3 — косметический, но дешёвый, и пока он не исправлен, README выглядит как сломанная документация при просмотре в GitHub UI.
+
+**После исправления B1 нужно добавить тест** на «неавторизованный `/clear` получает понятный отказ» (см. п.11.3).
+
+### 13.3. После merge — желательно сразу
+
+1. **Branch protection** для `main` в GitHub:
    - require PR review;
    - require CI зелёный;
    - запретить force-push.
-3. **CHANGELOG.md** или GitHub Release с описанием фаз 1–6 — чтобы оператор бота знал, что обновляется.
-
-### 13.3. Очистка после merge
-
-- Удалить `REFACTOR_PLAN.md` (план полностью реализован, документ переходит в исторический шум). Этот шаг сделан вместе с обновлением `PROJECT_AUDIT.md`.
-- Опционально: создать тикеты на оставшийся P2/P3-долг (см. ниже).
+2. **CHANGELOG.md** или GitHub Release с описанием фаз 1–6 — чтобы оператор бота знал, что обновляется.
+3. README: добавить разделы Tests / Architecture / Privacy, поправить `Python 3.14` → `Python 3.12+`.
 
 ### 13.4. Рекомендация
 
-**Можно мёржить.** Все P0/P1 из исходного аудита закрыты, регрессий не обнаружено, поведение бота сохранено. Оставшийся техдолг — P2/P3, документирован в этом файле, не блокирует production.
+**Не мёржить до фикса B1, B2, B3.** Изначально (в первой редакции этого аудита) рекомендация была «можно мёржить» — она была преждевременной: изменение поведения админ-команд проходило мимо радара под формулировкой «behavior change is acceptable», а декоративный lock-файл был засчитан как закрытие пункта P1-5.
 
-Тип merge — **squash** или **merge commit** с цельной историей коммитов фаз. Я бы выбрал **merge commit без squash**: 25+ маленьких коммитов фаз дают полезный bisect-friendly след — каждая фаза была атомарной с зелёными тестами.
+После исправления B1–B3 — мёржить **merge commit без squash**: 27+ маленьких коммитов фаз дают полезный bisect-friendly след, каждая фаза была атомарной с зелёными тестами.
+
+В архитектурном смысле ветка готова: P0 закрыт, P1 закрыт по существу (кроме декоративного lock-файла), регрессии локализованы, тестами покрыто хорошо. Оставшийся P2/P3-техдолг документирован и не блокирует production.
 
 ---
 
-## 14. Оставшийся техдолг (новый список)
+## 14. Оставшийся техдолг (актуальный список)
 
 ### P0 — пусто
 
-Закрыт.
+Закрыт фазами 1–6.
 
-### P1 — пусто
+### P1 — блокеры merge
 
-Закрыт.
+| # | Описание | Где | Усилия |
+|---|---|---|---|
+| **P1-A** (B1) | Вернуть явный отказ для unauthorized `/set`/`/setprob`/`/clear` (см. R1) | [`app/handlers/admin.py`](app/handlers/admin.py) | ~30 мин + тест |
+| **P1-B** (B2) | Решить судьбу `requirements.lock`: использовать в Dockerfile/CI, переименовать или удалить (см. п.9.5) | `Dockerfile`, `.github/workflows/ci.yml`, `requirements.lock` | ~30 мин |
+| **P1-C** (B3) | README: починить 2 абсолютные ссылки `/D:/test/...` | [`README.md:47,54`](README.md) | ~5 мин |
 
 ### P2 — желательно в ближайшие 1–2 итерации
 
 | # | Описание | Где | Эффект |
 |---|---|---|---|
-| **P2-1** | Реестр настроек как один источник истины (Settings ↔ RuntimeState ↔ runtime_config) | [settings.py](settings.py), [runtime_state.py](runtime_state.py), [runtime_config.py](runtime_config.py) | Сильно упрощает добавление настроек; на сегодня — самый ощутимый техдолг |
-| **P2-2** | Dockerfile hardening (non-root user, HEALTHCHECK, pin minor, `requirements.lock`) | [Dockerfile](Dockerfile) | Соответствие best practices, безопасность контейнера |
-| **P2-3** | README: разделы Tests/Architecture/Privacy, починить 2 абсолютные ссылки | [README.md](README.md) | UX для нового пользователя/контрибьютора |
-| **P2-4** | `LOG_LEVEL` из `.env` | [main.py:25](main.py:25), [.env.example](.env.example) | Эксплуатация |
-| **P2-5** | E2E-тест `/pivo` flow (subscribe → call → unsubscribe) | `tests/test_pivo_e2e.py` (новый) | Регрессии в основном opt-in flow |
-| **P2-6** | Команда `/learn_off` / `/learn_on` или `/privacy` для opt-out обучения на уровне чата | новый handler + repo | Завершает privacy-историю, начатую удалением `messages.text` |
-| **P2-7** | Расширить `BOT_TEXT_ALIASES` через `.env` | [bot_policy.py:6](bot_policy.py:6) | Конфигурируемость |
+| **P2-1** | Реестр настроек как один источник истины (Settings ↔ RuntimeState ↔ runtime_config) | [`settings.py`](settings.py), [`runtime_state.py`](runtime_state.py), [`runtime_config.py`](runtime_config.py) | Самый ощутимый архитектурный техдолг |
+| **P2-2** | Migrator: перейти на `conn.executescript()` + явные транзакции с rollback (см. п.8.1) | [`app/infrastructure/migrator.py`](app/infrastructure/migrator.py) | Снимает хрупкость для будущих SQL-миграций |
+| **P2-3** | Dockerfile hardening (non-root, HEALTHCHECK, pin минорной версии) | [`Dockerfile`](Dockerfile) | Best practices, безопасность контейнера |
+| **P2-4** | README: разделы Tests/Architecture/Privacy, `Python 3.12+` вместо `Python 3.14`, инструкция «локальные проверки» | [`README.md`](README.md) | UX для нового пользователя/контрибьютора |
+| **P2-5** | Решить судьбу `MembersService`: либо подключить через продуктовый сценарий, либо вынести в feature-branch до реального использования | [`app/services/members_service.py`](app/services/members_service.py), `main.py` | Сейчас инфраструктура без runtime-вызовов |
+| **P2-6** | `LOG_LEVEL` из `.env` | [`main.py:25`](main.py:25), [`.env.example`](.env.example) | Эксплуатация |
+| **P2-7** | E2E-тест `/pivo` flow (subscribe → call → unsubscribe) | `tests/test_pivo_e2e.py` (новый) | Регрессии в основном opt-in flow |
+| **P2-8** | Smoke-тест на wiring `main.py` (все routers зарегистрированы, middleware подключён, ключи в `dp[]`) | `tests/test_main_wiring.py` (новый) | Защита от случайного удаления строки в compose root |
+| **P2-9** | Команда `/learn_off` / `/learn_on` или `/privacy` для opt-out обучения на уровне чата | новый handler + repo | Завершает privacy-историю, начатую удалением `messages.text` |
+| **P2-10** | Расширить `BOT_TEXT_ALIASES` через `.env` | [`bot_policy.py:6`](bot_policy.py:6) | Конфигурируемость |
 
 ### P3 — косметика и долгосрочное
 
-- Магические числа → константы ([learning.py:75](app/handlers/learning.py:75), [learning.py:162](app/handlers/learning.py:162)).
+- Магические числа → константы ([`learning.py:75`](app/handlers/learning.py:75), [`learning.py:162`](app/handlers/learning.py:162)).
+- **Зафиксировать концепцию `is_duplicate`**: либо переименовать/задокументировать как эвристику разнообразия (см. п.6.1), либо сделать детерминированной (`for length in range(3, min(5, len(tokens))+1): if tuple(tokens[:length]) in cache: return True`). Текущая полу-формулировка вводит в заблуждение.
+- Throttling: для админских команд (`/clear`) возвращать «слишком часто, подождите» вместо silent drop (см. R2).
 - Маскирование `chat_id` в логах через HMAC.
 - Удалить неиспользуемое поле `is_bot` в `pivo_chat_members` (миграция `006_drop_is_bot.py`).
 - Структурированные логи (JSON) — отложить до выбора системы агрегации.
-- `MENTION_RE` в [text_utils.py:6](text_utils.py:6) — переписать так, чтобы не ломать email-адреса.
+- `MENTION_RE` в [`text_utils.py:6`](text_utils.py:6) — переписать так, чтобы не ломать email-адреса.
 - Метрики (Prometheus / aiogram-middleware) — заводить, когда будет куда отправлять.
-- Unify «cleanup стартовых сообщений» в `db.py` ([db.py:160-162](db.py:160)) с тем же `assert row is not None` стилем, что в `markov_repo`.
+- Унифицировать стиль `cursor.fetchone()` в [`db.py:160-162`](db.py:160) (`assert row is not None`, как уже сделано в `markov_repo`).
 
 ### Что **не** делать сейчас
 
@@ -556,19 +648,28 @@ CMD ["python", "main.py"]      # ❌ работает от root
 
 | ID | Локация | Суть | Риск | Приоритет |
 |---|---|---|---|---|
+| **P1-A** | `app/handlers/admin.py` | UX-регрессия: unauthorized `/set`/`/setprob`/`/clear` молча игнорируются | UX, доверие к боту | **P1 / blocker** |
+| **P1-B** | `requirements.lock`, `Dockerfile`, CI | lock-файл декоративен, не используется | ложная воспроизводимость | **P1 / blocker** |
+| **P1-C** | `README.md:47,54` | абсолютные ссылки `/D:/test/...` | сломанная документация | **P1 / blocker** |
 | P2-1 | `settings.py` / `runtime_state.py` / `runtime_config.py` | Тройное дублирование настроек | DX / ошибки при добавлении | P2 |
-| P2-2 | `Dockerfile` | non-root, HEALTHCHECK, pin минорной | hardening | P2 |
-| P2-3 | `README.md` | абсолютные ссылки + нет разделов Tests/Architecture/Privacy | UX | P2 |
-| P2-4 | `main.py:25`, `.env.example` | LOG_LEVEL захардкожен | эксплуатация | P2 |
-| P2-5 | `tests/` | нет E2E-теста `/pivo` flow | регрессии | P2 |
-| P2-6 | (новый handler) | нет opt-out на обучение чата | privacy-завершение | P2 |
-| P2-7 | `bot_policy.py:6` | `BOT_TEXT_ALIASES` хардкод | конфигурируемость | P2 |
+| P2-2 | `app/infrastructure/migrator.py` | хрупкий `sql.split(";")` без транзакций | будущие миграции | P2 |
+| P2-3 | `Dockerfile` | non-root, HEALTHCHECK, pin минорной | hardening | P2 |
+| P2-4 | `README.md` | нет разделов Tests/Architecture/Privacy, `Python 3.14` vs `3.12+` | UX | P2 |
+| P2-5 | `app/services/members_service.py` | инфраструктура без runtime-использования | поверхность поддержки | P2 |
+| P2-6 | `main.py:25`, `.env.example` | LOG_LEVEL захардкожен | эксплуатация | P2 |
+| P2-7 | `tests/` | нет E2E-теста `/pivo` flow | регрессии | P2 |
+| P2-8 | `tests/` | нет smoke-теста на wiring `main.py` | потеря роутера незаметна | P2 |
+| P2-9 | (новый handler) | нет opt-out на обучение чата | privacy-завершение | P2 |
+| P2-10 | `bot_policy.py:6` | `BOT_TEXT_ALIASES` хардкод | конфигурируемость | P2 |
 | P3-1 | `learning.py:75,162` | магические числа | качество | P3 |
-| P3-2 | логи | `chat_id` без маскирования | privacy (низко) | P3 |
-| P3-3 | `pivo_chat_members.is_bot` | неиспользуемое поле | чистка | P3 |
-| P3-4 | `text_utils.py:6` | MENTION_RE на emails | corner case | P3 |
+| P3-2 | `app/services/learning_service.py:36-56` | `is_duplicate` — концептуальная неоднозначность (privacy-guard vs эвристика) | путаница в коде | P3 |
+| P3-3 | `app/middlewares/throttling.py` | silent drop для админ `/clear` | UX | P3 |
+| P3-4 | логи | `chat_id` без маскирования | privacy (низко) | P3 |
+| P3-5 | `pivo_chat_members.is_bot` | неиспользуемое поле | чистка | P3 |
+| P3-6 | `text_utils.py:6` | MENTION_RE на emails | corner case | P3 |
 
 ---
 
-**Дата актуализации:** 2026-05-08.
-**Статус:** ветка `refactor/structure` готова к merge в `main`. Файл `REFACTOR_PLAN.md` удалён как выполненный.
+**Дата актуализации:** 2026-05-08, вторая редакция.
+**Статус:** ветка `refactor/structure` **не готова к merge** — требуется фикс P1-A/B/C (блокеров три, суммарные усилия ~1 час). После их исправления — merge через `merge commit` без squash.
+**История ревизии:** первая редакция (2026-05-08, текущий аудит до Codex-ревизии) рекомендовала «можно мёржить». Вторая редакция (2026-05-08, после ревизии) уточнила список блокеров.
