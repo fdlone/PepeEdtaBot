@@ -16,6 +16,7 @@ EXPECTED_MIGRATIONS = [
     "002_normalize_messages_text_column",
     "003_anonymize_authors",
     "004_chat_member_profiles",
+    "005_drop_messages_text",
 ]
 
 EXPECTED_TABLES = {
@@ -296,31 +297,32 @@ class TestMigratorFullCompatibility(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0][0], "enc_uid_1")
         self.assertEqual(rows[1][1], "enc_dname_2")
 
-    async def test_original_text_column_not_modified(self) -> None:
+    async def test_text_column_removed(self) -> None:
         await migrator.run(self.conn)
 
-        cur = await self.conn.execute(
-            "SELECT text FROM messages WHERE chat_id=100 ORDER BY id"
-        )
-        texts = [row[0] for row in await cur.fetchall()]
-        self.assertEqual(texts, ["кофе утром бодрит", "Привет @bot !", "старый автор"])
+        cur = await self.conn.execute("PRAGMA table_info(messages)")
+        columns = {row[1] for row in await cur.fetchall()}
+        self.assertNotIn("text", columns, "text column must be removed by migration 005")
+        self.assertIn("normalized_text", columns, "normalized_text must remain")
 
     async def test_already_normalized_text_not_overwritten(self) -> None:
         await migrator.run(self.conn)
 
+        # First inserted row had normalized_text already set to "кофе утром бодрит"
         cur = await self.conn.execute(
-            "SELECT normalized_text FROM messages WHERE text='кофе утром бодрит'"
+            "SELECT normalized_text FROM messages WHERE chat_id=100 ORDER BY id LIMIT 1"
         )
         self.assertEqual((await cur.fetchone())[0], "кофе утром бодрит")
 
     async def test_empty_normalized_text_backfilled(self) -> None:
         await migrator.run(self.conn)
 
+        # Second inserted row had normalized_text='' and needed backfill
         cur = await self.conn.execute(
-            "SELECT normalized_text FROM messages WHERE text='Привет @bot !'"
+            "SELECT normalized_text FROM messages WHERE chat_id=100 ORDER BY id LIMIT 1 OFFSET 1"
         )
         result = (await cur.fetchone())[0]
-        self.assertNotEqual(result, "", "normalized_text must be backfilled from text")
+        self.assertNotEqual(result, "", "normalized_text must be backfilled")
 
     async def test_author_ids_anonymized(self) -> None:
         await migrator.run(self.conn)
@@ -460,19 +462,12 @@ class TestMigratorRealSchemaFixture(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual((await cur.fetchone())[0], 5)
 
-    async def test_original_text_not_modified(self) -> None:
+    async def test_text_column_removed(self) -> None:
         await migrator.run(self.conn)
-        cur = await self.conn.execute(
-            "SELECT text FROM messages ORDER BY id"
-        )
-        texts = [r[0] for r in await cur.fetchall()]
-        self.assertEqual(texts, [
-            "привет всем",
-            "как дела",
-            "всё хорошо",
-            "пойдём пить кофе",
-            "другой чат тоже здесь",
-        ])
+        cur = await self.conn.execute("PRAGMA table_info(messages)")
+        columns = {row[1] for row in await cur.fetchall()}
+        self.assertNotIn("text", columns, "text column must be removed by migration 005")
+        self.assertIn("normalized_text", columns, "normalized_text must remain")
 
     async def test_pivo_chat_members_created_empty(self) -> None:
         await migrator.run(self.conn)

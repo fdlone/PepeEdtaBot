@@ -86,11 +86,8 @@ class Database:
             db = await self._get_conn()
 
             await db.execute(
-                """
-                INSERT INTO messages(chat_id, author_id, text, normalized_text)
-                VALUES (?, ?, ?, ?)
-                """,
-                (chat_id, 0, raw_text, sanitize_text(raw_text)),
+                "INSERT INTO messages(chat_id, author_id, normalized_text) VALUES (?, ?, ?)",
+                (chat_id, 0, sanitize_text(raw_text)),
             )
 
             if starts2_pair:

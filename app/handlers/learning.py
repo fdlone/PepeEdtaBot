@@ -157,10 +157,11 @@ async def on_text_message(
             seed,
         )
     reply_text = ""
-    # Повторяем генерацию несколько раз, чтобы не уходить в "молчание" на разреженной модели.
+    # Повторяем генерацию несколько раз: сначала с контекстом, потом без,
+    # и отбрасываем результат если он дословно совпадает с уже виденным сообщением.
     for attempt in range(4):
         attempt_context_tokens = context_tokens if attempt < 2 else None
-        reply_text = await generator.generate_text(
+        candidate = await generator.generate_text(
             chat_id=message.chat.id,
             max_chars=state.max_reply_chars,
             max_tokens=state.max_reply_tokens,
@@ -174,15 +175,24 @@ async def on_text_message(
             enable_backoff=state.enable_backoff,
             backoff_min_order=state.backoff_min_order,
         )
-        if reply_text:
+        if not candidate:
+            logger.debug(
+                "Generation attempt failed: chat=%s attempt=%s context=%s seed_len=%s",
+                message.chat.id,
+                attempt + 1,
+                bool(attempt_context_tokens),
+                len(seed or []),
+            )
+        elif await learning_service.is_duplicate(message.chat.id, candidate):
+            logger.debug(
+                "Generated duplicate, retrying: chat=%s attempt=%s",
+                message.chat.id,
+                attempt + 1,
+            )
+        else:
+            reply_text = candidate
             break
-        logger.debug(
-            "Generation attempt failed: chat=%s attempt=%s context=%s seed_len=%s",
-            message.chat.id,
-            attempt + 1,
-            bool(attempt_context_tokens),
-            len(seed or []),
-        )
+
         if attempt == 0 and context_tokens:
             seed = context_tokens[-state.reply_context_last_tokens :]
         else:

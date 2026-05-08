@@ -19,18 +19,12 @@ class MessagesRepo:
         self._lock = lock
 
     async def exists(self, chat_id: int, text: str) -> bool:
-        normalized_text = sanitize_text(text)
+        normalized = sanitize_text(text)
         async with self._lock:
             db = await self._conn_provider()
             cursor = await db.execute(
-                """
-                SELECT 1
-                FROM messages
-                WHERE chat_id = ?
-                  AND (text = ? OR normalized_text = ?)
-                LIMIT 1
-                """,
-                (chat_id, text, normalized_text),
+                "SELECT 1 FROM messages WHERE chat_id = ? AND normalized_text = ? LIMIT 1",
+                (chat_id, normalized),
             )
             row = await cursor.fetchone()
         return row is not None
