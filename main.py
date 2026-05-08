@@ -10,6 +10,7 @@ from app.handlers import admin as admin_handlers
 from app.handlers import common as common_handlers
 from app.handlers import learning as learning_handlers
 from app.handlers import pivo as pivo_handlers
+from app.middlewares import ThrottlingMiddleware
 from app.services import LearningService, PivoService
 from bot_messages import TELEGRAM_COMMANDS
 from db import Database
@@ -51,6 +52,7 @@ async def run_bot() -> None:
     )
 
     dp = Dispatcher()
+    dp.message.middleware(ThrottlingMiddleware(limits={"pivo": 30.0, "clear": 10.0}))
     dp["db"] = db
     dp["generator"] = generator
     dp["pivo_service"] = pivo_service

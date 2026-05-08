@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
-from aiogram import Bot, Router
+from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.handlers._helpers import is_group_message, reply_humanized
+from app.filters import AdminOrOwner, GroupOnly
+from app.handlers._helpers import reply_humanized
 from bot_messages import (
     format_clear_confirmation_message,
     format_config_message,
@@ -29,41 +29,9 @@ router = Router(name="admin")
 logger = logging.getLogger("chat_markov")
 
 
-def _is_owner(message: Message, owner_id: Optional[int]) -> bool:
-    return (
-        owner_id is not None
-        and message.from_user is not None
-        and message.from_user.id == owner_id
-    )
-
-
-async def _is_chat_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
-    admins = await bot.get_chat_administrators(chat_id)
-    for admin in admins:
-        if admin.user.id == user_id:
-            return True
-    return False
-
-
-async def _can_manage_settings(
-    message: Message, bot: Bot, owner_id: Optional[int]
-) -> bool:
-    if _is_owner(message, owner_id):
-        return True
-    if message.from_user is None:
-        return False
-    try:
-        return await _is_chat_admin(bot, message.chat.id, message.from_user.id)
-    except Exception as exc:
-        logger.warning("Cannot verify chat admins for settings command: %s", exc)
-        return False
-
-
 def _extract_command_arg(text: str) -> str:
     parts = text.split(maxsplit=1)
-    if len(parts) < 2:
-        return ""
-    return parts[1].strip()
+    return parts[1].strip() if len(parts) >= 2 else ""
 
 
 @router.message(Command("config"))
@@ -73,18 +41,8 @@ async def cmd_config(message: Message, state: RuntimeState) -> None:
     await reply_humanized(message, text, state.typing_min_ms, state.typing_max_ms)
 
 
-@router.message(Command("set"))
-async def cmd_set(
-    message: Message, bot: Bot, settings: Settings, state: RuntimeState
-) -> None:
-    if not await _can_manage_settings(message, bot, settings.owner_id):
-        await reply_humanized(
-            message,
-            "Команда доступна OWNER_ID и администраторам чата.",
-            state.typing_min_ms,
-            state.typing_max_ms,
-        )
-        return
+@router.message(Command("set"), GroupOnly(), AdminOrOwner())
+async def cmd_set(message: Message, state: RuntimeState, settings: Settings) -> None:
     raw = _extract_command_arg(message.text or "")
     if raw.strip().lower() == "help":
         await reply_humanized(
@@ -140,19 +98,8 @@ async def cmd_set(
     )
 
 
-@router.message(Command("setprob"))
-async def cmd_setprob(
-    message: Message, bot: Bot, settings: Settings, state: RuntimeState
-) -> None:
-    if not await _can_manage_settings(message, bot, settings.owner_id):
-        await reply_humanized(
-            message,
-            "Команда доступна OWNER_ID и администраторам чата.",
-            state.typing_min_ms,
-            state.typing_max_ms,
-        )
-        return
-
+@router.message(Command("setprob"), GroupOnly(), AdminOrOwner())
+async def cmd_setprob(message: Message, state: RuntimeState, settings: Settings) -> None:
     raw = _extract_command_arg(message.text or "")
     if not raw:
         await reply_humanized(
@@ -191,34 +138,14 @@ async def cmd_setprob(
     )
 
 
-@router.message(Command("clear"))
+@router.message(Command("clear"), GroupOnly(), AdminOrOwner())
 async def cmd_clear(
     message: Message,
-    bot: Bot,
     db: Database,
-    settings: Settings,
     state: RuntimeState,
     generator: MarkovGenerator,
+    settings: Settings,
 ) -> None:
-    if not is_group_message(message):
-        return
-    allowed = _is_owner(message, settings.owner_id)
-    if not allowed and message.from_user is not None:
-        try:
-            allowed = await _is_chat_admin(
-                bot, message.chat.id, message.from_user.id
-            )
-        except Exception as exc:
-            logger.warning("Cannot verify chat admins for /clear: %s", exc)
-            allowed = False
-    if not allowed:
-        await reply_humanized(
-            message,
-            "Недостаточно прав. Нужен OWNER_ID или права админа чата.",
-            state.typing_min_ms,
-            state.typing_max_ms,
-        )
-        return
     raw = _extract_command_arg(message.text or "")
     if raw.strip().lower() != "confirm":
         await reply_humanized(
