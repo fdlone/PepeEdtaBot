@@ -1,4 +1,4 @@
-"""Tests for LearningService — prefix cache deduplication."""
+"""Tests for LearningService — near-repeat variability heuristic."""
 from __future__ import annotations
 
 import unittest
@@ -58,12 +58,16 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         await self._record("пойдём пить кофе вечером")
         key = (self.chat, False)
         self.assertNotIn(key, self.svc._prefix_cache)
-        await self.svc.is_duplicate(self.chat, "пойдём пить кофе вечером", False)
+        await self.svc.looks_too_close_to_training_sample(
+            self.chat, "пойдём пить кофе вечером", False
+        )
         self.assertIn(key, self.svc._prefix_cache)
 
     async def test_cache_contains_all_prefix_lengths(self) -> None:
         await self._record("один два три четыре пять")
-        await self.svc.is_duplicate(self.chat, "один два три", False)
+        await self.svc.looks_too_close_to_training_sample(
+            self.chat, "один два три", False
+        )
         cache = self.svc._prefix_cache[(self.chat, False)]
         self.assertIn(("один", "два", "три"), cache)
         self.assertIn(("один", "два", "три", "четыре"), cache)
@@ -71,39 +75,49 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
 
     async def test_cache_invalidated_after_record(self) -> None:
         await self._record("кофе утром бодрит всех нас")
-        await self.svc.is_duplicate(self.chat, "кофе утром бодрит", False)
+        await self.svc.looks_too_close_to_training_sample(
+            self.chat, "кофе утром бодрит", False
+        )
         self.assertIn((self.chat, False), self.svc._prefix_cache)
         await self._record("новое сообщение пришло сюда")
         self.assertNotIn((self.chat, False), self.svc._prefix_cache)
 
     async def test_separate_cache_per_normalize_lower(self) -> None:
         await self._record("Кофе утром бодрит всех нас")
-        await self.svc.is_duplicate(self.chat, "кофе утром бодрит", False)
-        await self.svc.is_duplicate(self.chat, "кофе утром бодрит", True)
+        await self.svc.looks_too_close_to_training_sample(
+            self.chat, "кофе утром бодрит", False
+        )
+        await self.svc.looks_too_close_to_training_sample(
+            self.chat, "кофе утром бодрит", True
+        )
         self.assertIn((self.chat, False), self.svc._prefix_cache)
         self.assertIn((self.chat, True), self.svc._prefix_cache)
 
-    # --- is_duplicate behaviour ---
+    # --- similarity heuristic behaviour ---
 
-    async def test_exact_match_detected(self) -> None:
+    async def test_exact_match_treated_as_too_close(self) -> None:
         await self._record("кофе утром бодрит")
         # 3 tokens → exact match via prefix cache
-        result = await self.svc.is_duplicate(self.chat, "кофе утром бодрит", False)
+        result = await self.svc.looks_too_close_to_training_sample(
+            self.chat, "кофе утром бодрит", False
+        )
         self.assertTrue(result)
 
-    async def test_prefix_extension_detected(self) -> None:
+    async def test_prefix_extension_is_present_in_similarity_cache(self) -> None:
         """Bot generates stored prefix + new tokens — 3-gram must be in cache."""
         await self._record("пойдём пить кофе")
         # Build cache by triggering a check
-        await self.svc.is_duplicate(self.chat, "пойдём пить кофе утром вечером", False)
+        await self.svc.looks_too_close_to_training_sample(
+            self.chat, "пойдём пить кофе утром вечером", False
+        )
         cache = self.svc._prefix_cache.get((self.chat, False), set())
         # The 3-token prefix of the stored message must be in the cache
         self.assertIn(("пойдём", "пить", "кофе"), cache,
-                      "3-gram from training must be detected as a known prefix")
+                      "3-gram from training must be available to the heuristic")
 
     async def test_unique_text_passes(self) -> None:
         await self._record("пойдём пить кофе")
-        result = await self.svc.is_duplicate(
+        result = await self.svc.looks_too_close_to_training_sample(
             self.chat, "совершенно другое предложение здесь", False
         )
         self.assertFalse(result)
@@ -112,30 +126,38 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         """Text with < 3 tokens falls back to SQL exact match."""
         await self._record("привет мир")
         # 2 tokens — prefix cache can't help, SQL must catch it
-        result = await self.svc.is_duplicate(self.chat, "привет мир", False)
+        result = await self.svc.looks_too_close_to_training_sample(
+            self.chat, "привет мир", False
+        )
         self.assertTrue(result)
 
     async def test_short_unique_text_passes(self) -> None:
-        result = await self.svc.is_duplicate(self.chat, "уникально", False)
+        result = await self.svc.looks_too_close_to_training_sample(
+            self.chat, "уникально", False
+        )
         self.assertFalse(result)
 
-    async def test_empty_chat_no_duplicates(self) -> None:
-        result = await self.svc.is_duplicate(
+    async def test_empty_chat_has_no_too_close_samples(self) -> None:
+        result = await self.svc.looks_too_close_to_training_sample(
             self.chat, "никаких сообщений ещё нет тут", False
         )
         self.assertFalse(result)
 
-    async def test_different_chat_not_duplicate(self) -> None:
+    async def test_different_chat_not_too_close(self) -> None:
         await self._record("пойдём пить кофе утром всем")
-        result = await self.svc.is_duplicate(
+        result = await self.svc.looks_too_close_to_training_sample(
             999, "пойдём пить кофе утром всем", False
         )
         self.assertFalse(result)
 
     async def test_invalidate_clears_all_normalize_variants(self) -> None:
         await self._record("кофе утром бодрит всех нас")
-        await self.svc.is_duplicate(self.chat, "кофе утром", False)
-        await self.svc.is_duplicate(self.chat, "кофе утром", True)
+        await self.svc.looks_too_close_to_training_sample(
+            self.chat, "кофе утром", False
+        )
+        await self.svc.looks_too_close_to_training_sample(
+            self.chat, "кофе утром", True
+        )
         self.svc._invalidate_prefix_cache(self.chat)
         self.assertNotIn((self.chat, False), self.svc._prefix_cache)
         self.assertNotIn((self.chat, True), self.svc._prefix_cache)

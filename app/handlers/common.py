@@ -19,14 +19,24 @@ async def cmd_ping(message: Message) -> None:
 
 
 @router.message(Command("help"))
-async def cmd_help(message: Message, state: RuntimeState) -> None:
+async def cmd_help(message: Message, runtime_state: RuntimeState) -> None:
     await reply_humanized(
-        message, format_help_message(), state.typing_min_ms, state.typing_max_ms
+        message,
+        format_help_message(),
+        runtime_state.typing_min_ms,
+        runtime_state.typing_max_ms,
     )
 
 
 @router.message(Command("stats"), GroupOnly())
-async def cmd_stats(message: Message, db: Database, state: RuntimeState) -> None:
+async def cmd_stats(
+    message: Message, db: Database, runtime_state: RuntimeState
+) -> None:
     stats = await db.get_stats(message.chat.id)
-    text = format_stats_message(stats, state.min_tokens_for_model)
-    await reply_humanized(message, text, state.typing_min_ms, state.typing_max_ms)
+    text = format_stats_message(stats, runtime_state.min_tokens_for_model)
+    await reply_humanized(
+        message,
+        text,
+        runtime_state.typing_min_ms,
+        runtime_state.typing_max_ms,
+    )

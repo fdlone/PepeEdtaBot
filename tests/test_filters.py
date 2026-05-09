@@ -148,6 +148,25 @@ class TestThrottlingMiddleware(unittest.IsolatedAsyncioTestCase):
         result = await mw(handler, msg_clear, {})
         self.assertEqual(result, "ok")
 
+    async def test_clear_confirm_not_throttled_by_initial_clear_prompt(self) -> None:
+        mw = self._make_middleware()
+        handler = AsyncMock(return_value="ok")
+        msg_clear = self._make_cmd_message("/clear")
+        msg_confirm = self._make_cmd_message("/clear confirm")
+        await mw(handler, msg_clear, {})
+        result = await mw(handler, msg_confirm, {})
+        self.assertEqual(result, "ok")
+        self.assertEqual(handler.await_count, 2)
+
+    async def test_repeated_clear_confirm_is_throttled(self) -> None:
+        mw = self._make_middleware()
+        handler = AsyncMock(return_value="ok")
+        msg_confirm = self._make_cmd_message("/clear confirm")
+        await mw(handler, msg_confirm, {})
+        result = await mw(handler, msg_confirm, {})
+        self.assertIsNone(result)
+        handler.assert_awaited_once()
+
     async def test_unthrottled_command_always_passes(self) -> None:
         mw = self._make_middleware()
         handler = AsyncMock(return_value="ok")

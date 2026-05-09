@@ -1,24 +1,28 @@
 # Технический аудит проекта PepeEdtaBot
 
-Дата аудита: 2026-05-08 (третья редакция, после закрытия P1-блокеров)
-Ветка: `refactor/structure`, последний коммит `037b401 fix(admin): restore explicit denial reply for unauthorized commands`
-Предыдущая редакция аудита: 2026-05-08, вторая редакция (после Codex-ревизии).
+Дата актуализации: 2026-05-09 (четвёртая редакция, после фичи daily quota + hotfixes)
+Ветка: `codex/pivo-daily-quota` — 6 коммитов поверх слитой `refactor/structure`.
+Предыдущая редакция аудита: 2026-05-08, третья редакция (ветка `refactor/structure` признана готовой к merge).
 
-**Изменения третьей редакции:** все три P1-блокера, выявленные во второй редакции, закрыты; CI зелёный; ветка готова к merge.
+> История редакций: 1я — первичный аудит; 2я — после Codex-ревизии P1-блокеры; 3я — после закрытия B1/B2/B3, merge-ready; 4я (текущая) — после ветки `codex/pivo-daily-quota`.
 
-| Блокер | SHA | Описание |
+**Изменения третьей редакции (для контекста):** все три P1-блокера закрыты; CI зелёный; ветка `refactor/structure` слита в `main`.
+
+| Блокер | SHA (после rewrite) | Описание |
 |---|---|---|
-| B3 | `d342c3e` | docs(readme): fix two stale absolute links to compose.yaml and .env.example |
-| B2 | `9a052af` | build: wire requirements.lock into Dockerfile and CI |
-| B1 | `037b401` | fix(admin): restore explicit denial reply for unauthorized commands |
+| B3 | `1ef20a2` | docs(readme): fix two stale absolute links to compose.yaml and .env.example |
+| B2 | `db1de05` | build: wire requirements.lock into Dockerfile and CI |
+| B1 | `a0fae76` | fix(admin): restore explicit denial reply for unauthorized commands |
 
 **Изменения второй редакции (для контекста):** дополнен по результатам независимой ревизии (`PROJECT_AUDIT_CODEX.md`). Добавлены пункты: UX-регрессия в админ-командах, неэффективность `requirements.lock`, хрупкость SQL-splitter в migrator, концептуальная неоднозначность dedup-фильтра. Рекомендация была изменена с «можно мёржить» на «после фикса P1».
 
 ---
 
-## 0. Статус ветки `refactor/structure`
+## 0. Статус проекта
 
-Все шесть фаз рефакторинга, запланированные после первоначального аудита, выполнены. Цель ревизии — независимым взглядом подтвердить, что ветка готова к слиянию в `main`, и зафиксировать оставшийся технический долг с приоритетами.
+### 0.1. Ветка `refactor/structure` — слита в `main` (2026-05-08)
+
+Все шесть фаз рефакторинга, запланированные после первоначального аудита, выполнены. Ветка была признана готовой к merge в третьей редакции аудита.
 
 | Фаза | Содержание | Статус |
 |---|---|---|
@@ -29,7 +33,20 @@
 | 5 | Фильтры (`GroupOnly`, `AdminOrOwner`) + throttling middleware | ✅ |
 | 6 | `ruff`/`mypy strict` для `app/`, `requirements.lock`, CI с линтерами, тесты хендлеров | ✅ |
 
-Все 181 тест зелёные локально и в CI (3.12/3.13/3.14). `ruff check` и `mypy app/` проходят без замечаний.
+Все 200 тестов зелёные локально (3.12/3.13/3.14). `ruff check` и `mypy app/` проходят без замечаний.
+
+### 0.2. Ветка `codex/pivo-daily-quota` — текущая (6 коммитов поверх main)
+
+После merge `refactor/structure` добавлена фича суточной квоты `/pivo` и закрыт ряд runtime-багов. Полный трекинг — в `PROJECT_AUDIT_CODEX.md`.
+
+| Коммит | Содержание |
+|---|---|
+| `e7ec2fb` | feat(pivo): add daily call quota |
+| `73aa324` | ci: run checks on codex branches |
+| `6edb0ca` | Revert «ci: run checks on codex branches» |
+| `5ee676c` | fix(pivo): harden daily quota flow |
+| `84693d9` | fix(clear): allow confirm under cooldown |
+| `dd43b13` | fix(runtime): avoid fsm state injection conflicts |
 
 ---
 
@@ -60,23 +77,24 @@ PepeEdtaBot — Telegram-бот для группового чата на `aiogr
 
 ```
 PepeEdtaBot/
-├── main.py                              # 84 строки (было 588) — compose root
-├── app/                                 # ~1300 строк, 17 модулей
+├── main.py                              # 115 строк (было 588) — compose root + configure_dispatcher()
+├── app/                                 # ~1400 строк, 24 модуля
 │   ├── handlers/
 │   │   ├── _helpers.py                  # reply_humanized
 │   │   ├── common.py                    # /ping, /help, /stats
-│   │   ├── admin.py                     # /config, /set, /setprob, /clear
-│   │   ├── pivo.py                      # /pivo, /pivo_on, /pivo_off, /pivo_privacy
+│   │   ├── admin.py                     # /config, /set, /setprob, /clear + fallback-handlers (denied)
+│   │   ├── pivo.py                      # /pivo (quota check), /pivo_on, /pivo_off, /pivo_privacy
 │   │   └── learning.py                  # F.text + extract_context_tokens
 │   ├── services/
 │   │   ├── learning_service.py          # record_message, is_duplicate (prefix-cache)
-│   │   ├── pivo_service.py              # subscribe / unsubscribe / build_call_message
-│   │   └── members_service.py           # record_consent / get_profile / revoke (инфраструктура)
+│   │   ├── pivo_service.py              # subscribe / unsubscribe / build_call_message / consume_daily_call_quota / refund_daily_call_quota
+│   │   └── members_service.py           # record_consent / get_profile / revoke (инфраструктура, runtime не вызывается)
 │   ├── repositories/
 │   │   ├── markov_repo.py               # starts/transitions/transitions3/transitions1
 │   │   ├── messages_repo.py             # exists / get_all_normalized
 │   │   ├── pivo_repo.py                 # upsert / list_members / remove
-│   │   └── members_repo.py              # upsert / get / list / remove (chat_member_profiles)
+│   │   ├── members_repo.py              # upsert / get / list / remove (chat_member_profiles)
+│   │   └── pivo_usage_repo.py           # consume_daily_call / refund_daily_call / delete_usage_before
 │   ├── filters/
 │   │   ├── group_only.py                # ChatType.GROUP/SUPERGROUP
 │   │   └── admin_or_owner.py            # OWNER_ID или администратор чата
@@ -89,10 +107,11 @@ PepeEdtaBot/
 │   │   ├── 002_normalize_messages_text_column.py
 │   │   ├── 003_anonymize_authors.py
 │   │   ├── 004_chat_member_profiles.sql
-│   │   └── 005_drop_messages_text.py
+│   │   ├── 005_drop_messages_text.py
+│   │   └── 006_pivo_daily_usage.sql     # таблица pivo_daily_usage (chat_hash, user_hash, usage_day, used_count)
 │   └── security/
 │       └── key_derivation.py            # HKDF-SHA256 derivation
-├── db.py                                # 373 строки — фасад: соединение, save_message_and_update_model, clear_chat, get_stats, делегаты
+├── db.py                                # ~390 строк — фасад: соединение, save_message_and_update_model, clear_chat, get_stats, делегаты; cleanup_pivo_daily_usage при init()
 ├── markov.py                            # 674 строки — НЕ ТРОГАТЬ
 ├── pivo.py                              # 125 строк — PivoSecurity, PivoMember
 ├── pivo_templates.py                    # 487 строк (контент)
@@ -102,17 +121,18 @@ PepeEdtaBot/
 ├── runtime_state.py                     # 56 строк — RuntimeState dataclass
 ├── runtime_config.py                    # 144 строки — apply_runtime_setting
 ├── text_utils.py                        # 28 строк — sanitize_text
-├── tests/                               # 12 файлов, 2518 строк, 181 тест
+├── tests/                               # 14 файлов, ~2700 строк, 200 тестов
 │   ├── test_bot_messages.py             # форматирование
 │   ├── test_bot_policy.py               # политика ответа
-│   ├── test_db_logic.py                 # save_message_and_update_model, get_stats
+│   ├── test_db_logic.py                 # save_message_and_update_model, get_stats, daily_usage retention
 │   ├── test_filters.py                  # GroupOnly, AdminOrOwner, ThrottlingMiddleware
 │   ├── test_handlers.py                 # happy-path по всем 4 роутерам
 │   ├── test_learning_service.py         # prefix-cache дедупликация
+│   ├── test_main.py                     # smoke-тест wiring configure_dispatcher()
 │   ├── test_markov_and_text.py          # генерация, токенизация
 │   ├── test_members.py                  # KeyDerivation, MembersRepo, MembersService
 │   ├── test_migrator.py                 # идемпотентность, resume, реальный legacy fixture
-│   ├── test_pivo.py                     # HMAC, Fernet, mentions
+│   ├── test_pivo.py                     # HMAC, Fernet, mentions, E2E subscribe→quota→unsubscribe
 │   ├── test_runtime_config.py           # /set ключи
 │   └── test_settings.py                 # load_settings
 ├── pyproject.toml                       # ruff + mypy конфигурация
@@ -127,16 +147,16 @@ PepeEdtaBot/
 
 **Метрики динамики:**
 
-| Метрика | До рефакторинга | Сейчас |
-|---|---|---|
-| `main.py` | 588 строк | **84 строки** (-86%) |
-| Файлов в `app/` | 0 | 22 |
-| Тестов | 83 | **181** (+118%) |
-| Слоёв архитектуры | 1 (всё в `main.py`) | 6 (handlers/services/repos/filters/middlewares/infrastructure) |
-| Миграций | 0 (inline `CREATE TABLE`) | 5 версионированных |
-| Линтер/тайпчекер | нет | ruff + mypy strict для `app/` |
-| CI | нет | GitHub Actions × 3 версии Python |
-| Lock-файл | нет | `requirements.lock` |
+| Метрика | До рефакторинга | После refactor/structure | Сейчас (codex/pivo-daily-quota) |
+|---|---|---|---|
+| `main.py` | 588 строк | 84 строки (-86%) | **115 строк** (+configure_dispatcher) |
+| Файлов в `app/` | 0 | 22 | **24** (+pivo_usage_repo.py, test_main.py) |
+| Тестов | 83 | 185 | **200** |
+| Миграций | 0 (inline `CREATE TABLE`) | 5 | **6** (006_pivo_daily_usage) |
+| Слоёв архитектуры | 1 (всё в `main.py`) | 6 | 6 (без изменений) |
+| Линтер/тайпчекер | нет | ruff + mypy strict для `app/` | без изменений |
+| CI | нет | GitHub Actions × 3 версии Python | без изменений |
+| Lock-файл | нет | `requirements.lock` | без изменений |
 
 ---
 
@@ -557,7 +577,7 @@ E2E `/pivo` и smoke `main.py` — P2. Тест на denied auth — прихо�
 
 | # | Что | Статус |
 |---|---|---|
-| 1 | CI зелёный на ветке `refactor/structure` | ✅ (CI #20, последний коммит `037b401`) |
+| 1 | CI зелёный на ветке `refactor/structure` | ✅ (CI #20, последний коммит `a0fae76`) |
 | 2 | Все 185 тестов проходят локально | ✅ |
 | 3 | `ruff check app/ tests/` без замечаний | ✅ |
 | 4 | `mypy app/` без замечаний | ✅ |
@@ -571,9 +591,9 @@ E2E `/pivo` и smoke `main.py` — P2. Тест на denied auth — прихо�
 
 | # | Блокер | Закрыто в коммите | Что сделано |
 |---|---|---|---|
-| **B1** | UX-регрессия: `/set`/`/setprob`/`/clear` без прав молча игнорируются (R1) | `037b401` | Добавлены fallback-handlers `cmd_set_denied`/`cmd_setprob_denied`/`cmd_clear_denied` после защищённых; aiogram перебирает handlers по порядку, fallback срабатывает при `AdminOrOwner=False`. Покрытие: 4 теста (3 на тексты + 1 smoke на порядок регистрации). |
-| **B2** | `requirements.lock` не выполняет роль lock-файла | `9a052af` | `Dockerfile` устанавливает `requirements.lock` (вместо `requirements.txt`); `requirements-dev.txt` ссылается на `-r requirements.lock`; добавлен header с описанием стратегии (pip freeze без pip-tools) и процедурой регенерации; убрана транзитивная dev-зависимость `ast_serialize`. |
-| **B3** | README: 2 абсолютные ссылки ведут в `/D:/test/...` | `d342c3e` | Заменены на относительные `compose.yaml` и `.env.example`. |
+| **B1** | UX-регрессия: `/set`/`/setprob`/`/clear` без прав молча игнорируются (R1) | `a0fae76` | Добавлены fallback-handlers `cmd_set_denied`/`cmd_setprob_denied`/`cmd_clear_denied` после защищённых; aiogram перебирает handlers по порядку, fallback срабатывает при `AdminOrOwner=False`. Покрытие: 4 теста (3 на тексты + 1 smoke на порядок регистрации). |
+| **B2** | `requirements.lock` не выполняет роль lock-файла | `db1de05` | `Dockerfile` устанавливает `requirements.lock` (вместо `requirements.txt`); `requirements-dev.txt` ссылается на `-r requirements.lock`; добавлен header с описанием стратегии (pip freeze без pip-tools) и процедурой регенерации; убрана транзитивная dev-зависимость `ast_serialize`. |
+| **B3** | README: 2 абсолютные ссылки ведут в `/D:/test/...` | `1ef20a2` | Заменены на относительные `compose.yaml` и `.env.example`. |
 
 ### 13.3. После merge — желательно сразу
 
@@ -586,7 +606,7 @@ E2E `/pivo` и smoke `main.py` — P2. Тест на denied auth — прихо�
 
 ### 13.4. Рекомендация
 
-**Готово к merge.** Все три блокера B1/B2/B3 закрыты коммитами `037b401`, `9a052af`, `d342c3e` соответственно. CI #20 зелёный на матрице 3.12/3.13/3.14, локально 185 тестов проходят, ruff и mypy без замечаний.
+**Готово к merge.** Все три блокера B1/B2/B3 закрыты коммитами `a0fae76`, `db1de05`, `1ef20a2` соответственно. CI #20 зелёный на матрице 3.12/3.13/3.14, локально 185 тестов проходят, ruff и mypy без замечаний.
 
 **Тип merge:** `merge commit` без squash. 31+ маленьких коммитов фаз дают полезный bisect-friendly след — каждая фаза была атомарной с зелёными тестами и явным сообщением.
 
@@ -604,9 +624,9 @@ E2E `/pivo` и smoke `main.py` — P2. Тест на denied auth — прихо�
 
 | # | Описание | Закрыто в |
 |---|---|---|
-| **P1-A** (B1) | Вернуть явный отказ для unauthorized `/set`/`/setprob`/`/clear` | ✅ `037b401` |
-| **P1-B** (B2) | Подключить `requirements.lock` к Dockerfile и CI | ✅ `9a052af` |
-| **P1-C** (B3) | README: починить 2 абсолютные ссылки | ✅ `d342c3e` |
+| **P1-A** (B1) | Вернуть явный отказ для unauthorized `/set`/`/setprob`/`/clear` | ✅ `a0fae76` |
+| **P1-B** (B2) | Подключить `requirements.lock` к Dockerfile и CI | ✅ `db1de05` |
+| **P1-C** (B3) | README: починить 2 абсолютные ссылки | ✅ `1ef20a2` |
 
 ### P2 — желательно в ближайшие 1–2 итерации
 
@@ -618,8 +638,8 @@ E2E `/pivo` и smoke `main.py` — P2. Тест на denied auth — прихо�
 | **P2-4** | README: разделы Tests/Architecture/Privacy, `Python 3.12+` вместо `Python 3.14`, инструкция «локальные проверки» | [`README.md`](README.md) | UX для нового пользователя/контрибьютора |
 | **P2-5** | Решить судьбу `MembersService`: либо подключить через продуктовый сценарий, либо вынести в feature-branch до реального использования | [`app/services/members_service.py`](app/services/members_service.py), `main.py` | Сейчас инфраструктура без runtime-вызовов |
 | **P2-6** | `LOG_LEVEL` из `.env` | [`main.py:25`](main.py:25), [`.env.example`](.env.example) | Эксплуатация |
-| **P2-7** | E2E-тест `/pivo` flow (subscribe → call → unsubscribe) | `tests/test_pivo_e2e.py` (новый) | Регрессии в основном opt-in flow |
-| **P2-8** | Smoke-тест на wiring `main.py` (все routers зарегистрированы, middleware подключён, ключи в `dp[]`) | `tests/test_main_wiring.py` (новый) | Защита от случайного удаления строки в compose root |
+| ~~**P2-7**~~ | E2E-тест `/pivo` flow (subscribe → call → unsubscribe) | `tests/test_pivo.py` | ✅ закрыто в `codex/pivo-daily-quota` |
+| ~~**P2-8**~~ | Smoke-тест на wiring `main.py` (все routers зарегистрированы, middleware подключён, ключи в `dp[]`) | `tests/test_main.py` | ✅ закрыто в `codex/pivo-daily-quota` |
 | **P2-9** | Команда `/learn_off` / `/learn_on` или `/privacy` для opt-out обучения на уровне чата | новый handler + repo | Завершает privacy-историю, начатую удалением `messages.text` |
 | **P2-10** | Расширить `BOT_TEXT_ALIASES` через `.env` | [`bot_policy.py:6`](bot_policy.py:6) | Конфигурируемость |
 
@@ -653,31 +673,95 @@ E2E `/pivo` и smoke `main.py` — P2. Тест на denied auth — прихо�
 
 | ID | Локация | Суть | Риск | Приоритет |
 |---|---|---|---|---|
-| ~~P1-A~~ | `app/handlers/admin.py` | UX-регрессия в админ-командах | UX | ✅ закрыто `037b401` |
-| ~~P1-B~~ | `requirements.lock`, `Dockerfile` | lock-файл декоративен | воспроизводимость | ✅ закрыто `9a052af` |
-| ~~P1-C~~ | `README.md` | абсолютные ссылки `/D:/test/...` | документация | ✅ закрыто `d342c3e` |
+| ~~P1-A~~ | `app/handlers/admin.py` | UX-регрессия в админ-командах | UX | ✅ закрыто `a0fae76` |
+| ~~P1-B~~ | `requirements.lock`, `Dockerfile` | lock-файл декоративен | воспроизводимость | ✅ закрыто `db1de05` |
+| ~~P1-C~~ | `README.md` | абсолютные ссылки `/D:/test/...` | документация | ✅ закрыто `1ef20a2` |
+| ~~P2-7~~ | `tests/test_pivo.py` | нет E2E-теста `/pivo` flow | регрессии | ✅ закрыто в `codex/pivo-daily-quota` |
+| ~~P2-8~~ | `tests/test_main.py` | нет smoke-теста на wiring `main.py` | потеря роутера незаметна | ✅ закрыто в `codex/pivo-daily-quota` |
 | P2-1 | `settings.py` / `runtime_state.py` / `runtime_config.py` | Тройное дублирование настроек | DX / ошибки при добавлении | P2 |
 | P2-2 | `app/infrastructure/migrator.py` | хрупкий `sql.split(";")` без транзакций | будущие миграции | P2 |
 | P2-3 | `Dockerfile` | non-root, HEALTHCHECK, pin минорной | hardening | P2 |
 | P2-4 | `README.md` | нет разделов Tests/Architecture/Privacy, `Python 3.14` vs `3.12+` | UX | P2 |
 | P2-5 | `app/services/members_service.py` | инфраструктура без runtime-использования | поверхность поддержки | P2 |
-| P2-6 | `main.py:25`, `.env.example` | LOG_LEVEL захардкожен | эксплуатация | P2 |
-| P2-7 | `tests/` | нет E2E-теста `/pivo` flow | регрессии | P2 |
-| P2-8 | `tests/` | нет smoke-теста на wiring `main.py` | потеря роутера незаметна | P2 |
+| P2-6 | `main.py:59`, `.env.example` | LOG_LEVEL захардкожен | эксплуатация | P2 |
 | P2-9 | (новый handler) | нет opt-out на обучение чата | privacy-завершение | P2 |
 | P2-10 | `bot_policy.py:6` | `BOT_TEXT_ALIASES` хардкод | конфигурируемость | P2 |
 | P3-1 | `learning.py:75,162` | магические числа | качество | P3 |
 | P3-2 | `app/services/learning_service.py:36-56` | `is_duplicate` — концептуальная неоднозначность (privacy-guard vs эвристика) | путаница в коде | P3 |
-| P3-3 | `app/middlewares/throttling.py` | silent drop для админ `/clear` | UX | P3 |
+| P3-3 | `app/middlewares/throttling.py` | silent drop для `/clear` под throttle | UX | P3 |
 | P3-4 | логи | `chat_id` без маскирования | privacy (низко) | P3 |
 | P3-5 | `pivo_chat_members.is_bot` | неиспользуемое поле | чистка | P3 |
 | P3-6 | `text_utils.py:6` | MENTION_RE на emails | corner case | P3 |
 
 ---
 
-**Дата актуализации:** 2026-05-08, третья редакция.
-**Статус:** ветка `refactor/structure` **готова к merge в `main`**. Все P0/P1 закрыты, CI #20 зелёный на матрице 3.12/3.13/3.14, 185 тестов проходят, ruff/mypy без замечаний.
-**История ревизии:**
-- первая редакция (2026-05-08, до Codex-ревизии) рекомендовала «можно мёржить»;
-- вторая редакция (2026-05-08, после Codex-ревизии) уточнила список блокеров P1-A/B/C;
-- третья редакция (2026-05-08, после закрытия блокеров `037b401`, `9a052af`, `d342c3e`) — готово к merge.
+**Дата актуализации:** 2026-05-09, четвёртая редакция.
+**Статус:** ветка `codex/pivo-daily-quota` — 200 тестов, ruff/mypy без замечаний. Требует merge в `main` после live-тестирования.
+**История ревизий:**
+- 2026-05-08, 1я: первичный аудит, «мёржить после фиксов».
+- 2026-05-08, 2я: Codex-ревизия, блокеры P1-A/B/C.
+- 2026-05-08, 3я: блокеры закрыты (`a0fae76`, `db1de05`, `1ef20a2`), `refactor/structure` — merge-ready.
+- 2026-05-09, 4я: `codex/pivo-daily-quota` — daily quota, hotfixes (DI conflict, clear cooldown, quota refund), 200 тестов, P2-7/P2-8 закрыты.
+
+> SHA коммитов обновлены после очистки истории `git filter-repo` (2026-05-09): удалены строки `Co-Authored-By: Claude` из 28 коммитов.
+
+---
+
+## 16. Session update — 2026-05-09
+
+### Completed
+- Очистка истории git: удалены `Co-Authored-By: Claude Opus 4.7 / Sonnet 4.6` из 28 коммитов через `git filter-repo`.
+- Force-push перезаписанных веток на GitHub: `main` и `codex/pivo-daily-quota`.
+- `PROJECT_AUDIT.md` актуализирован: новые SHA, текущая ветка, обновлённые метрики (200 тестов), закрыты P2-7/P2-8.
+
+### Audit findings updated
+- SHA всех коммитов, упомянутых в аудите, обновлены на новые значения после rewrite.
+- Статус P2-7 и P2-8 — закрыты.
+
+### Not run / limitations
+- Тесты не запускались в этой сессии.
+- `docs/ARCHITECTURE.md` по-прежнему устарел — описывает пре-рефакторинговую структуру.
+- `refactor/structure` на remote не существует; если нужна — отдельно запушить.
+
+### Remaining work
+- Включить обратно branch protection для `main` на GitHub.
+- P2-1 (тройное дублирование Settings/RuntimeState/runtime_config) — главный техдолг.
+- `docs/ARCHITECTURE.md` — переписать под текущую архитектуру.
+- Live-тест `codex/pivo-daily-quota` и merge в `main`.
+
+---
+
+## 17. Session update — 2026-05-09 (live smoke investigation)
+
+### Completed
+- Проведено расследование live-поведения бота в тестовом чате.
+- Подтверждено: все три симптома из тестов — не баги кода.
+
+### Findings
+
+**Симптом 1: "пепе" и обычные сообщения — 0 реакции.**
+Причина: privacy mode Telegram кэшируется на уровне конкретного чата. Изменение настройки в BotFather вступает в силу только при повторном добавлении бота в чат. В существующем тестовом чате бот по-прежнему получал только команды и реплаи на свои сообщения. Диагностирован через `outer_middleware` на `dp.update` — три из четырёх сообщений вообще не достигали бота. Исправление: удалить бота из чата и добавить снова. После этого все 4 типа сообщений начали доходить.
+
+**Симптом 2: "Собираю мысли..." вместо генерированного ответа.**
+Причина: тестовый датасет (120 предложений, 70-словный словарь) очень однородный. `looks_too_close_to_training_sample` отклоняет все 4 попытки генерации — сгенерированные кандидаты совпадают с префиксами обучающего корпуса. Для non-mentioned сообщений при неудаче генерации бот молчит (штатное поведение — не спамить чат). Для mentioned — отправляет "Собираю мысли...". В продакшн-чате с реальными разнообразными сообщениями генерация проходит успешно.
+
+**Симптом 3: `/pivo` показывает "3 раз(а) в сутки" для "обычного пользователя".**
+Причина: тестирование выполнялось с аккаунта, указанного в `OWNER_ID`. В базе данных только одна запись `pivo_daily_usage` с `used_count=3` — то есть оба отказа пришли от одного и того же (admin) аккаунта. Код работает корректно: `is_admin_or_owner=True` → `limit=3`.
+
+### Code changes
+- `app/handlers/learning.py` — в процессе расследования добавлялось и убиралось временное INFO-логирование на ключевых точках принятия решений. В финальной версии логирование возвращено к DEBUG-уровню (как было изначально).
+- `main.py` — добавлялся и убирался временный `outer_middleware` для логирования входящих Update-объектов. В финальной версии удалён.
+- Оба файла возвращены к исходному состоянию, `py_compile` чистый.
+
+### Tests/checks run
+- `python -m unittest discover tests -v` — 200 тестов, OK.
+- `python -m py_compile main.py app/handlers/learning.py` — OK.
+
+### Not run / limitations
+- Полноценный live smoke с реальными данными не проводился (тестовый датасет искусственный).
+- `seed_db.py` остаётся неоткоммиченным (вопрос не поднимался).
+
+### Remaining work
+- Merge `codex/pivo-daily-quota` в `main` — блокеров нет, code review вручную.
+- P2-1 (тройное дублирование Settings/RuntimeState/runtime_config) — главный техдолг.
+- Рассмотреть: добавить `.env`-параметр `LOG_LEVEL` (P2-6) — полезно для диагностики без правок кода.

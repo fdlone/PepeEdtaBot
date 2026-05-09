@@ -30,12 +30,17 @@ class ThrottlingMiddleware(BaseMiddleware):
         if not text.startswith("/") or event.from_user is None:
             return await handler(event, data)
 
-        command = text.split()[0].lstrip("/").split("@")[0].lower()
+        parts = text.split(maxsplit=1)
+        command = parts[0].lstrip("/").split("@")[0].lower()
         limit = self._limits.get(command)
         if limit is None:
             return await handler(event, data)
 
-        key = (event.chat.id, event.from_user.id, command)
+        throttle_key = command
+        if command == "clear" and len(parts) > 1 and parts[1].strip().lower() == "confirm":
+            throttle_key = "clear:confirm"
+
+        key = (event.chat.id, event.from_user.id, throttle_key)
         now = time.monotonic()
         if now - self._last_used.get(key, 0.0) < limit:
             return None  # throttled — silently drop

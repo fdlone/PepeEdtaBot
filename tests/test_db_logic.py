@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import unittest
 import uuid
+from datetime import date
 from pathlib import Path
 
 import aiosqlite
 
-from db import Database
+from db import PIVO_DAILY_USAGE_RETENTION_DAYS, Database
 
 
 class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
@@ -234,6 +235,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
                 "chat_member_profiles",
                 "messages",
                 "pivo_chat_members",
+                "pivo_daily_usage",
                 "schema_migrations",
                 "starts",
                 "starts3",
@@ -245,3 +247,79 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
 
         self.db = Database(str(self.db_path))
         await self.db.init()
+
+    async def test_pivo_daily_usage_limit(self) -> None:
+        result = await self.db.consume_pivo_daily_call(
+            chat_hash="chat-hash",
+            user_hash="user-hash",
+            usage_day="2026-05-08",
+            limit=1,
+        )
+        self.assertEqual(result, (True, 1))
+
+        result = await self.db.consume_pivo_daily_call(
+            chat_hash="chat-hash",
+            user_hash="user-hash",
+            usage_day="2026-05-08",
+            limit=1,
+        )
+        self.assertEqual(result, (False, 1))
+
+        result = await self.db.consume_pivo_daily_call(
+            chat_hash="chat-hash",
+            user_hash="user-hash",
+            usage_day="2026-05-09",
+            limit=1,
+        )
+        self.assertEqual(result, (True, 1))
+
+    async def test_pivo_daily_usage_refund_restores_quota(self) -> None:
+        result = await self.db.consume_pivo_daily_call(
+            chat_hash="chat-hash",
+            user_hash="user-hash",
+            usage_day="2026-05-08",
+            limit=1,
+        )
+        self.assertEqual(result, (True, 1))
+
+        await self.db.refund_pivo_daily_call(
+            chat_hash="chat-hash",
+            user_hash="user-hash",
+            usage_day="2026-05-08",
+        )
+
+        result = await self.db.consume_pivo_daily_call(
+            chat_hash="chat-hash",
+            user_hash="user-hash",
+            usage_day="2026-05-08",
+            limit=1,
+        )
+        self.assertEqual(result, (True, 1))
+
+    async def test_pivo_daily_usage_cleanup_deletes_only_rows_older_than_retention(self) -> None:
+        rows = [
+            ("chat-hash", "old-user", "2026-05-01"),
+            ("chat-hash", "cutoff-user", "2026-05-02"),
+            ("chat-hash", "recent-user", "2026-05-08"),
+        ]
+        for chat_hash, user_hash, usage_day in rows:
+            await self.db.consume_pivo_daily_call(
+                chat_hash=chat_hash,
+                user_hash=user_hash,
+                usage_day=usage_day,
+                limit=3,
+            )
+
+        deleted_count = await self.db.cleanup_pivo_daily_usage(
+            retention_days=PIVO_DAILY_USAGE_RETENTION_DAYS,
+            today=date(2026, 5, 9),
+        )
+
+        self.assertEqual(deleted_count, 1)
+        async with aiosqlite.connect(str(self.db_path)) as conn:
+            cursor = await conn.execute(
+                "SELECT user_hash FROM pivo_daily_usage ORDER BY user_hash"
+            )
+            users = [row[0] for row in await cursor.fetchall()]
+
+        self.assertEqual(users, ["cutoff-user", "recent-user"])

@@ -17,6 +17,7 @@ EXPECTED_MIGRATIONS = [
     "003_anonymize_authors",
     "004_chat_member_profiles",
     "005_drop_messages_text",
+    "006_pivo_daily_usage",
 ]
 
 EXPECTED_TABLES = {
@@ -28,6 +29,7 @@ EXPECTED_TABLES = {
     "transitions1",
     "pivo_chat_members",
     "chat_member_profiles",
+    "pivo_daily_usage",
     "schema_migrations",
 }
 

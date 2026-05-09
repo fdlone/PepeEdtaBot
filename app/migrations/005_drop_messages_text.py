@@ -2,7 +2,7 @@
 Remove the raw text column from messages.
 
 The Markov model lives in starts*/transitions* tables and does not use messages.text.
-normalized_text is kept for duplicate detection (message_exists / is_duplicate).
+normalized_text is kept for short-message exact matching and near-repeat heuristics.
 
 Uses ALTER TABLE DROP COLUMN (SQLite >= 3.35, Python >= 3.10).
 Guards against repeated runs: skips if column is already absent.

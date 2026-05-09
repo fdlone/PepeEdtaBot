@@ -222,11 +222,86 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         from app.handlers.pivo import cmd_pivo
         msg = _fake_message()
         pivo_service = AsyncMock()
+        pivo_service.consume_daily_call_quota = AsyncMock(
+            return_value=MagicMock(allowed=True, limit=1, usage_day="2026-05-08")
+        )
         pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2))
         state = _fake_state()
-        await cmd_pivo(msg, pivo_service, state)
+        bot = AsyncMock()
+        settings = MagicMock(owner_id=None)
+        with patch("app.handlers.pivo.is_admin_or_owner", AsyncMock(return_value=False)):
+            await cmd_pivo(msg, pivo_service, state, bot, settings)
+        pivo_service.consume_daily_call_quota.assert_awaited_once_with(
+            chat_id=msg.chat.id,
+            user_id=msg.from_user.id,
+            is_admin_or_owner=False,
+        )
         pivo_service.build_call_message.assert_awaited_once()
         msg.reply.assert_awaited_once()
+
+    async def test_pivo_quota_denied_replies_without_calling_mentions(self) -> None:
+        from app.handlers.pivo import cmd_pivo
+        msg = _fake_message()
+        pivo_service = AsyncMock()
+        pivo_service.consume_daily_call_quota = AsyncMock(
+            return_value=MagicMock(allowed=False, limit=1, usage_day="2026-05-08")
+        )
+        state = _fake_state()
+        bot = AsyncMock()
+        settings = MagicMock(owner_id=None)
+
+        with patch("app.handlers.pivo.is_admin_or_owner", AsyncMock(return_value=False)):
+            await cmd_pivo(msg, pivo_service, state, bot, settings)
+
+        pivo_service.build_call_message.assert_not_called()
+        msg.reply.assert_awaited_once()
+        assert "Лимит /pivo" in msg.reply.call_args[0][0]
+
+    async def test_pivo_admin_uses_admin_quota_path(self) -> None:
+        from app.handlers.pivo import cmd_pivo
+        msg = _fake_message()
+        pivo_service = AsyncMock()
+        pivo_service.consume_daily_call_quota = AsyncMock(
+            return_value=MagicMock(allowed=True, limit=3, usage_day="2026-05-08")
+        )
+        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2))
+        state = _fake_state()
+        bot = AsyncMock()
+        settings = MagicMock(owner_id=None)
+
+        with patch("app.handlers.pivo.is_admin_or_owner", AsyncMock(return_value=True)):
+            await cmd_pivo(msg, pivo_service, state, bot, settings)
+
+        pivo_service.consume_daily_call_quota.assert_awaited_once_with(
+            chat_id=msg.chat.id,
+            user_id=msg.from_user.id,
+            is_admin_or_owner=True,
+        )
+        msg.reply.assert_awaited_once()
+
+    async def test_pivo_refunds_quota_when_reply_fails(self) -> None:
+        from app.handlers.pivo import cmd_pivo
+        msg = _fake_message()
+        msg.reply = AsyncMock(side_effect=RuntimeError("telegram failed"))
+        pivo_service = AsyncMock()
+        pivo_service.consume_daily_call_quota = AsyncMock(
+            return_value=MagicMock(allowed=True, limit=1, usage_day="2026-05-08")
+        )
+        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2))
+        pivo_service.refund_daily_call_quota = AsyncMock()
+        state = _fake_state()
+        bot = AsyncMock()
+        settings = MagicMock(owner_id=None)
+
+        with patch("app.handlers.pivo.is_admin_or_owner", AsyncMock(return_value=False)):
+            with self.assertRaises(RuntimeError):
+                await cmd_pivo(msg, pivo_service, state, bot, settings)
+
+        pivo_service.refund_daily_call_quota.assert_awaited_once_with(
+            chat_id=msg.chat.id,
+            user_id=msg.from_user.id,
+            usage_day="2026-05-08",
+        )
 
     async def test_pivo_on_subscribes_user(self) -> None:
         from app.handlers.pivo import cmd_pivo_on
@@ -297,3 +372,17 @@ class TestExtractContextTokens(unittest.TestCase):
             max_tokens=3,
         )
         self.assertLessEqual(len(tokens), 3)
+
+
+class TestLearningMessageLength(unittest.TestCase):
+    def test_learning_message_length_boundaries(self) -> None:
+        from app.handlers.learning import (
+            MAX_LEARN_MESSAGE_CHARS,
+            MIN_LEARN_MESSAGE_CHARS,
+            is_learnable_message_length,
+        )
+
+        self.assertFalse(is_learnable_message_length("x" * (MIN_LEARN_MESSAGE_CHARS - 1)))
+        self.assertTrue(is_learnable_message_length("x" * MIN_LEARN_MESSAGE_CHARS))
+        self.assertTrue(is_learnable_message_length("x" * MAX_LEARN_MESSAGE_CHARS))
+        self.assertFalse(is_learnable_message_length("x" * (MAX_LEARN_MESSAGE_CHARS + 1)))

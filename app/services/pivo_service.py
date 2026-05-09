@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
+
 from aiogram.types import User
 
 from db import Database
@@ -11,6 +14,17 @@ from pivo import (
     display_name_from_user,
     get_random_pivo_message,
 )
+
+PIVO_DAILY_LIMIT_USER = 1
+PIVO_DAILY_LIMIT_ADMIN = 3
+
+
+@dataclass(frozen=True, slots=True)
+class PivoQuotaResult:
+    allowed: bool
+    used_count: int
+    limit: int
+    usage_day: str
 
 
 class PivoService:
@@ -36,6 +50,44 @@ class PivoService:
         await self._db.remove_pivo_member(
             chat_hash=self._security.hmac_value(chat_id),
             user_hash=self._security.hmac_value(user_id),
+        )
+
+    async def consume_daily_call_quota(
+        self,
+        *,
+        chat_id: int,
+        user_id: int,
+        is_admin_or_owner: bool,
+        today: date | None = None,
+    ) -> PivoQuotaResult:
+        """Списывает одну суточную квоту /pivo для пользователя в чате."""
+        usage_day = (today or datetime.now(UTC).date()).isoformat()
+        limit = PIVO_DAILY_LIMIT_ADMIN if is_admin_or_owner else PIVO_DAILY_LIMIT_USER
+        allowed, used_count = await self._db.consume_pivo_daily_call(
+            chat_hash=self._security.hmac_value(chat_id),
+            user_hash=self._security.hmac_value(user_id),
+            usage_day=usage_day,
+            limit=limit,
+        )
+        return PivoQuotaResult(
+            allowed=allowed,
+            used_count=used_count,
+            limit=limit,
+            usage_day=usage_day,
+        )
+
+    async def refund_daily_call_quota(
+        self,
+        *,
+        chat_id: int,
+        user_id: int,
+        usage_day: str,
+    ) -> None:
+        """Возвращает списанную квоту /pivo после сбоя до доставки ответа."""
+        await self._db.refund_pivo_daily_call(
+            chat_hash=self._security.hmac_value(chat_id),
+            user_hash=self._security.hmac_value(user_id),
+            usage_day=usage_day,
         )
 
     async def build_call_message(
