@@ -20,12 +20,16 @@ data/
 .vscode/
 .idea/
 
+# Logs
+*.log
+
 # OS
 .DS_Store
 Thumbs.db
 
 # Local agent instructions
 AGENTS.md
+CLAUDE.md
 .claude/
 
 # Local test temp data
