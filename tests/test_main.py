@@ -11,7 +11,7 @@ class TestMainWiring(unittest.TestCase):
         from main import COMMAND_COOLDOWNS_SECONDS
 
         self.assertEqual(COMMAND_COOLDOWNS_SECONDS["clear"], 3600.0)
-        self.assertLessEqual(COMMAND_COOLDOWNS_SECONDS["pivo"], 60.0)
+        self.assertNotIn("pivo", COMMAND_COOLDOWNS_SECONDS)
 
     def test_configure_dispatcher_registers_expected_data_routers_and_middleware(self) -> None:
         from app.middlewares import ThrottlingMiddleware
