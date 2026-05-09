@@ -48,13 +48,23 @@ async def cmd_pivo(
         )
         return
 
-    text, mentions_count = await pivo_service.build_call_message(
-        chat_id=message.chat.id,
-        caller_user_id=message.from_user.id,
-    )
+    try:
+        text, mentions_count = await pivo_service.build_call_message(
+            chat_id=message.chat.id,
+            caller_user_id=message.from_user.id,
+        )
+        await message.reply(text, parse_mode=ParseMode.HTML)
+    except Exception:
+        await pivo_service.refund_daily_call_quota(
+            chat_id=message.chat.id,
+            user_id=message.from_user.id,
+            usage_day=quota.usage_day,
+        )
+        logger.exception("pivo command failed after quota consumption; quota refunded")
+        raise
+
     logger.info("pivo command executed")
     logger.info("mentions count: %s", mentions_count)
-    await message.reply(text, parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("pivo_on"))

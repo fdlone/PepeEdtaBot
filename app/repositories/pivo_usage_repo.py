@@ -62,3 +62,59 @@ class PivoUsageRepo:
             )
             await db.commit()
             return True, used_count
+
+    async def refund_daily_call(
+        self,
+        *,
+        chat_hash: str,
+        user_hash: str,
+        usage_day: str,
+    ) -> None:
+        """Возвращает один списанный вызов, если ответ /pivo не был доставлен."""
+        async with self._lock:
+            db = await self._conn_provider()
+            cursor = await db.execute(
+                """
+                SELECT used_count
+                FROM pivo_daily_usage
+                WHERE chat_hash = ? AND user_hash = ? AND usage_day = ?
+                """,
+                (chat_hash, user_hash, usage_day),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return
+
+            used_count = int(row[0])
+            if used_count <= 1:
+                await db.execute(
+                    """
+                    DELETE FROM pivo_daily_usage
+                    WHERE chat_hash = ? AND user_hash = ? AND usage_day = ?
+                    """,
+                    (chat_hash, user_hash, usage_day),
+                )
+            else:
+                await db.execute(
+                    """
+                    UPDATE pivo_daily_usage
+                    SET used_count = ?, updated_at = datetime('now')
+                    WHERE chat_hash = ? AND user_hash = ? AND usage_day = ?
+                    """,
+                    (used_count - 1, chat_hash, user_hash, usage_day),
+                )
+            await db.commit()
+
+    async def delete_usage_before(self, cutoff_day: str) -> int:
+        """Deletes quota rows older than cutoff_day and returns deleted row count."""
+        async with self._lock:
+            db = await self._conn_provider()
+            cursor = await db.execute(
+                """
+                DELETE FROM pivo_daily_usage
+                WHERE usage_day < ?
+                """,
+                (cutoff_day,),
+            )
+            await db.commit()
+            return cursor.rowcount

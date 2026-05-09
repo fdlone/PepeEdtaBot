@@ -279,6 +279,30 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         )
         msg.reply.assert_awaited_once()
 
+    async def test_pivo_refunds_quota_when_reply_fails(self) -> None:
+        from app.handlers.pivo import cmd_pivo
+        msg = _fake_message()
+        msg.reply = AsyncMock(side_effect=RuntimeError("telegram failed"))
+        pivo_service = AsyncMock()
+        pivo_service.consume_daily_call_quota = AsyncMock(
+            return_value=MagicMock(allowed=True, limit=1, usage_day="2026-05-08")
+        )
+        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2))
+        pivo_service.refund_daily_call_quota = AsyncMock()
+        state = _fake_state()
+        bot = AsyncMock()
+        settings = MagicMock(owner_id=None)
+
+        with patch("app.handlers.pivo.is_admin_or_owner", AsyncMock(return_value=False)):
+            with self.assertRaises(RuntimeError):
+                await cmd_pivo(msg, pivo_service, state, bot, settings)
+
+        pivo_service.refund_daily_call_quota.assert_awaited_once_with(
+            chat_id=msg.chat.id,
+            user_id=msg.from_user.id,
+            usage_day="2026-05-08",
+        )
+
     async def test_pivo_on_subscribes_user(self) -> None:
         from app.handlers.pivo import cmd_pivo_on
         msg = _fake_message(is_bot=False)

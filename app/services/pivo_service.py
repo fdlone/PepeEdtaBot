@@ -76,6 +76,20 @@ class PivoService:
             usage_day=usage_day,
         )
 
+    async def refund_daily_call_quota(
+        self,
+        *,
+        chat_id: int,
+        user_id: int,
+        usage_day: str,
+    ) -> None:
+        """Возвращает списанную квоту /pivo после сбоя до доставки ответа."""
+        await self._db.refund_pivo_daily_call(
+            chat_hash=self._security.hmac_value(chat_id),
+            user_hash=self._security.hmac_value(user_id),
+            usage_day=usage_day,
+        )
+
     async def build_call_message(
         self, chat_id: int, caller_user_id: int
     ) -> tuple[str, int]:

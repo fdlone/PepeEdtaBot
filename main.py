@@ -10,6 +10,7 @@ from app.handlers import admin as admin_handlers
 from app.handlers import common as common_handlers
 from app.handlers import learning as learning_handlers
 from app.handlers import pivo as pivo_handlers
+from app.middlewares import ThrottlingMiddleware
 from app.services import LearningService, PivoService
 from bot_messages import TELEGRAM_COMMANDS
 from db import Database
@@ -17,6 +18,39 @@ from markov import MarkovGenerator
 from pivo import PivoSecurity
 from runtime_state import runtime_state_from_settings
 from settings import Settings, load_settings
+
+COMMAND_COOLDOWNS_SECONDS = {
+    "pivo": 60.0 * 60.0,
+    "clear": 60.0 * 60.0,
+}
+
+
+def configure_dispatcher(
+    dp: Dispatcher,
+    *,
+    db: Database,
+    generator: MarkovGenerator,
+    pivo_service: PivoService,
+    learning_service: LearningService,
+    state: object,
+    settings: Settings,
+    bot_username: str,
+    bot_id: int,
+) -> Dispatcher:
+    dp.message.middleware(ThrottlingMiddleware(limits=COMMAND_COOLDOWNS_SECONDS))
+    dp["db"] = db
+    dp["generator"] = generator
+    dp["pivo_service"] = pivo_service
+    dp["learning_service"] = learning_service
+    dp["state"] = state
+    dp["settings"] = settings
+    dp["bot_username"] = bot_username
+    dp["bot_id"] = bot_id
+    dp.include_router(common_handlers.router)
+    dp.include_router(admin_handlers.router)
+    dp.include_router(pivo_handlers.router)
+    dp.include_router(learning_handlers.router)
+    return dp
 
 
 async def run_bot() -> None:
@@ -50,19 +84,17 @@ async def run_bot() -> None:
         ]
     )
 
-    dp = Dispatcher()
-    dp["db"] = db
-    dp["generator"] = generator
-    dp["pivo_service"] = pivo_service
-    dp["learning_service"] = learning_service
-    dp["state"] = state
-    dp["settings"] = settings
-    dp["bot_username"] = bot_username
-    dp["bot_id"] = me.id
-    dp.include_router(common_handlers.router)
-    dp.include_router(admin_handlers.router)
-    dp.include_router(pivo_handlers.router)
-    dp.include_router(learning_handlers.router)
+    dp = configure_dispatcher(
+        Dispatcher(),
+        db=db,
+        generator=generator,
+        pivo_service=pivo_service,
+        learning_service=learning_service,
+        state=state,
+        settings=settings,
+        bot_username=bot_username,
+        bot_id=me.id,
+    )
 
     logger.info("Бот %s запущен (polling).", me.username)
     logger.info("Статус: работает.")

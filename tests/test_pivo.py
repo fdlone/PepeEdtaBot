@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import unittest
+import uuid
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from db import Database
 from pivo import (
     PIVO_FALLBACK_MENTIONS,
     PIVO_PRIVACY_MESSAGE,
@@ -193,6 +196,93 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.allowed)
         self.assertEqual(result.used_count, 3)
         self.assertEqual(result.limit, PIVO_DAILY_LIMIT_ADMIN)
+
+    async def test_refund_daily_call_uses_same_hashes_and_day(self) -> None:
+        from app.services.pivo_service import PivoService
+
+        security = make_security()
+        db = AsyncMock()
+        db.refund_pivo_daily_call = AsyncMock()
+        service = PivoService(db=db, security=security)
+
+        await service.refund_daily_call_quota(
+            chat_id=100,
+            user_id=200,
+            usage_day="2026-05-08",
+        )
+
+        db.refund_pivo_daily_call.assert_awaited_once_with(
+            chat_hash=security.hmac_value(100),
+            user_hash=security.hmac_value(200),
+            usage_day="2026-05-08",
+        )
+
+
+class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        from app.services.pivo_service import PivoService
+
+        self.db_path = Path(f"test_pivo_flow_{uuid.uuid4().hex}.sqlite")
+        self.db = Database(str(self.db_path))
+        await self.db.init()
+        self.security = make_security()
+        self.service = PivoService(db=self.db, security=self.security)
+
+    async def asyncTearDown(self) -> None:
+        await self.db.close()
+        self.db_path.unlink(missing_ok=True)
+
+    async def test_subscribe_call_quota_and_unsubscribe_flow(self) -> None:
+        caller = SimpleNamespace(
+            id=100,
+            username="caller",
+            full_name="Caller User",
+            is_bot=False,
+        )
+        friend = SimpleNamespace(
+            id=200,
+            username="friend",
+            full_name="Friend User",
+            is_bot=False,
+        )
+
+        await self.service.subscribe(chat_id=500, user=caller)
+        await self.service.subscribe(chat_id=500, user=friend)
+
+        text, mentions_count = await self.service.build_call_message(
+            chat_id=500,
+            caller_user_id=caller.id,
+        )
+        self.assertEqual(mentions_count, 1)
+        self.assertIn("@friend", text)
+        self.assertNotIn("@caller", text)
+
+        quota = await self.service.consume_daily_call_quota(
+            chat_id=500,
+            user_id=caller.id,
+            is_admin_or_owner=False,
+            today=date(2026, 5, 9),
+        )
+        self.assertTrue(quota.allowed)
+        self.assertEqual(quota.used_count, 1)
+        self.assertEqual(quota.limit, 1)
+
+        quota = await self.service.consume_daily_call_quota(
+            chat_id=500,
+            user_id=caller.id,
+            is_admin_or_owner=False,
+            today=date(2026, 5, 9),
+        )
+        self.assertFalse(quota.allowed)
+        self.assertEqual(quota.used_count, 1)
+
+        await self.service.unsubscribe(chat_id=500, user_id=friend.id)
+        text, mentions_count = await self.service.build_call_message(
+            chat_id=500,
+            caller_user_id=caller.id,
+        )
+        self.assertEqual(mentions_count, 0)
+        self.assertIn(PIVO_FALLBACK_MENTIONS, text)
 
 
 if __name__ == "__main__":

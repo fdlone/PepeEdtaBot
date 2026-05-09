@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from datetime import UTC, date, datetime, timedelta
 from typing import Optional
 
 import aiosqlite
@@ -9,6 +10,8 @@ import aiosqlite
 from app.infrastructure import migrator
 from app.repositories import MarkovRepo, MembersRepo, MessagesRepo, PivoRepo, PivoUsageRepo
 from text_utils import sanitize_text
+
+PIVO_DAILY_USAGE_RETENTION_DAYS = 7
 
 
 class Database:
@@ -46,6 +49,7 @@ class Database:
         self.messages = MessagesRepo(self._get_conn, self._lock)
         self.pivo = PivoRepo(self._get_conn, self._lock)
         self.pivo_usage = PivoUsageRepo(self._get_conn, self._lock)
+        await self.cleanup_pivo_daily_usage()
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -269,6 +273,34 @@ class Database:
             usage_day=usage_day,
             limit=limit,
         )
+
+    async def refund_pivo_daily_call(
+        self,
+        *,
+        chat_hash: str,
+        user_hash: str,
+        usage_day: str,
+    ) -> None:
+        assert self.pivo_usage is not None
+        await self.pivo_usage.refund_daily_call(
+            chat_hash=chat_hash,
+            user_hash=user_hash,
+            usage_day=usage_day,
+        )
+
+    async def cleanup_pivo_daily_usage(
+        self,
+        *,
+        retention_days: int = PIVO_DAILY_USAGE_RETENTION_DAYS,
+        today: date | None = None,
+    ) -> int:
+        """Deletes /pivo daily quota rows older than retention_days."""
+        if retention_days < 0:
+            raise ValueError("retention_days must be non-negative")
+        assert self.pivo_usage is not None
+        current_day = today or datetime.now(UTC).date()
+        cutoff_day = (current_day - timedelta(days=retention_days)).isoformat()
+        return await self.pivo_usage.delete_usage_before(cutoff_day)
 
     # --- Кросс-доменные операции ---
 
