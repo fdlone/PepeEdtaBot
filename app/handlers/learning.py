@@ -64,7 +64,7 @@ async def on_text_message(
     message: Message,
     learning_service: LearningService,
     generator: MarkovGenerator,
-    state: RuntimeState,
+    runtime_state: RuntimeState,
     bot_username: str,
     bot_id: int,
 ) -> None:
@@ -85,14 +85,14 @@ async def on_text_message(
         )
         return
 
-    tokens = tokenize(clean, normalize_lower=state.normalize_lower)
+    tokens = tokenize(clean, normalize_lower=runtime_state.normalize_lower)
     token_volume = await learning_service.record_message(
         chat_id=message.chat.id,
         raw_text=raw_text,
         tokens=tokens,
     )
-    learned = state.learned_messages.get(message.chat.id, 0) + 1
-    state.learned_messages[message.chat.id] = learned
+    learned = runtime_state.learned_messages.get(message.chat.id, 0) + 1
+    runtime_state.learned_messages[message.chat.id] = learned
     if learned == 1 or learned % 25 == 0:
         logger.info(
             "Прогресс обучения: chat_id=%s, сообщений=%s, объём_модели=%s",
@@ -104,14 +104,16 @@ async def on_text_message(
     now = time.time()
     mentioned = bot_is_mentioned(message, bot_username, bot_id)
 
-    enough_data = has_enough_model_data(token_volume, state.min_tokens_for_model)
+    enough_data = has_enough_model_data(
+        token_volume, runtime_state.min_tokens_for_model
+    )
 
     if mentioned and not enough_data:
         await reply_humanized(
             message,
             "Пока мало материала, поболтайте ещё 🙂",
-            state.typing_min_ms,
-            state.typing_max_ms,
+            runtime_state.typing_min_ms,
+            runtime_state.typing_max_ms,
         )
         return
 
@@ -120,16 +122,16 @@ async def on_text_message(
             "Skip reply: not enough model data chat=%s volume=%s min=%s",
             message.chat.id,
             token_volume,
-            state.min_tokens_for_model,
+            runtime_state.min_tokens_for_model,
         )
         return
 
-    last_ts = state.last_reply_ts.get(message.chat.id, 0.0)
-    cooldown_ok = cooldown_allows_reply(now, last_ts, state.min_cooldown_sec)
+    last_ts = runtime_state.last_reply_ts.get(message.chat.id, 0.0)
+    cooldown_ok = cooldown_allows_reply(now, last_ts, runtime_state.min_cooldown_sec)
     should_reply = should_reply_to_message(
         mentioned=mentioned,
         cooldown_ok=cooldown_ok,
-        reply_probability=state.reply_probability,
+        reply_probability=runtime_state.reply_probability,
         random_value=random.random(),
     )
 
@@ -139,24 +141,24 @@ async def on_text_message(
             message.chat.id,
             mentioned,
             cooldown_ok,
-            state.reply_probability,
+            runtime_state.reply_probability,
         )
         return
 
     context_tokens: list[str] = []
-    if state.use_reply_context:
+    if runtime_state.use_reply_context:
         context_tokens = extract_context_tokens(
             message=message,
             current_text=raw_text,
-            normalize_lower=state.normalize_lower,
-            max_tokens=state.reply_context_max_tokens,
-            only_for_replies=state.reply_context_only_for_replies,
-            include_current_message=state.reply_context_include_current_message,
+            normalize_lower=runtime_state.normalize_lower,
+            max_tokens=runtime_state.reply_context_max_tokens,
+            only_for_replies=runtime_state.reply_context_only_for_replies,
+            include_current_message=runtime_state.reply_context_include_current_message,
         )
 
     seed = None
     if seed is None and context_tokens:
-        seed = context_tokens[-state.reply_context_last_tokens :]
+        seed = context_tokens[-runtime_state.reply_context_last_tokens :]
         logger.debug(
             "Reply context prepared: chat=%s context_tokens=%s seed=%s",
             message.chat.id,
@@ -170,17 +172,17 @@ async def on_text_message(
         attempt_context_tokens = context_tokens if attempt < 2 else None
         candidate = await generator.generate_text(
             chat_id=message.chat.id,
-            max_chars=state.max_reply_chars,
-            max_tokens=state.max_reply_tokens,
+            max_chars=runtime_state.max_reply_chars,
+            max_tokens=runtime_state.max_reply_tokens,
             seed_tokens=seed,
             context_tokens=attempt_context_tokens,
-            context_bias=state.reply_context_bias,
-            context_start_bias=state.reply_context_start_bias,
-            randomness_strength=state.randomness_strength,
-            repetition_penalty_strength=state.repetition_penalty_strength,
-            markov_order=state.markov_order,
-            enable_backoff=state.enable_backoff,
-            backoff_min_order=state.backoff_min_order,
+            context_bias=runtime_state.reply_context_bias,
+            context_start_bias=runtime_state.reply_context_start_bias,
+            randomness_strength=runtime_state.randomness_strength,
+            repetition_penalty_strength=runtime_state.repetition_penalty_strength,
+            markov_order=runtime_state.markov_order,
+            enable_backoff=runtime_state.enable_backoff,
+            backoff_min_order=runtime_state.backoff_min_order,
         )
         if not candidate:
             logger.debug(
@@ -191,7 +193,7 @@ async def on_text_message(
                 len(seed or []),
             )
         elif await learning_service.looks_too_close_to_training_sample(
-            message.chat.id, candidate, state.normalize_lower
+            message.chat.id, candidate, runtime_state.normalize_lower
         ):
             logger.debug(
                 "Generated text is too close to training sample, retrying: chat=%s attempt=%s",
@@ -203,7 +205,7 @@ async def on_text_message(
             break
 
         if attempt == 0 and context_tokens:
-            seed = context_tokens[-state.reply_context_last_tokens :]
+            seed = context_tokens[-runtime_state.reply_context_last_tokens :]
         else:
             seed = None
 
@@ -212,16 +214,19 @@ async def on_text_message(
             await reply_humanized(
                 message,
                 "Собираю мысли... Напишите ещё пару сообщений 🙂",
-                state.typing_min_ms,
-                state.typing_max_ms,
+                runtime_state.typing_min_ms,
+                runtime_state.typing_max_ms,
             )
-            state.last_reply_ts[message.chat.id] = now
+            runtime_state.last_reply_ts[message.chat.id] = now
         logger.debug(
             "Generation failed: chat=%s mentioned=%s", message.chat.id, mentioned
         )
         return
 
-    state.last_reply_ts[message.chat.id] = now
+    runtime_state.last_reply_ts[message.chat.id] = now
     await reply_humanized(
-        message, reply_text, state.typing_min_ms, state.typing_max_ms
+        message,
+        reply_text,
+        runtime_state.typing_min_ms,
+        runtime_state.typing_max_ms,
     )

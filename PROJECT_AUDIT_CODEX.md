@@ -26,6 +26,7 @@
 - Daily quota reset остается по UTC. Это осознанное продуктовое решение и не считается текущей проблемой.
 - `main.py` wiring вынесен в `configure_dispatcher()` и покрыт smoke-test: dispatcher data, routers и middleware проверяются без запуска Telegram polling.
 - `/pivo` subscribe → call quota → unsubscribe flow покрыт сервисным тестом на реальной временной SQLite базе.
+- Исправлен runtime-конфликт DI: пользовательский `RuntimeState` больше не конфликтует с aiogram `FSMContext`, dispatcher data теперь использует ключ `runtime_state`.
 
 ### Security/privacy notes
 
@@ -40,10 +41,14 @@
 - Закрыто: P1 regression, где `/clear` prompt блокировал `/clear confirm` на 3600 секунд.
 - Закрыто: риск потери дневной quota при ошибке после списания и до успешной отправки `/pivo`.
 - Закрыто: бесконечный рост `pivo_daily_usage` без cleanup/retention.
+- Закрыто: runtime bug, из-за которого часть команд (`/help`, `/stats`, `/config`, `/clear`, `/pivo_privacy` и связанные handlers) падала с `AttributeError`, потому что в handlers вместо `RuntimeState` инжектился aiogram `FSMContext`.
 - Принято: UTC reset для daily quota остается без изменений.
 
 ## Changed files in current work
 
+- `app/handlers/admin.py`
+- `app/handlers/common.py`
+- `app/handlers/learning.py`
 - `main.py`
 - `db.py`
 - `app/handlers/pivo.py`
@@ -65,10 +70,11 @@
 - `python -m unittest discover tests -v` — 200 tests OK.
 - `python -m ruff check app/ tests/` — passed.
 - `python -m mypy app/` — passed, 30 source files.
+- Live smoke: подтверждено вручную, что после фикса большинство основных команд в Telegram-чате отвечает корректно.
 
 ## Not run / limitations
 
-- Live Telegram smoke test не выполнялся.
+- Полный сценарий live smoke выполнен не целиком; подтверждено, что основные команды после runtime-fix начали отвечать в реальном чате.
 - Docker build не выполнялся.
 - GitHub Actions на удаленном runner после текущих локальных изменений не проверялся.
 

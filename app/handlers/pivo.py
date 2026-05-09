@@ -22,7 +22,7 @@ logger = logging.getLogger("chat_markov")
 async def cmd_pivo(
     message: Message,
     pivo_service: PivoService,
-    state: RuntimeState,
+    runtime_state: RuntimeState,
     bot: Bot,
     settings: Settings,
 ) -> None:
@@ -38,8 +38,8 @@ async def cmd_pivo(
         await reply_humanized(
             message,
             f"Лимит /pivo на сегодня исчерпан: {quota.limit} раз(а) в сутки.",
-            state.typing_min_ms,
-            state.typing_max_ms,
+            runtime_state.typing_min_ms,
+            runtime_state.typing_max_ms,
         )
         logger.info(
             "pivo command rejected by daily quota: limit=%s day=%s",
@@ -69,7 +69,7 @@ async def cmd_pivo(
 
 @router.message(Command("pivo_on"))
 async def cmd_pivo_on(
-    message: Message, pivo_service: PivoService, state: RuntimeState
+    message: Message, pivo_service: PivoService, runtime_state: RuntimeState
 ) -> None:
     if message.from_user is None:
         return
@@ -77,8 +77,8 @@ async def cmd_pivo_on(
         await reply_humanized(
             message,
             "Ботов в пивной список не добавляю.",
-            state.typing_min_ms,
-            state.typing_max_ms,
+            runtime_state.typing_min_ms,
+            runtime_state.typing_max_ms,
         )
         return
 
@@ -87,14 +87,14 @@ async def cmd_pivo_on(
     await reply_humanized(
         message,
         "Готово, теперь я буду звать тебя через /pivo.",
-        state.typing_min_ms,
-        state.typing_max_ms,
+        runtime_state.typing_min_ms,
+        runtime_state.typing_max_ms,
     )
 
 
 @router.message(Command("pivo_off"))
 async def cmd_pivo_off(
-    message: Message, pivo_service: PivoService, state: RuntimeState
+    message: Message, pivo_service: PivoService, runtime_state: RuntimeState
 ) -> None:
     if message.from_user is None:
         return
@@ -104,16 +104,16 @@ async def cmd_pivo_off(
     await reply_humanized(
         message,
         "Готово, больше не буду звать тебя через /pivo.",
-        state.typing_min_ms,
-        state.typing_max_ms,
+        runtime_state.typing_min_ms,
+        runtime_state.typing_max_ms,
     )
 
 
 @router.message(Command("pivo_privacy"))
-async def cmd_pivo_privacy(message: Message, state: RuntimeState) -> None:
+async def cmd_pivo_privacy(message: Message, runtime_state: RuntimeState) -> None:
     await reply_humanized(
         message,
         PIVO_PRIVACY_MESSAGE,
-        state.typing_min_ms,
-        state.typing_max_ms,
+        runtime_state.typing_min_ms,
+        runtime_state.typing_max_ms,
     )

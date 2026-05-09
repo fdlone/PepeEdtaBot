@@ -32,7 +32,7 @@ def configure_dispatcher(
     generator: MarkovGenerator,
     pivo_service: PivoService,
     learning_service: LearningService,
-    state: object,
+    runtime_state: object,
     settings: Settings,
     bot_username: str,
     bot_id: int,
@@ -42,7 +42,7 @@ def configure_dispatcher(
     dp["generator"] = generator
     dp["pivo_service"] = pivo_service
     dp["learning_service"] = learning_service
-    dp["state"] = state
+    dp["runtime_state"] = runtime_state
     dp["settings"] = settings
     dp["bot_username"] = bot_username
     dp["bot_id"] = bot_id
@@ -71,7 +71,7 @@ async def run_bot() -> None:
     )
     pivo_service = PivoService(db=db, security=pivo_security)
     learning_service = LearningService(db=db, generator=generator)
-    state = runtime_state_from_settings(settings)
+    runtime_state = runtime_state_from_settings(settings)
 
     bot = Bot(token=settings.bot_token)
     me = await bot.get_me()
@@ -90,7 +90,7 @@ async def run_bot() -> None:
         generator=generator,
         pivo_service=pivo_service,
         learning_service=learning_service,
-        state=state,
+        runtime_state=runtime_state,
         settings=settings,
         bot_username=bot_username,
         bot_id=me.id,

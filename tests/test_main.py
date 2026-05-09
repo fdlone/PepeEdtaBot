@@ -21,7 +21,7 @@ class TestMainWiring(unittest.TestCase):
             "generator": MagicMock(),
             "pivo_service": MagicMock(),
             "learning_service": MagicMock(),
-            "state": MagicMock(),
+            "runtime_state": MagicMock(),
             "settings": MagicMock(),
             "bot_username": "pepebot",
             "bot_id": 12345,
