@@ -20,7 +20,7 @@ from runtime_state import runtime_state_from_settings
 from settings import Settings, load_settings
 
 COMMAND_COOLDOWNS_SECONDS = {
-    "pivo": 60.0 * 60.0,
+    "pivo": 30.0,
     "clear": 60.0 * 60.0,
 }
 

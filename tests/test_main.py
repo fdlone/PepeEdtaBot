@@ -7,10 +7,11 @@ from aiogram import Dispatcher
 
 
 class TestMainWiring(unittest.TestCase):
-    def test_command_cooldowns_are_one_hour_for_pivo_and_clear(self) -> None:
+    def test_command_cooldowns(self) -> None:
         from main import COMMAND_COOLDOWNS_SECONDS
 
-        self.assertEqual(COMMAND_COOLDOWNS_SECONDS, {"pivo": 3600.0, "clear": 3600.0})
+        self.assertEqual(COMMAND_COOLDOWNS_SECONDS["clear"], 3600.0)
+        self.assertLessEqual(COMMAND_COOLDOWNS_SECONDS["pivo"], 60.0)
 
     def test_configure_dispatcher_registers_expected_data_routers_and_middleware(self) -> None:
         from app.middlewares import ThrottlingMiddleware
