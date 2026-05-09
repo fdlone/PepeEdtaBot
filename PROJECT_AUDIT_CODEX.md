@@ -20,6 +20,7 @@
 - Admin/owner может вызвать `/pivo` 3 раза в сутки.
 - Runtime cooldown снова подключен через `ThrottlingMiddleware`.
 - `/pivo` и `/clear` ограничены cooldown 3600 секунд на `(chat_id, user_id, command)`.
+- `/clear` и `/clear confirm` используют разные throttle keys, поэтому prompt не блокирует follow-up confirmation.
 - Если `/pivo` quota уже списана, но сборка или отправка ответа падает, quota откатывается через refund.
 - Для `pivo_daily_usage` добавлен retention cleanup: строки старше 7 дней удаляются при `Database.init()`.
 - Daily quota reset остается по UTC. Это осознанное продуктовое решение и не считается текущей проблемой.
@@ -36,6 +37,7 @@
 ### Resolved during this session
 
 - Закрыто: потерянный runtime cooldown после удаления `ThrottlingMiddleware` из `main.py`.
+- Закрыто: P1 regression, где `/clear` prompt блокировал `/clear confirm` на 3600 секунд.
 - Закрыто: риск потери дневной quota при ошибке после списания и до успешной отправки `/pivo`.
 - Закрыто: бесконечный рост `pivo_daily_usage` без cleanup/retention.
 - Принято: UTC reset для daily quota остается без изменений.
@@ -48,6 +50,7 @@
 - `app/repositories/pivo_usage_repo.py`
 - `app/services/pivo_service.py`
 - `tests/test_db_logic.py`
+- `tests/test_filters.py`
 - `tests/test_handlers.py`
 - `tests/test_main.py`
 - `tests/test_pivo.py`
@@ -58,7 +61,8 @@
 - `python -m unittest tests.test_pivo tests.test_handlers tests.test_db_logic tests.test_main -v` — 53 tests OK.
 - `python -m unittest tests.test_db_logic -v` — 13 tests OK.
 - `python -m unittest tests.test_main tests.test_pivo -v` — 17 tests OK.
-- `python -m unittest discover tests -v` — 198 tests OK.
+- `python -m unittest tests.test_filters tests.test_main -v` — 22 tests OK.
+- `python -m unittest discover tests -v` — 200 tests OK.
 - `python -m ruff check app/ tests/` — passed.
 - `python -m mypy app/` — passed, 30 source files.
 
