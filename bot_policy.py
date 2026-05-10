@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from markov import tokenize
 
+# Default text aliases the bot answers to when used as plain words in chat
+# (i.e. without a Telegram @-mention). Frozen so callers can't mutate it
+# accidentally; fully overridable from .env via Settings.bot_text_aliases.
+DEFAULT_BOT_TEXT_ALIASES: frozenset[str] = frozenset({"pepe", "пепе"})
 
-BOT_TEXT_ALIASES = {"pepe", "пепе"}
 
-
-def text_contains_bot_alias(text: str, bot_aliases: set[str]) -> bool:
+def text_contains_bot_alias(text: str, bot_aliases: Iterable[str]) -> bool:
+    aliases = {a.lower() for a in bot_aliases}
     for chunk in tokenize(text, normalize_lower=True):
-        if chunk in bot_aliases:
+        if chunk in aliases:
             return True
     return False
 
@@ -19,7 +24,12 @@ def is_mention_entity(entity_type: object) -> bool:
     return value == "mention" or name == "MENTION"
 
 
-def bot_is_mentioned(message: object, bot_username: str, bot_id: int) -> bool:
+def bot_is_mentioned(
+    message: object,
+    bot_username: str,
+    bot_id: int,
+    bot_text_aliases: Iterable[str] = DEFAULT_BOT_TEXT_ALIASES,
+) -> bool:
     reply_to_message = getattr(message, "reply_to_message", None)
     text = getattr(message, "text", None)
 
@@ -33,7 +43,7 @@ def bot_is_mentioned(message: object, bot_username: str, bot_id: int) -> bool:
     username_mention = f"@{bot_username}".lower()
     if username_mention in text.lower():
         return True
-    if text_contains_bot_alias(text, BOT_TEXT_ALIASES):
+    if text_contains_bot_alias(text, bot_text_aliases):
         return True
 
     entities = getattr(message, "entities", None)

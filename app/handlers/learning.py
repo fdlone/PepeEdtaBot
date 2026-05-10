@@ -67,6 +67,7 @@ async def on_text_message(
     runtime_state: RuntimeState,
     bot_username: str,
     bot_id: int,
+    bot_text_aliases: frozenset[str],
 ) -> None:
     if not is_group_message(message):
         return
@@ -102,7 +103,7 @@ async def on_text_message(
         )
 
     now = time.time()
-    mentioned = bot_is_mentioned(message, bot_username, bot_id)
+    mentioned = bot_is_mentioned(message, bot_username, bot_id, bot_text_aliases)
 
     enough_data = has_enough_model_data(
         token_volume, runtime_state.min_tokens_for_model
