@@ -1,93 +1,299 @@
 # PROJECT_AUDIT_CODEX
 
-Дата актуализации: 2026-05-09 (содержимое заморожено).  
-Базовый документ аудита: `PROJECT_AUDIT.md`.
+Дата аудита: 2026-05-10  
+Аудитор: Codex  
+Область: фактическое состояние репозитория `E:\test\PepeEdtaBot` на ветке `main` без изменения `PROJECT_AUDIT.md`
 
-> **Status (2026-05-10):** ветка `codex/pivo-daily-quota`, описанная ниже,
-> уже **слита в `main`** вместе с последующими работами (`refactor/structure`,
-> `refactor/audit-p2-batch`, `fix/audit-followups`). Документ сохранён как
-> исторический snapshot независимой Codex-ревизии этой ветки и не
-> перезаписывается. Текущее состояние проекта и вся актуальная динамика
-> ведутся в `PROJECT_AUDIT.md` (sections 18–19 и далее).
+## 1. Executive summary
 
-## Current status
+Проект в целом находится в хорошем состоянии. Архитектура уже не монолитная: слои `handlers / services / repositories / middlewares / migrations` действительно выделены, мигратор версионирован, тестовый контур широкий, `ruff` и `mypy` зелёные. Критических дефектов уровня P0/P1 по коду я не нашёл.
 
-`PROJECT_AUDIT.md` остается главным общим аудитом проекта. По нему рефакторинговая ветка `refactor/structure` уже признана готовой к merge: P0 закрыты, P1-блокеры B1/B2/B3 закрыты, оставшийся долг относится к P2/P3.
+Главная оставшаяся проблема не в runtime-коде, а в консистентности продукта и документации:
 
-Этот файл используется как рабочий tracker Codex по ветке `codex/pivo-daily-quota`. Старые выводы по `refactor/structure` здесь не дублируются; актуальные детали по ним смотри в `PROJECT_AUDIT.md`.
+1. `/pivo`-команды не ограничены групповыми чатами, хотя проект и документация описывают их как групповой сценарий.
+2. `README.md` заметно отстал от реального security/privacy-устройства `/pivo` и логирования.
+3. `docs/ARCHITECTURE.md` тоже частично устарел по тестовой статистике.
+4. Quickstart в `README.md` ведёт на незалоченные зависимости, тогда как CI и Docker живут на `requirements.lock`.
 
-## Current branch audit: daily quota for /pivo
+Итоговая оценка:
 
-### Implemented
+- Код/архитектура: `хорошо`
+- Тестовое покрытие базовых сценариев: `хорошо`
+- Документация: `средне`
+- Операционная консистентность: `выше среднего`, но с хвостом по `/pivo`-scope и docs drift
 
-- Добавлена таблица `pivo_daily_usage` через миграцию `006_pivo_daily_usage.sql`.
-- Daily quota хранится отдельно от `pivo_chat_members` по ключу `(chat_hash, user_hash, usage_day)`.
-- Обычный пользователь может вызвать `/pivo` 1 раз в сутки.
-- Admin/owner может вызвать `/pivo` 3 раза в сутки.
-- Runtime cooldown снова подключен через `ThrottlingMiddleware`.
-- `/pivo` и `/clear` ограничены cooldown 3600 секунд на `(chat_id, user_id, command)`.
-- `/clear` и `/clear confirm` используют разные throttle keys, поэтому prompt не блокирует follow-up confirmation.
-- Если `/pivo` quota уже списана, но сборка или отправка ответа падает, quota откатывается через refund.
-- Для `pivo_daily_usage` добавлен retention cleanup: строки старше 7 дней удаляются при `Database.init()`.
-- Daily quota reset остается по UTC. Это осознанное продуктовое решение и не считается текущей проблемой.
-- `main.py` wiring вынесен в `configure_dispatcher()` и покрыт smoke-test: dispatcher data, routers и middleware проверяются без запуска Telegram polling.
-- `/pivo` subscribe → call quota → unsubscribe flow покрыт сервисным тестом на реальной временной SQLite базе.
-- Исправлен runtime-конфликт DI: пользовательский `RuntimeState` больше не конфликтует с aiogram `FSMContext`, dispatcher data теперь использует ключ `runtime_state`.
+## 2. Что было проверено
 
-### Security/privacy notes
+### Репозиторий и состояние
 
-- В `pivo_daily_usage` не хранятся raw Telegram IDs.
-- Используются `chat_hash` и `user_hash`, как и в остальном `/pivo` контуре.
-- `usage_day` хранит только дату использования quota.
-- Retention на 7 дней ограничивает долгосрочный рост таблицы и снижает объем вспомогательных usage-данных.
+- Ветка: `main`
+- `git status`: рабочее дерево чистое на момент начала аудита
+- В репозитории присутствуют локальные runtime-артефакты:
+  - `data/markov.db`
+  - `data/markov.db.backup-before-migration-007`
+  - корневой `markov.db`
+- `.env` локально указывает `DB_PATH=data/markov.db`
 
-### Resolved during this session
+### Фактические проверки
 
-- Закрыто: потерянный runtime cooldown после удаления `ThrottlingMiddleware` из `main.py`.
-- Закрыто: P1 regression, где `/clear` prompt блокировал `/clear confirm` на 3600 секунд.
-- Закрыто: риск потери дневной quota при ошибке после списания и до успешной отправки `/pivo`.
-- Закрыто: бесконечный рост `pivo_daily_usage` без cleanup/retention.
-- Закрыто: runtime bug, из-за которого часть команд (`/help`, `/stats`, `/config`, `/clear`, `/pivo_privacy` и связанные handlers) падала с `AttributeError`, потому что в handlers вместо `RuntimeState` инжектился aiogram `FSMContext`.
-- Принято: UTC reset для daily quota остается без изменений.
+Запущено через системный Python 3.12:
 
-## Changed files in current work
+- `python -m unittest discover tests`  
+  Результат: `Ran 199 tests ... OK`
+- `python -m ruff check app/ tests/`  
+  Результат: `All checks passed!`
+- `python -m mypy app/`  
+  Результат: `Success: no issues found in 27 source files`
 
-- `app/handlers/admin.py`
-- `app/handlers/common.py`
-- `app/handlers/learning.py`
-- `main.py`
-- `db.py`
-- `app/handlers/pivo.py`
-- `app/repositories/pivo_usage_repo.py`
+### Что дополнительно сверено вручную
+
+- `main.py`, `db.py`, `settings.py`, `config_registry.py`, `runtime_config.py`, `runtime_state.py`
+- `app/handlers/*`
 - `app/services/pivo_service.py`
-- `tests/test_db_logic.py`
-- `tests/test_filters.py`
-- `tests/test_handlers.py`
-- `tests/test_main.py`
-- `tests/test_pivo.py`
-- `PROJECT_AUDIT_CODEX.md`
+- `app/repositories/chat_members_repo.py`, `pivo_usage_repo.py`
+- `app/infrastructure/migrator.py`
+- `pivo.py`, `text_utils.py`
+- `README.md`, `docs/ARCHITECTURE.md`, `PROJECT_AUDIT.md`
+- `Dockerfile`, `docker-entrypoint.sh`, `compose.yaml`
+- `tests/test_main.py`, `tests/test_migrator.py`, `tests/test_log_masking.py`
 
-## Tests/checks run
+## 3. Подтверждённые сильные стороны
 
-- `python -m unittest tests.test_pivo tests.test_handlers tests.test_db_logic tests.test_main -v` — 53 tests OK.
-- `python -m unittest tests.test_db_logic -v` — 13 tests OK.
-- `python -m unittest tests.test_main tests.test_pivo -v` — 17 tests OK.
-- `python -m unittest tests.test_filters tests.test_main -v` — 22 tests OK.
-- `python -m unittest discover tests -v` — 200 tests OK.
-- `python -m ruff check app/ tests/` — passed.
-- `python -m mypy app/` — passed, 30 source files.
-- Live smoke: подтверждено вручную, что после фикса большинство основных команд в Telegram-чате отвечает корректно.
+### Архитектура
 
-## Not run / limitations
+- `main.py` действительно выполняет роль compose root, а не god-file.
+- DI через `Dispatcher` собран прозрачно и без лишних контейнеров.
+- Runtime-изменяемые настройки сведены в единый `config_registry.py`; это реальное улучшение по сравнению с дублированием в нескольких местах.
 
-- Полный сценарий live smoke выполнен не целиком; подтверждено, что основные команды после runtime-fix начали отвечать в реальном чате.
-- Docker build не выполнялся.
-- GitHub Actions на удаленном runner после текущих локальных изменений не проверялся.
+### База и миграции
 
-## Remaining work
+- Миграции действительно версионированы и применяются через `schema_migrations`.
+- `.sql`-миграции реально обёрнуты в `BEGIN; ... COMMIT;` через `executescript`, то есть заявленная атомарность не фиктивна.
+- В `tests/test_migrator.py` есть не только happy-path, но и проверки legacy-схем и rollback на half-failed `.sql`.
 
-- По текущему `/pivo` daily quota flow локальных P1/P2-блокеров не осталось.
-- Локальные smoke/E2E-like проверки, рекомендованные для текущей ветки, добавлены.
-- Для полного production confidence желательно отдельно выполнить live smoke в Telegram.
-- При необходимости перед merge можно запустить Docker build и дождаться удаленного CI.
-- Общий P2/P3 техдолг проекта остается в `PROJECT_AUDIT.md`, разделы 14-15.
+### Privacy / security
+
+- `messages.text` в текущей схеме не хранится, используется только `normalized_text`.
+- `author_id` анонимизируется.
+- `/pivo`-данные хранятся через `chat_hash` / `user_hash` и зашифрованные payload-поля.
+- `chat_id` для learning-логов реально маскируется через `app/log_masking.py`.
+
+### Качество инженерной базы
+
+- `199` тестов действительно проходят локально.
+- `ruff` clean.
+- `mypy app/` clean.
+- CI-конфиг соответствует заявленному базовому набору проверок.
+
+## 4. Findings
+
+### F1. `/pivo`-контур не ограничен group/supergroup, хотя по смыслу проект и команды описаны как групповые
+
+Серьёзность: `P3`  
+Статус: `open`
+
+#### Факт
+
+В [`app/handlers/pivo.py`](app/handlers/pivo.py) на хендлерах `/pivo`, `/pivo_on`, `/pivo_off`, `/pivo_privacy` нет фильтра `GroupOnly()`:
+
+- [`app/handlers/pivo.py:21`](app/handlers/pivo.py#L21)
+- [`app/handlers/pivo.py:70`](app/handlers/pivo.py#L70)
+- [`app/handlers/pivo.py:95`](app/handlers/pivo.py#L95)
+- [`app/handlers/pivo.py:112`](app/handlers/pivo.py#L112)
+
+При этом проект позиционируется как бот для группового чата, а `README.md` прямо ведёт пользователя в group-oriented сценарий:
+
+- [`README.md:3`](README.md#L3)
+- [`README.md:112`](README.md#L112)
+
+#### Риск
+
+- Пользователь может подписаться через `/pivo_on` в личке, что создаст запись в `chat_members` для приватного чата.
+- `/pivo` в личке тоже будет работать в терминах квоты и сборки сообщения, хотя продуктовый смысл у этого сомнительный.
+- Это поведение не выглядит осознанно документированным и не покрыто как явный контракт.
+
+#### Оценка
+
+Это не security-авария и не runtime-crash, но это реальная продуктовая неконсистентность между кодом и ожидаемой моделью использования.
+
+#### Рекомендация
+
+Если DM-сценарий не нужен:
+
+- добавить `GroupOnly()` ко всем `/pivo*` handlers;
+- добавить regression-тесты на отказ в private chat;
+- синхронизировать help/README.
+
+Если DM-сценарий нужен:
+
+- это надо явно задокументировать как supported behavior.
+
+### F2. `README.md` устарел по криптографии `/pivo` и privacy/logging
+
+Серьёзность: `P3`  
+Статус: `open`
+
+#### Факт
+
+`README.md` всё ещё утверждает, что `/pivo` опирается на HKDF-домены:
+
+- [`README.md:9`](README.md#L9)
+- [`README.md:146`](README.md#L146)
+
+Но фактическая реализация в [`pivo.py`](pivo.py) другая:
+
+- HMAC считается напрямую от `PIVO_HMAC_SECRET`: [`pivo.py:42`](pivo.py#L42)
+- Fernet-ключ строится как `sha256(PIVO_ENCRYPTION_SECRET)`: [`pivo.py:35`](pivo.py#L35)
+
+Также `README.md` говорит, что повышенные уровни логирования могут печатать raw `chat_id`:
+
+- [`README.md:149`](README.md#L149)
+
+Но текущий learning-path уже использует `mask_chat_id(...)`:
+
+- [`app/handlers/learning.py:11`](app/handlers/learning.py#L11)
+- [`app/handlers/learning.py:89`](app/handlers/learning.py#L89)
+- [`app/handlers/learning.py:105`](app/handlers/learning.py#L105)
+- [`app/handlers/learning.py:238`](app/handlers/learning.py#L238)
+
+#### Риск
+
+- Оператор читает неверное описание хранения секретов и логов.
+- Документация расходится с кодом именно в security/privacy-части, а это самый нежелательный тип docs drift.
+
+#### Рекомендация
+
+- переписать `README.md` под фактическую модель `PivoSecurity`;
+- убрать утверждение о raw `chat_id` из privacy-блока;
+- оставить HKDF только там, где он реально используется: log masking.
+
+### F3. `docs/ARCHITECTURE.md` устарел по числу тестов
+
+Серьёзность: `P3`  
+Статус: `open`
+
+#### Факт
+
+`docs/ARCHITECTURE.md` утверждает, что в проекте `208 unit-тестов`:
+
+- [`docs/ARCHITECTURE.md:235`](docs/ARCHITECTURE.md#L235)
+
+Фактический прогон дал:
+
+- `Ran 199 tests in 27.263s`
+
+`PROJECT_AUDIT.md` в этом месте уже актуален, а `docs/ARCHITECTURE.md` нет.
+
+#### Риск
+
+Небольшой, но это явный маркер того, что часть документации обновляется несинхронно.
+
+#### Рекомендация
+
+- синхронизировать численные метрики между `README.md`, `docs/ARCHITECTURE.md`, `PROJECT_AUDIT.md`;
+- если не хочется постоянно править числа, убрать хрупкие метрики из архитектурного документа или пометить их как approximate.
+
+### F4. Quickstart в `README.md` не воспроизводит тот же dependency set, что CI и Docker
+
+Серьёзность: `P3`  
+Статус: `open`
+
+#### Факт
+
+Quickstart предлагает ставить:
+
+- [`README.md:14`](README.md#L14) → `pip install -r requirements.txt`
+
+Но production/CI завязаны на:
+
+- `requirements.lock`
+- `requirements-dev.txt`
+- [`Dockerfile`](Dockerfile)
+- [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+
+#### Риск
+
+- локальная разработка по README может идти на другой резолюции пакетов, чем CI/Docker;
+- отладка «у меня локально работает / в CI нет» становится вероятнее.
+
+#### Рекомендация
+
+Минимум:
+
+- в quickstart явно разделить `runtime install` и `dev install`;
+- для dev по умолчанию рекомендовать `pip install -r requirements-dev.txt`.
+
+Опционально:
+
+- добавить отдельный reproduceable runtime-start через `requirements.lock`.
+
+## 5. Что в `PROJECT_AUDIT.md` подтверждено, а что нет
+
+### Подтверждено
+
+- Ветка `main`
+- `199` тестов
+- `ruff` clean
+- `mypy app/` clean на `27 source files`
+- слоистая архитектура
+- мигратор и atomic `.sql`
+- `chat_members` как текущая таблица `/pivo`
+- log masking через `app/log_masking.py`
+
+### Частично / с оговорками
+
+- Тезис «backlog пуст» я бы формально не повторял:
+  - по коду критичного долга действительно не видно;
+  - но docs drift и неконсистентность `/pivo`-scope означают, что маленький backlog всё же остался.
+
+### Не подтверждено в рамках этой сессии
+
+- live smoke в Telegram я не проводил;
+- Docker build/runtime здесь не проверялся;
+- удалённый GitHub Actions не перепроверялся после моего запуска локальных проверок;
+- фактическое содержимое текущей SQLite runtime-базы я не ревизовал на уровне данных, только на уровне файлов и кода.
+
+## 6. Текущее состояние файлов и структуры
+
+Подтверждено по дереву проекта:
+
+- `app/` содержит `27` Python-модулей
+- `tests/` содержит `13` test-файлов
+- `main.py` и `db.py` по масштабу соответствуют описанию рефакторинга
+- `Dockerfile`, `docker-entrypoint.sh`, `compose.yaml` присутствуют
+- миграции `001` ... `007` на месте
+
+Отдельно:
+
+- в `data/` лежит живая БД и backup перед migration 007;
+- это нормально для локального runtime-state, но важно помнить, что аудит кода и аудит содержимого прод-данных не одно и то же.
+
+## 7. Приоритет действий
+
+### Рекомендую сделать в первую очередь
+
+1. Определиться, должен ли `/pivo` работать в личке.
+2. После решения либо добавить `GroupOnly()`, либо явно задокументировать DM-support.
+3. Синхронизировать `README.md` с текущей security/privacy-моделью.
+4. Обновить `docs/ARCHITECTURE.md` по счётчикам тестов.
+5. Подправить quickstart на dependency parity с CI/Docker.
+
+### Что можно не трогать срочно
+
+- реестр runtime-настроек;
+- мигратор;
+- базовую `/pivo`-quota-логику;
+- log masking;
+- test/ruff/mypy контур.
+
+## 8. Вердикт
+
+Проект выглядит живым, поддерживаемым и инженерно заметно более зрелым, чем типичный «бот на одном файле». Основные прошлые риски действительно закрыты. На текущем состоянии я не вижу причин считать проект нестабильным или опасным для продолжения разработки.
+
+Но говорить, что аудит полностью закрыт и больше ничего не осталось, пока рано. Оставшиеся проблемы небольшие, но реальные:
+
+- одна продуктовая неконсистентность в `/pivo`-scope;
+- несколько явных разъездов документации с кодом;
+- слабая воспроизводимость quickstart относительно CI/prod.
+
+Если эти пункты закрыть, проект можно считать действительно аккуратно приведённым в порядок.
