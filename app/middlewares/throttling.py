@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -9,11 +10,22 @@ from aiogram.types import Message, TelegramObject
 
 
 class ThrottlingMiddleware(BaseMiddleware):
-    """Per-user per-command cooldown. Silently drops throttled updates."""
+    """Per-user per-command cooldown.
 
-    def __init__(self, limits: dict[str, float]) -> None:
+    By default throttled updates are silently dropped. Commands listed in
+    ``notify_on_throttle`` instead get a short reply telling the user how
+    long is left — useful for explicit user-driven commands like ``/clear``,
+    where silence reads as "the bot is broken".
+    """
+
+    def __init__(
+        self,
+        limits: dict[str, float],
+        notify_on_throttle: set[str] | None = None,
+    ) -> None:
         # limits: command name (without /) -> cooldown in seconds
         self._limits = limits
+        self._notify_on_throttle = notify_on_throttle or set()
         # (chat_id, user_id, command) -> last allowed timestamp
         self._last_used: dict[tuple[int, int, str], float] = {}
 
@@ -42,8 +54,14 @@ class ThrottlingMiddleware(BaseMiddleware):
 
         key = (event.chat.id, event.from_user.id, throttle_key)
         now = time.monotonic()
-        if now - self._last_used.get(key, 0.0) < limit:
-            return None  # throttled — silently drop
+        elapsed = now - self._last_used.get(key, 0.0)
+        if elapsed < limit:
+            if command in self._notify_on_throttle:
+                remaining = max(1, math.ceil(limit - elapsed))
+                await event.reply(
+                    f"Слишком часто. Подождите ~{remaining} сек."
+                )
+            return None  # throttled
 
         self._last_used[key] = now
         return await handler(event, data)

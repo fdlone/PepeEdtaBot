@@ -107,11 +107,15 @@ class TestThrottlingMiddleware(unittest.IsolatedAsyncioTestCase):
         msg.from_user = MagicMock()
         msg.from_user.id = user_id
         msg.chat.id = chat_id
+        msg.reply = AsyncMock()
         return msg
 
-    def _make_middleware(self) -> object:
+    def _make_middleware(self, notify_on_throttle: set[str] | None = None) -> object:
         from app.middlewares import ThrottlingMiddleware
-        return ThrottlingMiddleware(limits={"pivo": 30.0, "clear": 10.0})
+        return ThrottlingMiddleware(
+            limits={"pivo": 30.0, "clear": 10.0},
+            notify_on_throttle=notify_on_throttle,
+        )
 
     async def test_first_call_passes(self) -> None:
         mw = self._make_middleware()
@@ -197,3 +201,36 @@ class TestThrottlingMiddleware(unittest.IsolatedAsyncioTestCase):
         msg.from_user = None
         result = await mw(handler, msg, {})
         self.assertEqual(result, "ok")
+
+    async def test_throttled_command_in_notify_set_replies_with_cooldown_message(
+        self,
+    ) -> None:
+        mw = self._make_middleware(notify_on_throttle={"clear"})
+        handler = AsyncMock(return_value="ok")
+        msg = self._make_cmd_message("/clear")
+        await mw(handler, msg, {})  # primes the cooldown
+        result = await mw(handler, msg, {})
+        self.assertIsNone(result)
+        handler.assert_awaited_once()
+        msg.reply.assert_awaited_once()
+        reply_text = msg.reply.await_args.args[0]
+        self.assertIn("Слишком часто", reply_text)
+        self.assertIn("сек", reply_text)
+
+    async def test_throttled_command_not_in_notify_set_stays_silent(self) -> None:
+        mw = self._make_middleware(notify_on_throttle={"clear"})
+        handler = AsyncMock(return_value="ok")
+        msg = self._make_cmd_message("/pivo")
+        await mw(handler, msg, {})  # primes the cooldown
+        result = await mw(handler, msg, {})
+        self.assertIsNone(result)
+        msg.reply.assert_not_awaited()
+
+    async def test_clear_confirm_throttled_also_notifies(self) -> None:
+        mw = self._make_middleware(notify_on_throttle={"clear"})
+        handler = AsyncMock(return_value="ok")
+        msg_confirm = self._make_cmd_message("/clear confirm")
+        await mw(handler, msg_confirm, {})  # primes
+        result = await mw(handler, msg_confirm, {})
+        self.assertIsNone(result)
+        msg_confirm.reply.assert_awaited_once()
