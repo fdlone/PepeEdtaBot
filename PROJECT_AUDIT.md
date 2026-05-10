@@ -1,21 +1,11 @@
 # Технический аудит проекта PepeEdtaBot
 
-Дата актуализации: 2026-05-10 (девятая редакция, после chat_id-masking и P3-тестов).
-Текущая ветка: `main`.
+**Дата актуализации:** 2026-05-10, девятая редакция (после унификации `chat_members`, chat_id-masking, закрытия P3-долга и live smoke).
+**Текущая ветка:** `main`.
+**Тесты / проверки:** **199 unit-тестов**, `ruff check app/ tests/` — clean, `mypy app/` — clean (27 source files).
+**Backlog:** P0/P1/P2/P3 — пусто. Отложено по внешним решениям: структурированные JSON-логи (выбор системы агрегации), Prometheus-метрики (наличие endpoint).
 
-> История редакций: 1я — первичный аудит; 2я — после Codex-ревизии P1-блокеры; 3я — после закрытия B1/B2/B3 (merge-ready); 4я — после ветки `codex/pivo-daily-quota`; **5я — P2-batch (P2-1, P2-2, P2-3, P2-6 закрыты, +P2-4 частично, см. session 18); 6я — audit follow-ups (P2-5 + P1-фиксы атомарности миграций и Docker bind-mount, см. session 19).**
-
-Текущие тесты/проверки: **199 unit-тестов**, `ruff check app/ tests/` — clean, `mypy app/` — clean (27 source files).
-
-**Изменения третьей редакции (для контекста):** все три P1-блокера закрыты; CI зелёный; ветка `refactor/structure` слита в `main`.
-
-| Блокер | SHA (после rewrite) | Описание |
-|---|---|---|
-| B3 | `1ef20a2` | docs(readme): fix two stale absolute links to compose.yaml and .env.example |
-| B2 | `db1de05` | build: wire requirements.lock into Dockerfile and CI |
-| B1 | `a0fae76` | fix(admin): restore explicit denial reply for unauthorized commands |
-
-**Изменения второй редакции (для контекста):** дополнен по результатам независимой ревизии (`PROJECT_AUDIT_CODEX.md`). Добавлены пункты: UX-регрессия в админ-командах, неэффективность `requirements.lock`, хрупкость SQL-splitter в migrator, концептуальная неоднозначность dedup-фильтра. Рекомендация была изменена с «можно мёржить» на «после фикса P1».
+Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 22` (новые сверху-вниз по порядковому номеру).
 
 ---
 
@@ -29,7 +19,7 @@
 |---|---|---|
 | 1 | Разбить `main.py` на routers + сервисы + репозитории | ✅ |
 | 2 | Версионирование миграций (`schema_migrations` + `app/migrations/`) | ✅ |
-| 3 | `chat_member_profiles` + `MembersService` + HKDF derivation | ✅ |
+| 3 | `chat_member_profiles` + `MembersService` + HKDF derivation | ✅ (затем удалено session 21 при унификации в `chat_members`) |
 | 4 | Privacy: удаление `messages.text`, дедупликация генерации | ✅ |
 | 5 | Фильтры (`GroupOnly`, `AdminOrOwner`) + throttling middleware | ✅ |
 | 6 | `ruff`/`mypy strict` для `app/`, `requirements.lock`, CI с линтерами, тесты хендлеров | ✅ |
@@ -57,13 +47,35 @@ P2-batch: единый реестр настроек (`config_registry.py`), mig
 
 Audit follow-ups: атомарность .sql-миграций через `BEGIN; ... COMMIT;`-обёртку (P1 от ревью), Docker bind-mount writability через root-entrypoint с `chown` + `runuser` (P1 от ревью), `BOT_TEXT_ALIASES` в `.env` с safe fallback (P2-5). Подробности — section 19.
 
+### 0.5. PR #5 `polish/audit-session-20` — слит в `main` (2026-05-10)
+
+P3-полировка: `matches_training_prefix` (rename + docstring + drop dead branch), магические числа → константы, `MENTION_RE` для email, `notify_on_throttle` UX для `/clear`. Подробности — section 20.
+
+### 0.6. PR #6 `docs/audit-sync` — слит в `main` (2026-05-10)
+
+Только документ — синхронизация устаревших ссылок в самом `PROJECT_AUDIT.md` после session 20.
+
+### 0.7. PR #7 `feat/unify-chat-members` — слит в `main` (2026-05-10)
+
+Унификация участников: миграция 007 переносит `pivo_chat_members` → `chat_members` (без `is_bot`); `chat_member_profiles` / `MembersService` / `MembersRepo` / `app/security/key_derivation.py` удалены; `PivoRepo` → `ChatMembersRepo`. Подробности — section 21.
+
+### 0.8. PR #8 `feat/log-masking-and-p3-tests` — слит в `main` (2026-05-10)
+
+Маскирование `chat_id` в логах (`app/log_masking.py`), тесты на ошибки Telegram API, унификация стиля `cursor.fetchone()`. Подробности — section 22.
+
+### 0.9. Live smoke 2026-05-10
+
+Запуск на тестовом чате: миграция 007 применилась чисто, `/pivo_on` / `/pivo` / `/pivo_off` работают, в логах `chat=1f6bfe93` (8-hex маска, не сырой `chat_id`). Бэкап `data/markov.db.backup-before-migration-007` сохранён.
+
 ---
 
 ## 1. Краткое резюме проекта
 
-PepeEdtaBot — Telegram-бот для группового чата на `aiogram v3`, который обучается на сообщениях участников и генерирует ответы по цепям Маркова variable-order (n=3 → n=2 → n=1, с backoff). Внешние LLM не используются. Дополнительно есть opt-in команда `/pivo` для шуточного созыва участников в Discord; для неё реализовано HMAC-индексирование и шифрование чувствительных данных (`cryptography.Fernet`).
+PepeEdtaBot — Telegram-бот для группового чата на `aiogram v3`, который обучается на сообщениях участников и генерирует ответы по цепям Маркова variable-order (n=3 → n=2 → n=1, с backoff). Внешние LLM не используются. Дополнительно есть opt-in команда `/pivo` для шуточного созыва участников в Discord; данные подписок хранятся в таблице `chat_members` с HMAC-индексированием и Fernet-шифрованием (`PIVO_HMAC_SECRET` / `PIVO_ENCRYPTION_SECRET`).
 
-После завершения фаз 1–6 + P2-batch + audit follow-ups проект перешёл из «всё в `main.py`» к слоистой архитектуре `handlers / services / repositories / filters / middlewares / migrations / security / infrastructure`, с версионированными миграциями (атомарными через `BEGIN/COMMIT`), отдельными доменными ключами через HKDF, throttling-middleware, единым реестром runtime-настроек (`config_registry.py`), hardened Dockerfile с root-entrypoint и CI с линтерами на 3.12/3.13/3.14. Серьёзных уязвимостей не найдено; оставшийся техдолг — P3 (концептуальная неоднозначность `looks_too_close_to_training_sample`, silent drop `/clear` под throttle, магические числа, маскирование `chat_id` в логах) + опциональные P2-улучшения (`/learn_off` opt-out, структурированные JSON-логи).
+После всех итераций проект перешёл из «всё в `main.py`» к слоистой архитектуре `handlers / services / repositories / filters / middlewares / migrations / infrastructure` (плюс корневой `app/log_masking.py` для HKDF-маскирования `chat_id` в логах). Версионированные миграции запускаются атомарно через `BEGIN; ...; COMMIT;` обёртку поверх `sqlite3.executescript`. Throttling-middleware с `notify_on_throttle`-фолбэком для админ-команд. Единый реестр runtime-настроек (`config_registry.py`). Hardened Dockerfile (pin `python:3.14.0-slim`, non-root через root-entrypoint + `runuser`, HEALTHCHECK). CI на матрице Python 3.12/3.13/3.14.
+
+**Серьёзных уязвимостей нет. Открытого техдолга P0/P1/P2/P3 нет.** Отложены два пункта, заблокированные внешними решениями: структурированные JSON-логи (ждём выбор системы агрегации), Prometheus-метрики (ждём endpoint).
 
 ---
 
@@ -86,86 +98,92 @@ PepeEdtaBot — Telegram-бот для группового чата на `aiogr
 
 ```
 PepeEdtaBot/
-├── main.py                              # 115 строк (было 588) — compose root + configure_dispatcher()
-├── app/                                 # ~1400 строк, 24 модуля
+├── main.py                              # 121 строка — compose root + configure_dispatcher()
+├── app/                                 # 27 .py-модулей
+│   ├── log_masking.py                   # HKDF-helper для маскирования chat_id в логах
 │   ├── handlers/
-│   │   ├── _helpers.py                  # reply_humanized
+│   │   ├── _helpers.py                  # reply_humanized (toleratesend_chat_action errors)
 │   │   ├── common.py                    # /ping, /help, /stats
 │   │   ├── admin.py                     # /config, /set, /setprob, /clear + fallback-handlers (denied)
 │   │   ├── pivo.py                      # /pivo (quota check), /pivo_on, /pivo_off, /pivo_privacy
-│   │   └── learning.py                  # F.text + extract_context_tokens
+│   │   └── learning.py                  # F.text + extract_context_tokens, маскированные chat-ids в логах
 │   ├── services/
 │   │   ├── learning_service.py          # record_message, matches_training_prefix (prefix-cache)
-│   │   ├── pivo_service.py              # subscribe / unsubscribe / build_call_message / consume_daily_call_quota / refund_daily_call_quota
-│   │   └── members_service.py           # record_consent / get_profile / revoke (инфраструктура, runtime не вызывается)
+│   │   └── pivo_service.py              # subscribe / unsubscribe / build_call_message / consume_daily_call_quota / refund_daily_call_quota
 │   ├── repositories/
 │   │   ├── markov_repo.py               # starts/transitions/transitions3/transitions1
 │   │   ├── messages_repo.py             # exists / get_all_normalized
-│   │   ├── pivo_repo.py                 # upsert / list_members / remove
-│   │   ├── members_repo.py              # upsert / get / list / remove (chat_member_profiles)
+│   │   ├── chat_members_repo.py         # upsert / list_members / remove (таблица chat_members)
 │   │   └── pivo_usage_repo.py           # consume_daily_call / refund_daily_call / delete_usage_before
 │   ├── filters/
 │   │   ├── group_only.py                # ChatType.GROUP/SUPERGROUP
-│   │   └── admin_or_owner.py            # OWNER_ID или администратор чата
+│   │   └── admin_or_owner.py            # OWNER_ID или администратор чата, fail-closed
 │   ├── middlewares/
-│   │   └── throttling.py                # per-user per-command cooldown
+│   │   └── throttling.py                # per-user per-command cooldown + notify_on_throttle
 │   ├── infrastructure/
-│   │   └── migrator.py                  # discovers + runs NNN_*.sql/.py once each
-│   ├── migrations/
-│   │   ├── 001_initial.sql              # полная схема для пустых БД
-│   │   ├── 002_normalize_messages_text_column.py
-│   │   ├── 003_anonymize_authors.py
-│   │   ├── 004_chat_member_profiles.sql
-│   │   ├── 005_drop_messages_text.py
-│   │   └── 006_pivo_daily_usage.sql     # таблица pivo_daily_usage (chat_hash, user_hash, usage_day, used_count)
-│   └── security/
-│       └── key_derivation.py            # HKDF-SHA256 derivation
-├── db.py                                # ~390 строк — фасад: соединение, save_message_and_update_model, clear_chat, get_stats, делегаты; cleanup_pivo_daily_usage при init()
+│   │   └── migrator.py                  # NNN_*.sql/.py: атомарный BEGIN/COMMIT + executescript
+│   └── migrations/
+│       ├── 001_initial.sql              # полная схема для пустых БД
+│       ├── 002_normalize_messages_text_column.py
+│       ├── 003_anonymize_authors.py
+│       ├── 004_chat_member_profiles.sql # legacy — таблица будет дропнута 007
+│       ├── 005_drop_messages_text.py
+│       ├── 006_pivo_daily_usage.sql     # таблица pivo_daily_usage
+│       └── 007_unify_chat_members.sql   # pivo_chat_members + chat_member_profiles → chat_members (без is_bot)
+├── db.py                                # 423 строки — фасад: соединение, save_message_and_update_model, clear_chat, get_stats, делегаты; cleanup_pivo_daily_usage при init()
 ├── markov.py                            # 674 строки — НЕ ТРОГАТЬ
-├── pivo.py                              # 125 строк — PivoSecurity, PivoMember
+├── pivo.py                              # 124 строки — PivoSecurity, PivoMember (без is_bot)
 ├── pivo_templates.py                    # 487 строк (контент)
 ├── bot_messages.py                      # 116 строк — форматирование
-├── bot_policy.py                        # 72 строки — bot_is_mentioned, cooldown, should_reply
-├── settings.py                          # 180 строк — Settings + load_settings
-├── runtime_state.py                     # 56 строк — RuntimeState dataclass
-├── runtime_config.py                    # 144 строки — apply_runtime_setting
-├── text_utils.py                        # 28 строк — sanitize_text
-├── tests/                               # 14 файлов, ~2700 строк, 200 тестов
+├── bot_policy.py                        # 82 строки — bot_is_mentioned, cooldown, should_reply
+├── settings.py                          # 120 строк — Settings + load_settings
+├── runtime_state.py                     # 43 строки — RuntimeState dataclass
+├── runtime_config.py                    # 36 строк — apply_runtime_setting (итерируется по config_registry)
+├── config_registry.py                   # 152 строки — FieldSpec × 20, validate_cross_fields
+├── text_utils.py                        # 31 строка — sanitize_text (mention RE с lookbehind)
+├── seed_db.py                           # one-off seeder для smoke
+├── seed_diverse.py                      # альтернативный seeder с разнообразной лексикой
+├── tests/                               # 13 файлов
 │   ├── test_bot_messages.py             # форматирование
 │   ├── test_bot_policy.py               # политика ответа
 │   ├── test_db_logic.py                 # save_message_and_update_model, get_stats, daily_usage retention
-│   ├── test_filters.py                  # GroupOnly, AdminOrOwner, ThrottlingMiddleware
-│   ├── test_handlers.py                 # happy-path по всем 4 роутерам
-│   ├── test_learning_service.py         # prefix-cache дедупликация
+│   ├── test_filters.py                  # GroupOnly, AdminOrOwner, ThrottlingMiddleware + notify_on_throttle
+│   ├── test_handlers.py                 # happy-path по всем 4 роутерам + denied-fallback + reply_humanized resilience
+│   ├── test_learning_service.py         # prefix-cache, matches_training_prefix
+│   ├── test_log_masking.py              # init_masking, mask_chat_id, secret rotation
 │   ├── test_main.py                     # smoke-тест wiring configure_dispatcher()
-│   ├── test_markov_and_text.py          # генерация, токенизация
-│   ├── test_members.py                  # KeyDerivation, MembersRepo, MembersService
-│   ├── test_migrator.py                 # идемпотентность, resume, реальный legacy fixture
+│   ├── test_markov_and_text.py          # генерация, токенизация, email-safe MENTION_RE
+│   ├── test_migrator.py                 # идемпотентность, resume, legacy fixture, атомарность .sql
 │   ├── test_pivo.py                     # HMAC, Fernet, mentions, E2E subscribe→quota→unsubscribe
 │   ├── test_runtime_config.py           # /set ключи
-│   └── test_settings.py                 # load_settings
+│   └── test_settings.py                 # load_settings (LOG_LEVEL, BOT_TEXT_ALIASES)
+├── Dockerfile                           # python:3.14.0-slim, root-entrypoint + runuser, HEALTHCHECK
+├── docker-entrypoint.sh                 # chown bind-mount → runuser -u bot
+├── .gitattributes                       # `*.sh text eol=lf`
 ├── pyproject.toml                       # ruff + mypy конфигурация
-├── requirements.txt                     # верхнеуровневые диапазоны
-├── requirements.lock                    # 24 пакета с pinned версиями
-├── requirements-dev.txt                 # ruff + mypy для CI
+├── requirements.txt                     # верхнеуровневые диапазоны (источник для lock)
+├── requirements.lock                    # фиксированные версии, используется Dockerfile + CI
+├── requirements-dev.txt                 # `-r requirements.lock` + ruff/mypy для CI
 ├── .github/workflows/ci.yml             # ruff + mypy + tests на 3.12/3.13/3.14
 ├── docs/ARCHITECTURE.md
 ├── README.md
 └── PROJECT_AUDIT.md (этот файл)
 ```
 
-**Метрики динамики:**
+**Метрики (актуальное состояние):**
 
-| Метрика | До рефакторинга | После refactor/structure | Сейчас (codex/pivo-daily-quota) |
-|---|---|---|---|
-| `main.py` | 588 строк | 84 строки (-86%) | **115 строк** (+configure_dispatcher) |
-| Файлов в `app/` | 0 | 22 | **24** (+pivo_usage_repo.py, test_main.py) |
-| Тестов | 83 | 185 | **200** |
-| Миграций | 0 (inline `CREATE TABLE`) | 5 | **6** (006_pivo_daily_usage) |
-| Слоёв архитектуры | 1 (всё в `main.py`) | 6 | 6 (без изменений) |
-| Линтер/тайпчекер | нет | ruff + mypy strict для `app/` | без изменений |
-| CI | нет | GitHub Actions × 3 версии Python | без изменений |
-| Lock-файл | нет | `requirements.lock` | без изменений |
+| Метрика | До рефакторинга | Сейчас |
+|---|---|---|
+| `main.py` | 588 строк | **121 строка** (compose root + `configure_dispatcher`, `init_masking`) |
+| `db.py` | ~620 строк (миграции + бизнес) | **423 строки** (фасад) |
+| Файлов `.py` в `app/` | 0 | **27** |
+| Test-файлов | — | **13** |
+| Тестов | 83 | **199** |
+| Миграций | 0 (inline `CREATE TABLE`) | **7** (001…007) |
+| Слоёв архитектуры | 1 (всё в `main.py`) | 6 |
+| Линтер/тайпчекер | нет | ruff + mypy strict для `app/` |
+| CI | нет | GitHub Actions × 3 версии Python |
+| Lock-файл | нет | `requirements.lock` (используется Docker + CI) |
 
 ---
 
@@ -176,38 +194,31 @@ PepeEdtaBot/
 | ID | Старая формулировка | Сейчас |
 |---|---|---|
 | **P0-1** | `messages.text` хранится без opt-in, это PII в открытом виде | ✅ Колонка `text` удалена миграцией [`005_drop_messages_text.py`](app/migrations/005_drop_messages_text.py); хранится только `normalized_text` (используется генератором для exact-match exclude и `LearningService.matches_training_prefix` для построения set'а префиксов обучающих сообщений). |
-| **P0-2** | Нет версионирования миграций | ✅ Реализован [`migrator.py`](app/infrastructure/migrator.py) с таблицей `schema_migrations`, 5 версионированных миграций (`.sql`/`.py`), идемпотентность покрыта тестами. |
-| **P0-3** | Не спроектирована таблица чувствительных данных участников | ✅ Создана таблица [`chat_member_profiles`](app/migrations/004_chat_member_profiles.sql) (PRIMARY KEY `(chat_hash, user_hash)`, `encrypted_user_id`, `encrypted_payload`, `key_version`, `consent_version`, `consented_at`); сервис [`MembersService`](app/services/members_service.py) шифрует через Fernet с ключом, выведенным **HKDF-SHA256** (см. ниже п.6.3) от существующих PIVO-секретов с доменными метками `members:hmac` и `members:encryption`. |
+| **P0-2** | Нет версионирования миграций | ✅ Реализован [`migrator.py`](app/infrastructure/migrator.py) с таблицей `schema_migrations`, 7 версионированных миграций (`.sql`/`.py`). `.sql` выполняются через `executescript` внутри явного `BEGIN; ...; COMMIT;` — атомарны при ошибке. Идемпотентность и атомарность покрыты тестами. |
+| **P0-3** | Не спроектирована таблица чувствительных данных участников | ✅ Канонической таблицей участников чата сейчас является [`chat_members`](app/migrations/007_unify_chat_members.sql) (PRIMARY KEY `(chat_hash, user_hash)`, `encrypted_user_id`, `encrypted_username`, `encrypted_display_name`; HMAC-ключи под `PIVO_HMAC_SECRET`, Fernet под `sha256(PIVO_ENCRYPTION_SECRET)`). Изначально (P0-3) была спроектирована параллельная `chat_member_profiles` + `MembersService` с HKDF-доменизацией под будущие домены, но они не материализовались, и в session 21 эта инфраструктура была удалена. |
 
 ### P1 — все восемь пунктов закрыты
 
 | ID | Старая формулировка | Сейчас |
 |---|---|---|
 | **P1-1** | `main.py` — бог-файл с inner-функциями-хендлерами | ✅ `main.py` = 84 строки, чистый compose root. Все хендлеры в `app/handlers/{common,admin,pivo,learning}.py`, каждый — `aiogram.Router`. |
-| **P1-2** | `db.py` смешивает миграции, бизнес-запросы, статистику | ✅ Введены репозитории `MarkovRepo`, `MessagesRepo`, `PivoRepo`, `MembersRepo`. `db.py` оставлен как фасад с делегатами + кросс-доменными транзакциями (`save_message_and_update_model`, `clear_chat`, `get_stats`). Объём `db.py` сократился с ~620 до 373 строк. |
+| **P1-2** | `db.py` смешивает миграции, бизнес-запросы, статистику | ✅ Введены репозитории `MarkovRepo`, `MessagesRepo`, `ChatMembersRepo`, `PivoUsageRepo`. `db.py` оставлен как фасад с делегатами + кросс-доменными транзакциями (`save_message_and_update_model`, `clear_chat`, `get_stats`). Объём `db.py` — 423 строки (с ~620). |
 | **P1-3** | Нет фильтров авторизации | ✅ [`GroupOnly`](app/filters/group_only.py) и [`AdminOrOwner`](app/filters/admin_or_owner.py) применяются декларативно в декораторе `@router.message(...)`. Старые хелперы `_is_owner` / `_is_chat_admin` / `_can_manage_settings` удалены. |
 | **P1-4** | Throttling/rate-limit отсутствует | ✅ [`ThrottlingMiddleware`](app/middlewares/throttling.py) с per-user-per-command cooldown; в production включён `clear=3600` сек (см. `COMMAND_COOLDOWNS_SECONDS` в `main.py`). Quota для `/pivo` реализована отдельно в `PivoService` (daily quota). Поддерживает `notify_on_throttle` — список команд, для которых при throttle возвращается явный ответ вместо silent drop (включает `clear`). |
-| **P1-5** | Нет lock-файла | ⚠️ **Декоративно — файл создан, но не используется.** [`requirements.lock`](requirements.lock) содержит 24 пакета, но `Dockerfile` ставит `requirements.txt`, CI ставит `requirements-dev.txt`, в самом lock'е нет `mypy`/`ruff`. Реальной воспроизводимости не даёт. См. п.9.4 — требует решения до merge. |
+| **P1-5** | Нет lock-файла | ✅ Закрыто (B2, `db1de05`): `Dockerfile` устанавливает `requirements.lock`, `requirements-dev.txt` — это `-r requirements.lock` + dev-зависимости. CI и Docker реально используют lock. |
 | **P1-6** | Нет CI | ✅ [`.github/workflows/ci.yml`](.github/workflows/ci.yml) на матрице `python-version: [3.12, 3.13, 3.14]`, шаги `ruff check` → `mypy app/` → `unittest discover`. |
 | **P1-7** | Нет линтеров и mypy | ✅ [`pyproject.toml`](pyproject.toml) с `ruff` (E/F/I/UP, line-length=100) и `mypy strict для app.*`; legacy-модули вынесены в `[[tool.mypy.overrides]] ignore_errors = true`. |
-| **P1-8** | Нет тестов хендлеров | ✅ [`tests/test_handlers.py`](tests/test_handlers.py) — 18 happy-path тестов, по одному-двум на каждую команду каждого роутера; покрытие через прямой вызов функций с `MagicMock`/`AsyncMock`. |
+| **P1-8** | Нет тестов хендлеров | ✅ [`tests/test_handlers.py`](tests/test_handlers.py) — happy-path по всем 4 роутерам + denied-fallback для unauthorized admin-команд + `TestReplyHumanizedResilience` для Telegram API errors. Прямые вызовы с `MagicMock`/`AsyncMock`. |
 
-### P2 — частично
+### P2 — все закрыты
 
 | ID | Описание | Статус | Комментарий |
 |---|---|---|---|
-| **P2-1** | Реестр настроек как один источник истины (Settings ↔ RuntimeState ↔ runtime_config) | ✅ | Закрыто в `refactor/audit-p2-batch`: введён `config_registry.py` с `FieldSpec` × 20 + `validate_cross_fields`. `settings.py`, `runtime_state.py`, `runtime_config.py` итерируются по реестру вместо литерального дублирования. Публичный API `runtime_config` сохранён. |
-| **P2-2** | Dockerfile hardening (non-root user, HEALTHCHECK, pin minor) | ✅ | Закрыто в `refactor/audit-p2-batch` + `fix/audit-followups`: pin `python:3.14.0-slim`, HEALTHCHECK; non-root через root-entrypoint, который чинит права на bind-mount и делает `runuser -u bot` (см. п.9.3 ниже). |
-| **P2-3** | README: разделы Tests/Architecture/Privacy, убрать абсолютные ссылки | ✅ | Закрыто в `refactor/audit-p2-batch`: добавлены секции Architecture, Privacy, Тесты; `Python 3.14` → `Python 3.12+`; команды локальных проверок. Абсолютные ссылки уже были вычищены ранее (B3). |
-| **P2-4** | LOG_LEVEL из `.env`, структурированные логи | 🟡 | `LOG_LEVEL` из `.env` закрыт в `refactor/audit-p2-batch` (валидируется в `Settings`, читается в `main.py`). Структурированные логи остаются P3. |
-| **P2-5** | Расширить `BOT_TEXT_ALIASES` через `.env` | ✅ | Закрыто в `fix/audit-followups`: добавлен `Settings.bot_text_aliases`, парсится из CSV-env. Безопасный fallback — пустая/незаданная переменная подставляет встроенные `{"pepe", "пепе"}` (важно для деплоев без доступа к `.env` на проде). |
+Все P2-задачи закрыты в течение сессий 17–22. Полный статус — в section 14. Открытые пункты — только заблокированные внешними решениями (JSON-логи, метрики).
 
-### P3 — отложены
+### P3 — закрыто
 
-- Маскирование `chat_id` в логах через HMAC.
-- Магические числа (`range(4)` в `learning.py`, `len(clean) < 3 or > 500`) → константы.
-- Удалить неиспользуемое поле `is_bot` в `pivo_chat_members` (пишется при `subscribe`, нигде не читается; уже фильтруется до записи).
-- Структурированные логи (JSON) — отложить до выбора системы агрегации.
+Полный список закрытий — в section 14. Открытого P3-долга нет.
 
 ### Известные регрессии относительно старого `main` — **закрыты**
 
@@ -233,28 +244,28 @@ PepeEdtaBot/
 handlers (aiogram Router'ы) → services (бизнес-логика) → repositories (SQL)
               ↑                       ↑
            filters                 infrastructure (migrator)
-           middlewares             security (HKDF)
+           middlewares             log_masking (HKDF helper)
 ```
 
-Хендлеры **не знают** про SQL: они работают только с сервисами и моделями `aiogram`. Сервисы **не знают** про aiogram (исключение — `PivoService.subscribe(chat_id, user)`, осознанное компромиссное решение, см. `REFACTOR_PLAN.md` фазы 1, конвенция №2). Это правильное направление и сохранено во всех новых модулях.
+Хендлеры **не знают** про SQL: они работают только с сервисами и моделями `aiogram`. Сервисы **не знают** про aiogram (исключение — `PivoService.subscribe(chat_id, user)`, осознанное компромиссное решение: при подписке нам нужен `aiogram.types.User` целиком для извлечения username/display_name). Это правильное направление и сохранено во всех новых модулях.
 
 ### 5.2. Кросс-доменные транзакции
 
-`save_message_and_update_model` ([db.py:57](db.py:57)) трогает 5 таблиц в одной транзакции. Эта операция оставлена в `Database`-фасаде, не размазана по репозиториям. Это разумно: вводить «UnitOfWork» для одной такой операции — overengineering. При появлении второй такой операции стоит рассмотреть выделение отдельного слоя, но сейчас — нет.
+`save_message_and_update_model` ([db.py:64](db.py:64)) трогает 5 таблиц в одной транзакции (`messages`, `starts`, `starts3`, `transitions`, `transitions3`, `transitions1`). Эта операция оставлена в `Database`-фасаде, не размазана по репозиториям. Это разумно: вводить «UnitOfWork» для одной такой операции — overengineering. При появлении второй такой операции стоит рассмотреть выделение отдельного слоя, но сейчас — нет.
 
 ### 5.3. DI
 
-Зависимости (`db`, `generator`, `pivo_service`, `learning_service`, `state`, `settings`, `bot_username`, `bot_id`) кладутся в `dp[...]` и автоматически передаются в хендлеры через `workflow_data` aiogram v3. Никаких самодельных DI-контейнеров. Ровно то, что нужно проекту такого размера.
+Зависимости (`db`, `generator`, `pivo_service`, `learning_service`, `runtime_state`, `settings`, `bot_username`, `bot_id`, `bot_text_aliases`) кладутся в `dp[...]` и автоматически передаются в хендлеры через `workflow_data` aiogram v3. Никаких самодельных DI-контейнеров. Ровно то, что нужно проекту такого размера.
 
 ### 5.4. `main.py` как compose root
 
-84 строки, ровно одна функция `run_bot()`. Никакой бизнес-логики, никаких хендлеров. Структура:
-1. `load_settings()` → `Database.init()` → `MarkovGenerator` → сервисы;
+121 строка, две функции — `configure_dispatcher` (wiring, отдельно для smoke-теста) и `run_bot` (точка входа). Никакой бизнес-логики, никаких хендлеров. Структура `run_bot`:
+1. `load_settings()` → `log_masking.init_masking(...)` → `logging.basicConfig` → `Database.init()` → `MarkovGenerator` → сервисы;
 2. `Bot` → `me = await bot.get_me()` → `bot.set_my_commands(...)`;
-3. `Dispatcher()` → middleware → `dp[...] = ...` → `dp.include_router(...)`;
+3. `configure_dispatcher(Dispatcher(), ...)` (middleware + `dp[...]` + routers);
 4. `dp.start_polling(bot)` в `try/finally`.
 
-Образцовый compose root.
+Образцовый compose root. Покрыт smoke-тестом `test_main.py`.
 
 ### 5.5. Оставшиеся архитектурные мелочи
 
@@ -269,7 +280,7 @@ handlers (aiogram Router'ы) → services (бизнес-логика) → reposi
 
 Колонка `messages.text` удалена. Хранится только `normalized_text` — `sanitize_text` убирает `@mentions` и URL, нормализует пробелы. Это уже **не сырой текст пользователя**: tokenizable, но не идентичен исходному. Используется только генератором (для exact-match exclude через `db.message_exists`) и `LearningService.matches_training_prefix` (строит set префиксов 3..5 токенов из всех сообщений чата). Это резкое улучшение privacy-постуры.
 
-**Что не сделано:** нет команды `/learn_off` / `/privacy` для opt-out на уровне чата (см. P2-9 в section 14). Решено отложить — основной privacy-долг закрыт удалением `messages.text` и анонимизацией `author_id`.
+**Что осознанно не делаем:** команды `/learn_off` / `/privacy` для opt-out на уровне чата нет. Решено снять с backlog'а (session 21): после удаления `messages.text`, анонимизации `author_id` и маскирования `chat_id` в логах чувствительной информации на уровне чата не остаётся; явный opt-out закрывал бы теоретический риск, не отвечающий реальной угрозе.
 
 #### `matches_training_prefix` — вспомогательный novelty-фильтр
 
@@ -280,22 +291,28 @@ handlers (aiogram Router'ы) → services (бизнес-логика) → reposi
 - `OWNER_ID` или admin чата → проверяет [`AdminOrOwner`](app/filters/admin_or_owner.py); при ошибке `bot.get_chat_administrators` (например, бот не в чате) → возвращает `False` (deny by default). Тесты покрывают этот случай.
 - `/clear` → ограничен [`ThrottlingMiddleware`](app/middlewares/throttling.py): `clear=3600` сек **на пользователя в данном чате**. `/clear` добавлен в `notify_on_throttle`-набор, поэтому повторный вызов под cooldown получает явный ответ «Слишком часто. Подождите ~N сек.» вместо silent drop (session 20). Quota для `/pivo` реализована отдельно в `PivoService` через дневной счётчик (см. P2-7). Проброшенные сообщения (без `from_user`, не-команды, команды без записи в `limits`) пропускаются без задержек.
 
-### 6.3. HKDF derivation для members
+### 6.3. HKDF derivation — текущее применение
+
+HKDF используется в одном месте — `app/log_masking.py` для вывода ключа маскирования `chat_id` в логах:
 
 ```python
-# app/security/key_derivation.py
-def derive_key(master_secret: str, domain: str, length: int = 32) -> bytes:
-    return HKDF(algorithm=hashes.SHA256(), length=length, salt=None,
-                info=domain.encode()).derive(master_secret.encode())
+# app/log_masking.py
+_key = HKDF(
+    algorithm=hashes.SHA256(), length=32, salt=None, info=b"logging:chat_id",
+).derive(PIVO_HMAC_SECRET.encode("utf-8"))
+mask = hmac.new(_key, str(chat_id).encode(), hashlib.sha256).hexdigest()[:8]
 ```
 
-`MembersService` использует `derive_key(PIVO_HMAC_SECRET, "members:hmac")` и `derive_fernet_key(PIVO_ENCRYPTION_SECRET, "members:encryption")`. Это означает:
-- ключ для `members` **не равен** raw-секрету `PIVO_*_SECRET` (тест [`test_members_keys_differ_from_pivo_keys`](tests/test_members.py) фиксирует этот инвариант);
-- domain-метки изолируют будущие домены (`members:hmac` ≠ `members:encryption` ≠ `audit:hmac`...).
+Это означает:
+- ключ для масок **не равен** raw-секрету `PIVO_HMAC_SECRET` — domain-метка `logging:chat_id` изолирует домен (тест в `tests/test_log_masking.py` фиксирует, что маска при ротации `PIVO_HMAC_SECRET` меняется).
+- Маска стабильна между рестартами при том же секрете → можно коррелировать строки логов одного чата.
+- 8 hex символов → 32 бита энтропии, достаточно для одного бота с десятками чатов.
 
-Соль (`salt`) у HKDF — `None`. Это допустимо, потому что master-секрет уже высокоэнтропийный (32 байта `secrets.token_urlsafe(32)`). Если бы master-ключ выводился из пользовательского пароля — соль была бы обязательна.
+Соль (`salt`) у HKDF — `None`. Это допустимо, потому что master-секрет уже высокоэнтропийный (32 байта `secrets.token_urlsafe(32)` из `.env`). Если бы master-ключ выводился из пользовательского пароля — соль была бы обязательна.
 
-**Замечание:** старый PivoSecurity ([pivo.py](pivo.py)) **не** перешёл на HKDF — он по-прежнему использует `sha256(PIVO_ENCRYPTION_SECRET)` напрямую. Это было осознанное решение фазы 3: переход PivoSecurity на HKDF поломал бы существующие подписи `/pivo` (изменился бы ключ). Документированное ограничение.
+**Историческое замечание:** изначально HKDF был введён под `MembersService` с доменами `members:hmac` / `members:encryption`. Эта инфраструктура удалена в session 21 как «заготовка под несуществующие домены». Текущая `chat_members` таблица использует не HKDF, а раздельные секреты `PIVO_HMAC_SECRET` (HMAC напрямую) и `sha256(PIVO_ENCRYPTION_SECRET)` (Fernet) — те же ключи, что и в исходном `/pivo`-flow.
+
+**Замечание про PivoSecurity:** `PivoSecurity` в [pivo.py](pivo.py) не использует HKDF — `sha256(PIVO_ENCRYPTION_SECRET)` напрямую. Переход поломал бы существующие подписи. Это и привело к тому, что HKDF-инфраструктура `MembersService` оказалась изолированной от `/pivo`-flow и не пригодилась. Текущая модель: один секрет = один Fernet-ключ = одна доменная зона.
 
 ### 6.4. SQL-инъекции
 
@@ -303,7 +320,10 @@ def derive_key(master_secret: str, domain: str, length: int = 32) -> bytes:
 
 ### 6.5. Логирование
 
-`chat_id` в логах не маскируется (P3-4, см. п.10), `user_id` — не пишется (хорошо), `pivo`-операции пишут только `mentions count: N` (хорошо). Уровень настраивается через `LOG_LEVEL` в `.env` (закрыто в P2-6).
+- `chat_id` **маскируется** через `mask_chat_id(...)` в `app/handlers/learning.py` (8 hex от HKDF-HMAC, session 22). Live smoke 2026-05-10 подтвердил: в логах видим `chat=1f6bfe93`, а не сырой id.
+- `user_id` — не пишется.
+- `pivo`-операции пишут только `mentions count: N` и `pivo command executed` — без идентификаторов.
+- Уровень настраивается через `LOG_LEVEL` в `.env` (закрыто P2-6).
 
 ### 6.6. Bot privacy mode (старая 6.7)
 
@@ -323,25 +343,21 @@ def derive_key(master_secret: str, domain: str, length: int = 32) -> bytes:
 
 ### 7.2. Что осталось
 
-| # | Где | Что | Приоритет |
-|---|---|---|---|
-| 7.1 | [`db.py:165-174`](db.py:165) | `save_message_and_update_model` использует `cursor.fetchone()[0]` без `assert row is not None`, тогда как репозитории (например, `markov_repo.get_chat_token_volume`) уже унифицированы. Стилистическая мелочь, mypy не ругается из-за приведения `int(...)`. | P3 |
+Открытого долга по качеству кода нет. Все ранее зафиксированные пункты закрыты:
 
-Закрыто в предыдущих сессиях:
-- ~~`range(4)` / `attempt < 2`~~ — константы `MAX_GENERATION_ATTEMPTS` (session 20).
-- ~~`len(clean) < 3 or > 500`~~ — `MIN/MAX_LEARN_MESSAGE_CHARS` (раньше).
-- ~~Дублирование Settings/RuntimeState/runtime_config~~ — `config_registry.py` (P2-batch).
-- ~~`BOT_TEXT_ALIASES = {"pepe", "пепе"}` хардкод~~ — `Settings.bot_text_aliases` с safe fallback (audit follow-ups).
-- ~~`MENTION_RE = r"@\w+"` ломает email~~ — `(?<!\w)@\w+` (session 20).
+- ~~`range(4)` / `attempt < 2` в `learning.py`~~ → константы `MAX_GENERATION_ATTEMPTS`, `GENERATION_ATTEMPTS_WITH_CONTEXT` (session 20).
+- ~~`len(clean) < 3 or > 500`~~ → константы `MIN_LEARN_MESSAGE_CHARS`, `MAX_LEARN_MESSAGE_CHARS`.
+- ~~Дублирование Settings / RuntimeState / runtime_config~~ → `config_registry.py` (P2-1).
+- ~~`BOT_TEXT_ALIASES = {"pepe", "пепе"}` хардкод~~ → `Settings.bot_text_aliases` с safe fallback (P2-5 / audit follow-ups).
+- ~~`MENTION_RE = r"@\w+"` ломает email~~ → `(?<!\w)@\w+` (session 20).
+- ~~`cursor.fetchone()[0]` в `save_message_and_update_model`~~ → `row = ...; assert row is not None` (session 22).
 
-### 7.3. Мёртвый код
+### 7.3. Мёртвый код — проверено явно
 
-Проверено явно:
-
-- `_ensure_messages_normalized_text_column` и `_anonymize_message_author_ids` — упоминаются только в `PROJECT_AUDIT.md` и `REFACTOR_PLAN.md`; в коде их нет (логика переехала в миграции 002 и 003). ✅
-- `MessagesRepo.exists()` — используется в [`MarkovGenerator.generate_text`](markov.py:670) для exact-match фильтра «не отдавать слово в слово сохранённое сообщение». Раньше также вызывался из `LearningService` как SQL-fallback для <3 токенов; ветка удалена в session 20 как избыточная (генератор делает то же самое раньше). Не мёртвый. ✅
-- `MembersService.record_consent` / `get_profile` / `revoke` — **никем не вызывается** из хендлеров. Это **намеренная инфраструктура** (плановое решение фазы 3: «Хендлеры/команды НЕ добавлять в этой фазе — только инфраструктура»). Покрыта 18 тестами. Не мёртвый код, но требует продуктового шага: либо использовать в ближайшее время, либо документировать как «WIP backend».
-- `pivo_chat_members.is_bot` — пишется в `PivoService.subscribe`, нигде не читается; боты уже отсекаются в хендлере [`cmd_pivo_on`](app/handlers/pivo.py:40). Поле лишнее, но удалять до P3.
+- `_ensure_messages_normalized_text_column` и `_anonymize_message_author_ids` — в коде их нет (логика переехала в миграции 002 и 003). ✅
+- `MessagesRepo.exists()` — используется в [`MarkovGenerator.generate_text`](markov.py:670) для exact-match фильтра «не отдавать слово в слово сохранённое сообщение». Не мёртвый. ✅
+- ~~`MembersService.record_consent` / `get_profile` / `revoke`~~ — удалены в session 21 вместе с `chat_member_profiles` и `app/security/key_derivation.py` как нереализованная инфраструктура.
+- ~~`pivo_chat_members.is_bot`~~ — удалено вместе со старой таблицей в миграции 007 (session 21).
 
 ---
 
@@ -349,132 +365,97 @@ def derive_key(master_secret: str, domain: str, length: int = 32) -> bytes:
 
 ### 8.1. Миграции
 
-- 5 версионированных миграций, каждая запускается ровно один раз.
+- 7 версионированных миграций (`001_initial.sql` … `007_unify_chat_members.sql`), каждая запускается ровно один раз.
 - Резюм через таблицу `schema_migrations(name, applied_at)`.
-- Тесты на migrator (`tests/test_migrator.py`, 495 строк) покрывают:
-  - чистая БД → все миграции применяются по порядку;
-  - повторный init → ничего не делает;
-  - legacy-БД (фикстура `tests/fixtures/legacy_real_schema.sql` со схемой реальной prod-БД пользователя) → корректно проходит миграции 002–005 без потери данных;
-  - INSERT после миграций кладёт данные в правильные новые столбцы.
-
-**Слабое место — SQL splitter (P2).** [`migrator._split_sql`](app/infrastructure/migrator.py:58) сейчас:
-
-```python
-return [s.strip() for s in sql.split(";") if s.strip()]
-```
-
-Для текущих 5 простых миграций (`CREATE TABLE`, `CREATE INDEX`) этого достаточно, и тесты подтверждают. Но splitter сломается на:
-- `;` внутри строковых литералов (`INSERT ... VALUES ('foo;bar')`);
-- триггерах с `BEGIN ... END;` блоками;
-- views с подзапросами;
-- комментариях с `;`.
-
-Дополнительно — `_apply` не оборачивает миграцию в явную транзакцию с rollback. Для DDL в SQLite в большинстве случаев работает терпимо (DDL коммитится автоматически), но это слабая инфраструктура.
-
-**Рекомендация:** для `.sql`-миграций перейти на `conn.executescript(sql)` (SQLite сам разбирает многооператорные скрипты) внутри `BEGIN...COMMIT/ROLLBACK`. Текущий splitter оставить только если будет ограничение «один statement на файл».
+- `.sql`-миграции выполняются через `sqlite3.executescript` внутри явного `BEGIN; ...; COMMIT;` — обёртка добавлена `migrator._apply` (sessions 18 + audit follow-ups). При исключении `run()` делает `conn.rollback()`, in-flight транзакция откатывается, в `schema_migrations` ничего не записывается.
+- `.py`-миграции импортируют и вызывают `await mod.apply(conn)`; те же гарантии rollback применяются.
+- Тесты на migrator (`tests/test_migrator.py`) покрывают: чистая БД, повторный init, partial resume, legacy-фикстуру (`tests/fixtures/legacy_real_schema.sql` от реальной prod-БД), full-data fixture (все таблицы заполнены, после миграций все row counts сохраняются), атомарность при битом statement, миграцию `pivo_chat_members` → `chat_members`.
 
 ### 8.2. Индексы
 
 | Индекс | Использование | Замечание |
 |---|---|---|
-| `idx_pivo_chat_members_chat_hash` | `PivoRepo.list_members(chat_hash)` | OK |
-| `idx_chat_member_profiles_chat_hash` | (потенциально) `MembersRepo.list_for_chat` | OK |
-| `idx_messages_normalized_lookup(chat_id, normalized_text)` | `MessagesRepo.exists(chat_id, text)` | Используется в SQL-fallback для текстов <3 токенов |
+| `idx_chat_members_chat_hash` | `ChatMembersRepo.list_members(chat_hash)` | Создан миграцией 007 |
+| `idx_messages_normalized_lookup(chat_id, normalized_text)` | `MessagesRepo.exists(chat_id, text)` — exact-match exclude в генераторе | OK |
+| `idx_messages_chat_id` | `Database.get_stats / clear_chat / get_all_normalized_messages` | OK |
 
-Дополнительные индексы по `(chat_id, w1, w2)` на `transitions*` и `starts*` существуют через PRIMARY KEY и не требуют отдельных definition'ов.
+Индексы по `(chat_id, w1, w2)` на `transitions*` и `starts*` существуют через PRIMARY KEY и не требуют отдельных definition'ов.
 
 ### 8.3. Целостность
 
 - Нет FK между `messages` и `transitions*` — это агрегаты, FK не нужны. ✅
-- `pivo_chat_members.is_bot` — лишнее поле (см. п.7.3). P3.
-- `chat_member_profiles.consent_version` и `key_version` заложены, но нет процедуры ротации ключей. Это OK — заложить sloтa достаточно, ротация будет отдельной задачей при необходимости.
+- `chat_members` хранит только зашифрованные поля и HMAC-индексы. Структура минимальна: одна строка на (chat, user), без unused columns.
+- Все cleanup-операции явно ограничены `WHERE chat_id = ?` или `WHERE chat_hash = ?`. Нет «глобальных» DROP/DELETE без области.
 
 ---
 
 ## 9. Конфигурация и запуск
 
-### 9.1. README
+### 9.1. README — **закрыто** (P2-3, `refactor/audit-p2-batch` + B3)
 
-**Не обновлён** после рефакторинга.
+- Quickstart (`venv`, `pip`, `python main.py`) — есть.
+- Команды — актуальные.
+- Docker — есть.
+- `/pivo` privacy — есть.
+- Раздел «Тесты», «Архитектура» (со ссылкой на `docs/ARCHITECTURE.md`), «Privacy» — добавлены.
+- Указание `requirements.lock` для воспроизводимости — есть.
+- Абсолютные ссылки на `compose.yaml` / `.env.example` починены на относительные (B3).
+- Стек обновлён до `Python 3.12+`.
+- Инструкция по локальным проверкам (`ruff`, `mypy`, `unittest`) — есть.
 
-| Что | Статус |
-|---|---|
-| Quickstart (`venv`, `pip`, `python main.py`) | ✅ есть |
-| Команды | ✅ есть, актуальные |
-| Docker | ✅ есть |
-| `/pivo` privacy | ✅ есть |
-| Раздел «Тесты» | ❌ отсутствует |
-| Раздел «Архитектура» (ссылка на `docs/ARCHITECTURE.md`) | ❌ отсутствует |
-| Раздел «Privacy» (что хранится, что не хранится, опт-ин для `/pivo`) | ❌ отсутствует |
-| Упоминание `requirements.lock` для воспроизводимости | ❌ отсутствует |
-| Абсолютная ссылка `[compose.yaml](/D:/test/PepeEdtaBot/compose.yaml)` (строка 47) | ❌ **сломанная ссылка**, ведёт на чужую машину |
-| Абсолютная ссылка `[.env.example](/D:/test/PepeEdtaBot/.env.example)` (строка 54) | ❌ **сломанная ссылка** |
-| Версия Python: указано `Python 3.14` (строка 6), но CI поддерживает `3.12/3.13/3.14` | ❌ противоречие, лучше `Python 3.12+` |
-| Инструкция «как запустить локальные проверки» (`ruff`, `mypy`, `unittest discover`) | ❌ отсутствует |
+### 9.2. `.env.example` — **актуален**
 
-**Срочность:** P2. Не блокирует merge технически, но первая внешняя impression проекта — это README.
+Полный, структурированный, с инструкцией по генерации секретов. Включает `LOG_LEVEL` (P2-6), `BOT_TEXT_ALIASES` (P2-5).
 
-### 9.2. `.env.example`
+### 9.3. Dockerfile — **hardened** (P2-2 + audit follow-ups)
 
-Полный, структурированный, с инструкцией по генерации секретов. Не хватает:
-- `LOG_LEVEL` (используется захардкоженный `INFO` в [`main.py:25`](main.py:25)).
-
-**Срочность:** P2.
-
-### 9.3. Dockerfile
-
-**Не изменялся.** Текущее состояние:
+Текущее состояние:
 
 ```dockerfile
-FROM python:3.14-slim          # ❌ нет pin минорной версии (3.14.x-slim)
-ENV PYTHONDONTWRITEBYTECODE=1  # ✅
-ENV PYTHONUNBUFFERED=1         # ✅
+FROM python:3.14.0-slim            # pin minor
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 WORKDIR /app
-RUN mkdir -p /app/data
-COPY requirements.txt .        # ✅ кеш слоёв
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .                       # ⚠️  COPY . . включает .git, tests, docs — лучше docker-build с .dockerignore (он уже есть)
-CMD ["python", "main.py"]      # ❌ работает от root
-                               # ❌ нет HEALTHCHECK
+RUN useradd -m -u 1000 bot
+COPY --chown=bot:bot requirements.lock .
+RUN pip install --no-cache-dir -r requirements.lock
+COPY --chown=bot:bot . .
+HEALTHCHECK CMD python -c "import sys; sys.exit(0)"
+ENTRYPOINT ["/app/docker-entrypoint.sh"]    # root → chown bind-mount → runuser -u bot
+CMD ["python", "main.py"]
 ```
 
-**Что добавить (P2):**
-- `RUN useradd -m -u 1000 bot && chown -R bot /app` + `USER bot`;
-- pin минорной версии (`python:3.14.0-slim` или конкретный digest);
-- `HEALTHCHECK CMD python -c "import sys; sys.exit(0)"` или подобное;
-- использовать `requirements.lock` вместо `requirements.txt` для воспроизводимости.
+`docker-entrypoint.sh` запускается под root, делает best-effort `chown -R bot:bot /app/data` (для bind-mount от root-owned директорий), затем `exec runuser -u bot -- "$@"`. `runuser` есть в `python:*-slim` (`util-linux`). `.gitattributes` фиксирует LF для `*.sh`, чтобы Windows-клон не сделал CRLF.
 
-**Срочность:** P2 — не блокирует функциональность, hardening.
+### 9.4. CI — стабильно
 
-### 9.4. CI
-
-`.github/workflows/ci.yml` обновлён в фазе 6:
+`.github/workflows/ci.yml`:
 
 ```yaml
-- pip install -r requirements-dev.txt   # ставит и runtime, и линтеры
+- pip install -r requirements-dev.txt   # = lock + ruff + mypy
 - python -m ruff check app/ tests/
 - python -m mypy app/
 - python -m unittest discover tests -v
 ```
 
-Матрица — 3.12/3.13/3.14. Triggers — push в main, PR в main. Branch protection пока не настроен (см. рекомендацию в п.13).
+Матрица — Python 3.12/3.13/3.14. Triggers — push/PR в main. Branch protection активен (PR обязателен).
 
-### 9.5. `requirements.lock` — **закрыто** (`db1de05` / B2)
+### 9.5. `requirements.lock` — **закрыто** (B2, `db1de05`)
 
-`Dockerfile` теперь устанавливает `requirements.lock` (вместо ранее использовавшегося `requirements.txt` с диапазонами), `requirements-dev.txt` ссылается на `-r requirements.lock`, в файл добавлен header с описанием стратегии (`pip freeze` без `pip-tools`) и процедурой регенерации. CI и Docker действительно используют lock — это уже не декорация.
+`Dockerfile` устанавливает `requirements.lock` (вместо ранее использовавшегося `requirements.txt` с диапазонами), `requirements-dev.txt` ссылается на `-r requirements.lock`, в файл добавлен header с описанием стратегии (`pip freeze` без `pip-tools`) и процедурой регенерации. CI и Docker реально используют lock.
 
 ---
 
 ## 10. Логирование
 
-- ~~Уровень захардкожен `INFO`~~ — закрыто (P2-6): `LOG_LEVEL` валидируется в `Settings`, читается из `.env`, применяется в `main.py`.
+- `LOG_LEVEL` валидируется в `Settings`, читается из `.env`, применяется в `main.py` (P2-6, закрыто).
 - `aiogram` приглушён до `WARNING`.
 - Формат — обычный текст: `%(asctime)s | %(levelname)s | %(name)s | %(message)s`.
-- Идентификаторы пользователей не пишутся, `chat_id` пишется в открытом виде. **Открытый P3** — маскирование через HMAC.
-- Нет ID-корреляции запросов. Не приоритет.
-- Нет аудита админ-команд (`/clear`, `/set`) в БД. Опциональная фича.
+- Идентификаторы пользователей не пишутся; `chat_id` маскируется через `mask_chat_id(...)` (P3-4, закрыто session 22). Маска — 8 hex от HKDF-HMAC под `PIVO_HMAC_SECRET` с доменом `logging:chat_id`, стабильна между рестартами при одном секрете, меняется при ротации, не обратима к исходному `chat_id`.
+- Корреляция между строками одного чата работает через стабильную маску.
+- Нет аудита админ-команд (`/clear`, `/set`) в БД. Опциональная фича, не планируем без запроса.
 
-**Срочность:** P3 (маскирование `chat_id`; структурированные JSON-логи отложены до выбора системы агрегации).
+**Отложено по внешним решениям:** структурированные JSON-логи (ждём выбора системы агрегации); ID-корреляции запросов (ждём метрик).
 
 ---
 
@@ -482,112 +463,85 @@ CMD ["python", "main.py"]      # ❌ работает от root
 
 ### 11.1. Состояние
 
-Текущее число тестов в наборе: **208** (после P2-batch и audit follow-ups). Полный список файлов и доменов покрытия:
+Текущее число тестов: **199**. 13 test-файлов:
 
 | Файл | Что покрывает |
 |---|---|
-| `test_db_logic.py` | `save_message_and_update_model`, `get_stats`, `clear_chat`, retention `pivo_daily_usage` |
-| `test_filters.py` | `GroupOnly`, `AdminOrOwner` (включая fail-closed на ошибке Telegram API), `ThrottlingMiddleware` |
-| `test_handlers.py` | happy-path для всех 4 роутеров + denied-fallback для админ-команд |
-| `test_learning_service.py` | prefix-cache дедупликация, инвалидация кэша |
-| `test_main.py` | smoke-тест на `configure_dispatcher` (роутеры, middleware, ключи в `dp[]`) |
-| `test_markov_and_text.py` | генерация, токенизация, `sanitize_text` |
-| `test_members.py` | `KeyDerivation` (HKDF), `MembersRepo`, `MembersService` |
-| `test_migrator.py` | пустая БД, повторный init, legacy fixture, real-schema fixture, **атомарность .sql при ошибке** |
-| `test_pivo.py` | HMAC, Fernet, `build_pivo_mention`, E2E subscribe → call quota → unsubscribe |
-| `test_runtime_config.py` | `apply_runtime_setting` для всех ключей реестра |
-| `test_settings.py` | `load_settings`, валидация ENV (включая `LOG_LEVEL`, `BOT_TEXT_ALIASES` с fallback) |
 | `test_bot_messages.py` | форматирование `/help`, `/stats`, `/config` |
 | `test_bot_policy.py` | `bot_is_mentioned`, `should_reply`, cooldown |
+| `test_db_logic.py` | `save_message_and_update_model`, `get_stats`, `clear_chat`, `chat_members` upsert/get/remove, retention `pivo_daily_usage`, refund |
+| `test_filters.py` | `GroupOnly`, `AdminOrOwner` (fail-closed на ошибке Telegram API), `ThrottlingMiddleware` (silent drop + `notify_on_throttle` UX) |
+| `test_handlers.py` | happy-path по 4 роутерам, denied-fallback для unauthorized admin-команд, `TestReplyHumanizedResilience` (chat-action 5xx, /pivo_on under failure) |
+| `test_learning_service.py` | prefix-cache, `matches_training_prefix` |
+| `test_log_masking.py` | `init_masking`/`mask_chat_id`: длина, детерминизм, изменение при ротации секрета, fail-fast без init |
+| `test_main.py` | smoke-тест на `configure_dispatcher` (роутеры, middleware, ключи в `dp[]`) |
+| `test_markov_and_text.py` | генерация, токенизация, `sanitize_text`, email-safe `MENTION_RE` |
+| `test_migrator.py` | пустая БД, повторный init, partial resume, legacy fixture, full-data fixture, real-schema fixture, атомарность `.sql`, миграция `pivo_chat_members` → `chat_members` |
+| `test_pivo.py` | HMAC, Fernet, `build_pivo_mention`, E2E subscribe → call → quota → unsubscribe через реальный SQLite |
+| `test_runtime_config.py` | `apply_runtime_setting` для всех ключей реестра |
+| `test_settings.py` | `load_settings`, валидация ENV (включая `LOG_LEVEL`, `BOT_TEXT_ALIASES` с fallback) |
 
 ### 11.2. Покрытие модулей
 
 | Модуль | Тесты | Качество покрытия |
 |---|---|---|
-| `app/handlers/*` | `test_handlers.py` | ✅ Happy-path, моки сервисов |
+| `app/handlers/*` | `test_handlers.py` | ✅ Happy-path, denied-fallback, resilience |
 | `app/services/learning_service.py` | `test_learning_service.py` | ✅ Кэш, инвалидация, edge cases |
-| `app/services/members_service.py` | `test_members.py` | ✅ Все 3 метода + шифрование |
-| `app/services/pivo_service.py` | `test_pivo.py` (косвенно) | ⚠️ Покрыты HMAC/Fernet, но не сам сервис в полном flow |
-| `app/repositories/*` | `test_db_logic.py`, `test_members.py` | ✅ |
+| `app/services/pivo_service.py` | `test_pivo.py` (`TestPivoServiceFlow`) | ✅ E2E flow через SQLite |
+| `app/repositories/*` | `test_db_logic.py` | ✅ |
 | `app/filters/*` | `test_filters.py` | ✅ Включая ошибки API `get_chat_administrators` |
-| `app/middlewares/throttling.py` | `test_filters.py` | ✅ throttle, разные пользователи, разные команды, suffix `@bot` |
-| `app/infrastructure/migrator.py` | `test_migrator.py` | ✅ С реальной prod-фикстурой |
-| `app/security/key_derivation.py` | `test_members.py` | ✅ |
+| `app/middlewares/throttling.py` | `test_filters.py` | ✅ silent drop, notify_on_throttle, разные команды |
+| `app/infrastructure/migrator.py` | `test_migrator.py` | ✅ Атомарность, real-prod fixture |
+| `app/log_masking.py` | `test_log_masking.py` | ✅ 6 кейсов |
 
 ### 11.3. Дыры в покрытии
 
 Закрыто:
-- ~~E2E `/pivo`-flow~~ — закрыто в `codex/pivo-daily-quota` (`tests/test_pivo.py`).
-- ~~Smoke-тест на wiring `main.py`~~ — закрыто там же (`tests/test_main.py`).
-- ~~Тесты на отказ авторизации с явным ответом~~ — закрыто блокером B1 в `refactor/structure` (`test_handlers.py` покрывает denied-fallback handlers).
-- ~~Атомарность .sql-миграций при ошибке~~ — закрыто в `fix/audit-followups` (`TestMigratorAtomicity`).
+- ~~E2E `/pivo`-flow~~ — `tests/test_pivo.py::TestPivoServiceFlow`.
+- ~~Smoke-тест на wiring `main.py`~~ — `tests/test_main.py`.
+- ~~Тесты на отказ авторизации с явным ответом~~ — denied-fallback handlers (B1).
+- ~~Атомарность .sql-миграций~~ — `TestMigratorAtomicity` (audit follow-ups).
+- ~~Поведение хендлеров при ошибках Telegram API~~ — `TestReplyHumanizedResilience` + refund на reply-error + fail-closed на admin-API (session 22).
+- ~~`build_call_message` через DB~~ — фактически покрыт `TestPivoServiceFlow.test_subscribe_call_quota_and_unsubscribe_flow` (session 22).
 
 Осталось:
-- **`PivoService.build_call_message`** в реальной комбинации с `MembersRepo` через DB — не покрыт целиком (P3).
-- **Поведение хендлеров при ошибках Telegram API** (`bot.get_me()` падает, `bot.send_chat_action` 5xx) — не покрыто (P3).
-- **Реальная гонка throttling** (одновременные вызовы) — не тестируется, но in-memory dict не имеет race conditions в asyncio (single-threaded), поэтому риск низкий.
+- **Реальная гонка throttling** (одновременные вызовы) — не тестируется, но in-memory dict не имеет race conditions в asyncio (single-threaded), риск низкий. Не планируем.
 
 ---
 
 ## 12. Что хорошо сделано в проекте
 
-Сохраняю и расширяю раздел из прошлого аудита.
-
-- **Структурный рефакторинг прошёл без регрессий** — поведение бота идентично, что подтверждается тем, что все 83 предсуществующих теста зелёные плюс 98 новых.
-- **Миграции на реальной БД** — фаза 2 проверялась на реальном `markov.db` пользователя (фикстура `tests/fixtures/legacy_real_schema.sql`), а не только на синтетических случаях.
-- **HKDF с domain labels** — модель ключей расширяема: добавление нового домена (например, `audit:hmac`) не требует новых env-переменных и не ломает существующие подписи.
-- **Throttling middleware** правильно использует `TelegramObject` в сигнатуре `__call__` (LSP-compatible), внутри проверяет `isinstance(event, Message)`. Это даёт корректный mypy strict.
-- **`AdminOrOwner.fail-closed`** — при ошибке Telegram API (бот не в чате) фильтр возвращает `False`, не `True`. Поведение покрыто тестом.
-- **Параметризованные SQL-запросы** — нет инъекций. ✅
-- **`author_id` принудительно анонимизирован** через миграцию 003 при первом обновлении старой БД.
-- **Opt-in `/pivo`** реализован с поддержкой пользователей **без `@username`** (через `tg://user?id=...`) — это образец для любого будущего функционала, требующего упоминаний.
-- **Privacy-сообщение `/pivo_privacy`** написано спокойно, без технических деталей хранения, и сейчас уже не врёт пользователю (нет хранения сырого `messages.text`).
-- **`pyproject.toml`** настроен с осмысленными overrides: legacy-модули (`markov.py`, `bot_messages.py` и т.д.) явно вынесены в `ignore_errors`, чтобы strict-режим не ломал CI ради `# type: ignore` спама.
-- **CI на 3 версиях Python** (3.12/3.13/3.14) — даёт уверенность, что код работает на актуальной prod-версии и на двух более старых.
-- **Документация в виде комментариев** к `REFACTOR_PLAN.md` (раздел «Конвенции», «Подводные камни») — будет полезна следующему контрибьютору.
+- **Слоистая архитектура** — handlers / services / repositories / filters / middlewares / migrations / infrastructure. Каждая граница реальна (хендлеры не видят SQL, сервисы не видят aiogram кроме одного осознанного исключения).
+- **Атомарные миграции** — `.sql` через `executescript` внутри `BEGIN; ...; COMMIT;`. При сбое в середине миграции — `conn.rollback()`, `schema_migrations` не получает запись о половинчатой. Покрыто `TestMigratorAtomicity` с битым statement.
+- **Миграции на реальной БД** — проверены на фикстуре `tests/fixtures/legacy_real_schema.sql` (схема реального prod-`markov.db` пользователя), а не только на синтетических случаях. Все full-data fixtures сохраняют row counts after migration.
+- **Миграция 007 (unification)** прошла на проде без потери подписок: live smoke 2026-05-10 подтвердил `chat_members` сохранил данные, старые таблицы исчезли.
+- **HKDF для log-masking** — стабильная маска чатов в логах с domain-label `logging:chat_id`, отделена от `/pivo`-флоу. Ротация `PIVO_HMAC_SECRET` ломает корреляцию ID между «до/после» — это желаемое свойство.
+- **Throttling middleware** правильно использует `TelegramObject` в сигнатуре `__call__` (LSP-compatible), внутри проверяет `isinstance(event, Message)`. `notify_on_throttle` даёт явный ответ для админ-команд, silent drop сохранён для `/pivo` по дизайну.
+- **`AdminOrOwner.fail-closed`** — при ошибке Telegram API (бот не в чате, network blip) фильтр возвращает `False`, не `True`. Поведение покрыто тестом.
+- **`reply_humanized.resilience`** — `bot.send_chat_action` 5xx не блокирует основной reply; покрыто 3 тестами + 1 для `/pivo_on` под этим сценарием.
+- **Параметризованные SQL-запросы** — нет инъекций.
+- **`author_id` принудительно анонимизирован** через миграцию 003 при первом обновлении старой БД; новые сообщения пишутся с `author_id=0`.
+- **`messages.text` удалён** миграцией 005; хранится только `normalized_text` после `sanitize_text` (URL/mentions удалены, пробелы нормализованы, email-адреса сохранены).
+- **Opt-in `/pivo`** поддерживает пользователей **без `@username`** (через `tg://user?id=...`) — образец для упоминаний.
+- **Privacy-сообщение `/pivo_privacy`** не врёт: нет хранения сырого текста, нет нерасшифровываемых полей.
+- **`pyproject.toml`** настроен с осмысленными overrides: legacy-модули (`markov.py`, `pivo.py`, `bot_messages.py` и т.д.) вынесены в `ignore_errors`. `app/` под `mypy strict`.
+- **CI на 3 версиях Python** (3.12/3.13/3.14), branch protection требует PR.
+- **Single source of truth для настроек** (`config_registry.py`): `Settings`, `RuntimeState`, `runtime_config.apply_runtime_setting` итерируются по `FieldSpec` × 20.
+- **Lock-файл реально используется** Dockerfile и CI (не декорация).
+- **Docker non-root** через root-entrypoint, который чинит права на bind-mount и делает `runuser -u bot`.
 
 ---
 
-## 13. Готовность к merge в `main`
+## 13. Готовность к продакшну — историческая запись
 
-### 13.1. Чек-лист технической готовности
+Раздел оставлен как историческая запись. Все три P1-блокера были закрыты коммитами `a0fae76` (B1), `db1de05` (B2), `1ef20a2` (B3). С тех пор ветка `refactor/structure` смержена в `main`, проект прошёл через P2-batch, audit follow-ups, session 20 (P3 polish), session 21 (`chat_members` unification) и session 22 (chat_id masking + P3 close-out).
 
-| # | Что | Статус |
-|---|---|---|
-| 1 | CI зелёный на ветке `refactor/structure` | ✅ (CI #20, последний коммит `a0fae76`) |
-| 2 | Все 185 тестов проходят локально | ✅ |
-| 3 | `ruff check app/ tests/` без замечаний | ✅ |
-| 4 | `mypy app/` без замечаний | ✅ |
-| 5 | Нет `TODO`/`FIXME` в `app/` | ✅ |
-| 6 | Нет коммита временных файлов (`.env`, `*.sqlite` тестов) | ✅ |
-| 7 | `REFACTOR_PLAN.md` удалён (план выполнен) | ✅ |
-| 8 | `MERGE_PREP_PLAN.md` удалён (блокеры закрыты) | ✅ (этой редакцией) |
-| 9 | `PROJECT_AUDIT.md` обновлён до текущего состояния | ✅ (третья редакция) |
-
-### 13.2. Блокеры P1 — закрыты
-
-| # | Блокер | Закрыто в коммите | Что сделано |
-|---|---|---|---|
-| **B1** | UX-регрессия: `/set`/`/setprob`/`/clear` без прав молча игнорируются (R1) | `a0fae76` | Добавлены fallback-handlers `cmd_set_denied`/`cmd_setprob_denied`/`cmd_clear_denied` после защищённых; aiogram перебирает handlers по порядку, fallback срабатывает при `AdminOrOwner=False`. Покрытие: 4 теста (3 на тексты + 1 smoke на порядок регистрации). |
-| **B2** | `requirements.lock` не выполняет роль lock-файла | `db1de05` | `Dockerfile` устанавливает `requirements.lock` (вместо `requirements.txt`); `requirements-dev.txt` ссылается на `-r requirements.lock`; добавлен header с описанием стратегии (pip freeze без pip-tools) и процедурой регенерации; убрана транзитивная dev-зависимость `ast_serialize`. |
-| **B3** | README: 2 абсолютные ссылки ведут в `/D:/test/...` | `1ef20a2` | Заменены на относительные `compose.yaml` и `.env.example`. |
-
-### 13.3. После merge — желательно сразу
-
-1. **Branch protection** для `main` в GitHub:
-   - require PR review;
-   - require CI зелёный;
-   - запретить force-push.
-2. **CHANGELOG.md** или GitHub Release с описанием фаз 1–6 — чтобы оператор бота знал, что обновляется.
-3. Создать issues по оставшемуся P2/P3-долгу (см. раздел 14).
-
-### 13.4. Рекомендация
-
-**Готово к merge.** Все три блокера B1/B2/B3 закрыты коммитами `a0fae76`, `db1de05`, `1ef20a2` соответственно. CI #20 зелёный на матрице 3.12/3.13/3.14, локально 185 тестов проходят, ruff и mypy без замечаний.
-
-**Тип merge:** `merge commit` без squash. 31+ маленьких коммитов фаз дают полезный bisect-friendly след — каждая фаза была атомарной с зелёными тестами и явным сообщением.
-
-В архитектурном смысле ветка чистая: P0 закрыт, P1 закрыт полностью, регрессии относительно `main` устранены, тестами покрыто хорошо. Оставшийся P2/P3-техдолг документирован в разделе 14 и не блокирует production.
+Текущее состояние:
+- **Branch protection** для `main` включён (требует PR; force-push заблокирован).
+- **CI зелёный** на 3.12/3.13/3.14 на последнем коммите.
+- **199 тестов** проходят локально, ruff/mypy без замечаний.
+- **Live smoke 2026-05-10** подтвердил миграцию 007, `chat_members`, `/pivo`-flow, маскирование `chat_id` в логах.
+- Открытого P0/P1/P2/P3-долга **нет**.
 
 ---
 
@@ -620,19 +574,22 @@ CMD ["python", "main.py"]      # ❌ работает от root
 | ~~**P2-9**~~ | `/learn_off` opt-out | ❌ снят по продуктовому решению (session 21): после удаления `messages.text`, анонимизации `author_id` и маскирования `chat_id` чувствительной информации на уровне чата не остаётся; явный opt-out закрывал бы теоретический риск, не соответствующий реальной угрозе |
 | ~~**P2-10**~~ | Расширить `BOT_TEXT_ALIASES` через `.env` | ✅ закрыто в `fix/audit-followups` с safe fallback на встроенные `{"pepe", "пепе"}` |
 
-### P3 — косметика и долгосрочное
+### P3 — все закрыты
 
-Закрыто в session 20:
-- ~~Магические числа в `learning.py` (`range(4)`, `attempt < 2`)~~ → константы.
-- ~~Концепция `is_duplicate` (privacy vs novelty)~~ → переименовано в `matches_training_prefix`, docstring и тесты обновлены, мёртвая SQL-ветка удалена.
-- ~~Silent drop `/clear` под throttle~~ → `notify_on_throttle` + явный ответ.
-- ~~`MENTION_RE` на email~~ → `(?<!\w)@\w+`.
+Закрыто в session 20 (`polish/audit-session-20`):
+- ~~Магические числа в `learning.py` (`range(4)`, `attempt < 2`)~~ → константы `MAX_GENERATION_ATTEMPTS`, `GENERATION_ATTEMPTS_WITH_CONTEXT`.
+- ~~Концепция `is_duplicate` (privacy vs novelty)~~ → переименовано в `matches_training_prefix`, docstring переписан, мёртвая SQL-ветка удалена.
+- ~~Silent drop `/clear` под throttle (R2)~~ → `notify_on_throttle` + явный ответ.
+- ~~`MENTION_RE` на email~~ → `(?<!\w)@\w+` (regression-тесты).
 
-Закрыто в session 22:
-- ~~Маскирование `chat_id` в логах~~ → `app/log_masking.py`, HKDF от `PIVO_HMAC_SECRET` с доменом `logging:chat_id`, 8 hex.
+Закрыто в session 21 (`feat/unify-chat-members`):
+- ~~Неиспользуемое поле `is_bot` в `pivo_chat_members`~~ → миграция 007 не создаёт колонку.
+
+Закрыто в session 22 (`feat/log-masking-and-p3-tests`):
+- ~~Маскирование `chat_id` в логах~~ → `app/log_masking.py`, HKDF от `PIVO_HMAC_SECRET` с доменом `logging:chat_id`, 8 hex; live smoke подтвердил `chat=1f6bfe93` в логах.
 - ~~Поведение хендлеров при ошибках Telegram API~~ → `TestReplyHumanizedResilience` (+3 теста) поверх уже существующих покрытий refund/fail-closed.
 - ~~`build_call_message` через DB E2E~~ → фактически покрыт `test_subscribe_call_quota_and_unsubscribe_flow`.
-- ~~`cursor.fetchone()` стиль в `db.py`~~ → унифицирован с репозиториями.
+- ~~`cursor.fetchone()[0]` стиль в `db.py`~~ → унифицирован с репозиториями (`row = ...; assert row is not None`).
 
 Остаётся (заблокировано внешними решениями):
 - **Структурированные логи (JSON)** — ждать выбора системы агрегации.
@@ -671,7 +628,7 @@ CMD ["python", "main.py"]      # ❌ работает от root
 - 2026-05-10, 6я: `fix/audit-followups` — P2-5 закрыто (BOT_TEXT_ALIASES с safe fallback), P1-фиксы атомарности миграций (BEGIN/COMMIT-обёртка) и Docker bind-mount (root-entrypoint + runuser), 208 тестов.
 - 2026-05-10, 7я (PR #5, `polish/audit-session-20`): P3-полировка — `matches_training_prefix` (rename + honest docstring + removed dead branch), магические числа → константы, `MENTION_RE` для email, `notify_on_throttle` UX-фикс silent drop `/clear`. 213 тестов.
 - 2026-05-10, 8я (`feat/unify-chat-members`): унификация участников — миграция 007 переносит `pivo_chat_members` → `chat_members` (без `is_bot`), `chat_member_profiles` / `MembersService` / `MembersRepo` / `key_derivation.py` удалены, `PivoRepo` → `ChatMembersRepo`. Закрыто P2-5, P3-5, снят P2-9. 190 тестов (-23 за счёт удалённых dead-code тестов).
-- 2026-05-10, 9я (`feat/log-masking-and-p3-tests`): закрыт остаточный P3 — `chat_id` маскируется в логах (HKDF от `PIVO_HMAC_SECRET`), добавлены тесты на ошибки Telegram API, стиль `cursor.fetchone()` унифицирован. 199 тестов.
+- 2026-05-10, 9я (`feat/log-masking-and-p3-tests` + live smoke + полный re-sync аудита): закрыт остаточный P3 — `chat_id` маскируется в логах (HKDF от `PIVO_HMAC_SECRET`), добавлены тесты на ошибки Telegram API, стиль `cursor.fetchone()` унифицирован. Live smoke на проде подтвердил миграцию 007 и маскирование. Аудит полностью переписан под актуальное состояние (sections 0–15). 199 тестов.
 
 > SHA коммитов обновлены после очистки истории `git filter-repo` (2026-05-09): удалены строки `Co-Authored-By: Claude` из 28 коммитов.
 
