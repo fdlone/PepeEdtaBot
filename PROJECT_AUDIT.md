@@ -188,10 +188,10 @@ PepeEdtaBot/
 | ID | Описание | Статус | Комментарий |
 |---|---|---|---|
 | **P2-1** | Реестр настроек как один источник истины (Settings ↔ RuntimeState ↔ runtime_config) | ✅ | Закрыто в `refactor/audit-p2-batch`: введён `config_registry.py` с `FieldSpec` × 20 + `validate_cross_fields`. `settings.py`, `runtime_state.py`, `runtime_config.py` итерируются по реестру вместо литерального дублирования. Публичный API `runtime_config` сохранён. |
-| **P2-2** | Dockerfile hardening (non-root user, HEALTHCHECK, pin minor) | ✅ | Закрыто в `refactor/audit-p2-batch`: pin `python:3.14.0-slim`, non-root user `bot` (UID 1000), HEALTHCHECK через python-интерпретатор. |
+| **P2-2** | Dockerfile hardening (non-root user, HEALTHCHECK, pin minor) | ✅ | Закрыто в `refactor/audit-p2-batch` + `fix/audit-followups`: pin `python:3.14.0-slim`, HEALTHCHECK; non-root через root-entrypoint, который чинит права на bind-mount и делает `runuser -u bot` (см. п.9.3 ниже). |
 | **P2-3** | README: разделы Tests/Architecture/Privacy, убрать абсолютные ссылки | ✅ | Закрыто в `refactor/audit-p2-batch`: добавлены секции Architecture, Privacy, Тесты; `Python 3.14` → `Python 3.12+`; команды локальных проверок. Абсолютные ссылки уже были вычищены ранее (B3). |
 | **P2-4** | LOG_LEVEL из `.env`, структурированные логи | 🟡 | `LOG_LEVEL` из `.env` закрыт в `refactor/audit-p2-batch` (валидируется в `Settings`, читается в `main.py`). Структурированные логи остаются P3. |
-| **P2-5** | Расширить `BOT_TEXT_ALIASES` через `.env` | ❌ | Не блокирующее. |
+| **P2-5** | Расширить `BOT_TEXT_ALIASES` через `.env` | ✅ | Закрыто в `fix/audit-followups`: добавлен `Settings.bot_text_aliases`, парсится из CSV-env. Безопасный fallback — пустая/незаданная переменная подставляет встроенные `{"pepe", "пепе"}` (важно для деплоев без доступа к `.env` на проде). |
 
 ### P3 — отложены
 
@@ -728,6 +728,67 @@ E2E `/pivo` и smoke `main.py` — P2. Тест на denied auth — прихо�
 - P2-1 (тройное дублирование Settings/RuntimeState/runtime_config) — главный техдолг.
 - `docs/ARCHITECTURE.md` — переписать под текущую архитектуру.
 - Live-тест `codex/pivo-daily-quota` и merge в `main`.
+
+---
+
+## 19. Session update — 2026-05-10 (audit followups)
+
+### Completed (post-P2-batch fixes after independent review)
+- **Migration atomicity** (P1 от ревью): `migrator._apply` теперь оборачивает
+  тело `.sql`-миграции в `BEGIN; ... COMMIT;` перед передачей в
+  `executescript`. Это закрывает дыру, описанную в ревью: stdlib
+  `sqlite3.executescript` неявно делает `COMMIT` перед запуском скрипта,
+  поэтому без явного BEGIN каждый DDL внутри миграции
+  авто-коммитился по мере выполнения, и при падении в середине файла
+  половина схемы оставалась применённой, а в `schema_migrations`
+  записи не было — следующий старт повторял миграцию и снова падал.
+  Теперь `run()` ловит исключение, делает `conn.rollback()`,
+  in-flight-транзакция откатывается. Добавлен класс тестов
+  `TestMigratorAtomicity` (2 теста) с временным `.sql`-файлом, в котором
+  второй statement битый. Коммит `af8cac3`.
+- **Docker bind-mount writability** (P1 от ревью): `USER bot` снят из
+  Dockerfile. Добавлен `docker-entrypoint.sh`, который при старте от
+  root делает best-effort `chown -R bot:bot /app/data`, затем
+  `exec runuser -u bot -- "$@"`. `runuser` уже есть в `python:*-slim`
+  (`util-linux`). Если контейнер запускается с `--user 1000:1000`, то
+  entrypoint просто пропускает команду как есть. Добавлен
+  `.gitattributes` с `*.sh text eol=lf`, чтобы Windows-клон не сделал
+  CRLF в shell-скрипте. README обновлён. Коммит `34d20b9`.
+- **P2-5**: `BOT_TEXT_ALIASES` через `.env` с **безопасным fallback'ом**.
+  `bot_policy.DEFAULT_BOT_TEXT_ALIASES = frozenset({"pepe", "пепе"})`
+  остаётся в коде; `Settings.bot_text_aliases` читает CSV из env и
+  при пустом/незаданном значении подставляет defaults. Это критично
+  для эксплуатации, когда у оператора нет доступа к
+  `.env`/контейнеру — бот всегда отвечает на свои стандартные
+  прозвища. Сигнатура `bot_is_mentioned` расширена 4-м аргументом
+  с дефолтом, поэтому существующие прямые вызовы из тестов остаются
+  совместимыми. +3 теста на settings, +1 на проброс через диспетчер.
+  Коммит `b50f580`.
+
+### Changed files
+- `app/infrastructure/migrator.py`, `tests/test_migrator.py`
+- `Dockerfile`, `docker-entrypoint.sh` (new), `.gitattributes` (new), `README.md`
+- `bot_policy.py`, `settings.py`, `main.py`, `app/handlers/learning.py`,
+  `.env.example`, `tests/test_settings.py`, `tests/test_main.py`
+- `PROJECT_AUDIT.md`
+
+### Tests/checks run
+- `python -m unittest discover tests` — **208 тестов OK** (было 205, +3 на atomicity и settings).
+- `python -m ruff check app/ tests/ <root modules>` — clean.
+- `python -m mypy app/` — clean (30 source files).
+
+### Not run / limitations
+- `docker build .` локально не выполнялся (нет docker daemon).
+  Ручная проверка на стороне оператора рекомендуется: чистая сборка,
+  затем `docker run` с bind-mount от root-owned `./data` — entrypoint
+  должен поправить владельца и стартовать без ошибок.
+- Удалённый CI после этих коммитов ещё не проверялся.
+
+### Remaining work (без изменений с P2-batch)
+- P3-долг (концептуальная неоднозначность `looks_too_close_to_training_sample`,
+  silent drop `/clear` под throttle, магические числа в `learning.py`,
+  маскирование `chat_id` в логах).
+- Структурированные JSON-логи (P3, ждать выбора системы агрегации).
 
 ---
 
