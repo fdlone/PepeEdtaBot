@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+from bot_policy import DEFAULT_BOT_TEXT_ALIASES
 from config_registry import RUNTIME_FIELDS, validate_cross_fields
 
 
@@ -36,6 +37,7 @@ class Settings:
     pivo_hmac_secret: str
     pivo_encryption_secret: str
     log_level: str
+    bot_text_aliases: frozenset[str]
 
 
 def _load_runtime_fields() -> dict[str, object]:
@@ -88,6 +90,20 @@ def load_settings(load_env: bool = True) -> Settings:
             "LOG_LEVEL must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL"
         )
 
+    # BOT_TEXT_ALIASES: comma-separated. Empty / unset → built-in defaults
+    # so deployments without .env access keep working.
+    aliases_raw = os.getenv("BOT_TEXT_ALIASES", "").strip()
+    if aliases_raw:
+        bot_text_aliases = frozenset(
+            chunk.strip().lower()
+            for chunk in aliases_raw.split(",")
+            if chunk.strip()
+        )
+        if not bot_text_aliases:
+            bot_text_aliases = DEFAULT_BOT_TEXT_ALIASES
+    else:
+        bot_text_aliases = DEFAULT_BOT_TEXT_ALIASES
+
     runtime_values = _load_runtime_fields()
 
     settings = Settings(
@@ -97,6 +113,7 @@ def load_settings(load_env: bool = True) -> Settings:
         pivo_hmac_secret=pivo_hmac_secret,
         pivo_encryption_secret=pivo_encryption_secret,
         log_level=log_level,
+        bot_text_aliases=bot_text_aliases,
         **runtime_values,  # type: ignore[arg-type]
     )
     validate_cross_fields(settings)

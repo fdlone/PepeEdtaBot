@@ -32,6 +32,11 @@ class TestMainWiring(unittest.TestCase):
 
         for key, value in dependencies.items():
             self.assertIs(dp[key], value)
+        # bot_text_aliases is derived from settings, not passed as a separate
+        # configure_dispatcher kwarg.
+        self.assertIs(
+            dp["bot_text_aliases"], dependencies["settings"].bot_text_aliases
+        )
         self.assertEqual(
             [router.name for router in dp.sub_routers],
             ["common", "admin", "pivo", "learning"],

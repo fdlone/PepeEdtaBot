@@ -1,6 +1,7 @@
 """Tests for app.infrastructure.migrator."""
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -495,3 +496,61 @@ class TestMigratorRealSchemaFixture(unittest.IsolatedAsyncioTestCase):
             "SELECT COUNT(DISTINCT chat_id) FROM messages"
         )
         self.assertEqual((await cur.fetchone())[0], 2)
+
+
+class TestMigratorAtomicity(unittest.IsolatedAsyncioTestCase):
+    """Verifies that a half-failed .sql migration leaves no partial schema.
+
+    sqlite3.Cursor.executescript implicitly COMMITs any pending transaction
+    before running, so DDL statements would auto-persist as they execute
+    unless the script body itself opens a transaction. _apply wraps every
+    .sql file in BEGIN ... COMMIT for exactly this reason. When the script
+    fails, run() calls conn.rollback() and the partially executed DDL is
+    discarded.
+    """
+
+    async def asyncSetUp(self) -> None:
+        self.conn = await aiosqlite.connect(":memory:")
+        self._tmp_path: Path | None = None
+
+    async def asyncTearDown(self) -> None:
+        await self.conn.close()
+        if self._tmp_path is not None:
+            self._tmp_path.unlink(missing_ok=True)
+
+    def _write_sql(self, content: str) -> Path:
+        # NamedTemporaryFile on Windows can't be re-opened while still open,
+        # so write via mkstemp and close immediately.
+        fd, name = tempfile.mkstemp(suffix=".sql", text=True)
+        with open(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        path = Path(name)
+        self._tmp_path = path
+        return path
+
+    async def _table_exists(self, name: str) -> bool:
+        cur = await self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        )
+        return (await cur.fetchone()) is not None
+
+    async def test_failed_sql_migration_rolls_back_partial_ddl(self) -> None:
+        path = self._write_sql(
+            "CREATE TABLE good_table (a INTEGER);\n"
+            "INSERT INTO nonexistent VALUES (1);\n"  # statement that errors
+        )
+        with self.assertRaises(Exception):
+            await migrator._apply(self.conn, path)
+        # run() does conn.rollback() in its except block — emulate.
+        await self.conn.rollback()
+        self.assertFalse(
+            await self._table_exists("good_table"),
+            "good_table must not persist when later statements in the same "
+            ".sql migration fail",
+        )
+
+    async def test_successful_sql_migration_persists(self) -> None:
+        path = self._write_sql("CREATE TABLE persisted (a INTEGER)")
+        await migrator._apply(self.conn, path)
+        # _apply commits via the embedded COMMIT inside the wrapped script.
+        self.assertTrue(await self._table_exists("persisted"))

@@ -74,7 +74,7 @@
 | `repositories/` | `markov_repo.py`, `messages_repo.py`, `pivo_repo.py`, `pivo_usage_repo.py`, `members_repo.py` |
 | `filters/` | `group_only.py` (только `GROUP`/`SUPERGROUP`), `admin_or_owner.py` (`OWNER_ID` или админ чата, fail-closed при ошибке Telegram API) |
 | `middlewares/` | `throttling.py` — per-user-per-command cooldown, `pivo`=30 сек, `clear`=3600 сек |
-| `infrastructure/` | `migrator.py` — пробегает `app/migrations/NNN_*` ровно один раз через `executescript` + rollback на ошибку |
+| `infrastructure/` | `migrator.py` — пробегает `app/migrations/NNN_*` ровно один раз. `.sql`-файлы оборачиваются в `BEGIN; ... COMMIT;` и проходят через `executescript`; на исключении вызывается `conn.rollback()` и схема не остаётся в полу-применённом состоянии |
 | `migrations/` | `001_initial.sql` … `006_pivo_daily_usage.sql` |
 | `security/` | `key_derivation.py` — HKDF-SHA256 derivation |
 
@@ -87,7 +87,7 @@
 | `pivo.py` | `PivoSecurity` (HMAC + Fernet), `PivoMember`. |
 | `pivo_templates.py` | Контент сообщений `/pivo`. |
 | `bot_messages.py` | Форматирование `/help`, `/stats`, `/config`. |
-| `bot_policy.py` | `bot_is_mentioned`, cooldown, `should_reply`. |
+| `bot_policy.py` | `bot_is_mentioned`, cooldown, `should_reply` + `DEFAULT_BOT_TEXT_ALIASES` (встроенные «прозвища», на которые бот отзывается). |
 | `settings.py` | `Settings` dataclass + `load_settings(env)`. |
 | `runtime_state.py` | `RuntimeState` dataclass + `runtime_state_from_settings`. |
 | `runtime_config.py` | Тонкая обёртка вокруг `config_registry.try_apply` для `/set`. |
@@ -108,6 +108,7 @@ dp["runtime_state"] = runtime_state
 dp["settings"] = settings
 dp["bot_username"] = bot_username
 dp["bot_id"] = bot_id
+dp["bot_text_aliases"] = settings.bot_text_aliases
 ```
 
 Никаких самодельных DI-контейнеров. Размер проекта это не оправдывает.
@@ -144,8 +145,14 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
    `validate_cross_fields`.
 
 Поля, которые не должны быть mutable в runtime (`BOT_TOKEN`, `OWNER_ID`,
-`DB_PATH`, `PIVO_*_SECRET`, `LOG_LEVEL`), живут только в `Settings` и
-парсятся вручную в `load_settings`.
+`DB_PATH`, `PIVO_*_SECRET`, `LOG_LEVEL`, `BOT_TEXT_ALIASES`), живут
+только в `Settings` и парсятся вручную в `load_settings`.
+
+`BOT_TEXT_ALIASES` имеет специальное поведение «безопасного fallback'а»:
+если переменная не задана или содержит только разделители — берутся
+встроенные `bot_policy.DEFAULT_BOT_TEXT_ALIASES = {"pepe", "пепе"}`, чтобы
+бот отвечал на свои стандартные прозвища даже без редактируемого
+`.env` (например, на проде с ограниченным доступом к контейнеру).
 
 ## Модель данных
 
@@ -167,11 +174,20 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
 - сканирует `app/migrations/NNN_<name>.{sql,py}`;
 - сравнивает с записями в `schema_migrations`;
 - применяет недостающие в порядке имён;
-- `.sql` идёт через `conn.executescript(...)` (корректно обрабатывает
-  multi-statement файлы, в т.ч. триггеры `BEGIN..END;`);
+- `.sql` оборачивается в `BEGIN; <тело>; COMMIT;` и пропускается через
+  `conn.executescript(...)` — это даёт **атомарность**: stdlib
+  `sqlite3.executescript` неявно делает `COMMIT` перед запуском, и без
+  явного `BEGIN` каждый DDL внутри файла авто-коммитился бы по мере
+  выполнения. Теперь при падении в середине файла `run()` ловит
+  исключение, делает `conn.rollback()`, in-flight-транзакция
+  откатывается, и `schema_migrations` не получает запись о
+  половинчатой миграции;
 - `.py` импортирует и вызывает `await mod.apply(conn)`;
 - на исключении `await conn.rollback()` и raise — запись в
   `schema_migrations` не появится для не до конца применённой миграции.
+
+**Конвенция:** файлы `app/migrations/*.sql` НЕ должны содержать собственных
+`BEGIN`/`COMMIT` — runner добавляет их сам.
 
 ## Безопасность
 
@@ -187,6 +203,26 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
 - `messages.text` больше не хранится; только `normalized_text` после
   `sanitize_text`.
 
+## Docker
+
+Контейнер собран из `python:3.14.0-slim` (pin минорной версии, осознанный
+апгрейд при изменении). Внутри:
+
+- При сборке создаётся пользователь `bot` (UID 1000), `/app` принадлежит ему.
+- `requirements.lock` ставится первым слоем (cache-friendly).
+- `HEALTHCHECK` каждые 60 секунд проверяет, что Python-интерпретатор жив
+  (бот polling-only, HTTP endpoint'а нет — это формальная заглушка).
+- **`docker-entrypoint.sh`** запускается от root: best-effort
+  `chown -R bot:bot /app/data`, затем `exec runuser -u bot -- "$@"`. Это
+  защищает от «host bind-mount принадлежит другому UID/GID, бот не может
+  писать в `/app/data`». `runuser` входит в `util-linux` в slim-образе,
+  ничего доустанавливать не нужно.
+- Если оператор гарантирует владельца хост-директории, можно запустить
+  контейнер с `--user 1000:1000` — тогда entrypoint пропустит команду без
+  изменений.
+- `.gitattributes` фиксирует LF-окончания для `*.sh`, чтобы Windows-клон
+  не сделал CRLF и не сломал shebang в Linux-контейнере.
+
 ## Окружения БД
 
 - `data/markov.db` — runtime-база по умолчанию, проброшена в Docker
@@ -196,9 +232,9 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
 
 ## Тесты и CI
 
-- `tests/` — 13 файлов, ~200 unit-тестов (`unittest`), включая smoke на
-  `configure_dispatcher` и фикстуру с реальной legacy-схемой
-  (`tests/fixtures/legacy_real_schema.sql`).
+- `tests/` — 13 файлов, **208 unit-тестов** (`unittest`), включая smoke на
+  `configure_dispatcher`, атомарность миграций, фикстуру с реальной
+  legacy-схемой (`tests/fixtures/legacy_real_schema.sql`).
 - CI: `.github/workflows/ci.yml` — матрица Python 3.12/3.13/3.14, шаги
   `ruff check` → `mypy app/` → `unittest discover`.
 

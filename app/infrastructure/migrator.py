@@ -65,8 +65,24 @@ async def _apply(conn: aiosqlite.Connection, path: Path) -> None:
         # triggers with BEGIN..END blocks, semicolons inside string literals,
         # and inline comments) — all corner cases the previous naive
         # str.split(";") splitter could not.
-        sql = path.read_text(encoding="utf-8")
-        await conn.executescript(sql)
+        #
+        # However, sqlite3.executescript implicitly issues a COMMIT before
+        # running the script, which would auto-commit each DDL statement as
+        # it runs. To preserve atomicity (so a failure halfway through leaves
+        # no partially applied schema), we explicitly wrap the script content
+        # in BEGIN ... COMMIT. On failure, run() catches the exception and
+        # calls conn.rollback(), which drops the in-flight transaction and
+        # reverts every DDL statement that ran since BEGIN.
+        #
+        # Convention: migration .sql files MUST NOT contain their own BEGIN
+        # or COMMIT statements — the runner adds them.
+        # rstrip() + ensure trailing ';' so the appended COMMIT does not
+        # collide with the last statement when the file omits the
+        # terminator (some of our migrations do).
+        sql = path.read_text(encoding="utf-8").rstrip()
+        if not sql.endswith(";"):
+            sql += ";"
+        await conn.executescript(f"BEGIN;\n{sql}\nCOMMIT;")
     else:
         spec = importlib.util.spec_from_file_location(f"_migration_{path.stem}", path)
         mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]

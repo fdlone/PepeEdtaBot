@@ -1,10 +1,11 @@
 # Технический аудит проекта PepeEdtaBot
 
-Дата актуализации: 2026-05-09 (четвёртая редакция, после фичи daily quota + hotfixes)
-Ветка: `codex/pivo-daily-quota` — 6 коммитов поверх слитой `refactor/structure`.
-Предыдущая редакция аудита: 2026-05-08, третья редакция (ветка `refactor/structure` признана готовой к merge).
+Дата актуализации: 2026-05-10 (шестая редакция, после P2-batch и audit follow-ups).
+Текущая ветка: `main` (последний merge — ветка `fix/audit-followups`).
 
-> История редакций: 1я — первичный аудит; 2я — после Codex-ревизии P1-блокеры; 3я — после закрытия B1/B2/B3, merge-ready; 4я (текущая) — после ветки `codex/pivo-daily-quota`.
+> История редакций: 1я — первичный аудит; 2я — после Codex-ревизии P1-блокеры; 3я — после закрытия B1/B2/B3 (merge-ready); 4я — после ветки `codex/pivo-daily-quota`; **5я — P2-batch (P2-1, P2-2, P2-3, P2-6 закрыты, +P2-4 частично, см. session 18); 6я — audit follow-ups (P2-5 + P1-фиксы атомарности миграций и Docker bind-mount, см. session 19).**
+
+Текущие тесты/проверки: **208 unit-тестов**, `ruff check app/ tests/` — clean, `mypy app/` — clean (30 source files).
 
 **Изменения третьей редакции (для контекста):** все три P1-блокера закрыты; CI зелёный; ветка `refactor/structure` слита в `main`.
 
@@ -35,7 +36,7 @@
 
 Все 200 тестов зелёные локально (3.12/3.13/3.14). `ruff check` и `mypy app/` проходят без замечаний.
 
-### 0.2. Ветка `codex/pivo-daily-quota` — текущая (6 коммитов поверх main)
+### 0.2. Ветка `codex/pivo-daily-quota` — слита в `main` (2026-05-09)
 
 После merge `refactor/structure` добавлена фича суточной квоты `/pivo` и закрыт ряд runtime-багов. Полный трекинг — в `PROJECT_AUDIT_CODEX.md`.
 
@@ -48,13 +49,21 @@
 | `84693d9` | fix(clear): allow confirm under cooldown |
 | `dd43b13` | fix(runtime): avoid fsm state injection conflicts |
 
+### 0.3. Ветка `refactor/audit-p2-batch` — слита в `main` (2026-05-10)
+
+P2-batch: единый реестр настроек (`config_registry.py`), migrator → `executescript` + rollback, Dockerfile hardening (pin minor, non-root, HEALTHCHECK), `LOG_LEVEL` из `.env`, README/ARCHITECTURE обновлены, debug-лог успешной генерации. Подробности — section 18.
+
+### 0.4. Ветка `fix/audit-followups` — слита в `main` (2026-05-10)
+
+Audit follow-ups: атомарность .sql-миграций через `BEGIN; ... COMMIT;`-обёртку (P1 от ревью), Docker bind-mount writability через root-entrypoint с `chown` + `runuser` (P1 от ревью), `BOT_TEXT_ALIASES` в `.env` с safe fallback (P2-5). Подробности — section 19.
+
 ---
 
 ## 1. Краткое резюме проекта
 
 PepeEdtaBot — Telegram-бот для группового чата на `aiogram v3`, который обучается на сообщениях участников и генерирует ответы по цепям Маркова variable-order (n=3 → n=2 → n=1, с backoff). Внешние LLM не используются. Дополнительно есть opt-in команда `/pivo` для шуточного созыва участников в Discord; для неё реализовано HMAC-индексирование и шифрование чувствительных данных (`cryptography.Fernet`).
 
-После завершения фаз 1–6 проект перешёл из «всё в `main.py`» к слоистой архитектуре `handlers / services / repositories / filters / middlewares / migrations`, с версионированными миграциями, отдельными доменными ключами через HKDF, throttling-middleware и CI с линтерами. Серьёзных уязвимостей не найдено; оставшийся техдолг — преимущественно P2/P3 (Dockerfile-hardening, README, реестр настроек).
+После завершения фаз 1–6 + P2-batch + audit follow-ups проект перешёл из «всё в `main.py`» к слоистой архитектуре `handlers / services / repositories / filters / middlewares / migrations / security / infrastructure`, с версионированными миграциями (атомарными через `BEGIN/COMMIT`), отдельными доменными ключами через HKDF, throttling-middleware, единым реестром runtime-настроек (`config_registry.py`), hardened Dockerfile с root-entrypoint и CI с линтерами на 3.12/3.13/3.14. Серьёзных уязвимостей не найдено; оставшийся техдолг — P3 (концептуальная неоднозначность `looks_too_close_to_training_sample`, silent drop `/clear` под throttle, магические числа, маскирование `chat_id` в логах) + опциональные P2-улучшения (`/learn_off` opt-out, структурированные JSON-логи).
 
 ---
 
@@ -188,10 +197,10 @@ PepeEdtaBot/
 | ID | Описание | Статус | Комментарий |
 |---|---|---|---|
 | **P2-1** | Реестр настроек как один источник истины (Settings ↔ RuntimeState ↔ runtime_config) | ✅ | Закрыто в `refactor/audit-p2-batch`: введён `config_registry.py` с `FieldSpec` × 20 + `validate_cross_fields`. `settings.py`, `runtime_state.py`, `runtime_config.py` итерируются по реестру вместо литерального дублирования. Публичный API `runtime_config` сохранён. |
-| **P2-2** | Dockerfile hardening (non-root user, HEALTHCHECK, pin minor) | ✅ | Закрыто в `refactor/audit-p2-batch`: pin `python:3.14.0-slim`, non-root user `bot` (UID 1000), HEALTHCHECK через python-интерпретатор. |
+| **P2-2** | Dockerfile hardening (non-root user, HEALTHCHECK, pin minor) | ✅ | Закрыто в `refactor/audit-p2-batch` + `fix/audit-followups`: pin `python:3.14.0-slim`, HEALTHCHECK; non-root через root-entrypoint, который чинит права на bind-mount и делает `runuser -u bot` (см. п.9.3 ниже). |
 | **P2-3** | README: разделы Tests/Architecture/Privacy, убрать абсолютные ссылки | ✅ | Закрыто в `refactor/audit-p2-batch`: добавлены секции Architecture, Privacy, Тесты; `Python 3.14` → `Python 3.12+`; команды локальных проверок. Абсолютные ссылки уже были вычищены ранее (B3). |
 | **P2-4** | LOG_LEVEL из `.env`, структурированные логи | 🟡 | `LOG_LEVEL` из `.env` закрыт в `refactor/audit-p2-batch` (валидируется в `Settings`, читается в `main.py`). Структурированные логи остаются P3. |
-| **P2-5** | Расширить `BOT_TEXT_ALIASES` через `.env` | ❌ | Не блокирующее. |
+| **P2-5** | Расширить `BOT_TEXT_ALIASES` через `.env` | ✅ | Закрыто в `fix/audit-followups`: добавлен `Settings.bot_text_aliases`, парсится из CSV-env. Безопасный fallback — пустая/незаданная переменная подставляет встроенные `{"pepe", "пепе"}` (важно для деплоев без доступа к `.env` на проде). |
 
 ### P3 — отложены
 
@@ -509,21 +518,23 @@ CMD ["python", "main.py"]      # ❌ работает от root
 
 ### 11.1. Состояние
 
-| Файл | Строк | Тестов | Что покрывает |
-|---|---:|---:|---|
-| `test_db_logic.py` | 247 | ~14 | save_message_and_update_model, get_stats, clear_chat |
-| `test_filters.py` | 180 | 18 | GroupOnly (4), AdminOrOwner (6), ThrottlingMiddleware (8) |
-| `test_handlers.py` | 238 | 18 | happy-path для всех 4 роутеров |
-| `test_learning_service.py` | 141 | 13 | prefix-cache дедупликация |
-| `test_markov_and_text.py` | 427 | ~30 | генерация, токенизация, sanitize_text |
-| `test_members.py` | 225 | 18 | KeyDerivation, MembersRepo, MembersService (включая шифрование payload) |
-| `test_migrator.py` | 495 | ~12 | пустая БД, повторный init, legacy fixture, real-schema fixture |
-| `test_pivo.py` | 152 | ~18 | HMAC, Fernet, build_pivo_mention |
-| `test_runtime_config.py` | 137 | ~20 | apply_runtime_setting для всех ключей |
-| `test_settings.py` | 86 | ~10 | load_settings, валидация |
-| `test_bot_messages.py` | 104 | ~10 | format_*_message |
-| `test_bot_policy.py` | 86 | ~10 | bot_is_mentioned, should_reply |
-| **Итого** | **2518** | **181** | |
+Текущее число тестов в наборе: **208** (после P2-batch и audit follow-ups). Полный список файлов и доменов покрытия:
+
+| Файл | Что покрывает |
+|---|---|
+| `test_db_logic.py` | `save_message_and_update_model`, `get_stats`, `clear_chat`, retention `pivo_daily_usage` |
+| `test_filters.py` | `GroupOnly`, `AdminOrOwner` (включая fail-closed на ошибке Telegram API), `ThrottlingMiddleware` |
+| `test_handlers.py` | happy-path для всех 4 роутеров + denied-fallback для админ-команд |
+| `test_learning_service.py` | prefix-cache дедупликация, инвалидация кэша |
+| `test_main.py` | smoke-тест на `configure_dispatcher` (роутеры, middleware, ключи в `dp[]`) |
+| `test_markov_and_text.py` | генерация, токенизация, `sanitize_text` |
+| `test_members.py` | `KeyDerivation` (HKDF), `MembersRepo`, `MembersService` |
+| `test_migrator.py` | пустая БД, повторный init, legacy fixture, real-schema fixture, **атомарность .sql при ошибке** |
+| `test_pivo.py` | HMAC, Fernet, `build_pivo_mention`, E2E subscribe → call quota → unsubscribe |
+| `test_runtime_config.py` | `apply_runtime_setting` для всех ключей реестра |
+| `test_settings.py` | `load_settings`, валидация ENV (включая `LOG_LEVEL`, `BOT_TEXT_ALIASES` с fallback) |
+| `test_bot_messages.py` | форматирование `/help`, `/stats`, `/config` |
+| `test_bot_policy.py` | `bot_is_mentioned`, `should_reply`, cooldown |
 
 ### 11.2. Покрытие модулей
 
@@ -541,14 +552,16 @@ CMD ["python", "main.py"]      # ❌ работает от root
 
 ### 11.3. Дыры в покрытии
 
-- **E2E `/pivo`-flow** (subscribe → call → mention render → unsubscribe) — нет интеграционного теста, есть только разрозненные unit-тесты компонентов.
-- **Smoke-тест на wiring `main.py`** — нет теста, который проверял бы, что `dp.include_router(...)` действительно регистрирует все 4 роутера, что middleware подключён, что нужные ключи положены в `dp[...]`. Если кто-то случайно удалит строку `dp.include_router(pivo_handlers.router)` — тесты пройдут, бот сломается.
-- **`PivoService.build_call_message`** в реальной комбинации с `MembersRepo` через DB — не покрыт целиком.
-- **Поведение хендлеров при ошибках Telegram API** (`bot.get_me()` падает, `bot.send_chat_action` 5xx) — не покрыто.
-- **Тесты на отказ авторизации с явным ответом** — отсутствуют (см. R1 в разделе «Известные регрессии»). Если регрессия будет исправлена, тест на «неавторизованный `/clear` получает понятное сообщение» должен быть добавлен сразу.
-- **Реальная гонка throttling** (одновременные вызовы) — не тестируется, но in-memory dict не имеет race conditions в asyncio (single-threaded).
+Закрыто:
+- ~~E2E `/pivo`-flow~~ — закрыто в `codex/pivo-daily-quota` (`tests/test_pivo.py`).
+- ~~Smoke-тест на wiring `main.py`~~ — закрыто там же (`tests/test_main.py`).
+- ~~Тесты на отказ авторизации с явным ответом~~ — закрыто блокером B1 в `refactor/structure` (`test_handlers.py` покрывает denied-fallback handlers).
+- ~~Атомарность .sql-миграций при ошибке~~ — закрыто в `fix/audit-followups` (`TestMigratorAtomicity`).
 
-E2E `/pivo` и smoke `main.py` — P2. Тест на denied auth — приходит вместе с R1-фиксом.
+Осталось:
+- **`PivoService.build_call_message`** в реальной комбинации с `MembersRepo` через DB — не покрыт целиком (P3).
+- **Поведение хендлеров при ошибках Telegram API** (`bot.get_me()` падает, `bot.send_chat_action` 5xx) — не покрыто (P3).
+- **Реальная гонка throttling** (одновременные вызовы) — не тестируется, но in-memory dict не имеет race conditions в asyncio (single-threaded), поэтому риск низкий.
 
 ---
 
@@ -628,20 +641,20 @@ E2E `/pivo` и smoke `main.py` — P2. Тест на denied auth — прихо�
 | **P1-B** (B2) | Подключить `requirements.lock` к Dockerfile и CI | ✅ `db1de05` |
 | **P1-C** (B3) | README: починить 2 абсолютные ссылки | ✅ `1ef20a2` |
 
-### P2 — желательно в ближайшие 1–2 итерации
+### P2 — статус после P2-batch и audit follow-ups
 
-| # | Описание | Где | Эффект |
-|---|---|---|---|
-| **P2-1** | Реестр настроек как один источник истины (Settings ↔ RuntimeState ↔ runtime_config) | [`settings.py`](settings.py), [`runtime_state.py`](runtime_state.py), [`runtime_config.py`](runtime_config.py) | Самый ощутимый архитектурный техдолг |
-| **P2-2** | Migrator: перейти на `conn.executescript()` + явные транзакции с rollback (см. п.8.1) | [`app/infrastructure/migrator.py`](app/infrastructure/migrator.py) | Снимает хрупкость для будущих SQL-миграций |
-| **P2-3** | Dockerfile hardening (non-root, HEALTHCHECK, pin минорной версии) | [`Dockerfile`](Dockerfile) | Best practices, безопасность контейнера |
-| **P2-4** | README: разделы Tests/Architecture/Privacy, `Python 3.12+` вместо `Python 3.14`, инструкция «локальные проверки» | [`README.md`](README.md) | UX для нового пользователя/контрибьютора |
-| **P2-5** | Решить судьбу `MembersService`: либо подключить через продуктовый сценарий, либо вынести в feature-branch до реального использования | [`app/services/members_service.py`](app/services/members_service.py), `main.py` | Сейчас инфраструктура без runtime-вызовов |
-| **P2-6** | `LOG_LEVEL` из `.env` | [`main.py:25`](main.py:25), [`.env.example`](.env.example) | Эксплуатация |
-| ~~**P2-7**~~ | E2E-тест `/pivo` flow (subscribe → call → unsubscribe) | `tests/test_pivo.py` | ✅ закрыто в `codex/pivo-daily-quota` |
-| ~~**P2-8**~~ | Smoke-тест на wiring `main.py` (все routers зарегистрированы, middleware подключён, ключи в `dp[]`) | `tests/test_main.py` | ✅ закрыто в `codex/pivo-daily-quota` |
-| **P2-9** | Команда `/learn_off` / `/learn_on` или `/privacy` для opt-out обучения на уровне чата | новый handler + repo | Завершает privacy-историю, начатую удалением `messages.text` |
-| **P2-10** | Расширить `BOT_TEXT_ALIASES` через `.env` | [`bot_policy.py:6`](bot_policy.py:6) | Конфигурируемость |
+| # | Описание | Статус |
+|---|---|---|
+| ~~**P2-1**~~ | Реестр настроек как один источник истины (Settings ↔ RuntimeState ↔ runtime_config) | ✅ закрыто в `refactor/audit-p2-batch` (`config_registry.py`) |
+| ~~**P2-2**~~ | Migrator: атомарные транзакции при ошибке | ✅ закрыто в `refactor/audit-p2-batch` (executescript + rollback) и `fix/audit-followups` (BEGIN/COMMIT-обёртка для true atomicity) |
+| ~~**P2-3**~~ | Dockerfile hardening (non-root, HEALTHCHECK, pin минорной версии) | ✅ закрыто в `refactor/audit-p2-batch` + `fix/audit-followups` (entrypoint с `chown` и `runuser` для bind-mount) |
+| ~~**P2-4**~~ | README: разделы Tests/Architecture/Privacy, `Python 3.12+` | ✅ закрыто в `refactor/audit-p2-batch`. Структурированные JSON-логи остаются P3 |
+| **P2-5** | Решить судьбу `MembersService`: либо подключить через продуктовый сценарий, либо вынести в feature-branch до реального использования | ❌ Сейчас инфраструктура без runtime-вызовов. Не блокер |
+| ~~**P2-6**~~ | `LOG_LEVEL` из `.env` | ✅ закрыто в `refactor/audit-p2-batch` (валидируемый `Settings.log_level`) |
+| ~~**P2-7**~~ | E2E-тест `/pivo` flow | ✅ закрыто в `codex/pivo-daily-quota` |
+| ~~**P2-8**~~ | Smoke-тест на wiring `main.py` | ✅ закрыто в `codex/pivo-daily-quota` |
+| **P2-9** | Команда `/learn_off` / `/learn_on` или `/privacy` для opt-out обучения на уровне чата | ❌ Принято решение отложить — privacy-история уже закрыта удалением `messages.text` и анонимизацией `author_id`, явный opt-out нужен только при выходе на независимые чаты со своими политиками |
+| ~~**P2-10**~~ | Расширить `BOT_TEXT_ALIASES` через `.env` | ✅ закрыто в `fix/audit-followups` с safe fallback на встроенные `{"pepe", "пепе"}` |
 
 ### P3 — косметика и долгосрочное
 
@@ -671,37 +684,32 @@ E2E `/pivo` и smoke `main.py` — P2. Тест на denied auth — прихо�
 
 ## 15. Сводная таблица оставшихся проблем
 
+Только открытые позиции. Закрытое см. в section 14 (P1/P2) и в session updates.
+
 | ID | Локация | Суть | Риск | Приоритет |
 |---|---|---|---|---|
-| ~~P1-A~~ | `app/handlers/admin.py` | UX-регрессия в админ-командах | UX | ✅ закрыто `a0fae76` |
-| ~~P1-B~~ | `requirements.lock`, `Dockerfile` | lock-файл декоративен | воспроизводимость | ✅ закрыто `db1de05` |
-| ~~P1-C~~ | `README.md` | абсолютные ссылки `/D:/test/...` | документация | ✅ закрыто `1ef20a2` |
-| ~~P2-7~~ | `tests/test_pivo.py` | нет E2E-теста `/pivo` flow | регрессии | ✅ закрыто в `codex/pivo-daily-quota` |
-| ~~P2-8~~ | `tests/test_main.py` | нет smoke-теста на wiring `main.py` | потеря роутера незаметна | ✅ закрыто в `codex/pivo-daily-quota` |
-| P2-1 | `settings.py` / `runtime_state.py` / `runtime_config.py` | Тройное дублирование настроек | DX / ошибки при добавлении | P2 |
-| P2-2 | `app/infrastructure/migrator.py` | хрупкий `sql.split(";")` без транзакций | будущие миграции | P2 |
-| P2-3 | `Dockerfile` | non-root, HEALTHCHECK, pin минорной | hardening | P2 |
-| P2-4 | `README.md` | нет разделов Tests/Architecture/Privacy, `Python 3.14` vs `3.12+` | UX | P2 |
-| P2-5 | `app/services/members_service.py` | инфраструктура без runtime-использования | поверхность поддержки | P2 |
-| P2-6 | `main.py:59`, `.env.example` | LOG_LEVEL захардкожен | эксплуатация | P2 |
-| P2-9 | (новый handler) | нет opt-out на обучение чата | privacy-завершение | P2 |
-| P2-10 | `bot_policy.py:6` | `BOT_TEXT_ALIASES` хардкод | конфигурируемость | P2 |
+| P2-5 | `app/services/members_service.py` | инфраструктура без runtime-использования | поверхность поддержки | P2 (не срочно) |
+| P2-9 | (новый handler + repo) | нет opt-out на обучение чата | privacy-завершение | P2 (отложено по продуктовому решению) |
 | P3-1 | `learning.py:75,162` | магические числа | качество | P3 |
-| P3-2 | `app/services/learning_service.py:36-56` | `is_duplicate` — концептуальная неоднозначность (privacy-guard vs эвристика) | путаница в коде | P3 |
+| P3-2 | `app/services/learning_service.py:36-56` | `looks_too_close_to_training_sample` — концептуальная неоднозначность (privacy-guard vs эвристика). Live smoke 2026-05-10 эмпирически подтвердил, что фильтр блокирует **любую** Markov-генерацию при наличии записей в `messages` (стартовая триграмма генератора структурно входит в кэш стартовых префиксов обучения) | путаница в коде, ложный privacy-сигнал | P3 |
 | P3-3 | `app/middlewares/throttling.py` | silent drop для `/clear` под throttle | UX | P3 |
-| P3-4 | логи | `chat_id` без маскирования | privacy (низко) | P3 |
+| P3-4 | логи | `chat_id` без маскирования (а на `LOG_LEVEL=DEBUG` ещё больше деталей) | privacy (низко) | P3 |
 | P3-5 | `pivo_chat_members.is_bot` | неиспользуемое поле | чистка | P3 |
 | P3-6 | `text_utils.py:6` | MENTION_RE на emails | corner case | P3 |
+| P3-7 | хендлеры | поведение при ошибках Telegram API не покрыто тестами | надёжность (низко) | P3 |
+| P3-8 | `app/services/pivo_service.py` | `build_call_message` через DB не покрыт целиком | E2E-coverage | P3 |
 
 ---
 
-**Дата актуализации:** 2026-05-09, четвёртая редакция.
-**Статус:** ветка `codex/pivo-daily-quota` — 200 тестов, ruff/mypy без замечаний. Требует merge в `main` после live-тестирования.
+**Дата актуализации:** 2026-05-10, шестая редакция.
+**Статус:** на `main`, **208 тестов**, ruff/mypy clean.
 **История ревизий:**
 - 2026-05-08, 1я: первичный аудит, «мёржить после фиксов».
 - 2026-05-08, 2я: Codex-ревизия, блокеры P1-A/B/C.
 - 2026-05-08, 3я: блокеры закрыты (`a0fae76`, `db1de05`, `1ef20a2`), `refactor/structure` — merge-ready.
 - 2026-05-09, 4я: `codex/pivo-daily-quota` — daily quota, hotfixes (DI conflict, clear cooldown, quota refund), 200 тестов, P2-7/P2-8 закрыты.
+- 2026-05-10, 5я: `refactor/audit-p2-batch` — P2-1, P2-2, P2-3, P2-6 закрыты, P2-4 частично, debug-лог успешной генерации, 203 теста.
+- 2026-05-10, 6я: `fix/audit-followups` — P2-5 закрыто (BOT_TEXT_ALIASES с safe fallback), P1-фиксы атомарности миграций (BEGIN/COMMIT-обёртка) и Docker bind-mount (root-entrypoint + runuser), 208 тестов.
 
 > SHA коммитов обновлены после очистки истории `git filter-repo` (2026-05-09): удалены строки `Co-Authored-By: Claude` из 28 коммитов.
 
@@ -728,6 +736,67 @@ E2E `/pivo` и smoke `main.py` — P2. Тест на denied auth — прихо�
 - P2-1 (тройное дублирование Settings/RuntimeState/runtime_config) — главный техдолг.
 - `docs/ARCHITECTURE.md` — переписать под текущую архитектуру.
 - Live-тест `codex/pivo-daily-quota` и merge в `main`.
+
+---
+
+## 19. Session update — 2026-05-10 (audit followups)
+
+### Completed (post-P2-batch fixes after independent review)
+- **Migration atomicity** (P1 от ревью): `migrator._apply` теперь оборачивает
+  тело `.sql`-миграции в `BEGIN; ... COMMIT;` перед передачей в
+  `executescript`. Это закрывает дыру, описанную в ревью: stdlib
+  `sqlite3.executescript` неявно делает `COMMIT` перед запуском скрипта,
+  поэтому без явного BEGIN каждый DDL внутри миграции
+  авто-коммитился по мере выполнения, и при падении в середине файла
+  половина схемы оставалась применённой, а в `schema_migrations`
+  записи не было — следующий старт повторял миграцию и снова падал.
+  Теперь `run()` ловит исключение, делает `conn.rollback()`,
+  in-flight-транзакция откатывается. Добавлен класс тестов
+  `TestMigratorAtomicity` (2 теста) с временным `.sql`-файлом, в котором
+  второй statement битый. Коммит `af8cac3`.
+- **Docker bind-mount writability** (P1 от ревью): `USER bot` снят из
+  Dockerfile. Добавлен `docker-entrypoint.sh`, который при старте от
+  root делает best-effort `chown -R bot:bot /app/data`, затем
+  `exec runuser -u bot -- "$@"`. `runuser` уже есть в `python:*-slim`
+  (`util-linux`). Если контейнер запускается с `--user 1000:1000`, то
+  entrypoint просто пропускает команду как есть. Добавлен
+  `.gitattributes` с `*.sh text eol=lf`, чтобы Windows-клон не сделал
+  CRLF в shell-скрипте. README обновлён. Коммит `34d20b9`.
+- **P2-5**: `BOT_TEXT_ALIASES` через `.env` с **безопасным fallback'ом**.
+  `bot_policy.DEFAULT_BOT_TEXT_ALIASES = frozenset({"pepe", "пепе"})`
+  остаётся в коде; `Settings.bot_text_aliases` читает CSV из env и
+  при пустом/незаданном значении подставляет defaults. Это критично
+  для эксплуатации, когда у оператора нет доступа к
+  `.env`/контейнеру — бот всегда отвечает на свои стандартные
+  прозвища. Сигнатура `bot_is_mentioned` расширена 4-м аргументом
+  с дефолтом, поэтому существующие прямые вызовы из тестов остаются
+  совместимыми. +3 теста на settings, +1 на проброс через диспетчер.
+  Коммит `b50f580`.
+
+### Changed files
+- `app/infrastructure/migrator.py`, `tests/test_migrator.py`
+- `Dockerfile`, `docker-entrypoint.sh` (new), `.gitattributes` (new), `README.md`
+- `bot_policy.py`, `settings.py`, `main.py`, `app/handlers/learning.py`,
+  `.env.example`, `tests/test_settings.py`, `tests/test_main.py`
+- `PROJECT_AUDIT.md`
+
+### Tests/checks run
+- `python -m unittest discover tests` — **208 тестов OK** (было 205, +3 на atomicity и settings).
+- `python -m ruff check app/ tests/ <root modules>` — clean.
+- `python -m mypy app/` — clean (30 source files).
+
+### Not run / limitations
+- `docker build .` локально не выполнялся (нет docker daemon).
+  Ручная проверка на стороне оператора рекомендуется: чистая сборка,
+  затем `docker run` с bind-mount от root-owned `./data` — entrypoint
+  должен поправить владельца и стартовать без ошибок.
+- Удалённый CI после этих коммитов ещё не проверялся.
+
+### Remaining work (без изменений с P2-batch)
+- P3-долг (концептуальная неоднозначность `looks_too_close_to_training_sample`,
+  silent drop `/clear` под throttle, магические числа в `learning.py`,
+  маскирование `chat_id` в логах).
+- Структурированные JSON-логи (P3, ждать выбора системы агрегации).
 
 ---
 

@@ -92,6 +92,25 @@ class TestSettings(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "LOG_LEVEL"):
                 load_settings(load_env=False)
 
+    def test_load_settings_default_bot_text_aliases(self) -> None:
+        with patch.dict(os.environ, minimal_env(), clear=True):
+            settings = load_settings(load_env=False)
+        self.assertEqual(settings.bot_text_aliases, frozenset({"pepe", "пепе"}))
+
+    def test_load_settings_empty_bot_text_aliases_falls_back_to_defaults(self) -> None:
+        env = minimal_env()
+        env["BOT_TEXT_ALIASES"] = "  ,  ,"
+        with patch.dict(os.environ, env, clear=True):
+            settings = load_settings(load_env=False)
+        self.assertEqual(settings.bot_text_aliases, frozenset({"pepe", "пепе"}))
+
+    def test_load_settings_overrides_bot_text_aliases(self) -> None:
+        env = minimal_env()
+        env["BOT_TEXT_ALIASES"] = "Bim,БИМ ,bim"
+        with patch.dict(os.environ, env, clear=True):
+            settings = load_settings(load_env=False)
+        self.assertEqual(settings.bot_text_aliases, frozenset({"bim", "бим"}))
+
     def test_load_settings_rejects_conflicting_backoff(self) -> None:
         env = minimal_env()
         env["MARKOV_ORDER"] = "2"

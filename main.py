@@ -45,6 +45,7 @@ def configure_dispatcher(
     dp["settings"] = settings
     dp["bot_username"] = bot_username
     dp["bot_id"] = bot_id
+    dp["bot_text_aliases"] = settings.bot_text_aliases
     dp.include_router(common_handlers.router)
     dp.include_router(admin_handlers.router)
     dp.include_router(pivo_handlers.router)
