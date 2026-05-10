@@ -24,6 +24,10 @@ logger = logging.getLogger("chat_markov")
 
 MIN_LEARN_MESSAGE_CHARS = 3
 MAX_LEARN_MESSAGE_CHARS = 500
+# Сколько раз подряд пробуем сгенерировать ответ, прежде чем сдаёмся.
+# Первые попытки идут с reply-контекстом, последние — без.
+MAX_GENERATION_ATTEMPTS = 4
+GENERATION_ATTEMPTS_WITH_CONTEXT = 2
 
 
 def is_learnable_message_length(clean_text: str) -> bool:
@@ -168,9 +172,11 @@ async def on_text_message(
         )
     reply_text = ""
     # Повторяем генерацию несколько раз: сначала с контекстом, потом без,
-    # и отбрасываем результат если он дословно совпадает с уже виденным сообщением.
-    for attempt in range(4):
-        attempt_context_tokens = context_tokens if attempt < 2 else None
+    # и отбрасываем результат, чьё начало совпадает с уже виденным сообщением.
+    for attempt in range(MAX_GENERATION_ATTEMPTS):
+        attempt_context_tokens = (
+            context_tokens if attempt < GENERATION_ATTEMPTS_WITH_CONTEXT else None
+        )
         candidate = await generator.generate_text(
             chat_id=message.chat.id,
             max_chars=runtime_state.max_reply_chars,
@@ -193,11 +199,11 @@ async def on_text_message(
                 bool(attempt_context_tokens),
                 len(seed or []),
             )
-        elif await learning_service.looks_too_close_to_training_sample(
+        elif await learning_service.matches_training_prefix(
             message.chat.id, candidate, runtime_state.normalize_lower
         ):
             logger.debug(
-                "Generated text is too close to training sample, retrying: chat=%s attempt=%s",
+                "Generated text starts like a training sample, retrying: chat=%s attempt=%s",
                 message.chat.id,
                 attempt + 1,
             )

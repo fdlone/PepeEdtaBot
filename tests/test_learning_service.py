@@ -1,4 +1,4 @@
-"""Tests for LearningService — near-repeat variability heuristic."""
+"""Tests for LearningService — prefix-match novelty heuristic."""
 from __future__ import annotations
 
 import unittest
@@ -58,14 +58,14 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         await self._record("пойдём пить кофе вечером")
         key = (self.chat, False)
         self.assertNotIn(key, self.svc._prefix_cache)
-        await self.svc.looks_too_close_to_training_sample(
+        await self.svc.matches_training_prefix(
             self.chat, "пойдём пить кофе вечером", False
         )
         self.assertIn(key, self.svc._prefix_cache)
 
     async def test_cache_contains_all_prefix_lengths(self) -> None:
         await self._record("один два три четыре пять")
-        await self.svc.looks_too_close_to_training_sample(
+        await self.svc.matches_training_prefix(
             self.chat, "один два три", False
         )
         cache = self.svc._prefix_cache[(self.chat, False)]
@@ -75,7 +75,7 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
 
     async def test_cache_invalidated_after_record(self) -> None:
         await self._record("кофе утром бодрит всех нас")
-        await self.svc.looks_too_close_to_training_sample(
+        await self.svc.matches_training_prefix(
             self.chat, "кофе утром бодрит", False
         )
         self.assertIn((self.chat, False), self.svc._prefix_cache)
@@ -84,10 +84,10 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
 
     async def test_separate_cache_per_normalize_lower(self) -> None:
         await self._record("Кофе утром бодрит всех нас")
-        await self.svc.looks_too_close_to_training_sample(
+        await self.svc.matches_training_prefix(
             self.chat, "кофе утром бодрит", False
         )
-        await self.svc.looks_too_close_to_training_sample(
+        await self.svc.matches_training_prefix(
             self.chat, "кофе утром бодрит", True
         )
         self.assertIn((self.chat, False), self.svc._prefix_cache)
@@ -98,7 +98,7 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
     async def test_exact_match_treated_as_too_close(self) -> None:
         await self._record("кофе утром бодрит")
         # 3 tokens → exact match via prefix cache
-        result = await self.svc.looks_too_close_to_training_sample(
+        result = await self.svc.matches_training_prefix(
             self.chat, "кофе утром бодрит", False
         )
         self.assertTrue(result)
@@ -107,7 +107,7 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         """Bot generates stored prefix + new tokens — 3-gram must be in cache."""
         await self._record("пойдём пить кофе")
         # Build cache by triggering a check
-        await self.svc.looks_too_close_to_training_sample(
+        await self.svc.matches_training_prefix(
             self.chat, "пойдём пить кофе утром вечером", False
         )
         cache = self.svc._prefix_cache.get((self.chat, False), set())
@@ -117,45 +117,49 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
 
     async def test_unique_text_passes(self) -> None:
         await self._record("пойдём пить кофе")
-        result = await self.svc.looks_too_close_to_training_sample(
+        result = await self.svc.matches_training_prefix(
             self.chat, "совершенно другое предложение здесь", False
         )
         self.assertFalse(result)
 
-    async def test_short_text_uses_sql_fallback(self) -> None:
-        """Text with < 3 tokens falls back to SQL exact match."""
+    async def test_short_text_passes_through(self) -> None:
+        """Text with < 3 tokens is skipped by the prefix filter (returns False).
+
+        Such candidates are already filtered by exact-match `message_exists`
+        inside `MarkovGenerator.generate_text`, so a duplicate check here
+        would be redundant and noisy.
+        """
         await self._record("привет мир")
-        # 2 tokens — prefix cache can't help, SQL must catch it
-        result = await self.svc.looks_too_close_to_training_sample(
+        result = await self.svc.matches_training_prefix(
             self.chat, "привет мир", False
         )
-        self.assertTrue(result)
+        self.assertFalse(result)
 
     async def test_short_unique_text_passes(self) -> None:
-        result = await self.svc.looks_too_close_to_training_sample(
+        result = await self.svc.matches_training_prefix(
             self.chat, "уникально", False
         )
         self.assertFalse(result)
 
     async def test_empty_chat_has_no_too_close_samples(self) -> None:
-        result = await self.svc.looks_too_close_to_training_sample(
+        result = await self.svc.matches_training_prefix(
             self.chat, "никаких сообщений ещё нет тут", False
         )
         self.assertFalse(result)
 
     async def test_different_chat_not_too_close(self) -> None:
         await self._record("пойдём пить кофе утром всем")
-        result = await self.svc.looks_too_close_to_training_sample(
+        result = await self.svc.matches_training_prefix(
             999, "пойдём пить кофе утром всем", False
         )
         self.assertFalse(result)
 
     async def test_invalidate_clears_all_normalize_variants(self) -> None:
         await self._record("кофе утром бодрит всех нас")
-        await self.svc.looks_too_close_to_training_sample(
+        await self.svc.matches_training_prefix(
             self.chat, "кофе утром", False
         )
-        await self.svc.looks_too_close_to_training_sample(
+        await self.svc.matches_training_prefix(
             self.chat, "кофе утром", True
         )
         self.svc._invalidate_prefix_cache(self.chat)

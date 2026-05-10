@@ -33,22 +33,27 @@ class LearningService:
         self._invalidate_prefix_cache(chat_id)
         return token_volume
 
-    async def looks_too_close_to_training_sample(
+    async def matches_training_prefix(
         self, chat_id: int, text: str, normalize_lower: bool
     ) -> bool:
-        """True если текст слишком похож на уже виденное сообщение.
+        """True если начало текста совпадает с началом какого-то обучающего сообщения.
 
-        Для коротких текстов (< 3 токенов) — точное SQL-совпадение.
-        Для остальных — эвристика: проверяется случайный префикс длиной 3, 4 или
-        5 токенов против in-memory кэша. Случайная длина намеренно добавляет
-        вариативность: одно и то же сообщение может пройти фильтр на одной
-        попытке и быть отклонено на другой. Это не строгая privacy-защита от
-        копирования, а способ снизить ощущение механического повтора.
+        Проверяется случайно выбранный префикс длиной 3, 4 или 5 токенов против
+        in-memory кэша префиксов всех сохранённых сообщений чата. Случайная
+        длина намеренно даёт вариативность: один и тот же кандидат может пройти
+        фильтр на одной попытке и быть отклонён на другой.
+
+        Это **второстепенный novelty-фильтр**: основные защиты от копий и
+        зацикливаний находятся в :meth:`markov.MarkovGenerator.generate_text`
+        (`is_low_diversity_reply`, `is_context_heavy_reply`,
+        `trim_repetitive_tail`, exact-match `message_exists`).
+
+        Тексты короче 3 токенов фильтр пропускает (нечего сравнивать); такие
+        кандидаты уже отсекаются exact-match'ем внутри генератора.
         """
         tokens = tokenize(sanitize_text(text), normalize_lower=normalize_lower)
-
         if len(tokens) < 3:
-            return await self._db.message_exists(chat_id, text)
+            return False
 
         cache_key = (chat_id, normalize_lower)
         if cache_key not in self._prefix_cache:

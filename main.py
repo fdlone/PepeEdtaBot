@@ -36,7 +36,12 @@ def configure_dispatcher(
     bot_username: str,
     bot_id: int,
 ) -> Dispatcher:
-    dp.message.middleware(ThrottlingMiddleware(limits=COMMAND_COOLDOWNS_SECONDS))
+    dp.message.middleware(
+        ThrottlingMiddleware(
+            limits=COMMAND_COOLDOWNS_SECONDS,
+            notify_on_throttle={"clear"},
+        )
+    )
     dp["db"] = db
     dp["generator"] = generator
     dp["pivo_service"] = pivo_service

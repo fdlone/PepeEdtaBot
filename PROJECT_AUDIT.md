@@ -1,11 +1,11 @@
 # Технический аудит проекта PepeEdtaBot
 
-Дата актуализации: 2026-05-10 (шестая редакция, после P2-batch и audit follow-ups).
-Текущая ветка: `main` (последний merge — ветка `fix/audit-followups`).
+Дата актуализации: 2026-05-10 (седьмая редакция, после P3-чистки и throttle UX).
+Текущая ветка: `main`.
 
 > История редакций: 1я — первичный аудит; 2я — после Codex-ревизии P1-блокеры; 3я — после закрытия B1/B2/B3 (merge-ready); 4я — после ветки `codex/pivo-daily-quota`; **5я — P2-batch (P2-1, P2-2, P2-3, P2-6 закрыты, +P2-4 частично, см. session 18); 6я — audit follow-ups (P2-5 + P1-фиксы атомарности миграций и Docker bind-mount, см. session 19).**
 
-Текущие тесты/проверки: **208 unit-тестов**, `ruff check app/ tests/` — clean, `mypy app/` — clean (30 source files).
+Текущие тесты/проверки: **213 unit-тестов**, `ruff check app/ tests/` — clean, `mypy app/` — clean (30 source files).
 
 **Изменения третьей редакции (для контекста):** все три P1-блокера закрыты; CI зелёный; ветка `refactor/structure` слита в `main`.
 
@@ -736,6 +736,82 @@ CMD ["python", "main.py"]      # ❌ работает от root
 - P2-1 (тройное дублирование Settings/RuntimeState/runtime_config) — главный техдолг.
 - `docs/ARCHITECTURE.md` — переписать под текущую архитектуру.
 - Live-тест `codex/pivo-daily-quota` и merge в `main`.
+
+---
+
+## 20. Session update — 2026-05-10 (P3 polish + throttle UX)
+
+### Completed
+- **P3 (7.1) magic numbers in handler:** `app/handlers/learning.py` — введены
+  module-level константы `MAX_GENERATION_ATTEMPTS = 4` и
+  `GENERATION_ATTEMPTS_WITH_CONTEXT = 2`; `for attempt in range(4)` и
+  `attempt < 2` заменены на ссылки на константы. Поведение идентично.
+- **6.1 conceptual ambiguity `is_duplicate`/`looks_too_close_to_training_sample`:**
+  метод переименован в `matches_training_prefix`. Docstring переписан:
+  фильтр явно описан как второстепенный novelty-хук поверх основных
+  защит в `MarkovGenerator.generate_text` (`is_low_diversity_reply`,
+  `is_context_heavy_reply`, exact-match `message_exists`). Удалена
+  мёртвая ветка `if len(tokens) < 3: return message_exists(...)`:
+  exact-match уже отрабатывает в финальной проверке генератора, и
+  кандидат с <3 токенами не может пройти туда же по prefix-логике.
+  Случайность префикса (`random.randint(3, min(5, ...))`) оставлена
+  по решению пользователя — это сознательный novelty-nudge. Обновлены
+  все вызовы и тесты (`tests/test_learning_service.py`).
+- **P3 (7.6) MENTION_RE на email:** `text_utils.py` — паттерн обновлён до
+  `(?<!\w)@\w+`. Теперь `user@example.com` остаётся `user@example.com`
+  после `sanitize_text`, а `@bot привет` по-прежнему чистится.
+  Добавлены два regression-теста в `tests/test_markov_and_text.py`.
+- **R2 (silent drop /clear под throttle):** `ThrottlingMiddleware` получил
+  параметр `notify_on_throttle: set[str] | None`. Команды в этом наборе
+  при throttle получают короткий ответ «Слишком часто. Подождите ~N сек.»
+  вместо silent drop. `/clear` добавлен в notify-set из `main.py`; `/pivo`
+  silent-drop сохранён по дизайну (шумная команда). Добавлены 3 теста на
+  новое поведение, существующий тест `test_repeated_clear_confirm_is_throttled`
+  сохранён (без notify-set он остаётся silent — это backward-compatible
+  дефолт). Тест отдельно фиксирует, что `/clear confirm` тоже уведомляет,
+  когда `clear` в notify-set.
+- **`seed_diverse.py`:** docstring почищен (убрана строка «локальный файл,
+  в репозиторий не коммитим»), описано назначение скрипта. Добавлен в git
+  как полезный seed-скрипт для smoke-тестирования.
+
+### Changed files
+- `app/handlers/learning.py`
+- `app/services/learning_service.py`
+- `app/middlewares/throttling.py`
+- `text_utils.py`
+- `main.py`
+- `seed_diverse.py`
+- `tests/test_learning_service.py`
+- `tests/test_markov_and_text.py`
+- `tests/test_filters.py`
+- `PROJECT_AUDIT.md`
+
+### Audit findings updated
+- 7.1 magic numbers in `learning.py` — закрыто (для `range(4)`/`attempt < 2`;
+  длины 3..500 уже были константами).
+- 7.6 `MENTION_RE` на email — закрыто.
+- 6.1 концептуальная неоднозначность `is_duplicate` — закрыто.
+- R2 silent drop `/clear` под throttle — закрыто.
+
+### Tests/checks run
+- `python -m unittest discover tests` — **213 тестов OK** (было 208, +5).
+- `python -m ruff check app/ tests/ text_utils.py main.py seed_diverse.py` — clean.
+- `python -m mypy app/` — clean (30 source files).
+
+### Not run / limitations
+- Live smoke в Telegram не проводился — поведение mention-фильтра и throttle
+  UX желательно проверить вручную на тестовом чате.
+- Docker build не выполнялся.
+
+### Remaining work
+- P3-долг частично закрыт. Осталось:
+  - 7.5 паттерн `cursor.fetchone()[0]` в `db.py:160-162` — стилистическая
+    мелочь, можно подтянуть к стилю репозиториев (`assert row is not None`).
+  - Маскирование `chat_id` в логах через HMAC — требует решения по схеме.
+  - Неиспользуемое поле `is_bot` в `pivo_chat_members` — миграция +
+    репозиторий, риск выше пользы.
+- P2-9 `/learn_off` opt-out — отдельная фича, не в этой сессии.
+- Структурированные JSON-логи — ждать выбора системы агрегации.
 
 ---
 
