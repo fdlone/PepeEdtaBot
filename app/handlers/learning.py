@@ -8,6 +8,7 @@ from aiogram import F, Router
 from aiogram.types import Message
 
 from app.handlers._helpers import is_group_message, reply_humanized
+from app.log_masking import mask_chat_id
 from app.services import LearningService
 from bot_policy import (
     bot_is_mentioned,
@@ -86,7 +87,9 @@ async def on_text_message(
     clean = sanitize_text(raw_text)
     if not is_learnable_message_length(clean):
         logger.debug(
-            "Skip message by length: chat=%s len=%s", message.chat.id, len(clean)
+            "Skip message by length: chat=%s len=%s",
+            mask_chat_id(message.chat.id),
+            len(clean),
         )
         return
 
@@ -100,8 +103,8 @@ async def on_text_message(
     runtime_state.learned_messages[message.chat.id] = learned
     if learned == 1 or learned % 25 == 0:
         logger.info(
-            "Прогресс обучения: chat_id=%s, сообщений=%s, объём_модели=%s",
-            message.chat.id,
+            "Прогресс обучения: chat=%s, сообщений=%s, объём_модели=%s",
+            mask_chat_id(message.chat.id),
             learned,
             token_volume,
         )
@@ -125,7 +128,7 @@ async def on_text_message(
     if not enough_data:
         logger.debug(
             "Skip reply: not enough model data chat=%s volume=%s min=%s",
-            message.chat.id,
+            mask_chat_id(message.chat.id),
             token_volume,
             runtime_state.min_tokens_for_model,
         )
@@ -143,7 +146,7 @@ async def on_text_message(
     if not should_reply:
         logger.debug(
             "Skip by trigger/cooldown: chat=%s mentioned=%s cooldown_ok=%s prob=%.2f",
-            message.chat.id,
+            mask_chat_id(message.chat.id),
             mentioned,
             cooldown_ok,
             runtime_state.reply_probability,
@@ -166,7 +169,7 @@ async def on_text_message(
         seed = context_tokens[-runtime_state.reply_context_last_tokens :]
         logger.debug(
             "Reply context prepared: chat=%s context_tokens=%s seed=%s",
-            message.chat.id,
+            mask_chat_id(message.chat.id),
             len(context_tokens),
             seed,
         )
@@ -194,7 +197,7 @@ async def on_text_message(
         if not candidate:
             logger.debug(
                 "Generation attempt failed: chat=%s attempt=%s context=%s seed_len=%s",
-                message.chat.id,
+                mask_chat_id(message.chat.id),
                 attempt + 1,
                 bool(attempt_context_tokens),
                 len(seed or []),
@@ -204,13 +207,13 @@ async def on_text_message(
         ):
             logger.debug(
                 "Generated text starts like a training sample, retrying: chat=%s attempt=%s",
-                message.chat.id,
+                mask_chat_id(message.chat.id),
                 attempt + 1,
             )
         else:
             logger.debug(
                 "Reply generated: chat=%s attempt=%s tokens=%s context=%s",
-                message.chat.id,
+                mask_chat_id(message.chat.id),
                 attempt + 1,
                 len(candidate.split()),
                 bool(attempt_context_tokens),
@@ -233,7 +236,9 @@ async def on_text_message(
             )
             runtime_state.last_reply_ts[message.chat.id] = now
         logger.debug(
-            "Generation failed: chat=%s mentioned=%s", message.chat.id, mentioned
+            "Generation failed: chat=%s mentioned=%s",
+            mask_chat_id(message.chat.id),
+            mentioned,
         )
         return
 

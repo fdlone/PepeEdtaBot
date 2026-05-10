@@ -163,12 +163,16 @@ class Database:
                 "SELECT COALESCE(SUM(cnt), 0) FROM transitions3 WHERE chat_id = ?",
                 (chat_id,),
             )
-            volume3 = int((await cursor3.fetchone())[0] or 0)
+            row3 = await cursor3.fetchone()
+            assert row3 is not None  # COALESCE guarantees a row
+            volume3 = int(row3[0] or 0)
             cursor2 = await db.execute(
                 "SELECT COALESCE(SUM(cnt), 0) FROM transitions WHERE chat_id = ?",
                 (chat_id,),
             )
-            volume2 = int((await cursor2.fetchone())[0] or 0)
+            row2 = await cursor2.fetchone()
+            assert row2 is not None
+            volume2 = int(row2[0] or 0)
 
             await db.commit()
             return volume3 if volume3 > 0 else volume2
