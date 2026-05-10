@@ -21,11 +21,15 @@ async def run(conn: aiosqlite.Connection) -> None:
     await _ensure_table(conn)
     applied = await _get_applied(conn)
     for stem, path in _list_pending(applied):
-        await _apply(conn, path)
-        await conn.execute(
-            "INSERT INTO schema_migrations(name) VALUES (?)", (stem,)
-        )
-        await conn.commit()
+        try:
+            await _apply(conn, path)
+            await conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)", (stem,)
+            )
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
 
 
 async def _ensure_table(conn: aiosqlite.Connection) -> None:
@@ -57,15 +61,14 @@ def _list_pending(applied: set[str]) -> list[tuple[str, Path]]:
 
 async def _apply(conn: aiosqlite.Connection, path: Path) -> None:
     if path.suffix == ".sql":
+        # executescript correctly handles multi-statement scripts (including
+        # triggers with BEGIN..END blocks, semicolons inside string literals,
+        # and inline comments) — all corner cases the previous naive
+        # str.split(";") splitter could not.
         sql = path.read_text(encoding="utf-8")
-        for stmt in _split_sql(sql):
-            await conn.execute(stmt)
+        await conn.executescript(sql)
     else:
         spec = importlib.util.spec_from_file_location(f"_migration_{path.stem}", path)
         mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
         spec.loader.exec_module(mod)  # type: ignore[union-attr]
         await mod.apply(conn)
-
-
-def _split_sql(sql: str) -> list[str]:
-    return [s.strip() for s in sql.split(";") if s.strip()]
