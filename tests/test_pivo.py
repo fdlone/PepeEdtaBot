@@ -15,7 +15,6 @@ from pivo import (
     PivoSecurity,
     build_pivo_mention,
     build_pivo_mentions,
-    collect_pivo_mentions,
     display_name_from_user,
     get_random_pivo_message,
     normalize_username,
@@ -36,13 +35,11 @@ def make_member(
     user_id: int,
     username: str = "",
     display_name: str = "Тестовый Пользователь",
-    is_bot: bool = False,
 ) -> PivoMember:
     return PivoMember(
         encrypted_user_id=security.encrypt_value(user_id),
         encrypted_username=security.encrypt_value(username),
         encrypted_display_name=security.encrypt_value(display_name),
-        is_bot=is_bot,
     )
 
 
@@ -85,12 +82,6 @@ class TestPivo(unittest.TestCase):
             '<a href="tg://user?id=101">Pepe &lt;Admin&gt;</a>',
         )
 
-    def test_build_pivo_mention_skips_bots(self) -> None:
-        security = make_security()
-        member = make_member(security, user_id=102, username="bot", is_bot=True)
-
-        self.assertEqual(build_pivo_mention(member, security), "")
-
     def test_build_pivo_mentions_excludes_caller(self) -> None:
         security = make_security()
         members = [
@@ -109,21 +100,6 @@ class TestPivo(unittest.TestCase):
         mentions = build_pivo_mentions(members, caller_user_id=301, security=security)
 
         self.assertEqual(mentions, PIVO_FALLBACK_MENTIONS)
-
-    def test_collect_pivo_mentions_excludes_bots(self) -> None:
-        security = make_security()
-        members = [
-            make_member(security, user_id=401, username="friend"),
-            make_member(security, user_id=402, username="bot", is_bot=True),
-        ]
-
-        mentions = collect_pivo_mentions(
-            members,
-            caller_user_id=999,
-            security=security,
-        )
-
-        self.assertEqual(mentions, ["@friend"])
 
     def test_display_name_from_user_supports_fallback(self) -> None:
         self.assertEqual(

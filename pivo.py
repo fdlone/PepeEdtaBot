@@ -29,7 +29,6 @@ class PivoMember:
     encrypted_user_id: str
     encrypted_username: str
     encrypted_display_name: str
-    is_bot: bool
 
 
 class PivoSecurity:
@@ -76,9 +75,9 @@ def display_name_from_user(user: object) -> str:
 
 
 def build_pivo_mention(member: PivoMember, security: PivoSecurity) -> str:
-    if member.is_bot:
-        return ""
-
+    # Bots are rejected up-front in the `/pivo_on` handler, so anything
+    # that reached the table is a regular user. The previous explicit
+    # `is_bot` short-circuit was redundant and is gone with that column.
     username = normalize_username(security.decrypt_value(member.encrypted_username))
     if username:
         return html.escape(username, quote=False)

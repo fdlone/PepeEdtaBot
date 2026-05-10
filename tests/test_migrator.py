@@ -19,6 +19,7 @@ EXPECTED_MIGRATIONS = [
     "004_chat_member_profiles",
     "005_drop_messages_text",
     "006_pivo_daily_usage",
+    "007_unify_chat_members",
 ]
 
 EXPECTED_TABLES = {
@@ -28,8 +29,7 @@ EXPECTED_TABLES = {
     "transitions",
     "transitions3",
     "transitions1",
-    "pivo_chat_members",
-    "chat_member_profiles",
+    "chat_members",
     "pivo_daily_usage",
     "schema_migrations",
 }
@@ -252,15 +252,21 @@ class TestMigratorFullCompatibility(unittest.IsolatedAsyncioTestCase):
         return (await cur.fetchone())[0]
 
     async def test_row_counts_unchanged_in_all_tables(self) -> None:
-        counts_before = {
+        # Counts are taken from the legacy table names; after migration 007
+        # `pivo_chat_members` becomes `chat_members` but its rows are copied
+        # verbatim, so the count comparison maps the old name to the new one.
+        legacy_counts = {
             t: await self._count(t)
             for t in ("messages", "starts", "transitions", "starts3",
                       "transitions3", "transitions1", "pivo_chat_members")
         }
         await migrator.run(self.conn)
-        for table, before in counts_before.items():
-            after = await self._count(table)
-            self.assertEqual(after, before, f"{table}: row count changed after migration")
+        for legacy_table, before in legacy_counts.items():
+            current_table = (
+                "chat_members" if legacy_table == "pivo_chat_members" else legacy_table
+            )
+            after = await self._count(current_table)
+            self.assertEqual(after, before, f"{legacy_table}: row count changed")
 
     async def test_markov_data_intact(self) -> None:
         await migrator.run(self.conn)
@@ -292,17 +298,30 @@ class TestMigratorFullCompatibility(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual((await cur.fetchone())[0], 10)
 
-    async def test_pivo_members_intact(self) -> None:
+    async def test_pivo_members_migrated_to_chat_members(self) -> None:
         await migrator.run(self.conn)
 
+        # After migration 007 the data lives in chat_members (no is_bot column).
         cur = await self.conn.execute(
             "SELECT encrypted_user_id, encrypted_display_name"
-            " FROM pivo_chat_members WHERE chat_hash='chash1' ORDER BY user_hash"
+            " FROM chat_members WHERE chat_hash='chash1' ORDER BY user_hash"
         )
         rows = await cur.fetchall()
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0][0], "enc_uid_1")
         self.assertEqual(rows[1][1], "enc_dname_2")
+
+        # Legacy table must be gone.
+        cur = await self.conn.execute(
+            "SELECT name FROM sqlite_master"
+            " WHERE type='table' AND name='pivo_chat_members'"
+        )
+        self.assertIsNone(await cur.fetchone())
+
+        # is_bot column must not exist on the new table.
+        cur = await self.conn.execute("PRAGMA table_info(chat_members)")
+        columns = {row[1] for row in await cur.fetchall()}
+        self.assertNotIn("is_bot", columns)
 
     async def test_text_column_removed(self) -> None:
         await migrator.run(self.conn)
@@ -476,10 +495,24 @@ class TestMigratorRealSchemaFixture(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("text", columns, "text column must be removed by migration 005")
         self.assertIn("normalized_text", columns, "normalized_text must remain")
 
-    async def test_pivo_chat_members_created_empty(self) -> None:
+    async def test_chat_members_created_empty(self) -> None:
         await migrator.run(self.conn)
-        cur = await self.conn.execute("SELECT COUNT(*) FROM pivo_chat_members")
+        cur = await self.conn.execute("SELECT COUNT(*) FROM chat_members")
         self.assertEqual((await cur.fetchone())[0], 0)
+
+        # And the legacy pivo_chat_members must be gone after migration 007.
+        cur = await self.conn.execute(
+            "SELECT name FROM sqlite_master"
+            " WHERE type='table' AND name='pivo_chat_members'"
+        )
+        self.assertIsNone(await cur.fetchone())
+
+        # The legacy chat_member_profiles infrastructure is also dropped.
+        cur = await self.conn.execute(
+            "SELECT name FROM sqlite_master"
+            " WHERE type='table' AND name='chat_member_profiles'"
+        )
+        self.assertIsNone(await cur.fetchone())
 
     async def test_legacy_index_preserved(self) -> None:
         """idx_starts_chat_id existed in old DB and must survive migration."""

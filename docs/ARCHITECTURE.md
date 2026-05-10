@@ -33,13 +33,13 @@
                   ▼
         ┌────────────────────────────────────────────────────────┐
         │  services/  (бизнес-логика, не знают про aiogram*)     │
-        │   LearningService   PivoService   MembersService       │
+        │   LearningService   PivoService                        │
         └────────────────────────────────────────────────────────┘
                   │
                   ▼
         ┌────────────────────────────────────────────────────────┐
         │  repositories/  (per-domain SQL)                       │
-        │   markov / messages / pivo / pivo_usage / members      │
+        │   markov / messages / chat_members / pivo_usage        │
         └────────────────────────────────────────────────────────┘
                   │
                   ▼
@@ -70,13 +70,12 @@
 | Подпакет | Содержимое |
 |---|---|
 | `handlers/` | `common.py`, `admin.py`, `pivo.py`, `learning.py` — `aiogram.Router` per file. `_helpers.py` — `reply_humanized`. |
-| `services/` | `learning_service.py`, `pivo_service.py`, `members_service.py` |
-| `repositories/` | `markov_repo.py`, `messages_repo.py`, `pivo_repo.py`, `pivo_usage_repo.py`, `members_repo.py` |
+| `services/` | `learning_service.py`, `pivo_service.py` |
+| `repositories/` | `markov_repo.py`, `messages_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py` |
 | `filters/` | `group_only.py` (только `GROUP`/`SUPERGROUP`), `admin_or_owner.py` (`OWNER_ID` или админ чата, fail-closed при ошибке Telegram API) |
-| `middlewares/` | `throttling.py` — per-user-per-command cooldown, `pivo`=30 сек, `clear`=3600 сек |
+| `middlewares/` | `throttling.py` — per-user-per-command cooldown, `clear`=3600 сек; команды из `notify_on_throttle` получают явный ответ при throttle вместо silent drop |
 | `infrastructure/` | `migrator.py` — пробегает `app/migrations/NNN_*` ровно один раз. `.sql`-файлы оборачиваются в `BEGIN; ... COMMIT;` и проходят через `executescript`; на исключении вызывается `conn.rollback()` и схема не остаётся в полу-применённом состоянии |
-| `migrations/` | `001_initial.sql` … `006_pivo_daily_usage.sql` |
-| `security/` | `key_derivation.py` — HKDF-SHA256 derivation |
+| `migrations/` | `001_initial.sql` … `007_unify_chat_members.sql` |
 
 ### Корневые legacy/utility модули
 
@@ -162,9 +161,8 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
 | `starts3` / `transitions3` | Основная триграммная модель (`(w1, w2) → w3`). |
 | `starts` / `transitions` | Биграммный fallback (`w1 → w2`). |
 | `transitions1` | Униграммный fallback. |
-| `pivo_chat_members` | Opt-in подписки `/pivo`. PK `(chat_hash, user_hash)`, payload зашифрован Fernet. |
+| `chat_members` | Каноническая таблица участников чата. PK `(chat_hash, user_hash)`, payload зашифрован Fernet. Сейчас единственный потребитель — `/pivo` (присутствие в таблице ≡ подписка); будущие фичи, которым нужно персистентное состояние участника, ходят сюда же. |
 | `pivo_daily_usage` | Суточная квота `/pivo` (`chat_hash`, `user_hash`, `usage_day`, `used_count`). Retention 7 дней. |
-| `chat_member_profiles` | Зарезервированный профиль участника с HKDF-derived ключом, `consent_version`, `key_version`. Сейчас инфраструктура без runtime-вызовов. |
 | `schema_migrations` | Учёт применённых миграций. |
 
 ## Миграции
@@ -194,11 +192,13 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
 - `OWNER_ID` или admin чата → `AdminOrOwner` filter (fail-closed при
   ошибке Telegram API).
 - `/pivo` / `/clear` → `ThrottlingMiddleware`.
-- `/pivo`-подписки: HMAC-индексированный `chat_hash`/`user_hash` +
-  Fernet-шифрование payload.
-- HKDF derivation ключей для `MembersService` с domain-метками
-  (`members:hmac`, `members:encryption`) изолирует домены и не использует
-  raw `PIVO_*_SECRET` напрямую.
+- `chat_members` (и зависящий от неё `/pivo`-flow): HMAC-индексированный
+  `chat_hash`/`user_hash` под `PIVO_HMAC_SECRET`, Fernet-шифрование
+  payload под `PIVO_ENCRYPTION_SECRET`. Прежняя HKDF-инфраструктура с
+  доменными метками (`members:hmac` / `members:encryption`) и
+  `chat_member_profiles` была удалена в миграции 007 как
+  «заготовка под несуществующие домены». Если в будущем появится
+  независимый домен, HKDF можно подключить отдельным сервисом.
 - Все SQL-запросы параметризованы.
 - `messages.text` больше не хранится; только `normalized_text` после
   `sanitize_text`.

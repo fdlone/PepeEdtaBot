@@ -181,40 +181,36 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
             await reopened.close()
             self.db = reopened
 
-    async def test_pivo_member_upsert_get_and_remove(self) -> None:
-        await self.db.upsert_pivo_member(
+    async def test_chat_member_upsert_get_and_remove(self) -> None:
+        await self.db.upsert_chat_member(
             chat_hash="chat-hash",
             user_hash="user-hash",
             encrypted_user_id="encrypted-user-id",
             encrypted_username="encrypted-username",
             encrypted_display_name="encrypted-display-name",
-            is_bot=False,
         )
 
-        members = await self.db.get_pivo_members("chat-hash")
+        members = await self.db.get_chat_members("chat-hash")
         self.assertEqual(len(members), 1)
         self.assertEqual(members[0]["encrypted_user_id"], "encrypted-user-id")
         self.assertEqual(members[0]["encrypted_username"], "encrypted-username")
         self.assertEqual(
             members[0]["encrypted_display_name"], "encrypted-display-name"
         )
-        self.assertFalse(members[0]["is_bot"])
 
-        await self.db.upsert_pivo_member(
+        await self.db.upsert_chat_member(
             chat_hash="chat-hash",
             user_hash="user-hash",
             encrypted_user_id="encrypted-user-id-2",
             encrypted_username="encrypted-username-2",
             encrypted_display_name="encrypted-display-name-2",
-            is_bot=True,
         )
-        members = await self.db.get_pivo_members("chat-hash")
+        members = await self.db.get_chat_members("chat-hash")
         self.assertEqual(len(members), 1)
         self.assertEqual(members[0]["encrypted_user_id"], "encrypted-user-id-2")
-        self.assertTrue(members[0]["is_bot"])
 
-        await self.db.remove_pivo_member("chat-hash", "user-hash")
-        self.assertEqual(await self.db.get_pivo_members("chat-hash"), [])
+        await self.db.remove_chat_member("chat-hash", "user-hash")
+        self.assertEqual(await self.db.get_chat_members("chat-hash"), [])
 
     async def test_schema_contains_expected_tables(self) -> None:
         await self.db.close()
@@ -232,9 +228,8 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             tables,
             [
-                "chat_member_profiles",
+                "chat_members",
                 "messages",
-                "pivo_chat_members",
                 "pivo_daily_usage",
                 "schema_migrations",
                 "starts",

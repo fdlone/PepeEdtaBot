@@ -123,10 +123,9 @@ middlewares / migrations / security / infrastructure`), DI через
   middleware и роутеров.
 - `app/handlers/` — четыре `aiogram.Router`'а: `common`, `admin`, `pivo`,
   `learning`. Хендлеры зависят только от сервисов.
-- `app/services/` — бизнес-логика (`LearningService`, `PivoService`,
-  `MembersService`).
-- `app/repositories/` — SQL по доменам (`markov`, `messages`, `pivo`,
-  `members`, `pivo_usage`).
+- `app/services/` — бизнес-логика (`LearningService`, `PivoService`).
+- `app/repositories/` — SQL по доменам (`markov`, `messages`,
+  `chat_members`, `pivo_usage`).
 - `app/filters/` и `app/middlewares/` — `GroupOnly`, `AdminOrOwner`,
   `ThrottlingMiddleware`.
 - `app/infrastructure/migrator.py` — пробегает по `app/migrations/NNN_*.sql|.py`

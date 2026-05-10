@@ -1,11 +1,11 @@
 # Технический аудит проекта PepeEdtaBot
 
-Дата актуализации: 2026-05-10 (седьмая редакция, после P3-чистки и throttle UX).
+Дата актуализации: 2026-05-10 (восьмая редакция, после унификации pivo + chat_members).
 Текущая ветка: `main`.
 
 > История редакций: 1я — первичный аудит; 2я — после Codex-ревизии P1-блокеры; 3я — после закрытия B1/B2/B3 (merge-ready); 4я — после ветки `codex/pivo-daily-quota`; **5я — P2-batch (P2-1, P2-2, P2-3, P2-6 закрыты, +P2-4 частично, см. session 18); 6я — audit follow-ups (P2-5 + P1-фиксы атомарности миграций и Docker bind-mount, см. session 19).**
 
-Текущие тесты/проверки: **213 unit-тестов**, `ruff check app/ tests/` — clean, `mypy app/` — clean (30 source files).
+Текущие тесты/проверки: **190 unit-тестов**, `ruff check app/ tests/` — clean, `mypy app/` — clean (26 source files). Падение числа тестов относительно седьмой редакции (213 → 190) — за счёт удаления `tests/test_members.py` и снятия двух теперь-нерелевантных кейсов в `tests/test_pivo.py` (фильтр `is_bot` ушёл вместе с колонкой).
 
 **Изменения третьей редакции (для контекста):** все три P1-блокера закрыты; CI зелёный; ветка `refactor/structure` слита в `main`.
 
@@ -613,11 +613,11 @@ CMD ["python", "main.py"]      # ❌ работает от root
 | ~~**P2-2**~~ | Migrator: атомарные транзакции при ошибке | ✅ закрыто в `refactor/audit-p2-batch` (executescript + rollback) и `fix/audit-followups` (BEGIN/COMMIT-обёртка для true atomicity) |
 | ~~**P2-3**~~ | Dockerfile hardening (non-root, HEALTHCHECK, pin минорной версии) | ✅ закрыто в `refactor/audit-p2-batch` + `fix/audit-followups` (entrypoint с `chown` и `runuser` для bind-mount) |
 | ~~**P2-4**~~ | README: разделы Tests/Architecture/Privacy, `Python 3.12+` | ✅ закрыто в `refactor/audit-p2-batch`. Структурированные JSON-логи остаются P3 |
-| **P2-5** | Решить судьбу `MembersService`: либо подключить через продуктовый сценарий, либо вынести в feature-branch до реального использования | ❌ Сейчас инфраструктура без runtime-вызовов. Не блокер |
+| ~~**P2-5**~~ | Решить судьбу `MembersService` | ✅ закрыто в session 21 — `MembersService` / `MembersRepo` / `chat_member_profiles` / `key_derivation.py` удалены; роль канонической таблицы участников перешла к `chat_members` (миграция 007), её использует `/pivo` |
 | ~~**P2-6**~~ | `LOG_LEVEL` из `.env` | ✅ закрыто в `refactor/audit-p2-batch` (валидируемый `Settings.log_level`) |
 | ~~**P2-7**~~ | E2E-тест `/pivo` flow | ✅ закрыто в `codex/pivo-daily-quota` |
 | ~~**P2-8**~~ | Smoke-тест на wiring `main.py` | ✅ закрыто в `codex/pivo-daily-quota` |
-| **P2-9** | Команда `/learn_off` / `/learn_on` или `/privacy` для opt-out обучения на уровне чата | ❌ Принято решение отложить — privacy-история уже закрыта удалением `messages.text` и анонимизацией `author_id`, явный opt-out нужен только при выходе на независимые чаты со своими политиками |
+| ~~**P2-9**~~ | `/learn_off` opt-out | ❌ снят по продуктовому решению (session 21): после удаления `messages.text`, анонимизации `author_id` и маскирования `chat_id` чувствительной информации на уровне чата не остаётся; явный opt-out закрывал бы теоретический риск, не соответствующий реальной угрозе |
 | ~~**P2-10**~~ | Расширить `BOT_TEXT_ALIASES` через `.env` | ✅ закрыто в `fix/audit-followups` с safe fallback на встроенные `{"pepe", "пепе"}` |
 
 ### P3 — косметика и долгосрочное
@@ -629,13 +629,13 @@ CMD ["python", "main.py"]      # ❌ работает от root
 - ~~`MENTION_RE` на email~~ → `(?<!\w)@\w+`.
 
 Остаётся:
-- **Маскирование `chat_id` в логах через HMAC.** Микропроект: hmac-helper (новый модуль `app/security/logging_safe.py`?), решение «использовать `PIVO_HMAC_SECRET` через HKDF с доменом `logging:chat_id`» или завести отдельный секрет; замена всех `chat=%s` на `chat=%s` с маскированным значением; тесты.
-- **Удалить неиспользуемое поле `is_bot` в `pivo_chat_members`** (миграция `00X_drop_pivo_is_bot.sql` + правка `PivoRepo.upsert`). Польза близка к нулю, риск миграции выше — можно оставить как есть.
+- **Маскирование `chat_id` в логах через HMAC** (HKDF от `PIVO_HMAC_SECRET` с доменом `logging:chat_id`, первые 8 hex). Будет в следующей сессии.
+- ~~Удалить неиспользуемое поле `is_bot`~~ — закрыто в session 21 (миграция 007).
 - **Структурированные логи (JSON)** — отложить до выбора системы агрегации.
 - **Метрики (Prometheus / aiogram-middleware)** — заводить, когда будет куда отправлять.
 - **`cursor.fetchone()` стиль в `db.py:165-174`** (`assert row is not None`, как в репозиториях).
 - **Поведение хендлеров при ошибках Telegram API** — не покрыто тестами (см. 11.3).
-- **`PivoService.build_call_message` через DB E2E** — не покрыт целиком (см. 11.3).
+- **`PivoService.build_call_message` через DB E2E** — закрыт фактически тестом `TestPivoServiceFlow.test_subscribe_call_quota_and_unsubscribe_flow`; при подтверждении можно убрать из остаточного P3.
 
 ### Что **не** делать сейчас
 
@@ -657,18 +657,15 @@ CMD ["python", "main.py"]      # ❌ работает от root
 
 | ID | Локация | Суть | Риск | Приоритет |
 |---|---|---|---|---|
-| P2-5 | `app/services/members_service.py` | инфраструктура без runtime-использования | поверхность поддержки | P2 (не срочно) |
-| P2-9 | (новый handler + repo) | нет opt-out на обучение чата | privacy-завершение | P2 (отложено по продуктовому решению) |
-| P3-4 | логи | `chat_id` без маскирования (а на `LOG_LEVEL=DEBUG` ещё больше деталей) | privacy (низко) | P3 |
-| P3-5 | `pivo_chat_members.is_bot` | неиспользуемое поле | чистка | P3 (не блокер, риск миграции выше пользы) |
+| P3-4 | логи | `chat_id` без маскирования | privacy (низко) | P3 (next) |
 | P3-7 | хендлеры | поведение при ошибках Telegram API не покрыто тестами | надёжность (низко) | P3 |
-| P3-8 | `app/services/pivo_service.py` | `build_call_message` через DB не покрыт целиком | E2E-coverage | P3 |
+| P3-8 | `tests/test_pivo.py` | `build_call_message` через DB — пересмотреть, фактически покрыт `test_subscribe_call_quota_and_unsubscribe_flow` | формальная закрываемость | P3 (review) |
 | 7.1 | `db.py:165-174` | стилистика `cursor.fetchone()[0]` без `assert row is not None` | стиль | P3 |
 
 ---
 
-**Дата актуализации:** 2026-05-10, седьмая редакция.
-**Статус:** на `main`, **213 тестов**, ruff/mypy clean.
+**Дата актуализации:** 2026-05-10, восьмая редакция.
+**Статус:** на `main`, **190 тестов**, ruff/mypy clean (26 source files).
 **История ревизий:**
 - 2026-05-08, 1я: первичный аудит, «мёржить после фиксов».
 - 2026-05-08, 2я: Codex-ревизия, блокеры P1-A/B/C.
@@ -677,6 +674,7 @@ CMD ["python", "main.py"]      # ❌ работает от root
 - 2026-05-10, 5я: `refactor/audit-p2-batch` — P2-1, P2-2, P2-3, P2-6 закрыты, P2-4 частично, debug-лог успешной генерации, 203 теста.
 - 2026-05-10, 6я: `fix/audit-followups` — P2-5 закрыто (BOT_TEXT_ALIASES с safe fallback), P1-фиксы атомарности миграций (BEGIN/COMMIT-обёртка) и Docker bind-mount (root-entrypoint + runuser), 208 тестов.
 - 2026-05-10, 7я (PR #5, `polish/audit-session-20`): P3-полировка — `matches_training_prefix` (rename + honest docstring + removed dead branch), магические числа → константы, `MENTION_RE` для email, `notify_on_throttle` UX-фикс silent drop `/clear`. 213 тестов.
+- 2026-05-10, 8я (`feat/unify-chat-members`): унификация участников — миграция 007 переносит `pivo_chat_members` → `chat_members` (без `is_bot`), `chat_member_profiles` / `MembersService` / `MembersRepo` / `key_derivation.py` удалены, `PivoRepo` → `ChatMembersRepo`. Закрыто P2-5, P3-5, снят P2-9. 190 тестов (-23 за счёт удалённых dead-code тестов).
 
 > SHA коммитов обновлены после очистки истории `git filter-repo` (2026-05-09): удалены строки `Co-Authored-By: Claude` из 28 коммитов.
 
@@ -703,6 +701,81 @@ CMD ["python", "main.py"]      # ❌ работает от root
 - P2-1 (тройное дублирование Settings/RuntimeState/runtime_config) — главный техдолг.
 - `docs/ARCHITECTURE.md` — переписать под текущую архитектуру.
 - Live-тест `codex/pivo-daily-quota` и merge в `main`.
+
+---
+
+## 21. Session update — 2026-05-10 (chat_members unification)
+
+### Completed
+- **P2-5** закрыто. `chat_member_profiles` / `MembersService` / `MembersRepo` /
+  `app/security/key_derivation.py` удалены: эта инфраструктура была заделом
+  «на будущие HKDF-домены», которые не материализовались, поэтому несла
+  только стоимость поддержки. Канонической таблицей участников теперь
+  является `chat_members` — единственный потребитель сейчас `/pivo`
+  (присутствие в таблице ≡ подписка), будущие фичи с персистентным
+  состоянием участника пишут сюда же.
+- **P3-5** закрыто. Поле `is_bot` в новой таблице отсутствует:
+  `cmd_pivo_on` отсекает ботов до записи, так что колонка читалась только
+  defensively в `build_pivo_mention`. Защита упрощена до уровня «всё, что
+  лежит в таблице — это пользователь».
+- **Миграция 007_unify_chat_members.sql:** CREATE TABLE `chat_members` →
+  копирование строк из `pivo_chat_members` → DROP `pivo_chat_members` /
+  `chat_member_profiles` и связанных индексов → CREATE INDEX
+  `idx_chat_members_chat_hash`. Атомарна (BEGIN/COMMIT-обёртка миграционного
+  раннера). Существующие /pivo-подписки сохранены без re-encrypt, потому
+  что ключи (HMAC под `PIVO_HMAC_SECRET`, Fernet под
+  `sha256(PIVO_ENCRYPTION_SECRET)`) не меняются.
+- **`PivoRepo` → `ChatMembersRepo`**. Методы по-прежнему `upsert / remove /
+  list_members`, но без `is_bot`. Таблица переименована, репозиторий
+  тоже. `db.py` facade методы переименованы:
+  `upsert_pivo_member` → `upsert_chat_member`,
+  `get_pivo_members` → `get_chat_members`,
+  `remove_pivo_member` → `remove_chat_member`.
+- `PivoMember` dataclass без `is_bot`. `build_pivo_mention` /
+  `collect_pivo_mentions` упрощены. Удалены теперь-нерелевантные
+  unit-тесты `test_build_pivo_mention_skips_bots` /
+  `test_collect_pivo_mentions_excludes_bots`.
+- **Документация:** `docs/ARCHITECTURE.md` и `README.md` обновлены.
+
+### Changed files
+- Новый: `app/migrations/007_unify_chat_members.sql`,
+  `app/repositories/chat_members_repo.py`.
+- Удалены: `app/repositories/pivo_repo.py`,
+  `app/repositories/members_repo.py`, `app/services/members_service.py`,
+  `app/security/key_derivation.py`, `app/security/__init__.py`,
+  `tests/test_members.py`.
+- Изменены: `app/repositories/__init__.py`, `app/services/pivo_service.py`,
+  `db.py`, `pivo.py`, `tests/test_pivo.py`, `tests/test_db_logic.py`,
+  `tests/test_migrator.py`, `docs/ARCHITECTURE.md`, `README.md`,
+  `PROJECT_AUDIT.md`.
+
+### Audit findings updated
+- P2-5 (MembersService без runtime) — закрыто.
+- P3-5 (неиспользуемое `is_bot`) — закрыто.
+- P2-9 (`/learn_off` opt-out) — снят как пункт по продуктовому решению:
+  после анонимизации `author_id`, удаления `messages.text` и предстоящего
+  маскирования `chat_id` чувствительной информации на уровне чата
+  фактически не остаётся; явный opt-out закрывает теоретический риск,
+  не отвечающий реальной угрозе.
+
+### Tests/checks run
+- `python -m unittest discover tests` — **190 тестов OK**.
+- `python -m ruff check app/ tests/` — clean.
+- `python -m mypy app/` — clean (26 source files, было 30).
+
+### Not run / limitations
+- Live smoke в Telegram не проводился. Рекомендуется:
+  существующий /pivo-чат → проверить, что `/pivo_on` / `/pivo` / `/pivo_off`
+  по-прежнему работают (миграция выполнится при первом запуске).
+- Docker build не выполнялся.
+
+### Remaining work
+- **P3-4** маскирование `chat_id` в логах — будет в следующей сессии.
+- **P3-7** тесты на ошибки Telegram API в хендлерах.
+- **P3-8** E2E `PivoService.build_call_message` через DB (фактически уже
+  покрыт `TestPivoServiceFlow.test_subscribe_call_quota_and_unsubscribe_flow`
+  — можно пересмотреть и закрыть в аудите при подтверждении).
+- **7.1** стиль `cursor.fetchone()[0]` в `db.py:165-174`.
 
 ---
 
