@@ -1,14 +1,20 @@
 # PROJECT_AUDIT_CODEX
 
-Дата актуализации: 2026-05-09  
-Текущая ветка: `codex/pivo-daily-quota`  
-Базовый документ аудита: `PROJECT_AUDIT.md`
+Дата актуализации: 2026-05-09 (содержимое заморожено).  
+Базовый документ аудита: `PROJECT_AUDIT.md`.
+
+> **Status (2026-05-10):** ветка `codex/pivo-daily-quota`, описанная ниже,
+> уже **слита в `main`** вместе с последующими работами (`refactor/structure`,
+> `refactor/audit-p2-batch`, `fix/audit-followups`). Документ сохранён как
+> исторический snapshot независимой Codex-ревизии этой ветки и не
+> перезаписывается. Текущее состояние проекта и вся актуальная динамика
+> ведутся в `PROJECT_AUDIT.md` (sections 18–19 и далее).
 
 ## Current status
 
 `PROJECT_AUDIT.md` остается главным общим аудитом проекта. По нему рефакторинговая ветка `refactor/structure` уже признана готовой к merge: P0 закрыты, P1-блокеры B1/B2/B3 закрыты, оставшийся долг относится к P2/P3.
 
-Этот файл используется как рабочий tracker Codex по текущей ветке `codex/pivo-daily-quota`. Старые выводы по `refactor/structure` больше не дублируются здесь; актуальные детали по ним нужно смотреть в `PROJECT_AUDIT.md`.
+Этот файл используется как рабочий tracker Codex по ветке `codex/pivo-daily-quota`. Старые выводы по `refactor/structure` здесь не дублируются; актуальные детали по ним смотри в `PROJECT_AUDIT.md`.
 
 ## Current branch audit: daily quota for /pivo
 
