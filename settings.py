@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -51,7 +50,7 @@ class Settings:
     min_tokens_for_model: int
     max_reply_chars: int
     max_reply_tokens: int
-    owner_id: Optional[int]
+    owner_id: int | None
     normalize_lower: bool
     db_path: str
     typing_min_ms: int
@@ -70,6 +69,7 @@ class Settings:
     reply_context_include_current_message: bool
     pivo_hmac_secret: str
     pivo_encryption_secret: str
+    log_level: str
 
 
 def load_settings(load_env: bool = True) -> Settings:
@@ -151,6 +151,12 @@ def load_settings(load_env: bool = True) -> Settings:
     if len(pivo_encryption_secret) < 16:
         raise ValueError("PIVO_ENCRYPTION_SECRET must be at least 16 characters")
 
+    log_level = os.getenv("LOG_LEVEL", "INFO").strip().upper()
+    if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+        raise ValueError(
+            "LOG_LEVEL must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL"
+        )
+
     return Settings(
         bot_token=bot_token,
         reply_probability=reply_probability,
@@ -177,4 +183,5 @@ def load_settings(load_env: bool = True) -> Settings:
         reply_context_include_current_message=reply_context_include_current_message,
         pivo_hmac_secret=pivo_hmac_secret,
         pivo_encryption_secret=pivo_encryption_secret,
+        log_level=log_level,
     )

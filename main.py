@@ -55,7 +55,7 @@ def configure_dispatcher(
 async def run_bot() -> None:
     settings: Settings = load_settings()
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, settings.log_level),
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
     logger = logging.getLogger("chat_markov")
