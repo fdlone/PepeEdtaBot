@@ -3,9 +3,10 @@
 Telegram-бот для группового чата. Учится на сообщениях чата и генерирует ответы на цепях Маркова без внешней LLM.
 
 ## Стек
-- Python 3.14
+- Python 3.12+ (CI прогоняет матрицу 3.12 / 3.13 / 3.14)
 - aiogram v3
 - SQLite + aiosqlite
+- `cryptography` (Fernet, HKDF) для шифрования и доменных ключей `/pivo`
 - конфигурация через `.env`
 
 ## Быстрый старт
@@ -101,6 +102,64 @@ docker compose down
 ## Важно для групп
 Отключите privacy mode у бота в BotFather:
 `Bot Settings -> Group Privacy -> Turn off`
+
+## Архитектура
+Подробное описание слоёв (`handlers / services / repositories / filters /
+middlewares / migrations / security / infrastructure`), DI через
+`Dispatcher` и compose root — в [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+Краткий обзор:
+- `main.py` — compose root: загрузка `Settings`, инициализация БД, сервисов,
+  middleware и роутеров.
+- `app/handlers/` — четыре `aiogram.Router`'а: `common`, `admin`, `pivo`,
+  `learning`. Хендлеры зависят только от сервисов.
+- `app/services/` — бизнес-логика (`LearningService`, `PivoService`,
+  `MembersService`).
+- `app/repositories/` — SQL по доменам (`markov`, `messages`, `pivo`,
+  `members`, `pivo_usage`).
+- `app/filters/` и `app/middlewares/` — `GroupOnly`, `AdminOrOwner`,
+  `ThrottlingMiddleware`.
+- `app/infrastructure/migrator.py` — пробегает по `app/migrations/NNN_*.sql|.py`
+  один раз и записывает в `schema_migrations`.
+
+Реестр runtime-настроек живёт в [`config_registry.py`](config_registry.py):
+любое поле, доступное через `/set`, описано там одной строкой и
+автоматически попадает в `Settings`, `RuntimeState` и
+`apply_runtime_setting`.
+
+## Privacy
+- Колонка `messages.text` удалена миграцией `005_drop_messages_text.py`.
+  Хранится только `normalized_text` — с убранными `@mention` и
+  схлопнутыми пробелами; используется для дедупликации генерации.
+- `author_id` принудительно анонимизируется миграцией `003_anonymize_authors.py`.
+- `/pivo` работает строго по opt-in: подписки хранятся как
+  HMAC-индексированные хэши `chat_hash` и `user_hash`, payload зашифрован
+  Fernet'ом. Ключи выводятся через HKDF-SHA256 от `PIVO_*_SECRET` с
+  доменными метками (`members:hmac`, `members:encryption`).
+- `/pivo_privacy` показывает пользователю, что хранится для `/pivo`.
+- Раскрытые уровни логирования (`LOG_LEVEL=DEBUG` и т.п.) могут
+  печатать `chat_id` — на проде используйте `INFO` или выше.
+
+## Тесты
+Проект использует стандартный `unittest` (без pytest) и линтеры `ruff` +
+`mypy strict` для `app/` (legacy-модули вынесены в `ignore_errors`).
+
+Установка dev-зависимостей:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+Локальные проверки (соответствуют шагам CI):
+
+```bash
+python -m ruff check app/ tests/
+python -m mypy app/
+python -m unittest discover tests -v
+```
+
+CI-конфиг: [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Тесты
+прогоняются на матрице Python 3.12 / 3.13 / 3.14.
 
 ## Безопасность
 - не коммитьте `.env`;

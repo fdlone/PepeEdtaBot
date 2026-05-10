@@ -187,10 +187,10 @@ PepeEdtaBot/
 
 | ID | Описание | Статус | Комментарий |
 |---|---|---|---|
-| **P2-1** | Реестр настроек как один источник истины (Settings ↔ RuntimeState ↔ runtime_config) | ❌ | Отложено: реализация требует переписать три модуля (`settings.py`, `runtime_state.py`, `runtime_config.py`), не блокирует merge, не критично. |
-| **P2-2** | Dockerfile hardening (non-root user, HEALTHCHECK, pin minor) | ❌ | См. п.9.3. |
-| **P2-3** | README: разделы Tests/Architecture/Privacy, убрать абсолютные ссылки | ❌ | См. п.9.1. |
-| **P2-4** | LOG_LEVEL из `.env`, структурированные логи | ❌ | См. п.10. |
+| **P2-1** | Реестр настроек как один источник истины (Settings ↔ RuntimeState ↔ runtime_config) | ✅ | Закрыто в `refactor/audit-p2-batch`: введён `config_registry.py` с `FieldSpec` × 20 + `validate_cross_fields`. `settings.py`, `runtime_state.py`, `runtime_config.py` итерируются по реестру вместо литерального дублирования. Публичный API `runtime_config` сохранён. |
+| **P2-2** | Dockerfile hardening (non-root user, HEALTHCHECK, pin minor) | ✅ | Закрыто в `refactor/audit-p2-batch`: pin `python:3.14.0-slim`, non-root user `bot` (UID 1000), HEALTHCHECK через python-интерпретатор. |
+| **P2-3** | README: разделы Tests/Architecture/Privacy, убрать абсолютные ссылки | ✅ | Закрыто в `refactor/audit-p2-batch`: добавлены секции Architecture, Privacy, Тесты; `Python 3.14` → `Python 3.12+`; команды локальных проверок. Абсолютные ссылки уже были вычищены ранее (B3). |
+| **P2-4** | LOG_LEVEL из `.env`, структурированные логи | 🟡 | `LOG_LEVEL` из `.env` закрыт в `refactor/audit-p2-batch` (валидируется в `Settings`, читается в `main.py`). Структурированные логи остаются P3. |
 | **P2-5** | Расширить `BOT_TEXT_ALIASES` через `.env` | ❌ | Не блокирующее. |
 
 ### P3 — отложены
@@ -728,6 +728,67 @@ E2E `/pivo` и smoke `main.py` — P2. Тест на denied auth — прихо�
 - P2-1 (тройное дублирование Settings/RuntimeState/runtime_config) — главный техдолг.
 - `docs/ARCHITECTURE.md` — переписать под текущую архитектуру.
 - Live-тест `codex/pivo-daily-quota` и merge в `main`.
+
+---
+
+## 18. Session update — 2026-05-10 (P2 batch)
+
+### Completed
+- **P2-6**: `LOG_LEVEL` вынесен в `Settings` + `.env.example`; убран хардкод
+  `logging.INFO` из `main.py`. Поддерживаемые значения:
+  `DEBUG/INFO/WARNING/ERROR/CRITICAL`. Тесты на default/lowercase/reject
+  добавлены в `tests/test_settings.py`. Коммит `2aba935`.
+- **P2-3**: `Dockerfile` — pin `python:3.14.0-slim`, non-root user `bot`
+  (UID 1000), HEALTHCHECK, `--chown` на COPY. Коммит `b01e12d`.
+- **P2-2**: `app/infrastructure/migrator.py` — наивный
+  `str.split(";")` заменён на `conn.executescript`; `_apply` обёрнут
+  в `try/except` с `conn.rollback()` на ошибке. Коммит `e8dc8e5`.
+- **P2-1**: `config_registry.py` создан как single source of truth для
+  20 runtime-mutable полей. `Settings.load_settings`,
+  `runtime_state_from_settings` и `runtime_config.apply_runtime_setting`
+  итерируются по реестру; cross-field-инварианты вынесены в
+  `validate_cross_fields` и проверяются на shallow copy перед мутацией
+  state. Публичный API `runtime_config` сохранён, все тесты остаются
+  совместимыми. Коммит `4559cd6`.
+- **P2-4**: README — добавлены секции Architecture (со ссылкой на
+  `docs/ARCHITECTURE.md`), Privacy и Тесты; стек обновлён до
+  `Python 3.12+`. Коммит `50eb8c2`.
+- **`docs/ARCHITECTURE.md`**: переписан под текущую слоистую структуру
+  (диаграмма слоёв, DI через `dp[...]`, config_registry, миграции с
+  `executescript`). Коммит `82ba68e`.
+
+### Changed files
+- `settings.py`, `runtime_state.py`, `runtime_config.py`, `config_registry.py` (новый),
+  `main.py`, `Dockerfile`, `app/infrastructure/migrator.py`,
+  `tests/test_settings.py`, `.env.example`, `README.md`,
+  `docs/ARCHITECTURE.md`, `PROJECT_AUDIT.md`.
+
+### Audit findings updated
+- P2-1, P2-2, P2-3 — закрыты.
+- P2-4 — частично (LOG_LEVEL ✅, структурированные логи остаются P3).
+- P2-6 — закрыт (был под старым номером, см. секцию 14).
+
+### Tests/checks run
+- `python -m unittest discover tests` — 203 теста OK (было 200, +3 на LOG_LEVEL).
+- `python -m ruff check app/ tests/ settings.py runtime_state.py runtime_config.py config_registry.py main.py` — clean.
+- `python -m mypy app/` — clean (30 source files).
+- Линтеры запускались на dev-зависимостях `requirements-dev.txt`
+  (`ruff 0.15.12`, `mypy 2.0.0`).
+
+### Not run / limitations
+- Docker build не выполнялся (нет docker daemon в среде).
+- Удалённый CI на этой ветке ещё не проверялся.
+- Live smoke в Telegram — не проводился, поведение runtime не
+  затронуто (config_registry сохраняет contract).
+
+### Remaining work
+- Открыть PR `refactor/audit-p2-batch → main`, дождаться CI.
+- P2-5 (`BOT_TEXT_ALIASES` из `.env`) и P2-9 (`/learn_off` opt-out) —
+  следующие кандидаты.
+- P3-долг (магические числа, `is_duplicate` концептуальная неоднозначность,
+  silent drop `/clear` под throttle, маскирование `chat_id` в логах,
+  `is_bot` поле в `pivo_chat_members`, `MENTION_RE` на email) — без изменений.
+- Структурированные логи (JSON) откладываются до выбора системы агрегации.
 
 ---
 

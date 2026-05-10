@@ -73,6 +73,25 @@ class TestSettings(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "OWNER_ID"):
                 load_settings(load_env=False)
 
+    def test_load_settings_default_log_level_is_info(self) -> None:
+        with patch.dict(os.environ, minimal_env(), clear=True):
+            settings = load_settings(load_env=False)
+        self.assertEqual(settings.log_level, "INFO")
+
+    def test_load_settings_accepts_lowercase_log_level(self) -> None:
+        env = minimal_env()
+        env["LOG_LEVEL"] = "debug"
+        with patch.dict(os.environ, env, clear=True):
+            settings = load_settings(load_env=False)
+        self.assertEqual(settings.log_level, "DEBUG")
+
+    def test_load_settings_rejects_invalid_log_level(self) -> None:
+        env = minimal_env()
+        env["LOG_LEVEL"] = "verbose"
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "LOG_LEVEL"):
+                load_settings(load_env=False)
+
     def test_load_settings_rejects_conflicting_backoff(self) -> None:
         env = minimal_env()
         env["MARKOV_ORDER"] = "2"

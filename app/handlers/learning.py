@@ -201,6 +201,13 @@ async def on_text_message(
                 attempt + 1,
             )
         else:
+            logger.debug(
+                "Reply generated: chat=%s attempt=%s tokens=%s context=%s",
+                message.chat.id,
+                attempt + 1,
+                len(candidate.split()),
+                bool(attempt_context_tokens),
+            )
             reply_text = candidate
             break
 
