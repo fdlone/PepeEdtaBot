@@ -35,7 +35,7 @@ class PivoService:
         self._security = security
 
     async def subscribe(self, chat_id: int, user: User) -> None:
-        await self._db.upsert_pivo_member(
+        await self._db.upsert_chat_member(
             chat_hash=self._security.hmac_value(chat_id),
             user_hash=self._security.hmac_value(user.id),
             encrypted_user_id=self._security.encrypt_value(user.id),
@@ -43,11 +43,10 @@ class PivoService:
             encrypted_display_name=self._security.encrypt_value(
                 display_name_from_user(user)
             ),
-            is_bot=user.is_bot,
         )
 
     async def unsubscribe(self, chat_id: int, user_id: int) -> None:
-        await self._db.remove_pivo_member(
+        await self._db.remove_chat_member(
             chat_hash=self._security.hmac_value(chat_id),
             user_hash=self._security.hmac_value(user_id),
         )
@@ -95,13 +94,12 @@ class PivoService:
     ) -> tuple[str, int]:
         """Возвращает готовое сообщение для /pivo и число упомянутых участников."""
         chat_hash = self._security.hmac_value(chat_id)
-        rows = await self._db.get_pivo_members(chat_hash)
+        rows = await self._db.get_chat_members(chat_hash)
         members = [
             PivoMember(
                 encrypted_user_id=str(row["encrypted_user_id"]),
                 encrypted_username=str(row["encrypted_username"]),
                 encrypted_display_name=str(row["encrypted_display_name"]),
-                is_bot=bool(row["is_bot"]),
             )
             for row in rows
         ]

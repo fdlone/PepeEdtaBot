@@ -8,7 +8,7 @@ from typing import Optional
 import aiosqlite
 
 from app.infrastructure import migrator
-from app.repositories import MarkovRepo, MembersRepo, MessagesRepo, PivoRepo, PivoUsageRepo
+from app.repositories import ChatMembersRepo, MarkovRepo, MessagesRepo, PivoUsageRepo
 from text_utils import sanitize_text
 
 PIVO_DAILY_USAGE_RETENTION_DAYS = 7
@@ -22,9 +22,8 @@ class Database:
         self._conn: Optional[aiosqlite.Connection] = None
         self._lock = asyncio.Lock()
         self.markov: Optional[MarkovRepo] = None
-        self.members: Optional[MembersRepo] = None
         self.messages: Optional[MessagesRepo] = None
-        self.pivo: Optional[PivoRepo] = None
+        self.chat_members: Optional[ChatMembersRepo] = None
         self.pivo_usage: Optional[PivoUsageRepo] = None
 
     async def _get_conn(self) -> aiosqlite.Connection:
@@ -45,9 +44,8 @@ class Database:
         await migrator.run(db)
 
         self.markov = MarkovRepo(self._get_conn, self._lock)
-        self.members = MembersRepo(self._get_conn, self._lock)
         self.messages = MessagesRepo(self._get_conn, self._lock)
-        self.pivo = PivoRepo(self._get_conn, self._lock)
+        self.chat_members = ChatMembersRepo(self._get_conn, self._lock)
         self.pivo_usage = PivoUsageRepo(self._get_conn, self._lock)
         await self.cleanup_pivo_daily_usage()
 
@@ -56,9 +54,8 @@ class Database:
             await self._conn.close()
             self._conn = None
         self.markov = None
-        self.members = None
         self.messages = None
-        self.pivo = None
+        self.chat_members = None
         self.pivo_usage = None
 
     async def save_message_and_update_model(
@@ -228,9 +225,9 @@ class Database:
         assert self.messages is not None
         return await self.messages.get_all_normalized(chat_id)
 
-    # --- Делегаты к PivoRepo ---
+    # --- Делегаты к ChatMembersRepo ---
 
-    async def upsert_pivo_member(
+    async def upsert_chat_member(
         self,
         *,
         chat_hash: str,
@@ -238,25 +235,23 @@ class Database:
         encrypted_user_id: str,
         encrypted_username: str,
         encrypted_display_name: str,
-        is_bot: bool,
     ) -> None:
-        assert self.pivo is not None
-        await self.pivo.upsert(
+        assert self.chat_members is not None
+        await self.chat_members.upsert(
             chat_hash=chat_hash,
             user_hash=user_hash,
             encrypted_user_id=encrypted_user_id,
             encrypted_username=encrypted_username,
             encrypted_display_name=encrypted_display_name,
-            is_bot=is_bot,
         )
 
-    async def remove_pivo_member(self, chat_hash: str, user_hash: str) -> None:
-        assert self.pivo is not None
-        await self.pivo.remove(chat_hash, user_hash)
+    async def remove_chat_member(self, chat_hash: str, user_hash: str) -> None:
+        assert self.chat_members is not None
+        await self.chat_members.remove(chat_hash, user_hash)
 
-    async def get_pivo_members(self, chat_hash: str) -> list[dict[str, object]]:
-        assert self.pivo is not None
-        return await self.pivo.list_members(chat_hash)
+    async def get_chat_members(self, chat_hash: str) -> list[dict[str, object]]:
+        assert self.chat_members is not None
+        return await self.chat_members.list_members(chat_hash)
 
     async def consume_pivo_daily_call(
         self,
