@@ -374,6 +374,47 @@ class TestExtractContextTokens(unittest.TestCase):
         self.assertLessEqual(len(tokens), 3)
 
 
+class TestReplyHumanizedResilience(unittest.IsolatedAsyncioTestCase):
+    """`reply_humanized` is the single point that calls Telegram's chat-action
+    API. A 5xx or network blip there must not block the actual reply — the
+    helper catches the exception and proceeds to `message.reply`."""
+
+    async def test_send_chat_action_failure_does_not_block_reply(self) -> None:
+        from app.handlers._helpers import reply_humanized
+
+        msg = _fake_message()
+        msg.bot.send_chat_action = AsyncMock(
+            side_effect=RuntimeError("telegram chat-action 5xx")
+        )
+
+        await reply_humanized(msg, "ответ", typing_min_ms=0, typing_max_ms=0)
+
+        msg.reply.assert_awaited_once_with("ответ")
+
+    async def test_send_chat_action_called_when_bot_present(self) -> None:
+        from app.handlers._helpers import reply_humanized
+
+        msg = _fake_message()
+        await reply_humanized(msg, "ответ", typing_min_ms=0, typing_max_ms=0)
+        msg.bot.send_chat_action.assert_awaited_once()
+        msg.reply.assert_awaited_once_with("ответ")
+
+    async def test_pivo_on_still_subscribes_even_when_chat_action_fails(self) -> None:
+        from app.handlers.pivo import cmd_pivo_on
+
+        msg = _fake_message(is_bot=False)
+        msg.bot.send_chat_action = AsyncMock(
+            side_effect=RuntimeError("transient telegram error")
+        )
+        pivo_service = AsyncMock()
+        state = _fake_state()
+
+        await cmd_pivo_on(msg, pivo_service, state)
+
+        pivo_service.subscribe.assert_awaited_once()
+        msg.reply.assert_awaited_once()
+
+
 class TestLearningMessageLength(unittest.TestCase):
     def test_learning_message_length_boundaries(self) -> None:
         from app.handlers.learning import (

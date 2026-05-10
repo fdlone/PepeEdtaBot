@@ -1,11 +1,11 @@
 # Технический аудит проекта PepeEdtaBot
 
-Дата актуализации: 2026-05-10 (восьмая редакция, после унификации pivo + chat_members).
+Дата актуализации: 2026-05-10 (девятая редакция, после chat_id-masking и P3-тестов).
 Текущая ветка: `main`.
 
 > История редакций: 1я — первичный аудит; 2я — после Codex-ревизии P1-блокеры; 3я — после закрытия B1/B2/B3 (merge-ready); 4я — после ветки `codex/pivo-daily-quota`; **5я — P2-batch (P2-1, P2-2, P2-3, P2-6 закрыты, +P2-4 частично, см. session 18); 6я — audit follow-ups (P2-5 + P1-фиксы атомарности миграций и Docker bind-mount, см. session 19).**
 
-Текущие тесты/проверки: **190 unit-тестов**, `ruff check app/ tests/` — clean, `mypy app/` — clean (26 source files). Падение числа тестов относительно седьмой редакции (213 → 190) — за счёт удаления `tests/test_members.py` и снятия двух теперь-нерелевантных кейсов в `tests/test_pivo.py` (фильтр `is_bot` ушёл вместе с колонкой).
+Текущие тесты/проверки: **199 unit-тестов**, `ruff check app/ tests/` — clean, `mypy app/` — clean (27 source files).
 
 **Изменения третьей редакции (для контекста):** все три P1-блокера закрыты; CI зелёный; ветка `refactor/structure` слита в `main`.
 
@@ -628,14 +628,15 @@ CMD ["python", "main.py"]      # ❌ работает от root
 - ~~Silent drop `/clear` под throttle~~ → `notify_on_throttle` + явный ответ.
 - ~~`MENTION_RE` на email~~ → `(?<!\w)@\w+`.
 
-Остаётся:
-- **Маскирование `chat_id` в логах через HMAC** (HKDF от `PIVO_HMAC_SECRET` с доменом `logging:chat_id`, первые 8 hex). Будет в следующей сессии.
-- ~~Удалить неиспользуемое поле `is_bot`~~ — закрыто в session 21 (миграция 007).
-- **Структурированные логи (JSON)** — отложить до выбора системы агрегации.
-- **Метрики (Prometheus / aiogram-middleware)** — заводить, когда будет куда отправлять.
-- **`cursor.fetchone()` стиль в `db.py:165-174`** (`assert row is not None`, как в репозиториях).
-- **Поведение хендлеров при ошибках Telegram API** — не покрыто тестами (см. 11.3).
-- **`PivoService.build_call_message` через DB E2E** — закрыт фактически тестом `TestPivoServiceFlow.test_subscribe_call_quota_and_unsubscribe_flow`; при подтверждении можно убрать из остаточного P3.
+Закрыто в session 22:
+- ~~Маскирование `chat_id` в логах~~ → `app/log_masking.py`, HKDF от `PIVO_HMAC_SECRET` с доменом `logging:chat_id`, 8 hex.
+- ~~Поведение хендлеров при ошибках Telegram API~~ → `TestReplyHumanizedResilience` (+3 теста) поверх уже существующих покрытий refund/fail-closed.
+- ~~`build_call_message` через DB E2E~~ → фактически покрыт `test_subscribe_call_quota_and_unsubscribe_flow`.
+- ~~`cursor.fetchone()` стиль в `db.py`~~ → унифицирован с репозиториями.
+
+Остаётся (заблокировано внешними решениями):
+- **Структурированные логи (JSON)** — ждать выбора системы агрегации.
+- **Метрики (Prometheus / aiogram-middleware)** — заводить когда будет endpoint.
 
 ### Что **не** делать сейчас
 
@@ -655,17 +656,12 @@ CMD ["python", "main.py"]      # ❌ работает от root
 
 Только открытые позиции. Закрытое см. в section 14 (P1/P2) и в session updates.
 
-| ID | Локация | Суть | Риск | Приоритет |
-|---|---|---|---|---|
-| P3-4 | логи | `chat_id` без маскирования | privacy (низко) | P3 (next) |
-| P3-7 | хендлеры | поведение при ошибках Telegram API не покрыто тестами | надёжность (низко) | P3 |
-| P3-8 | `tests/test_pivo.py` | `build_call_message` через DB — пересмотреть, фактически покрыт `test_subscribe_call_quota_and_unsubscribe_flow` | формальная закрываемость | P3 (review) |
-| 7.1 | `db.py:165-174` | стилистика `cursor.fetchone()[0]` без `assert row is not None` | стиль | P3 |
+Открытых пунктов P0/P1/P2/P3 в трекере **не осталось**. Заблокированные внешним выбором (JSON-логи, метрики) учтены в section 14 как «отложено».
 
 ---
 
-**Дата актуализации:** 2026-05-10, восьмая редакция.
-**Статус:** на `main`, **190 тестов**, ruff/mypy clean (26 source files).
+**Дата актуализации:** 2026-05-10, девятая редакция.
+**Статус:** на `main`, **199 тестов**, ruff/mypy clean (27 source files).
 **История ревизий:**
 - 2026-05-08, 1я: первичный аудит, «мёржить после фиксов».
 - 2026-05-08, 2я: Codex-ревизия, блокеры P1-A/B/C.
@@ -675,6 +671,7 @@ CMD ["python", "main.py"]      # ❌ работает от root
 - 2026-05-10, 6я: `fix/audit-followups` — P2-5 закрыто (BOT_TEXT_ALIASES с safe fallback), P1-фиксы атомарности миграций (BEGIN/COMMIT-обёртка) и Docker bind-mount (root-entrypoint + runuser), 208 тестов.
 - 2026-05-10, 7я (PR #5, `polish/audit-session-20`): P3-полировка — `matches_training_prefix` (rename + honest docstring + removed dead branch), магические числа → константы, `MENTION_RE` для email, `notify_on_throttle` UX-фикс silent drop `/clear`. 213 тестов.
 - 2026-05-10, 8я (`feat/unify-chat-members`): унификация участников — миграция 007 переносит `pivo_chat_members` → `chat_members` (без `is_bot`), `chat_member_profiles` / `MembersService` / `MembersRepo` / `key_derivation.py` удалены, `PivoRepo` → `ChatMembersRepo`. Закрыто P2-5, P3-5, снят P2-9. 190 тестов (-23 за счёт удалённых dead-code тестов).
+- 2026-05-10, 9я (`feat/log-masking-and-p3-tests`): закрыт остаточный P3 — `chat_id` маскируется в логах (HKDF от `PIVO_HMAC_SECRET`), добавлены тесты на ошибки Telegram API, стиль `cursor.fetchone()` унифицирован. 199 тестов.
 
 > SHA коммитов обновлены после очистки истории `git filter-repo` (2026-05-09): удалены строки `Co-Authored-By: Claude` из 28 коммитов.
 
@@ -701,6 +698,67 @@ CMD ["python", "main.py"]      # ❌ работает от root
 - P2-1 (тройное дублирование Settings/RuntimeState/runtime_config) — главный техдолг.
 - `docs/ARCHITECTURE.md` — переписать под текущую архитектуру.
 - Live-тест `codex/pivo-daily-quota` и merge в `main`.
+
+---
+
+## 22. Session update — 2026-05-10 (chat_id masking + P3 close-out)
+
+### Completed
+- **P3-4 chat_id masking.** Новый модуль `app/log_masking.py`:
+  `init_masking(secret)` выводит HKDF-ключ от `PIVO_HMAC_SECRET`
+  с доменом `logging:chat_id` (32 байта), `mask_chat_id(chat_id)`
+  возвращает первые 8 hex-символов HMAC-SHA256. Маска стабильна между
+  запусками с одним секретом, меняется при ротации, не содержит сырой
+  `chat_id`. Вызов `mask_chat_id` без `init_masking` поднимает
+  `LogMaskingNotInitialized` — fail-fast вместо silent leak.
+  `main.run_bot` вызывает `init_masking` сразу после `load_settings`.
+  Все 9 `logger.{info,debug}` вызовов в `app/handlers/learning.py`
+  заменены: `chat=%s` теперь принимает маску. 6 unit-тестов на helper.
+- **P3-7 поведение хендлеров при ошибках Telegram API.** Добавлены
+  3 теста в `tests/test_handlers.py::TestReplyHumanizedResilience`:
+  `send_chat_action` 5xx не блокирует основной reply,
+  `send_chat_action` вызывается когда `bot` присутствует, `/pivo_on`
+  по-прежнему подписывает пользователя даже если chat-action провалился.
+  Уже существующие покрытия: refund квоты при провале `message.reply`
+  в `/pivo` (`test_pivo_refunds_quota_when_reply_fails`), fail-closed
+  `AdminOrOwner` при падении `bot.get_chat_administrators`
+  (`test_api_error_falls_back_to_denied`).
+- **P3-8 build_call_message E2E.** Подтверждено, что фактически уже
+  закрыт `TestPivoServiceFlow.test_subscribe_call_quota_and_unsubscribe_flow`
+  — тест ходит через `Database` → `ChatMembersRepo` → `chat_members`
+  таблицу с реальным sqlite. Снимаю с backlog'а.
+- **7.1 стиль `cursor.fetchone()[0]` в `db.py:165-174`.** Заменено на
+  `row = await cursor.fetchone(); assert row is not None; int(row[0])`
+  — то же, что в репозиториях.
+
+### Changed files
+- Новый: `app/log_masking.py`, `tests/test_log_masking.py`.
+- Изменены: `main.py`, `app/handlers/learning.py`, `db.py`,
+  `tests/test_handlers.py`, `PROJECT_AUDIT.md`.
+
+### Audit findings updated
+- P3-4 (chat_id masking) — закрыто.
+- P3-7 (Telegram API errors в хендлерах) — закрыто.
+- P3-8 (E2E `build_call_message`) — закрыто (фактическое покрытие).
+- 7.1 (стиль `cursor.fetchone()[0]`) — закрыто.
+
+### Tests/checks run
+- `python -m unittest discover tests` — **199 тестов OK** (было 190, +9:
+  +6 на log_masking, +3 на reply_humanized resilience).
+- `python -m ruff check app/ tests/` — clean.
+- `python -m mypy app/` — clean (27 source files).
+
+### Not run / limitations
+- Live smoke: маскированные `chat_id` в логах не наблюдались на
+  реальном чате. Запускать в проде → подтвердить, что в `learning.py`
+  пишется маска, а не сырой `chat_id`.
+
+### Remaining work
+- Структурированные JSON-логи — ждать выбора системы агрегации.
+- Метрики (Prometheus / aiogram-middleware) — заводить когда будет
+  endpoint.
+- P0/P1 — пусто. P2 — пусто. P3 — пусто (за исключением «отложить до
+  внешних решений» сверху).
 
 ---
 

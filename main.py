@@ -6,6 +6,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
 
+from app import log_masking
 from app.handlers import admin as admin_handlers
 from app.handlers import common as common_handlers
 from app.handlers import learning as learning_handlers
@@ -60,6 +61,7 @@ def configure_dispatcher(
 
 async def run_bot() -> None:
     settings: Settings = load_settings()
+    log_masking.init_masking(settings.pivo_hmac_secret)
     logging.basicConfig(
         level=getattr(logging, settings.log_level),
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
