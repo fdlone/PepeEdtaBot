@@ -3,7 +3,10 @@ from __future__ import annotations
 import re
 
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
-MENTION_RE = re.compile(r"@\w+", re.UNICODE)
+# `(?<!\w)` prevents matching the `@host` part of an email address like
+# `user@example.com` — without it, `@example` would be stripped and leave
+# `user.com` in the normalized text.
+MENTION_RE = re.compile(r"(?<!\w)@\w+", re.UNICODE)
 SPACE_RE = re.compile(r"\s+")
 REPEAT_RE = re.compile(r"(.)\1{2,}", re.UNICODE)
 

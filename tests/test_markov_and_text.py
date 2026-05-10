@@ -42,6 +42,15 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         tokens = tokenize(clean)
         self.assertEqual(tokens, ["Привеет", "!", "!", "Как", "дела", "?", "?"])
 
+    def test_sanitize_preserves_email_host(self) -> None:
+        # Regression: `@host` inside an email must NOT be stripped as a mention.
+        clean = sanitize_text("Напиши на user@example.com если что")
+        self.assertEqual(clean, "Напиши на user@example.com если что")
+
+    def test_sanitize_still_strips_leading_mentions(self) -> None:
+        clean = sanitize_text("@PepeEdta_Bot привет")
+        self.assertEqual(clean, "привет")
+
     def test_detokenize(self) -> None:
         text = detokenize(
             ["Привет", ",", "мир", "!", "Как", "дела", "?"], max_chars=100
