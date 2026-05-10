@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from config_registry import RUNTIME_FIELDS
 from settings import Settings
 
 
@@ -32,25 +33,11 @@ class RuntimeState:
 
 
 def runtime_state_from_settings(settings: Settings) -> RuntimeState:
+    """Build a fresh RuntimeState from Settings via the config registry.
+
+    Iterating over RUNTIME_FIELDS guarantees that adding a new
+    runtime-mutable field requires editing only ``config_registry.py``.
+    """
     return RuntimeState(
-        reply_probability=settings.reply_probability,
-        min_cooldown_sec=settings.min_cooldown_sec,
-        min_tokens_for_model=settings.min_tokens_for_model,
-        max_reply_chars=settings.max_reply_chars,
-        max_reply_tokens=settings.max_reply_tokens,
-        normalize_lower=settings.normalize_lower,
-        typing_min_ms=settings.typing_min_ms,
-        typing_max_ms=settings.typing_max_ms,
-        randomness_strength=settings.randomness_strength,
-        repetition_penalty_strength=settings.repetition_penalty_strength,
-        markov_order=settings.markov_order,
-        enable_backoff=settings.enable_backoff,
-        backoff_min_order=settings.backoff_min_order,
-        use_reply_context=settings.use_reply_context,
-        reply_context_max_tokens=settings.reply_context_max_tokens,
-        reply_context_last_tokens=settings.reply_context_last_tokens,
-        reply_context_bias=settings.reply_context_bias,
-        reply_context_start_bias=settings.reply_context_start_bias,
-        reply_context_only_for_replies=settings.reply_context_only_for_replies,
-        reply_context_include_current_message=settings.reply_context_include_current_message,
+        **{spec.name: getattr(settings, spec.name) for spec in RUNTIME_FIELDS}
     )
