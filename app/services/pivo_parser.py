@@ -18,7 +18,12 @@ class PivoCommandArgs:
 
 _USERNAME_RE = re.compile(r"(?<!\S)@([A-Za-z][A-Za-z0-9_]{4,31})(?![A-Za-z0-9_])")
 _TIME_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"^(?:today|tomorrow)\s+at\s+(?:[01]?\d|2[0-3]):[0-5]\d\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"^(?:today|tomorrow)\s+(?:[01]?\d|2[0-3]):[0-5]\d\b", re.IGNORECASE),
+    re.compile(r"^(?:сегодня|завтра)\s+в\s+(?:[01]?\d|2[0-3]):[0-5]\d\b", re.IGNORECASE),
     re.compile(r"^(?:сегодня|завтра)\s+(?:[01]?\d|2[0-3]):[0-5]\d\b", re.IGNORECASE),
     re.compile(r"^(?:[01]?\d|2[0-3]):[0-5]\d\b"),
     re.compile(r"^(?:today|tomorrow)\s+evening\b", re.IGNORECASE),

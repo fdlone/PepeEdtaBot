@@ -73,6 +73,24 @@ class TestPivoParser(unittest.TestCase):
         self.assertEqual(args.target, "watch movie")
         self.assertEqual(args.explicit_mentions, ())
 
+    def test_time_with_preposition_and_target(self) -> None:
+        args = parse_pivo_command(  # type: ignore[arg-type]
+            _message("/pivo сегодня в 21:30 watch movie")
+        )
+
+        self.assertEqual(args.planned_time, "сегодня в 21:30")
+        self.assertEqual(args.target, "watch movie")
+        self.assertEqual(args.explicit_mentions, ())
+
+    def test_english_time_with_preposition_and_target(self) -> None:
+        args = parse_pivo_command(  # type: ignore[arg-type]
+            _message("/pivo tomorrow at 21:30 watch movie")
+        )
+
+        self.assertEqual(args.planned_time, "tomorrow at 21:30")
+        self.assertEqual(args.target, "watch movie")
+        self.assertEqual(args.explicit_mentions, ())
+
     def test_time_and_mention(self) -> None:
         args = parse_pivo_command(_message("/pivo завтра вечером @friend_user"))  # type: ignore[arg-type]
 

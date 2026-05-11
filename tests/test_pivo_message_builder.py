@@ -37,6 +37,7 @@ class TestPivoMessageBuilder(unittest.TestCase):
             side_effect=[
                 PIVO_TEMPLATES[0],
                 "Повестка вечера: {target}.",
+                "Discord и коллективное моральное разложение прилагаются.",
                 "Пиво приветствуется. Другой напиток тоже переживём.",
                 "Отмазки принимаются, но будут высмеяны.",
             ],
@@ -49,6 +50,7 @@ class TestPivoMessageBuilder(unittest.TestCase):
         self.assertNotIn("рисовалка", text)
         self.assertNotIn("игр", text.lower())
         self.assertNotIn("ведущ", text.lower())
+        self.assertIn("Пиво приветствуется", text)
         self.assertNotIn("Повод:", text)
 
     def test_target_and_time_are_both_embedded(self) -> None:
@@ -58,6 +60,7 @@ class TestPivoMessageBuilder(unittest.TestCase):
                 PIVO_TEMPLATES[0],
                 "{time_phrase} сбор в Discord.",
                 "Повестка вечера: {target}.",
+                "Discord и коллективное моральное разложение прилагаются.",
                 "Пиво приветствуется. Другой напиток тоже переживём.",
                 "Отмазки принимаются, но будут высмеяны.",
             ],
@@ -80,6 +83,7 @@ class TestPivoMessageBuilder(unittest.TestCase):
                 PIVO_TEMPLATES[0],
                 "{time_phrase} сбор в Discord.",
                 "Повестка вечера: {target}.",
+                "Discord и коллективное моральное разложение прилагаются.",
                 "Пиво приветствуется. Другой напиток тоже переживём.",
                 "Отмазки принимаются, но будут высмеяны.",
             ],
