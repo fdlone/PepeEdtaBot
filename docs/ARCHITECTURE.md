@@ -232,7 +232,7 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
 
 ## Тесты и CI
 
-- `tests/` — 13 файлов, **208 unit-тестов** (`unittest`), включая smoke на
+- `tests/` — широкий набор unit-тестов (`unittest`), включая smoke на
   `configure_dispatcher`, атомарность миграций, фикстуру с реальной
   legacy-схемой (`tests/fixtures/legacy_real_schema.sql`).
 - CI: `.github/workflows/ci.yml` — матрица Python 3.12/3.13/3.14, шаги
