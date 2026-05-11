@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import html
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 from aiogram.enums import MessageEntityType
 from aiogram.types import Message, MessageEntity, User
