@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import html
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
 from aiogram.types import User
 
+from app.services.pivo_message_builder import build_pivo_message
 from db import Database
 from pivo import (
     PIVO_FALLBACK_MENTIONS,
@@ -14,7 +14,6 @@ from pivo import (
     PivoSecurity,
     collect_pivo_mentions,
     display_name_from_user,
-    get_random_pivo_message,
 )
 
 PIVO_DAILY_LIMIT_USER = 1
@@ -120,22 +119,9 @@ class PivoService:
                 security=self._security,
             )
         mentions = " ".join(mention_items) if mention_items else PIVO_FALLBACK_MENTIONS
-        text = get_random_pivo_message(mentions)
-        text = _prepend_call_context(text, planned_time=planned_time, target=target)
+        text = build_pivo_message(
+            mentions,
+            planned_time=planned_time,
+            target=target,
+        )
         return text, len(mention_items)
-
-
-def _prepend_call_context(
-    text: str,
-    *,
-    planned_time: str | None,
-    target: str | None,
-) -> str:
-    lines: list[str] = []
-    if planned_time:
-        lines.append(f"Когда: {html.escape(planned_time, quote=False)}")
-    if target:
-        lines.append(f"Повод: {html.escape(target, quote=False)}")
-    if not lines:
-        return text
-    return f"{'\n'.join(lines)}\n\n{text}"

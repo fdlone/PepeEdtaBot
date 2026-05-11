@@ -212,11 +212,11 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
 
         db.get_chat_members.assert_not_called()
         self.assertEqual(mentions_count, 1)
-        self.assertIn("Когда: 20:00", text)
-        self.assertIn("Повод: watch movie", text)
+        self.assertIn("Сегодня в 20:00", text)
+        self.assertIn("Повестка вечера: watch movie.", text)
         self.assertIn("@friend", text)
 
-    async def test_build_call_message_escapes_context(self) -> None:
+    async def test_build_call_message_builds_contextual_body(self) -> None:
         from app.services.pivo_service import PivoService
 
         security = make_security()
@@ -233,8 +233,8 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(mentions_count, 0)
-        self.assertIn("Когда: &lt;20:00&gt;", text)
-        self.assertIn("Повод: movie &amp; chat", text)
+        self.assertIn("&lt;20:00&gt;", text)
+        self.assertIn("Повестка вечера: movie &amp; chat.", text)
 
 
 class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
