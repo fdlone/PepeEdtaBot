@@ -170,6 +170,18 @@ Decision:
 - Keep public DB behavior unchanged.
 - Marked `AUD-012` as Deferred in `PROJECT_AUDIT_ACTION_PLAN.md`.
 
+### AUD-013 completed by extending README tests section
+
+User chose Option B: fold local environment verification guidance into the
+existing README tests section.
+
+Changes:
+- README now states that local verification should use the same dependency set
+  and commands as CI.
+- README notes that CI also has a Docker build smoke job without starting the
+  bot.
+- Marked `AUD-013` as Done in `PROJECT_AUDIT_ACTION_PLAN.md`.
+
 ## 2026-05-11 — Deep project audit and maintenance action plan
 
 Аудитор: Codex  

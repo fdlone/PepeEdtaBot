@@ -166,13 +166,14 @@ middlewares / migrations / security / infrastructure`), DI через
 Проект использует стандартный `unittest` (без pytest) и линтеры `ruff` +
 `mypy strict` для `app/` (legacy-модули вынесены в `ignore_errors`).
 
-Установка dev-зависимостей:
+Для локальной проверки среды используйте тот же набор зависимостей и команд,
+что и CI. Установка dev-зависимостей:
 
 ```bash
 pip install -r requirements-dev.txt
 ```
 
-Локальные проверки (соответствуют шагам CI):
+Локальные проверки:
 
 ```bash
 python -m ruff check app/ tests/
@@ -181,7 +182,8 @@ python -m unittest discover tests -v
 ```
 
 CI-конфиг: [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Тесты
-прогоняются на матрице Python 3.12 / 3.13 / 3.14.
+прогоняются на матрице Python 3.12 / 3.13 / 3.14; отдельный job проверяет
+Docker build без запуска бота.
 
 ## Безопасность
 - не коммитьте `.env`;

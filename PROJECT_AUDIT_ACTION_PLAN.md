@@ -491,6 +491,12 @@ Yes, if done as pure refactor with tests.
 Priority: P3  
 Category: docs / devops  
 Recommended execution order: 13
+Status: Done
+
+Status note:
+User chose to fold the local environment verification guidance into the
+existing README tests section. README now states that local checks use the same
+dependency set and commands as CI, and mentions the CI Docker build smoke job.
 
 Problem description:
 README gives commands but does not provide a concise "verify your local dev env matches CI" checklist.
