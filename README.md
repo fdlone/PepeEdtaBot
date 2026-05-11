@@ -6,10 +6,12 @@ Telegram-бот для группового чата. Учится на сооб
 - Python 3.12+ (CI прогоняет матрицу 3.12 / 3.13 / 3.14)
 - aiogram v3
 - SQLite + aiosqlite
-- `cryptography` (Fernet, HKDF) для шифрования и доменных ключей `/pivo`
+- `cryptography` (Fernet для `/pivo`, HKDF для маскирования `chat_id` в логах)
 - конфигурация через `.env`
 
 ## Быстрый старт
+Минимальный локальный запуск:
+
 ```bash
 python -m venv .venv
 .\.venv\Scripts\activate
@@ -23,6 +25,13 @@ pip install -r requirements.txt
 
 ```bash
 python main.py
+```
+
+Для разработки и локальных проверок используйте dev-зависимости — этот путь
+ставит `requirements.lock` и инструменты, совпадающие с CI:
+
+```bash
+pip install -r requirements-dev.txt
 ```
 
 ## Docker
@@ -39,8 +48,8 @@ volume), entrypoint можно обойти, запустив контейнер
 Разовый запуск через `docker run`:
 
 ```bash
-docker build -t pepe-edta-bot .
-docker run -d --name pepe-edta-bot --env-file .env -v ${PWD}/data:/app/data pepe-edta-bot
+docker build -t pepe-bot:latest .
+docker run -d --name pepe-bot --env-file .env -v ${PWD}/data:/app/data pepe-bot:latest
 ```
 
 Удобная пересборка и перезапуск через Docker Compose:
@@ -74,6 +83,9 @@ docker compose down
 - `REPETITION_PENALTY_STRENGTH` — насколько сильно подавлять повторы токенов и n-грамм в одном ответе.
 
 ## Команды
+Команды предназначены для групповых чатов. Личный чат с ботом не является
+поддерживаемым рабочим сценарием.
+
 - `/help` — список команд.
 - `/ping` — проверка, что бот онлайн.
 - `/pivo` — позвать подписанных участников в Discord шуточным сообщением.
@@ -92,6 +104,7 @@ docker compose down
 
 ## /pivo
 `/pivo` работает только по opt-in: бот зовёт только тех пользователей, которые сами включили себя командой `/pivo_on`.
+Команды `/pivo*` доступны только в группах и супергруппах.
 
 Для хранения списка нужны секреты в `.env`:
 - `PIVO_HMAC_SECRET`
@@ -143,11 +156,11 @@ middlewares / migrations / security / infrastructure`), DI через
 - `author_id` принудительно анонимизируется миграцией `003_anonymize_authors.py`.
 - `/pivo` работает строго по opt-in: подписки хранятся как
   HMAC-индексированные хэши `chat_hash` и `user_hash`, payload зашифрован
-  Fernet'ом. Ключи выводятся через HKDF-SHA256 от `PIVO_*_SECRET` с
-  доменными метками (`members:hmac`, `members:encryption`).
+  Fernet'ом. Хэши считаются через HMAC-SHA256 под `PIVO_HMAC_SECRET`,
+  Fernet-ключ строится как SHA-256 от `PIVO_ENCRYPTION_SECRET`.
 - `/pivo_privacy` показывает пользователю, что хранится для `/pivo`.
-- Раскрытые уровни логирования (`LOG_LEVEL=DEBUG` и т.п.) могут
-  печатать `chat_id` — на проде используйте `INFO` или выше.
+- Для learning-логов `chat_id` маскируется через HKDF-SHA256-derived key
+  и короткий HMAC-mask; не добавляйте raw `chat_id` в новые log-сообщения.
 
 ## Тесты
 Проект использует стандартный `unittest` (без pytest) и линтеры `ruff` +

@@ -1,5 +1,452 @@
 # PROJECT_AUDIT_CODEX
 
+## 2026-05-11 — Action plan execution log
+
+### AUD-001 deferred by workflow decision
+
+User clarified that `D:\test\PepeEdtaBot` is a local working/test checkout, not
+the production Docker build environment. Local Docker build from this folder is
+not needed and is not possible on the current machine.
+
+Decision:
+- Do not change `.dockerignore` now.
+- Do not delete, move, or rename local working artifacts.
+- Keep the finding documented as relevant only if local Docker builds from this
+  workspace become part of the workflow later.
+
+Files changed:
+- `PROJECT_AUDIT_ACTION_PLAN.md`
+- `PROJECT_AUDIT_CODEX.md`
+
+### AUD-002 completed by explicit local ignore policy
+
+User chose Option B for `db_prod_copy/`: keep the folder in the local
+working/test checkout, do not delete or move its contents, and make the local
+ignore policy explicit.
+
+Change:
+- Added `db_prod_copy/` to `.gitignore`.
+- Marked `AUD-002` as Done in `PROJECT_AUDIT_ACTION_PLAN.md`.
+
+No data contents were inspected. No files in `db_prod_copy/` were deleted,
+moved, renamed, or added to git.
+
+### AUD-003 left as manual local secret follow-up
+
+User chose Option A for local `.env`: report only, do not modify the file.
+
+Decision:
+- Keep `.env` unchanged because it is a secret-bearing local file.
+- Track the item as `Needs decision` in `PROJECT_AUDIT_ACTION_PLAN.md`.
+- Missing keys were considered by name only; secret values were not printed,
+  copied, or changed.
+
+### AUD-004 completed by syncing existing `.venv`
+
+User chose Option B for local `.venv`: install dev dependencies into the
+existing environment instead of recreating it.
+
+Command:
+- `.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt`
+
+Notes:
+- The first sandboxed attempt timed out.
+- The approved rerun completed successfully.
+- Runtime packages were synchronized to `requirements.lock` where needed.
+- `ruff 0.15.12` and `mypy 2.0.0` were installed.
+- No `requirements*.txt` files were changed.
+
+Checks after install:
+- `.\.venv\Scripts\python.exe -m ruff check app/ tests/` — passed.
+- `.\.venv\Scripts\python.exe -m mypy app/` — passed, 27 source files.
+- `.\.venv\Scripts\python.exe -m unittest discover tests -v` — 199 tests OK.
+
+### AUD-005 completed with group-only `/pivo` contract
+
+User chose Option A: the bot is for group chats, and private chat command
+handling is not an active product feature.
+
+Changes:
+- Added `GroupOnly()` to all `/pivo*` handlers.
+- Added a router-registration regression test ensuring every `/pivo*` handler
+  is protected by `GroupOnly`.
+- Updated `README.md` to state that commands are intended for group chats and
+  `/pivo*` commands are available only in groups/supergroups.
+- Marked `AUD-005` as Done in `PROJECT_AUDIT_ACTION_PLAN.md`.
+
+Checks after change:
+- `.\.venv\Scripts\python.exe -m unittest tests.test_handlers tests.test_filters -v`
+  — 53 tests OK.
+- `.\.venv\Scripts\python.exe -m ruff check app/ tests/` — passed.
+- `.\.venv\Scripts\python.exe -m mypy app/` — passed, 27 source files.
+- `.\.venv\Scripts\python.exe -m unittest discover tests -v` — 200 tests OK.
+
+### AUD-006 completed with minimal README crypto/privacy correction
+
+User chose Option A: minimal factual correction.
+
+Changes:
+- README stack wording now says Fernet is used for `/pivo`, while HKDF is used
+  for `chat_id` log masking.
+- README privacy wording now describes `/pivo` as HMAC-SHA256 under
+  `PIVO_HMAC_SECRET` plus Fernet key derived as SHA-256 of
+  `PIVO_ENCRYPTION_SECRET`.
+- README no longer broadly warns that debug logging prints raw `chat_id`; it
+  states that learning logs mask `chat_id` and new log messages should not add
+  raw IDs.
+- Marked `AUD-006` as Done in `PROJECT_AUDIT_ACTION_PLAN.md`.
+
+### AUD-007 completed by splitting runtime and development setup
+
+User chose Option B.
+
+Changes:
+- README quickstart now labels `requirements.txt` as the minimal local runtime
+  install path.
+- README now explicitly recommends `requirements-dev.txt` for development and
+  local checks because it installs `requirements.lock` and CI tools.
+- No dependency files were changed.
+- Marked `AUD-007` as Done in `PROJECT_AUDIT_ACTION_PLAN.md`.
+
+### AUD-008 completed by removing brittle test-count wording
+
+User chose Option A.
+
+Changes:
+- Replaced the stale exact `208 unit-тестов` metric in
+  `docs/ARCHITECTURE.md` with stable wording.
+- `PROJECT_AUDIT.md` was not edited.
+- Marked `AUD-008` as Done in `PROJECT_AUDIT_ACTION_PLAN.md`.
+
+### AUD-009 completed by confirming local-only `AGENTS.md`
+
+User chose Option C: `AGENTS.md` should be local-only rather than a repository
+document.
+
+Verification:
+- `git ls-files AGENTS.md` returned no tracked path.
+- `git check-ignore -v AGENTS.md` confirmed `.gitignore` ignores the file.
+- `git rm --cached AGENTS.md` had no tracked path to remove, so no index change
+  was needed.
+
+Result:
+- No file deletion or rename was performed.
+- `AGENTS.md` remains local-only in this checkout.
+- Marked `AUD-009` as Done in `PROJECT_AUDIT_ACTION_PLAN.md`.
+
+### AUD-010 completed with targeted screenshot ignore
+
+User chose Option B: keep the local screenshot workflow and add a targeted
+ignore pattern.
+
+Changes:
+- Added `Screenshot_*.jpg` to `.gitignore`.
+- Marked `AUD-010` as Done in `PROJECT_AUDIT_ACTION_PLAN.md`.
+
+No screenshot files were deleted, moved, renamed, or added to git.
+
+### AUD-011 completed with CI Docker build smoke
+
+User chose Option B and asked to fix the related Docker docs drift immediately.
+
+Changes:
+- Added a separate `docker-build` job to `.github/workflows/ci.yml`.
+- The job runs `docker build -t pepe-bot:latest .` on GitHub Actions.
+- It does not start the bot, call Telegram APIs, or require `.env`/secrets.
+- Updated README Docker commands from `pepe-edta-bot` to `pepe-bot` /
+  `pepe-bot:latest`, matching `compose.yaml`.
+- Marked `AUD-011` as Done in `PROJECT_AUDIT_ACTION_PLAN.md`.
+
+Local Docker build was not run because Docker build is not available/needed on
+the current machine.
+
+### AUD-012 deferred until real DB work
+
+User chose Option A: defer the `db.py` stats/clear helper refactor until the
+next real DB-related feature or bugfix.
+
+Decision:
+- Do not refactor DB code as a standalone audit cleanup.
+- Keep public DB behavior unchanged.
+- Marked `AUD-012` as Deferred in `PROJECT_AUDIT_ACTION_PLAN.md`.
+
+## 2026-05-11 — Deep project audit and maintenance action plan
+
+Аудитор: Codex  
+Область: фактическое состояние репозитория `D:\test\PepeEdtaBot` на ветке `main` после синхронизации с `origin/main`.  
+Режим: audit-only; исходный код, зависимости, runtime-конфигурация и `PROJECT_AUDIT.md` не изменялись.  
+Связанный план: `PROJECT_AUDIT_ACTION_PLAN.md`.
+
+### Executive summary
+
+Проект находится в рабочем и в целом поддерживаемом состоянии: слои `handlers / services / repositories / infrastructure / migrations` реально выделены, миграции версионированы, есть CI, Docker, lock-файл, unit-тесты и базовая privacy-модель для `/pivo`.
+
+Критических P0-проблем в коде или репозитории не найдено. Главные риски текущего состояния:
+
+1. В локальной рабочей папке присутствует потенциально чувствительный runtime-state: `.env`, корневой `markov.db`, `db_prod_copy/markov.db`, `db_prod_copy/*.db-shm/*.db-wal`. Эти файлы не tracked, но требуют аккуратной ручной политики хранения.
+2. `.dockerignore` не исключает локальные артефакты `db_prod_copy/`, `.test_tmp/`, `Screenshot_*.jpg`, поэтому они могут попасть в Docker build context.
+3. `README.md`, `docs/ARCHITECTURE.md` и `PROJECT_AUDIT.md` частично расходятся с текущей реализацией и проверками.
+4. `/pivo`-команды всё ещё не ограничены `GroupOnly()`, хотя продукт и документация описывают групповой сценарий.
+5. Локальное `.venv` не соответствует `requirements.lock`, поэтому локальные проверки в нём не полностью воспроизводят CI/Docker.
+
+### Checks performed
+
+- `git status --short --branch` — ветка `main`, синхронизирована с `origin/main`; untracked: `Screenshot_1.jpg`, `Screenshot_2.jpg`.
+- `git ls-files` — tracked-файлы сверены.
+- `git ls-files --others --exclude-standard` — видимые неигнорируемые untracked: только `Screenshot_1.jpg`, `Screenshot_2.jpg`.
+- `git check-ignore -v AGENTS.md Screenshot_1.jpg Screenshot_2.jpg db_prod_copy\markov.db .test_tmp\tmp_196kqx7` — подтверждено, что `AGENTS.md`, `*.db`, `.test_tmp/` игнорируются `.gitignore`; screenshots не игнорируются.
+- `rg --files` и рекурсивный file inventory — структура проекта проверена.
+- `rg -n "TODO|FIXME|HACK|XXX|password|secret|token|api[_-]?key|BOT_TOKEN|PIVO_|OWNER_ID"` — в коде не найдено TODO/FIXME/HACK и явных committed-секретов; совпадения в документации и примерах проверялись отдельно.
+- `.\.venv\Scripts\python.exe -m unittest discover tests` — `Ran 199 tests ... OK`.
+- `.\.venv\Scripts\python.exe -m ruff check app/ tests/` — не выполнено: в `.venv` нет `ruff`.
+- `.\.venv\Scripts\python.exe -m mypy app/` — не выполнено: в `.venv` нет `mypy`.
+- `.\.venv\Scripts\python.exe -m pip list` — локальный `.venv` отличается от `requirements.lock`.
+
+### Technology and architecture snapshot
+
+- Python Telegram bot на `aiogram v3`.
+- SQLite + `aiosqlite`; WAL включается в `Database.init()`.
+- `cryptography.Fernet` используется для payload `/pivo`; HMAC-SHA256 используется для `chat_hash`/`user_hash`.
+- HKDF сейчас реально используется в `app/log_masking.py` для маскирования `chat_id`, но не для `/pivo` encryption/HMAC.
+- `main.py` — compose root: `Settings`, `Database`, `MarkovGenerator`, `PivoService`, `LearningService`, `Dispatcher`.
+- `db.py` — фасад и cross-domain транзакции; репозитории вынесены в `app/repositories`.
+- Legacy/root modules всё ещё существуют (`markov.py`, `bot_messages.py`, `bot_policy.py`, `pivo.py`, `pivo_templates.py`, `settings.py`, `runtime_*`) и частично исключены из strict mypy через `pyproject.toml`.
+
+### Status of previous `PROJECT_AUDIT_CODEX.md` findings
+
+| Previous finding | Current status | Note |
+|---|---|---|
+| F1 `/pivo` не ограничен group/supergroup | Still open | `app/handlers/pivo.py` содержит handlers без `GroupOnly()` на строках `21`, `70`, `95`, `112`. |
+| F2 `README.md` устарел по `/pivo` crypto/privacy/logging | Still open | `README.md` всё ещё говорит про HKDF-домены для `/pivo` и raw `chat_id` при DEBUG, что не соответствует текущему коду. |
+| F3 `docs/ARCHITECTURE.md` устарел по числу тестов | Still open | Документ говорит `208 unit-тестов`, фактически локально прошло `199`. |
+| F4 Quickstart ставит `requirements.txt`, а CI/Docker живут на lock | Still open | Quickstart по-прежнему предлагает `pip install -r requirements.txt`; dev/CI путь ниже в README использует `requirements-dev.txt`. |
+
+### Discrepancies found in `PROJECT_AUDIT.md`
+
+`PROJECT_AUDIT.md` был прочитан и намеренно не изменялся.
+
+Подтверждено:
+
+- общая слоистая архитектура соответствует текущей структуре;
+- `199` тестов — подтверждено локальным `unittest`;
+- миграции `001`...`007` присутствуют;
+- `chat_members` является текущей таблицей `/pivo`;
+- `messages.text` удалён, `author_id` анонимизируется;
+- CI, Dockerfile, lock-файл, `.gitattributes` существуют.
+
+Неактуально или спорно:
+
+- В разделе `0.1` есть фраза «Все 200 тестов зелёные локально», но актуальный прогон дал `199`.
+- В разделе `0` заявлен пустой P0/P1/P2/P3 backlog; текущий аудит нашёл новый backlog P1/P2/P3, прежде всего docs drift, Docker context hygiene, local env drift и `/pivo` scope.
+- В Docker-сниппете раздела `9.3` указан `ENTRYPOINT ["/app/docker-entrypoint.sh"]`, а фактический Dockerfile использует `/usr/local/bin/docker-entrypoint.sh`.
+- Исторические ссылки на ветку `codex/pivo-daily-quota` остаются как история, но для новых веток использовать `codex` нельзя по текущим правилам пользователя.
+- Документ в целом точнее `README.md` по HKDF: он правильно уточняет, что `PivoSecurity` не использует HKDF. Однако верхний стек всё ещё формулирует `cryptography (Fernet, HKDF)` слишком широко.
+
+### Findings — current audit
+
+#### CA-2026-05-11-F1. `/pivo` scope не зафиксирован как явный контракт
+
+Priority: P2  
+Category: architecture / product-consistency  
+Status: open
+
+`/pivo`, `/pivo_on`, `/pivo_off`, `/pivo_privacy` зарегистрированы без `GroupOnly()`. Learning и часть admin/common команд имеют явную group-модель, а `/pivo` — нет. Это не выглядит security-инцидентом, но мешает предсказуемому развитию продукта.
+
+Рекомендация: принять продуктовые решение: либо добавить `GroupOnly()` и тесты на private chat, либо задокументировать DM-support как поддерживаемый сценарий.
+
+#### CA-2026-05-11-F2. Documentation drift в security/privacy-части README
+
+Priority: P2  
+Category: docs / security  
+Status: open
+
+`README.md` утверждает, что `/pivo` выводит ключи через HKDF-домены `members:hmac` / `members:encryption`. Фактически `pivo.py` использует прямой HMAC от `PIVO_HMAC_SECRET` и Fernet-ключ как `sha256(PIVO_ENCRYPTION_SECRET)`. Также README предупреждает о raw `chat_id` при DEBUG, хотя learning-path маскирует `chat_id` через `mask_chat_id(...)`.
+
+Рекомендация: синхронизировать README с фактической реализацией и оставить HKDF только для log-masking.
+
+#### CA-2026-05-11-F3. `docs/ARCHITECTURE.md` содержит устаревшую test metric
+
+Priority: P3  
+Category: docs  
+Status: open
+
+Документ говорит `208 unit-тестов`, но текущий локальный прогон на Python 3.14 дал `199 tests OK`. Хрупкие числовые метрики быстро устаревают.
+
+Рекомендация: либо обновить число, либо заменить на менее хрупкую формулировку.
+
+#### CA-2026-05-11-F4. Quickstart не воспроизводит CI/Docker dependency set
+
+Priority: P2  
+Category: dependencies / docs  
+Status: open
+
+`README.md` в быстром старте использует `pip install -r requirements.txt`, тогда как CI/Docker используют `requirements-dev.txt`/`requirements.lock`. Это допустимо для runtime-range install, но не как основной путь для новой разработки.
+
+Рекомендация: в README явно разделить `runtime quickstart` и `development setup`; для разработки по умолчанию рекомендовать `pip install -r requirements-dev.txt`.
+
+#### CA-2026-05-11-F5. Local `.venv` drift relative to `requirements.lock`
+
+Priority: P2  
+Category: dependencies / devops  
+Status: open
+
+`pip list` в `.venv` отличается от `requirements.lock`: например, локально `aiogram 3.25.0`, `aiohttp 3.13.3`, `python-dotenv 1.2.1`, а lock содержит `aiogram 3.27.0`, `aiohttp 3.13.5`, `python-dotenv 1.2.2`. Из-за этого `unittest` проверяет не тот же набор пакетов, что Docker/CI.
+
+Рекомендация: пересоздать `.venv` или переустановить зависимости из `requirements-dev.txt`; добавить в docs короткую команду проверки соответствия.
+
+#### CA-2026-05-11-F6. `ruff` и `mypy` отсутствуют в локальном `.venv`
+
+Priority: P2  
+Category: devops / dependencies  
+Status: open
+
+`python -m ruff` и `python -m mypy` не запускаются в текущем `.venv`, хотя CI их использует. Это признак неполного dev setup.
+
+Рекомендация: установить dev-зависимости из `requirements-dev.txt` и после этого повторить `ruff`/`mypy`.
+
+#### CA-2026-05-11-F7. Docker build context может включать локальные артефакты
+
+Priority: P1  
+Category: devops / filesystem / security  
+Status: open
+
+`.dockerignore` исключает `.env`, `.venv`, `.idea`, caches, `markov.db`, `docs`, `tests`, но не исключает `db_prod_copy/`, `.test_tmp/`, `Screenshot_*.jpg`. Эти файлы не tracked, но при локальном `docker build` могут быть отправлены в build context и потенциально попасть в слой `COPY . .`, если не отфильтрованы.
+
+Рекомендация: добавить в `.dockerignore` локальные DB/backups/temp/screenshot-паттерны; перед сборкой проверить `docker build` context.
+
+#### CA-2026-05-11-F8. Local production DB copy in workspace
+
+Priority: P1  
+Category: filesystem / security  
+Status: open
+
+В рабочей папке есть `db_prod_copy/markov.db` (~9.5 MB) плюс WAL/SHM. Файлы игнорируются за счёт `*.db`, `*.db-shm`, `*.db-wal`, но сама папка не описана в `.gitignore`/`.dockerignore` явно. По имени это копия production DB; даже после анонимизации часть данных может быть чувствительной.
+
+Рекомендация: хранить такие копии вне repo workspace или в явно игнорируемой local-only директории; перед удалением/переносом проверить, не нужна ли копия для миграционного smoke.
+
+#### CA-2026-05-11-F9. Root `markov.db` remains local runtime/test artifact
+
+Priority: P2  
+Category: filesystem / repository hygiene  
+Status: open
+
+Корневой `markov.db` присутствует локально и описан в README как локальная тестовая база. Он игнорируется `*.db`, но всё равно загрязняет рабочую папку и может путать новые сценарии, где runtime DB по умолчанию `data/markov.db`.
+
+Рекомендация: либо перенести тестовые DB в `data/`/local-only storage, либо оставить как документированный local artifact; не удалять без ручного подтверждения.
+
+#### CA-2026-05-11-F10. `Screenshot_1.jpg` and `Screenshot_2.jpg` are untracked and not ignored
+
+Priority: P2  
+Category: git / filesystem  
+Status: open
+
+`git status` показывает два untracked screenshot-файла. Они не попадают под `.gitignore`, и могут случайно попасть в commit или Docker context.
+
+Рекомендация: определить, нужны ли они как документация/issue evidence; если нет — удалить вручную или добавить локальный ignore-паттерн для `Screenshot_*.jpg`.
+
+#### CA-2026-05-11-F11. Local `.env` appears outdated relative to `.env.example`
+
+Priority: P2  
+Category: devops / configuration  
+Status: open
+
+Без раскрытия значений проверены только ключи: локальный `.env` содержит старые комментарии (`/seed`) и не содержит видимых новых ключей вроде `PIVO_HMAC_SECRET`, `PIVO_ENCRYPTION_SECRET`, `MAX_REPLY_TOKENS`, `REPETITION_PENALTY_STRENGTH`, `LOG_LEVEL`, `BOT_TEXT_ALIASES`. Такой `.env` может не запустить текущую версию приложения.
+
+Рекомендация: вручную синхронизировать локальный `.env` с `.env.example`, сохранив реальные секреты.
+
+#### CA-2026-05-11-F12. `AGENTS.md` is tracked while `.gitignore` marks it local
+
+Priority: P3  
+Category: git / repository hygiene  
+Status: open
+
+`.gitignore` содержит `AGENTS.md` как local agent instructions, но `git ls-files` показывает `AGENTS.md` как tracked. Это не runtime-баг, но правило вводит в заблуждение: новые изменения в tracked ignored-файле всё равно попадут в git status.
+
+Рекомендация: решить, должен ли `AGENTS.md` быть частью репозитория. Если да — убрать его из `.gitignore`; если нет — отдельным решением удалить из индекса.
+
+#### CA-2026-05-11-F13. `db.py` still has dense cross-domain SQL and repetitive stats queries
+
+Priority: P3  
+Category: architecture / code-quality  
+Status: open
+
+`db.py` уже стал фасадом, но `save_message_and_update_model`, `get_stats`, `clear_chat` всё ещё содержат много прямого SQL и повторяющихся `COUNT/SUM` запросов. Это не срочно, но расширение статистики или новой модели может быть труднее, чем в repository-style коде.
+
+Рекомендация: при следующем архитектурном проходе вынести stats/clear helpers или добавить маленькие internal query helpers без изменения поведения.
+
+#### CA-2026-05-11-F14. Tests are broad but mostly unit-level; no automated Docker/runtime smoke
+
+Priority: P3  
+Category: tests / devops  
+Status: open
+
+Unit suite сильная и проходит, но текущая локальная проверка не покрывает Docker build, container startup, real Telegram smoke, dependency sync и реальные secrets/env validation.
+
+Рекомендация: добавить безопасный smoke checklist и, по возможности, CI job для Docker build без запуска бота.
+
+### File and folder classification
+
+Actively used:
+
+- `main.py`, `db.py`, `markov.py`, `bot_policy.py`, `bot_messages.py`, `pivo.py`, `pivo_templates.py`, `settings.py`, `runtime_config.py`, `runtime_state.py`, `config_registry.py`, `text_utils.py`
+- `app/handlers`, `app/services`, `app/repositories`, `app/filters`, `app/middlewares`, `app/infrastructure`, `app/migrations`
+- `tests/`, `tests/fixtures/legacy_real_schema.sql`
+- `requirements.txt`, `requirements.lock`, `requirements-dev.txt`, `pyproject.toml`
+- `Dockerfile`, `docker-entrypoint.sh`, `compose.yaml`, `.github/workflows/ci.yml`
+- `README.md`, `docs/ARCHITECTURE.md`, `.env.example`
+
+Auxiliary but valid:
+
+- `seed_db.py`, `seed_diverse.py` — local/smoke data seeders.
+- `PROJECT_AUDIT.md` — main historical audit; read-only for this task.
+- `PROJECT_AUDIT_CODEX.md` — working audit log.
+- `AGENTS.md` — currently tracked repo instruction file, despite `.gitignore` ambiguity.
+
+Temporary/local/legacy candidates:
+
+- `.env` — local secret-bearing config, ignored; do not commit.
+- `.venv/` — local virtualenv, ignored; currently dependency-drifted.
+- `.idea/` — local IDE config, ignored.
+- `.test_tmp/` — old temp directories, ignored by git but not dockerignored.
+- `markov.db` — local SQLite DB, ignored.
+- `db_prod_copy/` — local DB copy, ignored only by file extension; likely sensitive.
+- `Screenshot_1.jpg`, `Screenshot_2.jpg` — untracked, not ignored.
+- `__pycache__/` — generated cache.
+
+### Deletion / relocation candidates
+
+| Path | Why it looks removable or relocatable | Confidence | Check before deletion |
+|---|---|---|---|
+| `Screenshot_1.jpg` | Untracked screenshot, not referenced by docs/code. | Medium | Ask whether it is needed for issue evidence or documentation. |
+| `Screenshot_2.jpg` | Same as above. | Medium | Ask whether it is needed for issue evidence or documentation. |
+| `.test_tmp/` | Old local temp directories from February; ignored by git. | High | Ensure no running test/process uses it. |
+| `__pycache__/` | Generated Python cache. | High | None beyond confirming no process is running. |
+| `markov.db` | Local SQLite DB; README says local test DB, but runtime default is `data/markov.db`. | Medium | Confirm it is not the only useful local training/test dataset. |
+| `db_prod_copy/` | Looks like production DB copy; should not live in repo workspace. | Medium | Confirm backup/retention requirements; move securely before deletion. |
+| `.idea/` | Local IDE metadata. | Medium | Keep if user wants local IDE settings; do not commit. |
+| `.venv/` | Recreateable virtualenv and currently out of sync. | Medium | Confirm no local-only packages are intentionally installed. |
+
+### Security notes
+
+- No committed `.env` or obvious real token was found in tracked files.
+- `.env.example` contains placeholders and generation guidance, acceptable for repo.
+- SQL statements appear parameterized.
+- `/pivo` payload encryption and HMAC are present, but README must describe the actual scheme precisely.
+- `chat_id` log masking is present in learning logs. `/pivo` logs do not print raw IDs.
+- Local DB copies and `.env` remain the main operational privacy risk in this workspace.
+
+### Recommended next steps
+
+1. Address P1 hygiene/security: `.dockerignore` for local DB/temp/screenshot artifacts; decide where `db_prod_copy/` belongs.
+2. Sync local `.venv` and `.env` with project files.
+3. Resolve `/pivo` group-vs-DM product contract.
+4. Fix README and architecture docs drift.
+5. Add Docker build smoke and dependency sync checks when convenient.
+
+---
+
+## Historical audit snapshot — 2026-05-10
+
 Дата аудита: 2026-05-10  
 Аудитор: Codex  
 Область: фактическое состояние репозитория `E:\test\PepeEdtaBot` на ветке `main` без изменения `PROJECT_AUDIT.md`

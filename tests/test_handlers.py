@@ -218,6 +218,31 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
 # ---------------------------------------------------------------------------
 
 class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
+    def test_pivo_router_handlers_are_group_only(self) -> None:
+        from app.filters import GroupOnly
+        from app.handlers.pivo import router
+
+        expected = {
+            "cmd_pivo",
+            "cmd_pivo_on",
+            "cmd_pivo_off",
+            "cmd_pivo_privacy",
+        }
+
+        handlers = {
+            handler.callback.__name__: handler
+            for handler in router.message.handlers
+            if handler.callback.__name__ in expected
+        }
+
+        self.assertEqual(set(handlers), expected)
+        for name, handler in handlers.items():
+            callbacks = [filter_object.callback for filter_object in handler.filters]
+            self.assertTrue(
+                any(isinstance(callback, GroupOnly) for callback in callbacks),
+                f"{name} must be registered with GroupOnly",
+            )
+
     async def test_pivo_calls_build_and_replies(self) -> None:
         from app.handlers.pivo import cmd_pivo
         msg = _fake_message()

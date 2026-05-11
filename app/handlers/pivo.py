@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.filters import is_admin_or_owner
+from app.filters import GroupOnly, is_admin_or_owner
 from app.handlers._helpers import reply_humanized
 from app.services import PivoService
 from pivo import PIVO_PRIVACY_MESSAGE
@@ -18,7 +18,7 @@ router = Router(name="pivo")
 logger = logging.getLogger("chat_markov")
 
 
-@router.message(Command("pivo"))
+@router.message(Command("pivo"), GroupOnly())
 async def cmd_pivo(
     message: Message,
     pivo_service: PivoService,
@@ -67,7 +67,7 @@ async def cmd_pivo(
     logger.info("mentions count: %s", mentions_count)
 
 
-@router.message(Command("pivo_on"))
+@router.message(Command("pivo_on"), GroupOnly())
 async def cmd_pivo_on(
     message: Message, pivo_service: PivoService, runtime_state: RuntimeState
 ) -> None:
@@ -92,7 +92,7 @@ async def cmd_pivo_on(
     )
 
 
-@router.message(Command("pivo_off"))
+@router.message(Command("pivo_off"), GroupOnly())
 async def cmd_pivo_off(
     message: Message, pivo_service: PivoService, runtime_state: RuntimeState
 ) -> None:
@@ -109,7 +109,7 @@ async def cmd_pivo_off(
     )
 
 
-@router.message(Command("pivo_privacy"))
+@router.message(Command("pivo_privacy"), GroupOnly())
 async def cmd_pivo_privacy(message: Message, runtime_state: RuntimeState) -> None:
     await reply_humanized(
         message,
