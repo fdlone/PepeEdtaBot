@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.filters import GroupOnly, is_admin_or_owner
+from app.filters import GroupOnly
 from app.handlers._helpers import reply_humanized
 from app.services import PivoService
 from app.services.pivo_parser import parse_pivo_command
@@ -30,25 +30,6 @@ async def cmd_pivo(
     if message.from_user is None:
         return
     command_args = parse_pivo_command(message)
-    is_privileged = await is_admin_or_owner(message, bot, settings)
-    quota = await pivo_service.consume_daily_call_quota(
-        chat_id=message.chat.id,
-        user_id=message.from_user.id,
-        is_admin_or_owner=is_privileged,
-    )
-    if not quota.allowed:
-        await reply_humanized(
-            message,
-            f"Лимит /pivo на сегодня исчерпан: {quota.limit} раз(а) в сутки.",
-            runtime_state.typing_min_ms,
-            runtime_state.typing_max_ms,
-        )
-        logger.info(
-            "pivo command rejected by daily quota: limit=%s day=%s",
-            quota.limit,
-            quota.usage_day,
-        )
-        return
 
     try:
         text, mentions_count = await pivo_service.build_call_message(
@@ -60,12 +41,7 @@ async def cmd_pivo(
         )
         await message.reply(text, parse_mode=ParseMode.HTML)
     except Exception:
-        await pivo_service.refund_daily_call_quota(
-            chat_id=message.chat.id,
-            user_id=message.from_user.id,
-            usage_day=quota.usage_day,
-        )
-        logger.exception("pivo command failed after quota consumption; quota refunded")
+        logger.exception("pivo command failed")
         raise
 
     logger.info("pivo command executed")

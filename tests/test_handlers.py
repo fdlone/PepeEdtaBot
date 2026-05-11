@@ -247,20 +247,14 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         from app.handlers.pivo import cmd_pivo
         msg = _fake_message()
         pivo_service = AsyncMock()
-        pivo_service.consume_daily_call_quota = AsyncMock(
-            return_value=MagicMock(allowed=True, limit=1, usage_day="2026-05-08")
-        )
         pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2))
         state = _fake_state()
         bot = AsyncMock()
         settings = MagicMock(owner_id=None)
-        with patch("app.handlers.pivo.is_admin_or_owner", AsyncMock(return_value=False)):
-            await cmd_pivo(msg, pivo_service, state, bot, settings)
-        pivo_service.consume_daily_call_quota.assert_awaited_once_with(
-            chat_id=msg.chat.id,
-            user_id=msg.from_user.id,
-            is_admin_or_owner=False,
-        )
+
+        await cmd_pivo(msg, pivo_service, state, bot, settings)
+
+        pivo_service.consume_daily_call_quota.assert_not_called()
         pivo_service.build_call_message.assert_awaited_once_with(
             chat_id=msg.chat.id,
             caller_user_id=msg.from_user.id,
@@ -274,17 +268,14 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         from app.handlers.pivo import cmd_pivo
         msg = _fake_message(text="/pivo 20:00 watch movie @friend")
         pivo_service = AsyncMock()
-        pivo_service.consume_daily_call_quota = AsyncMock(
-            return_value=MagicMock(allowed=True, limit=1, usage_day="2026-05-08")
-        )
         pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 1))
         state = _fake_state()
         bot = AsyncMock()
         settings = MagicMock(owner_id=None)
 
-        with patch("app.handlers.pivo.is_admin_or_owner", AsyncMock(return_value=False)):
-            await cmd_pivo(msg, pivo_service, state, bot, settings)
+        await cmd_pivo(msg, pivo_service, state, bot, settings)
 
+        pivo_service.consume_daily_call_quota.assert_not_called()
         pivo_service.build_call_message.assert_awaited_once_with(
             chat_id=msg.chat.id,
             caller_user_id=msg.from_user.id,
@@ -294,69 +285,52 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         )
         msg.reply.assert_awaited_once()
 
-    async def test_pivo_quota_denied_replies_without_calling_mentions(self) -> None:
+    async def test_pivo_does_not_check_daily_quota_while_testing(self) -> None:
         from app.handlers.pivo import cmd_pivo
         msg = _fake_message()
         pivo_service = AsyncMock()
-        pivo_service.consume_daily_call_quota = AsyncMock(
-            return_value=MagicMock(allowed=False, limit=1, usage_day="2026-05-08")
-        )
-        state = _fake_state()
-        bot = AsyncMock()
-        settings = MagicMock(owner_id=None)
-
-        with patch("app.handlers.pivo.is_admin_or_owner", AsyncMock(return_value=False)):
-            await cmd_pivo(msg, pivo_service, state, bot, settings)
-
-        pivo_service.build_call_message.assert_not_called()
-        msg.reply.assert_awaited_once()
-        assert "Лимит /pivo" in msg.reply.call_args[0][0]
-
-    async def test_pivo_admin_uses_admin_quota_path(self) -> None:
-        from app.handlers.pivo import cmd_pivo
-        msg = _fake_message()
-        pivo_service = AsyncMock()
-        pivo_service.consume_daily_call_quota = AsyncMock(
-            return_value=MagicMock(allowed=True, limit=3, usage_day="2026-05-08")
-        )
         pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2))
         state = _fake_state()
         bot = AsyncMock()
         settings = MagicMock(owner_id=None)
 
-        with patch("app.handlers.pivo.is_admin_or_owner", AsyncMock(return_value=True)):
-            await cmd_pivo(msg, pivo_service, state, bot, settings)
+        await cmd_pivo(msg, pivo_service, state, bot, settings)
 
-        pivo_service.consume_daily_call_quota.assert_awaited_once_with(
-            chat_id=msg.chat.id,
-            user_id=msg.from_user.id,
-            is_admin_or_owner=True,
-        )
+        pivo_service.consume_daily_call_quota.assert_not_called()
+        pivo_service.build_call_message.assert_awaited_once()
         msg.reply.assert_awaited_once()
 
-    async def test_pivo_refunds_quota_when_reply_fails(self) -> None:
+    async def test_pivo_does_not_check_admin_quota_path_while_testing(self) -> None:
+        from app.handlers.pivo import cmd_pivo
+        msg = _fake_message()
+        pivo_service = AsyncMock()
+        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2))
+        state = _fake_state()
+        bot = AsyncMock()
+        settings = MagicMock(owner_id=None)
+
+        await cmd_pivo(msg, pivo_service, state, bot, settings)
+
+        pivo_service.consume_daily_call_quota.assert_not_called()
+        pivo_service.build_call_message.assert_awaited_once()
+        msg.reply.assert_awaited_once()
+
+    async def test_pivo_does_not_refund_quota_when_reply_fails_while_testing(self) -> None:
         from app.handlers.pivo import cmd_pivo
         msg = _fake_message()
         msg.reply = AsyncMock(side_effect=RuntimeError("telegram failed"))
         pivo_service = AsyncMock()
-        pivo_service.consume_daily_call_quota = AsyncMock(
-            return_value=MagicMock(allowed=True, limit=1, usage_day="2026-05-08")
-        )
         pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2))
         pivo_service.refund_daily_call_quota = AsyncMock()
         state = _fake_state()
         bot = AsyncMock()
         settings = MagicMock(owner_id=None)
 
-        with patch("app.handlers.pivo.is_admin_or_owner", AsyncMock(return_value=False)):
-            with self.assertRaises(RuntimeError):
-                await cmd_pivo(msg, pivo_service, state, bot, settings)
+        with self.assertRaises(RuntimeError):
+            await cmd_pivo(msg, pivo_service, state, bot, settings)
 
-        pivo_service.refund_daily_call_quota.assert_awaited_once_with(
-            chat_id=msg.chat.id,
-            user_id=msg.from_user.id,
-            usage_day="2026-05-08",
-        )
+        pivo_service.consume_daily_call_quota.assert_not_called()
+        pivo_service.refund_daily_call_quota.assert_not_called()
 
     async def test_pivo_on_subscribes_user(self) -> None:
         from app.handlers.pivo import cmd_pivo_on
