@@ -39,11 +39,32 @@ class TestPivoParser(unittest.TestCase):
         self.assertEqual(args.explicit_mentions, ())
 
     def test_only_plain_mention(self) -> None:
-        args = parse_pivo_command(_message("/pivo @friend"))  # type: ignore[arg-type]
+        args = parse_pivo_command(_message("/pivo @friend_user"))  # type: ignore[arg-type]
 
         self.assertIsNone(args.planned_time)
         self.assertIsNone(args.target)
-        self.assertEqual(args.explicit_mentions, ("@friend",))
+        self.assertEqual(args.explicit_mentions, ("@friend_user",))
+
+    def test_short_at_word_is_target_not_mention(self) -> None:
+        args = parse_pivo_command(_message("/pivo @all"))  # type: ignore[arg-type]
+
+        self.assertIsNone(args.planned_time)
+        self.assertEqual(args.target, "@all")
+        self.assertEqual(args.explicit_mentions, ())
+
+    def test_plain_words_are_target_not_mentions(self) -> None:
+        args = parse_pivo_command(_message("/pivo all contact mail"))  # type: ignore[arg-type]
+
+        self.assertIsNone(args.planned_time)
+        self.assertEqual(args.target, "all contact mail")
+        self.assertEqual(args.explicit_mentions, ())
+
+    def test_at_word_starting_with_digit_is_target_not_mention(self) -> None:
+        args = parse_pivo_command(_message("/pivo @1friend"))  # type: ignore[arg-type]
+
+        self.assertIsNone(args.planned_time)
+        self.assertEqual(args.target, "@1friend")
+        self.assertEqual(args.explicit_mentions, ())
 
     def test_time_and_target(self) -> None:
         args = parse_pivo_command(_message("/pivo today 21:00 watch movie"))  # type: ignore[arg-type]
@@ -53,27 +74,27 @@ class TestPivoParser(unittest.TestCase):
         self.assertEqual(args.explicit_mentions, ())
 
     def test_time_and_mention(self) -> None:
-        args = parse_pivo_command(_message("/pivo завтра вечером @friend"))  # type: ignore[arg-type]
+        args = parse_pivo_command(_message("/pivo завтра вечером @friend_user"))  # type: ignore[arg-type]
 
         self.assertEqual(args.planned_time, "завтра вечером")
         self.assertIsNone(args.target)
-        self.assertEqual(args.explicit_mentions, ("@friend",))
+        self.assertEqual(args.explicit_mentions, ("@friend_user",))
 
     def test_target_and_mention(self) -> None:
-        args = parse_pivo_command(_message("/pivo board games @friend"))  # type: ignore[arg-type]
+        args = parse_pivo_command(_message("/pivo board games @friend_user"))  # type: ignore[arg-type]
 
         self.assertIsNone(args.planned_time)
         self.assertEqual(args.target, "board games")
-        self.assertEqual(args.explicit_mentions, ("@friend",))
+        self.assertEqual(args.explicit_mentions, ("@friend_user",))
 
     def test_time_target_and_mention(self) -> None:
         args = parse_pivo_command(  # type: ignore[arg-type]
-            _message("/pivo tomorrow evening board games @friend @second")
+            _message("/pivo tomorrow evening board games @friend_user @second_user")
         )
 
         self.assertEqual(args.planned_time, "tomorrow evening")
         self.assertEqual(args.target, "board games")
-        self.assertEqual(args.explicit_mentions, ("@friend", "@second"))
+        self.assertEqual(args.explicit_mentions, ("@friend_user", "@second_user"))
 
     def test_time_in_middle_is_target(self) -> None:
         args = parse_pivo_command(_message("/pivo movie at 20:00"))  # type: ignore[arg-type]
