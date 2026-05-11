@@ -4,7 +4,29 @@ import html
 import random
 import re
 
-from pivo_templates import PIVO_TEMPLATES
+from pivo_templates import ENDING_PHRASES, PIVO_TEMPLATES
+
+NEUTRAL_TARGET_LINES: tuple[str, ...] = (
+    "Повестка вечера: {target}.",
+    "План на вечер: {target}.",
+    "Основная программа: {target}.",
+    "Сегодняшний повод для сбора: {target}.",
+    "В программе: {target}.",
+)
+
+NEUTRAL_SUPPORT_LINES: tuple[str, ...] = (
+    "Discord, напитки по желанию и коллективное моральное разложение прилагаются.",
+    "Споры допускаются, но без попыток делать вид, что кто-то здесь взрослый.",
+    "Пиво приветствуется. Другой напиток тоже переживём.",
+    "Главное - зайти в Discord и не изображать занятого человека.",
+    "Уныние не приносить, его и так хватает.",
+)
+
+TIME_LINES: tuple[str, ...] = (
+    "{time_phrase} сбор в Discord.",
+    "Собираемся в Discord {time_phrase}.",
+    "Discord открывается для морально сомнительных личностей {time_phrase}.",
+)
 
 
 def build_pivo_message(
@@ -16,10 +38,53 @@ def build_pivo_message(
     template = random.choice(PIVO_TEMPLATES)
     text = template.format(mentions=mentions).strip()
     if target:
-        text = _apply_target(text, html.escape(target, quote=False))
+        return _build_target_message(
+            text,
+            html.escape(target, quote=False),
+            planned_time=planned_time,
+        )
     if planned_time:
         text = _apply_time(text, _format_time_phrase(planned_time))
     return text
+
+
+def _build_target_message(
+    source_text: str,
+    target: str,
+    *,
+    planned_time: str | None,
+) -> str:
+    mentions, intro = _split_mentions_and_intro(source_text)
+    lines = [mentions, "", intro, ""]
+
+    if planned_time:
+        lines.extend(
+            [
+                random.choice(TIME_LINES).format(
+                    time_phrase=_format_time_phrase(planned_time)
+                ),
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            random.choice(NEUTRAL_TARGET_LINES).format(target=target),
+            random.choice(NEUTRAL_SUPPORT_LINES),
+            "",
+            random.choice(ENDING_PHRASES),
+        ]
+    )
+    return "\n".join(lines).strip()
+
+
+def _split_mentions_and_intro(text: str) -> tuple[str, str]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return "", "Сегодня общий сбор в Discord."
+    mentions = lines[0]
+    intro = next((line for line in lines[1:] if "Discord" not in line), "")
+    return mentions, intro or "Сегодня общий сбор в Discord."
 
 
 def _apply_time(text: str, time_phrase: str) -> str:
@@ -34,82 +99,6 @@ def _apply_time(text: str, time_phrase: str) -> str:
         if count:
             return updated
     return text.replace("Discord", f"Discord {time_phrase}", 1)
-
-
-def _apply_target(text: str, target: str) -> str:
-    updated = _replace_activity_blocks(text, target)
-    updated = _replace_inline_activity_mentions(updated, target)
-    if updated != text:
-        return updated
-    return _insert_target_after_discord_intro(text, target)
-
-
-def _replace_activity_blocks(text: str, target: str) -> str:
-    block_replacements = (
-        (
-            r"(?m)^Возможные дисциплины: .+$",
-            f"Повестка вечера: {target}.",
-        ),
-        (
-            r"(?m)^Варианты игр: .+$",
-            f"Повестка вечера: {target}.",
-        ),
-        (
-            r"(?m)^Игры на выбор: .+$",
-            f"Повестка вечера: {target}.",
-        ),
-        (
-            r"(?m)^Игры: .+$",
-            f"Повестка вечера: {target}.",
-        ),
-        (
-            r"(?m)^Рекомендуемые развлечения: .+$",
-            f"Повестка вечера: {target}.",
-        ),
-        (
-            r"(?m)^СИГейм, Codenames, рисовалка.*$",
-            f"Повестка вечера: {target}.",
-        ),
-        (
-            r"(?m)^СИГейм;\nCodenames;\nрисовалка;",
-            f"{target};",
-        ),
-        (
-            r"(?m)^Рекомендуемые дисциплины:\nСИГейм для .+\nCodenames для .+\nрисовалка для .+",
-            f"Рекомендуемая дисциплина:\n{target}.",
-        ),
-    )
-    updated = text
-    for pattern, replacement in block_replacements:
-        updated = re.sub(pattern, replacement, updated, count=1)
-    return updated
-
-
-def _replace_inline_activity_mentions(text: str, target: str) -> str:
-    inline_patterns = (
-        r"СИГейм, Codenames, рисовалка или [^.]+",
-        r"СИГейм, рисовалка, Codenames или [^.]+",
-        r"СИГейм, Codenames, рисовалка, Gartic Phone, [^.]+",
-        r"СИГейм, рисовалка",
-        r"СИГейма или рисовалки",
-        r"Codenames",
-        r"СИГейм",
-        r"рисовалка",
-        r"игры",
-    )
-    updated = text
-    for pattern in inline_patterns:
-        updated = re.sub(pattern, target, updated, count=1, flags=re.IGNORECASE)
-    return updated
-
-
-def _insert_target_after_discord_intro(text: str, target: str) -> str:
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        if "Discord" in line:
-            lines.insert(index + 1, f"Повестка вечера: {target}.")
-            return "\n".join(lines)
-    return f"{text}\n\nПовестка вечера: {target}."
 
 
 def _format_time_phrase(planned_time: str) -> str:

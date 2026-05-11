@@ -32,37 +32,65 @@ class TestPivoMessageBuilder(unittest.TestCase):
         self.assertNotIn("Когда:", text)
 
     def test_target_replaces_activity_context(self) -> None:
-        with patch("random.choice", return_value=PIVO_TEMPLATES[0]):
+        with patch(
+            "random.choice",
+            side_effect=[
+                PIVO_TEMPLATES[0],
+                "Повестка вечера: {target}.",
+                "Пиво приветствуется. Другой напиток тоже переживём.",
+                "Отмазки принимаются, но будут высмеяны.",
+            ],
+        ):
             text = build_pivo_message("@friend", target="watch movie")
 
         self.assertIn("Повестка вечера: watch movie.", text)
         self.assertNotIn("СИГейм", text)
         self.assertNotIn("Codenames", text)
         self.assertNotIn("рисовалка", text)
+        self.assertNotIn("игр", text.lower())
+        self.assertNotIn("ведущ", text.lower())
         self.assertNotIn("Повод:", text)
 
     def test_target_and_time_are_both_embedded(self) -> None:
-        with patch("random.choice", return_value=PIVO_TEMPLATES[0]):
+        with patch(
+            "random.choice",
+            side_effect=[
+                PIVO_TEMPLATES[0],
+                "{time_phrase} сбор в Discord.",
+                "Повестка вечера: {target}.",
+                "Пиво приветствуется. Другой напиток тоже переживём.",
+                "Отмазки принимаются, но будут высмеяны.",
+            ],
+        ):
             text = build_pivo_message(
                 "@friend",
                 planned_time="tomorrow evening",
                 target="watch movie",
             )
 
-        self.assertIn("Завтра вечером объявляется общий сбор в Discord.", text)
+        self.assertIn("завтра вечером сбор в Discord.", text)
         self.assertIn("Повестка вечера: watch movie.", text)
         self.assertNotIn("Когда:", text)
         self.assertNotIn("Повод:", text)
 
     def test_context_values_are_escaped(self) -> None:
-        with patch("random.choice", return_value=PIVO_TEMPLATES[0]):
+        with patch(
+            "random.choice",
+            side_effect=[
+                PIVO_TEMPLATES[0],
+                "{time_phrase} сбор в Discord.",
+                "Повестка вечера: {target}.",
+                "Пиво приветствуется. Другой напиток тоже переживём.",
+                "Отмазки принимаются, но будут высмеяны.",
+            ],
+        ):
             text = build_pivo_message(
                 "@friend",
                 planned_time="<20:00>",
                 target="movie & chat",
             )
 
-        self.assertIn("&lt;20:00&gt; объявляется общий сбор", text)
+        self.assertIn("&lt;20:00&gt; сбор в Discord.", text)
         self.assertIn("Повестка вечера: movie &amp; chat.", text)
 
 

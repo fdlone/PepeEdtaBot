@@ -201,7 +201,16 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         db.get_chat_members = AsyncMock()
         service = PivoService(db=db, security=security)
 
-        with patch("random.choice", return_value=PIVO_TEMPLATES[0]):
+        with patch(
+            "random.choice",
+            side_effect=[
+                PIVO_TEMPLATES[0],
+                "{time_phrase} сбор в Discord.",
+                "Повестка вечера: {target}.",
+                "Пиво приветствуется. Другой напиток тоже переживём.",
+                "Отмазки принимаются, но будут высмеяны.",
+            ],
+        ):
             text, mentions_count = await service.build_call_message(
                 chat_id=100,
                 caller_user_id=200,
@@ -212,7 +221,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
 
         db.get_chat_members.assert_not_called()
         self.assertEqual(mentions_count, 1)
-        self.assertIn("Сегодня в 20:00", text)
+        self.assertIn("сегодня в 20:00 сбор в Discord.", text)
         self.assertIn("Повестка вечера: watch movie.", text)
         self.assertIn("@friend", text)
 
@@ -224,7 +233,16 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         db.get_chat_members = AsyncMock(return_value=[])
         service = PivoService(db=db, security=security)
 
-        with patch("random.choice", return_value=PIVO_TEMPLATES[0]):
+        with patch(
+            "random.choice",
+            side_effect=[
+                PIVO_TEMPLATES[0],
+                "{time_phrase} сбор в Discord.",
+                "Повестка вечера: {target}.",
+                "Пиво приветствуется. Другой напиток тоже переживём.",
+                "Отмазки принимаются, но будут высмеяны.",
+            ],
+        ):
             text, mentions_count = await service.build_call_message(
                 chat_id=100,
                 caller_user_id=200,
