@@ -41,6 +41,14 @@ Decision:
 - Missing keys were considered by name only; secret values were not printed,
   copied, or changed.
 
+Update:
+- Local `PIVO_HMAC_SECRET` and `PIVO_ENCRYPTION_SECRET` were later generated
+  and inserted into the git-ignored `.env` without printing their values.
+- User added a new `BOT_TOKEN`.
+- `load_settings()` now succeeds with `DB_PATH=markov.db`, `BOT_TOKEN`,
+  `OWNER_ID`, and `/pivo` secrets set.
+- Marked `AUD-003` as Done in `PROJECT_AUDIT_ACTION_PLAN.md`.
+
 ### AUD-004 completed by syncing existing `.venv`
 
 User chose Option B for local `.venv`: install dev dependencies into the

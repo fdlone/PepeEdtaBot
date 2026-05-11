@@ -140,13 +140,15 @@ Yes, if only ignore/docs/storage policy changes are made.
 Priority: P2  
 Category: devops / configuration  
 Recommended execution order: 3
-Status: Needs decision
+Status: Done
 
 Status note:
-User chose report-only handling for now. Local `.env` is a secret-bearing,
-git-ignored working file and was not modified. Missing keys were identified by
-name only; secret values were not printed or changed. Manual follow-up is needed
-if local startup should use the current full configuration.
+Local `.env` remains a secret-bearing, git-ignored working file. Local
+`PIVO_HMAC_SECRET` and `PIVO_ENCRYPTION_SECRET` were generated and inserted
+without printing their values. User added a new `BOT_TOKEN`. `load_settings()`
+now succeeds with `DB_PATH=markov.db`, `BOT_TOKEN`, `OWNER_ID`, and `/pivo`
+secrets set. Secret values were not printed, committed, or copied into tracked
+files.
 
 Problem description:
 The local `.env` appears outdated by key list and comments. It lacks visible current keys such as `PIVO_HMAC_SECRET`, `PIVO_ENCRYPTION_SECRET`, `MAX_REPLY_TOKENS`, `REPETITION_PENALTY_STRENGTH`, `LOG_LEVEL`, and `BOT_TEXT_ALIASES`.
