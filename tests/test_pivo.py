@@ -193,6 +193,49 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
             usage_day="2026-05-08",
         )
 
+    async def test_build_call_message_uses_explicit_mentions_without_db_lookup(self) -> None:
+        from app.services.pivo_service import PivoService
+
+        security = make_security()
+        db = AsyncMock()
+        db.get_chat_members = AsyncMock()
+        service = PivoService(db=db, security=security)
+
+        with patch("random.choice", return_value=PIVO_TEMPLATES[0]):
+            text, mentions_count = await service.build_call_message(
+                chat_id=100,
+                caller_user_id=200,
+                planned_time="20:00",
+                target="watch movie",
+                explicit_mentions=("@friend",),
+            )
+
+        db.get_chat_members.assert_not_called()
+        self.assertEqual(mentions_count, 1)
+        self.assertIn("Когда: 20:00", text)
+        self.assertIn("Повод: watch movie", text)
+        self.assertIn("@friend", text)
+
+    async def test_build_call_message_escapes_context(self) -> None:
+        from app.services.pivo_service import PivoService
+
+        security = make_security()
+        db = AsyncMock()
+        db.get_chat_members = AsyncMock(return_value=[])
+        service = PivoService(db=db, security=security)
+
+        with patch("random.choice", return_value=PIVO_TEMPLATES[0]):
+            text, mentions_count = await service.build_call_message(
+                chat_id=100,
+                caller_user_id=200,
+                planned_time="<20:00>",
+                target="movie & chat",
+            )
+
+        self.assertEqual(mentions_count, 0)
+        self.assertIn("Когда: &lt;20:00&gt;", text)
+        self.assertIn("Повод: movie &amp; chat", text)
+
 
 class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:

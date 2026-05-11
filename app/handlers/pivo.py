@@ -10,6 +10,7 @@ from aiogram.types import Message
 from app.filters import GroupOnly, is_admin_or_owner
 from app.handlers._helpers import reply_humanized
 from app.services import PivoService
+from app.services.pivo_parser import parse_pivo_command
 from pivo import PIVO_PRIVACY_MESSAGE
 from runtime_state import RuntimeState
 from settings import Settings
@@ -28,6 +29,7 @@ async def cmd_pivo(
 ) -> None:
     if message.from_user is None:
         return
+    command_args = parse_pivo_command(message)
     is_privileged = await is_admin_or_owner(message, bot, settings)
     quota = await pivo_service.consume_daily_call_quota(
         chat_id=message.chat.id,
@@ -52,6 +54,9 @@ async def cmd_pivo(
         text, mentions_count = await pivo_service.build_call_message(
             chat_id=message.chat.id,
             caller_user_id=message.from_user.id,
+            planned_time=command_args.planned_time,
+            target=command_args.target,
+            explicit_mentions=command_args.explicit_mentions,
         )
         await message.reply(text, parse_mode=ParseMode.HTML)
     except Exception:

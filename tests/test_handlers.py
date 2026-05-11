@@ -261,7 +261,37 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
             user_id=msg.from_user.id,
             is_admin_or_owner=False,
         )
-        pivo_service.build_call_message.assert_awaited_once()
+        pivo_service.build_call_message.assert_awaited_once_with(
+            chat_id=msg.chat.id,
+            caller_user_id=msg.from_user.id,
+            planned_time=None,
+            target=None,
+            explicit_mentions=(),
+        )
+        msg.reply.assert_awaited_once()
+
+    async def test_pivo_passes_parsed_arguments_to_service(self) -> None:
+        from app.handlers.pivo import cmd_pivo
+        msg = _fake_message(text="/pivo 20:00 watch movie @friend")
+        pivo_service = AsyncMock()
+        pivo_service.consume_daily_call_quota = AsyncMock(
+            return_value=MagicMock(allowed=True, limit=1, usage_day="2026-05-08")
+        )
+        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 1))
+        state = _fake_state()
+        bot = AsyncMock()
+        settings = MagicMock(owner_id=None)
+
+        with patch("app.handlers.pivo.is_admin_or_owner", AsyncMock(return_value=False)):
+            await cmd_pivo(msg, pivo_service, state, bot, settings)
+
+        pivo_service.build_call_message.assert_awaited_once_with(
+            chat_id=msg.chat.id,
+            caller_user_id=msg.from_user.id,
+            planned_time="20:00",
+            target="watch movie",
+            explicit_mentions=("@friend",),
+        )
         msg.reply.assert_awaited_once()
 
     async def test_pivo_quota_denied_replies_without_calling_mentions(self) -> None:
