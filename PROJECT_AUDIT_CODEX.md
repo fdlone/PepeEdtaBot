@@ -17,6 +17,8 @@ Implemented:
 - Linked the runbook from `README.md`.
 - Updated `README.md` to state that CI now includes `bandit` and `safety`.
 - Added `bandit` and `safety` steps to `.github/workflows/ci.yml`.
+- Configured the CI `bandit` gate to fail on `medium/high` findings while the
+  separately tracked `AUD-011` low-only backlog remains open.
 - Verified `docker-build` job is present in `main` and marked CA-F14 complete.
 - Verified `markov.db` is not tracked; README continues to describe it as a
   local test DB artifact.
@@ -33,6 +35,7 @@ Checks:
 - `.\.venv\Scripts\python.exe -m mypy app/` — passed, 29 source files.
 - `.\.venv\Scripts\python.exe -m unittest discover tests -v` — passed, 252 tests.
 - `.\.venv\Scripts\python.exe -m bandit -r app main.py db.py settings.py pivo.py markov.py -x tests` — completed with 47 Low findings, 0 Medium, 0 High; no new findings introduced by this PR.
+- `.\.venv\Scripts\python.exe -m bandit -r app main.py db.py settings.py pivo.py markov.py -x tests --severity-level medium --confidence-level medium` — passed; this matches the CI gate.
 - `.\.venv\Scripts\safety.exe check -r requirements.lock` — first plain Windows-console run failed with a `charmap` decoding error; UTF-8 rerun completed with 0 vulnerabilities reported.
 
 Decision:
