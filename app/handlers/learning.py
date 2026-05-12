@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import random
 import time
+from collections import deque
 
 from aiogram import F, Router
 from aiogram.types import Message
@@ -16,7 +17,12 @@ from bot_policy import (
     has_enough_model_data,
     should_reply_to_message,
 )
-from markov import MarkovGenerator, tokenize
+from markov import (
+    MarkovGenerator,
+    escalated_randomness_strength,
+    is_short_generated_reply,
+    tokenize,
+)
 from runtime_state import RuntimeState
 from text_utils import sanitize_text
 
@@ -25,15 +31,45 @@ logger = logging.getLogger("chat_markov")
 
 MIN_LEARN_MESSAGE_CHARS = 3
 MAX_LEARN_MESSAGE_CHARS = 500
+MIN_LEARN_MESSAGE_TOKENS = 2
 # Сколько раз подряд пробуем сгенерировать ответ, прежде чем сдаёмся.
 # Первые попытки идут с reply-контекстом, последние — без.
 MAX_GENERATION_ATTEMPTS = 4
 GENERATION_ATTEMPTS_WITH_CONTEXT = 2
+MAX_TRAINING_PREFIX_RETRY_ATTEMPTS = 6
+RECENT_SHORT_REPLY_LIMIT = 5
 
 
 def is_learnable_message_length(clean_text: str) -> bool:
     length = len(clean_text)
-    return MIN_LEARN_MESSAGE_CHARS <= length <= MAX_LEARN_MESSAGE_CHARS
+    return length <= MAX_LEARN_MESSAGE_CHARS
+
+
+def has_enough_tokens_for_learning(tokens: list[str]) -> bool:
+    return len(tokens) >= MIN_LEARN_MESSAGE_TOKENS
+
+
+def normalize_short_reply_text(text: str) -> str:
+    return sanitize_text(text).lower()
+
+
+def was_recent_short_reply(
+    runtime_state: RuntimeState, chat_id: int, candidate: str
+) -> bool:
+    recent = runtime_state.recent_short_replies.get(chat_id)
+    if not recent:
+        return False
+    return normalize_short_reply_text(candidate) in recent
+
+
+def remember_short_reply(
+    runtime_state: RuntimeState, chat_id: int, reply_text: str
+) -> None:
+    recent = runtime_state.recent_short_replies.get(chat_id)
+    if recent is None:
+        recent = deque(maxlen=RECENT_SHORT_REPLY_LIMIT)
+        runtime_state.recent_short_replies[chat_id] = recent
+    recent.append(normalize_short_reply_text(reply_text))
 
 
 def extract_context_tokens(
@@ -94,6 +130,14 @@ async def on_text_message(
         return
 
     tokens = tokenize(clean, normalize_lower=runtime_state.normalize_lower)
+    if not has_enough_tokens_for_learning(tokens):
+        logger.debug(
+            "Skip message by token count: chat=%s tokens=%s",
+            mask_chat_id(message.chat.id),
+            len(tokens),
+        )
+        return
+
     token_volume = await learning_service.record_message(
         chat_id=message.chat.id,
         raw_text=raw_text,
@@ -176,9 +220,17 @@ async def on_text_message(
     reply_text = ""
     # Повторяем генерацию несколько раз: сначала с контекстом, потом без,
     # и отбрасываем результат, чьё начало совпадает с уже виденным сообщением.
-    for attempt in range(MAX_GENERATION_ATTEMPTS):
+    total_generation_attempts = (
+        MAX_GENERATION_ATTEMPTS + MAX_TRAINING_PREFIX_RETRY_ATTEMPTS
+    )
+    for attempt in range(total_generation_attempts):
         attempt_context_tokens = (
             context_tokens if attempt < GENERATION_ATTEMPTS_WITH_CONTEXT else None
+        )
+        attempt_randomness_strength = escalated_randomness_strength(
+            runtime_state.randomness_strength,
+            attempt,
+            total_generation_attempts,
         )
         candidate = await generator.generate_text(
             chat_id=message.chat.id,
@@ -188,7 +240,7 @@ async def on_text_message(
             context_tokens=attempt_context_tokens,
             context_bias=runtime_state.reply_context_bias,
             context_start_bias=runtime_state.reply_context_start_bias,
-            randomness_strength=runtime_state.randomness_strength,
+            randomness_strength=attempt_randomness_strength,
             repetition_penalty_strength=runtime_state.repetition_penalty_strength,
             markov_order=runtime_state.markov_order,
             enable_backoff=runtime_state.enable_backoff,
@@ -202,24 +254,37 @@ async def on_text_message(
                 bool(attempt_context_tokens),
                 len(seed or []),
             )
-        elif await learning_service.matches_training_prefix(
-            message.chat.id, candidate, runtime_state.normalize_lower
-        ):
-            logger.debug(
-                "Generated text starts like a training sample, retrying: chat=%s attempt=%s",
-                mask_chat_id(message.chat.id),
-                attempt + 1,
-            )
         else:
-            logger.debug(
-                "Reply generated: chat=%s attempt=%s tokens=%s context=%s",
-                mask_chat_id(message.chat.id),
-                attempt + 1,
-                len(candidate.split()),
-                bool(attempt_context_tokens),
+            candidate_tokens = tokenize(
+                candidate, normalize_lower=runtime_state.normalize_lower
             )
-            reply_text = candidate
-            break
+            is_short_candidate = is_short_generated_reply(candidate_tokens)
+            if is_short_candidate and was_recent_short_reply(
+                runtime_state, message.chat.id, candidate
+            ):
+                logger.debug(
+                    "Generated short reply was used recently, retrying: chat=%s attempt=%s",
+                    mask_chat_id(message.chat.id),
+                    attempt + 1,
+                )
+            elif (not is_short_candidate) and await learning_service.matches_training_prefix(
+            message.chat.id, candidate, runtime_state.normalize_lower
+            ):
+                logger.debug(
+                    "Generated text starts like a training sample, retrying: chat=%s attempt=%s",
+                    mask_chat_id(message.chat.id),
+                    attempt + 1,
+                )
+            else:
+                logger.debug(
+                    "Reply generated: chat=%s attempt=%s tokens=%s context=%s",
+                    mask_chat_id(message.chat.id),
+                    attempt + 1,
+                    len(candidate.split()),
+                    bool(attempt_context_tokens),
+                )
+                reply_text = candidate
+                break
 
         if attempt == 0 and context_tokens:
             seed = context_tokens[-runtime_state.reply_context_last_tokens :]
@@ -249,3 +314,7 @@ async def on_text_message(
         runtime_state.typing_min_ms,
         runtime_state.typing_max_ms,
     )
+    if is_short_generated_reply(
+        tokenize(reply_text, normalize_lower=runtime_state.normalize_lower)
+    ):
+        remember_short_reply(runtime_state, message.chat.id, reply_text)

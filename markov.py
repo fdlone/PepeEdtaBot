@@ -10,6 +10,8 @@ from db import Database
 
 TOKEN_RE = re.compile(r"\w+|[.,!?;:]", re.UNICODE)
 PUNCT_SET = {".", ",", "!", "?", ";", ":"}
+VALIDATION_RETRY_ATTEMPTS = 8
+SHORT_REPLY_MAX_CONTENT_TOKENS = 3
 
 
 def tokenize(text: str, normalize_lower: bool = False) -> list[str]:
@@ -37,6 +39,23 @@ def detokenize(tokens: list[str], max_chars: int) -> str:
     return text.strip()
 
 
+def escalated_randomness_strength(
+    base_strength: float,
+    attempt_index: int,
+    total_attempts: int,
+    max_strength: float = 3.0,
+) -> float:
+    if total_attempts <= 1:
+        return max(0.0, min(max_strength, base_strength))
+
+    base = max(0.0, min(max_strength, base_strength))
+    if base >= max_strength:
+        return base
+
+    progress = attempt_index / (total_attempts - 1)
+    return min(max_strength, base + (max_strength - base) * progress)
+
+
 def build_windows(tokens: list[str], size: int) -> list[tuple[str, ...]]:
     if size <= 0 or len(tokens) < size:
         return []
@@ -49,6 +68,11 @@ def content_tokens(tokens: list[str]) -> list[str]:
 
 def content_token_indexes(tokens: list[str]) -> list[int]:
     return [index for index, token in enumerate(tokens) if token not in PUNCT_SET]
+
+
+def is_short_generated_reply(tokens: list[str]) -> bool:
+    content = content_tokens(tokens)
+    return 0 < len(content) <= SHORT_REPLY_MAX_CONTENT_TOKENS
 
 
 def longest_shared_run(tokens_a: list[str], tokens_b: list[str]) -> int:
@@ -186,6 +210,18 @@ def is_context_heavy_reply(
     if shared_run >= max(4, len(generated_content) - 1):
         return True
     return False
+
+
+def is_short_context_copy(generated_tokens: list[str], context_tokens: list[str]) -> bool:
+    generated_content = content_tokens(generated_tokens)
+    context_content = content_tokens(context_tokens)
+    if not generated_content or not context_content:
+        return False
+    if len(generated_content) > SHORT_REPLY_MAX_CONTENT_TOKENS:
+        return False
+
+    shared_run = longest_shared_run(generated_content, context_content)
+    return shared_run >= len(generated_content)
 
 
 def context_decay(step_index: int) -> float:
@@ -445,6 +481,45 @@ class MarkovGenerator:
         enable_backoff: bool = True,
         backoff_min_order: int = 1,
     ) -> str:
+        for attempt_index in range(VALIDATION_RETRY_ATTEMPTS):
+            attempt_randomness_strength = escalated_randomness_strength(
+                randomness_strength,
+                attempt_index,
+                VALIDATION_RETRY_ATTEMPTS,
+            )
+            result = await self._generate_text_once(
+                chat_id=chat_id,
+                max_chars=max_chars,
+                max_tokens=max_tokens,
+                seed_tokens=seed_tokens,
+                context_tokens=context_tokens,
+                context_bias=context_bias,
+                context_start_bias=context_start_bias,
+                randomness_strength=attempt_randomness_strength,
+                repetition_penalty_strength=repetition_penalty_strength,
+                markov_order=markov_order,
+                enable_backoff=enable_backoff,
+                backoff_min_order=backoff_min_order,
+            )
+            if result:
+                return result
+        return ""
+
+    async def _generate_text_once(
+        self,
+        chat_id: int,
+        max_chars: int,
+        max_tokens: int = 45,
+        seed_tokens: Optional[list[str]] = None,
+        context_tokens: Optional[list[str]] = None,
+        context_bias: float = 1.0,
+        context_start_bias: float = 1.0,
+        randomness_strength: float = 1.0,
+        repetition_penalty_strength: float = 1.0,
+        markov_order: int = 3,
+        enable_backoff: bool = True,
+        backoff_min_order: int = 1,
+    ) -> str:
         order = 3 if markov_order >= 3 else 2
         strength = max(0.0, min(3.0, randomness_strength))
         next_explore = min(0.98, 0.12 + 0.18 * strength)
@@ -663,11 +738,15 @@ class MarkovGenerator:
         result = detokenize(generated, max_chars=max_chars)
         if len(result) < 5:
             return ""
-        if is_low_diversity_reply(generated):
+        is_short_reply = is_short_generated_reply(generated)
+        if not is_short_reply and is_low_diversity_reply(generated):
             return ""
-        if is_context_heavy_reply(generated, context_tokens):
+        if is_short_reply:
+            if is_short_context_copy(generated, context_tokens):
+                return ""
+        elif is_context_heavy_reply(generated, context_tokens):
             return ""
-        if await self.db.message_exists(chat_id, result):
+        if not is_short_reply and await self.db.message_exists(chat_id, result):
             return ""
         if strength >= 1.5 and len(generated) > 10 and jump_count == 0:
             return ""
