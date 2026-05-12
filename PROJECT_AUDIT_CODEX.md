@@ -1,5 +1,79 @@
 # PROJECT_AUDIT_CODEX
 
+## 2026-05-12 — Security and stability audit report
+
+Mode: audit plus dev-tooling update. Production bot code, tests, runtime
+configs, and deployment files were not changed. Dev-only security tools were
+added to `requirements-dev.txt`.
+
+Created:
+- `PROJECT_SECURITY_STABILITY_AUDIT.md`
+
+Changed:
+- `requirements-dev.txt` — added `bandit`, `pip-audit`, and `safety`.
+
+Scope:
+- code security;
+- Telegram bot abuse/security;
+- secrets/configuration;
+- CPU/RAM/disk/network load risks;
+- long-running process stability;
+- database/storage;
+- logging/observability;
+- deployment/operations;
+- tests and static checks.
+
+Summary:
+- Overall risk: `MEDIUM` for the current controlled small-group deployment;
+  `HIGH` before expanding to larger or less trusted chats.
+- No tracked `.env`, Telegram token, SQLite DB, WAL/SHM files, local
+  `db_prod_copy/`, screenshots, or obvious hardcoded production secrets were
+  found.
+- Top finding: `/pivo` explicit mentions are not capped, so a regular group
+  user can create several high-fanout mention messages per day.
+- Dependency finding: Safety reports 3 vulnerabilities in locked
+  `cryptography==45.0.7` (CVE-2026-34073, CVE-2026-26007,
+  CVE-2026-39892). Recommended next fix: upgrade `cryptography`, regenerate
+  `requirements.lock`, and rerun the full check set.
+- Other important findings: unbounded runtime dictionaries, full-message
+  prefix-cache rebuilds for novelty checks, unbounded SQLite model/WAL growth,
+  weaker `.dockerignore` compared with `.gitignore`, weak production
+  observability/log rotation guidance.
+
+Checks:
+- `.\.venv\Scripts\python.exe --version` — Python 3.14.0.
+- `.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt` —
+  installed dev security tools successfully.
+- `.\.venv\Scripts\python.exe -m unittest discover tests -v` — 244 tests OK.
+- `.\.venv\Scripts\python.exe -m ruff check app/ tests/` — clean.
+- `.\.venv\Scripts\python.exe -m mypy app/` — clean, 29 source files.
+- `.\.venv\Scripts\python.exe -m pip check` — no broken requirements.
+- `.\.venv\Scripts\python.exe -m bandit -r app main.py db.py settings.py pivo.py markov.py -x tests`
+  — completed with 47 Low findings, 0 Medium, 0 High. Findings are
+  `assert` usage, non-cryptographic `random`, and intentional `except/pass`
+  around Telegram chat action.
+- `.\.venv\Scripts\safety.exe check -r requirements.lock` — completed with
+  3 vulnerabilities in `cryptography==45.0.7`.
+- `.\.venv\Scripts\python.exe -m pip list --outdated` — completed; several
+  packages have newer releases, including `aiogram`, `cryptography`, and
+  `pydantic`.
+
+Not run:
+- `pip-audit` verdict — tool is installed, but the check did not complete in
+  this environment. Attempts against PyPI timed out after 300 seconds; OSV
+  backend timed out after 180 seconds. Earlier attempts also exposed local
+  Windows cache/encoding issues, worked around with local cache and
+  `PYTHONUTF8=1`.
+- Docker build — Docker CLI is not installed on this machine.
+- GitHub PR creation through `gh` — GitHub CLI is not installed on this
+  machine.
+
+Workflow note:
+- The audit branch `audit-security-stability-review` was created from the
+  currently checked out `fix-short-reply-policy` branch, not directly from
+  `origin/main`. Choose the PR base carefully to avoid mixing the audit report
+  with unrelated branch changes.
+
 ## 2026-05-11 — Action plan execution log
 
 ### AUD-001 deferred by workflow decision
