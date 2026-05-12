@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-
 TELEGRAM_COMMANDS: tuple[tuple[str, str], ...] = (
     ("help", "Список команд"),
     ("ping", "Проверить, что бот онлайн"),
-    ("pivo", "Позвать подписанных в Discord"),
+    ("pivo", "Позвать в Discord: время, повод, упоминания"),
     ("pivo_on", "Включить себя в список /pivo"),
     ("pivo_off", "Выключить себя из списка /pivo"),
     ("pivo_privacy", "Как работает список /pivo"),
@@ -24,7 +23,7 @@ def format_help_message() -> str:
         "/help - список команд\n"
         "/ping - проверить, что бот онлайн\n"
         "/stats - краткая статистика модели\n"
-        "/pivo - позвать подписанных участников в Discord\n"
+        "/pivo [время] [повод] [@кого] - позвать в Discord\n"
         "/pivo_on - включить себя в список /pivo\n"
         "/pivo_off - выключить себя из списка /pivo\n"
         "/pivo_privacy - как используются данные для /pivo\n"
