@@ -24,7 +24,11 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         self.db_path = Path(f"test_ls_{uuid.uuid4().hex}.sqlite")
         self.db = Database(str(self.db_path))
         await self.db.init()
-        self.svc = LearningService(self.db, _make_generator())
+        self.svc = LearningService(
+            self.db,
+            _make_generator(),
+            prefix_cache_max_messages=3,
+        )
         self.chat = 42
 
     async def asyncTearDown(self) -> None:
@@ -36,21 +40,29 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         tokens = tokenize(text)
         await self.svc.record_message(self.chat, text, tokens)
 
-    # --- MessagesRepo.get_all_normalized ---
+    # --- MessagesRepo.get_recent_normalized ---
 
-    async def test_get_all_normalized_returns_stored_texts(self) -> None:
+    async def test_get_recent_normalized_returns_stored_texts(self) -> None:
         await self._record("кофе утром бодрит")
         await self._record("привет всем")
-        result = await self.db.get_all_normalized_messages(self.chat)
+        result = await self.db.get_recent_normalized_messages(self.chat, 10)
         self.assertEqual(len(result), 2)
 
-    async def test_get_all_normalized_excludes_other_chats(self) -> None:
+    async def test_get_recent_normalized_excludes_other_chats(self) -> None:
         await self._record("кофе утром бодрит")
         other = Database(str(self.db_path))
         await other.init()
-        result = await other.get_all_normalized_messages(999)
+        result = await other.get_recent_normalized_messages(999, 10)
         self.assertEqual(result, [])
         await other.close()
+
+    async def test_get_recent_normalized_respects_limit_and_keeps_recent_order(self) -> None:
+        await self._record("первое сообщение")
+        await self._record("второе сообщение")
+        await self._record("третье сообщение")
+        await self._record("четвертое сообщение")
+        result = await self.db.get_recent_normalized_messages(self.chat, 2)
+        self.assertEqual(result, ["третье сообщение", "четвертое сообщение"])
 
     # --- prefix cache build and lookup ---
 
@@ -114,6 +126,23 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         # The 3-token prefix of the stored message must be in the cache
         self.assertIn(("пойдём", "пить", "кофе"), cache,
                       "3-gram from training must be available to the heuristic")
+
+    async def test_prefix_cache_uses_only_recent_messages_window(self) -> None:
+        await self._record("старый префикс должен выпасть")
+        await self._record("новый один два три")
+        await self._record("новый четыре пять шесть")
+        await self._record("новый семь восемь девять")
+
+        self.assertFalse(
+            await self.svc.matches_training_prefix(
+                self.chat, "старый префикс должен выпасть потом", False
+            )
+        )
+        self.assertTrue(
+            await self.svc.matches_training_prefix(
+                self.chat, "новый один два три потом", False
+            )
+        )
 
     async def test_unique_text_passes(self) -> None:
         await self._record("пойдём пить кофе")
