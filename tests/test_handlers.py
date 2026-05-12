@@ -7,6 +7,7 @@ the right service methods and reply to the message.
 from __future__ import annotations
 
 import unittest
+from collections import deque
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # ---------------------------------------------------------------------------
@@ -498,11 +499,244 @@ class TestLearningMessageLength(unittest.TestCase):
     def test_learning_message_length_boundaries(self) -> None:
         from app.handlers.learning import (
             MAX_LEARN_MESSAGE_CHARS,
-            MIN_LEARN_MESSAGE_CHARS,
             is_learnable_message_length,
         )
 
-        self.assertFalse(is_learnable_message_length("x" * (MIN_LEARN_MESSAGE_CHARS - 1)))
-        self.assertTrue(is_learnable_message_length("x" * MIN_LEARN_MESSAGE_CHARS))
         self.assertTrue(is_learnable_message_length("x" * MAX_LEARN_MESSAGE_CHARS))
         self.assertFalse(is_learnable_message_length("x" * (MAX_LEARN_MESSAGE_CHARS + 1)))
+
+    def test_learning_token_boundaries(self) -> None:
+        from app.handlers.learning import has_enough_tokens_for_learning
+
+        self.assertFalse(has_enough_tokens_for_learning(["один"]))
+        self.assertTrue(has_enough_tokens_for_learning(["один", "два"]))
+
+
+class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
+    async def test_single_token_message_is_not_learned(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="hello")
+        learning_service = AsyncMock()
+        generator = AsyncMock()
+        state = _fake_state(
+            normalize_lower=False,
+            learned_messages={},
+        )
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+        learning_service.record_message.assert_not_called()
+        msg.reply.assert_not_awaited()
+
+    async def test_prefix_rejection_gets_extra_retry_budget(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="pepe ответь нормально")
+        learning_service = AsyncMock()
+        learning_service.record_message = AsyncMock(return_value=100)
+        learning_service.matches_training_prefix = AsyncMock(
+            side_effect=[True, True, True, True, False]
+        )
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(
+            side_effect=[
+                "один два три четыре",
+                "один два три четыре",
+                "один два три четыре",
+                "один два три четыре",
+                "новый ответ теперь",
+            ]
+        )
+        state = _fake_state(
+            normalize_lower=False,
+            learned_messages={},
+            min_tokens_for_model=10,
+            min_cooldown_sec=999,
+            last_reply_ts={},
+            reply_probability=0.0,
+            use_reply_context=False,
+            reply_context_last_tokens=3,
+            reply_context_bias=1.8,
+            reply_context_start_bias=2.2,
+            max_reply_chars=280,
+            max_reply_tokens=45,
+            randomness_strength=0.0,
+            repetition_penalty_strength=1.0,
+            markov_order=3,
+            enable_backoff=True,
+            backoff_min_order=1,
+        )
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+        self.assertEqual(generator.generate_text.await_count, 5)
+        msg.reply.assert_awaited_once_with("новый ответ теперь")
+
+    async def test_short_reply_skips_training_prefix_filter(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="pepe ответь")
+        learning_service = AsyncMock()
+        learning_service.record_message = AsyncMock(return_value=100)
+        learning_service.matches_training_prefix = AsyncMock(return_value=True)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="Привет")
+        state = _fake_state(
+            normalize_lower=False,
+            learned_messages={},
+            recent_short_replies={},
+            min_tokens_for_model=10,
+            min_cooldown_sec=999,
+            last_reply_ts={},
+            reply_probability=0.0,
+            use_reply_context=False,
+            reply_context_last_tokens=3,
+            reply_context_bias=1.8,
+            reply_context_start_bias=2.2,
+            max_reply_chars=280,
+            max_reply_tokens=45,
+            randomness_strength=0.0,
+            repetition_penalty_strength=1.0,
+            markov_order=3,
+            enable_backoff=True,
+            backoff_min_order=1,
+        )
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+        learning_service.matches_training_prefix.assert_not_awaited()
+        msg.reply.assert_awaited_once_with("Привет")
+        self.assertEqual(list(state.recent_short_replies[msg.chat.id]), ["привет"])
+
+    async def test_recent_short_reply_is_retried_instead_of_sent(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="pepe ответь")
+        learning_service = AsyncMock()
+        learning_service.record_message = AsyncMock(return_value=100)
+        learning_service.matches_training_prefix = AsyncMock(return_value=False)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(side_effect=["Привет", "Нормально"])
+        state = _fake_state(
+            normalize_lower=False,
+            learned_messages={},
+            recent_short_replies={msg.chat.id: deque(["привет"], maxlen=5)},
+            min_tokens_for_model=10,
+            min_cooldown_sec=999,
+            last_reply_ts={},
+            reply_probability=0.0,
+            use_reply_context=False,
+            reply_context_last_tokens=3,
+            reply_context_bias=1.8,
+            reply_context_start_bias=2.2,
+            max_reply_chars=280,
+            max_reply_tokens=45,
+            randomness_strength=0.0,
+            repetition_penalty_strength=1.0,
+            markov_order=3,
+            enable_backoff=True,
+            backoff_min_order=1,
+        )
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+        self.assertEqual(generator.generate_text.await_count, 2)
+        msg.reply.assert_awaited_once_with("Нормально")
+        self.assertEqual(
+            list(state.recent_short_replies[msg.chat.id]),
+            ["привет", "нормально"],
+        )
+
+    async def test_handler_increases_randomness_on_generation_retries(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="pepe ответь нормально")
+        learning_service = AsyncMock()
+        learning_service.record_message = AsyncMock(return_value=100)
+        learning_service.matches_training_prefix = AsyncMock(
+            side_effect=[True, True, False]
+        )
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(
+            side_effect=[
+                "первый ответ заметно длиннее",
+                "второй ответ заметно длиннее",
+                "третий ответ заметно длиннее",
+            ]
+        )
+        state = _fake_state(
+            normalize_lower=False,
+            learned_messages={},
+            min_tokens_for_model=10,
+            min_cooldown_sec=999,
+            last_reply_ts={},
+            reply_probability=0.0,
+            use_reply_context=False,
+            reply_context_last_tokens=3,
+            reply_context_bias=1.8,
+            reply_context_start_bias=2.2,
+            max_reply_chars=280,
+            max_reply_tokens=45,
+            randomness_strength=0.5,
+            repetition_penalty_strength=1.0,
+            markov_order=3,
+            enable_backoff=True,
+            backoff_min_order=1,
+        )
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+        strengths = [
+            call.kwargs["randomness_strength"]
+            for call in generator.generate_text.await_args_list
+        ]
+        self.assertEqual(strengths, sorted(strengths))
+        self.assertEqual(strengths[0], 0.5)
+        self.assertGreater(strengths[-1], strengths[0])
+        msg.reply.assert_awaited_once_with("третий ответ заметно длиннее")

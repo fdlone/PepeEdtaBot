@@ -12,9 +12,11 @@ from db import Database
 from markov import (
     MarkovGenerator,
     detokenize,
+    escalated_randomness_strength,
     has_degraded_recent_window,
     is_context_heavy_reply,
     is_low_diversity_reply,
+    is_short_generated_reply,
     tokenize,
     trim_repetitive_tail,
     weighted_next_choice,
@@ -61,6 +63,17 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         text = detokenize(["Очень", "длинноеслово", "дальше"], max_chars=12)
         self.assertEqual(text, "Очень")
 
+    def test_escalated_randomness_strength_grows_monotonically(self) -> None:
+        values = [
+            escalated_randomness_strength(0.6, attempt_index=i, total_attempts=5)
+            for i in range(5)
+        ]
+
+        self.assertEqual(values[0], 0.6)
+        self.assertGreater(values[-1], values[0])
+        self.assertLessEqual(values[-1], 3.0)
+        self.assertEqual(values, sorted(values))
+
     def test_context_heavy_reply_detects_loop_on_parent_tokens(self) -> None:
         self.assertTrue(
             is_context_heavy_reply(
@@ -84,6 +97,11 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
                 context_tokens=["Люблю", "кофе", "утром"],
             )
         )
+
+    def test_is_short_generated_reply_detects_short_content(self) -> None:
+        self.assertTrue(is_short_generated_reply(["ага"]))
+        self.assertTrue(is_short_generated_reply(["ну", "да"]))
+        self.assertFalse(is_short_generated_reply(["очень", "даже", "сегодня", "да"]))
 
     def test_has_degraded_recent_window_detects_repetitive_recent_loop(self) -> None:
         self.assertTrue(
@@ -385,6 +403,67 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(text)
         self.assertTrue(text.startswith("утром люблю"))
+
+    async def test_generate_text_retries_after_internal_validation_failure(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        with patch.object(
+            MarkovGenerator,
+            "_generate_text_once",
+            new=AsyncMock(side_effect=["", "", "валидный ответ"]),
+        ) as mock_generate_once:
+            text = await self.generator.generate_text(
+                chat_id=8888,
+                max_chars=50,
+            )
+
+        self.assertEqual(text, "валидный ответ")
+        self.assertEqual(mock_generate_once.await_count, 3)
+
+    async def test_generate_text_increases_randomness_on_retries(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        with patch.object(
+            MarkovGenerator,
+            "_generate_text_once",
+            new=AsyncMock(side_effect=["", "", "валидный ответ"]),
+        ) as mock_generate_once:
+            await self.generator.generate_text(
+                chat_id=8889,
+                max_chars=50,
+                randomness_strength=0.5,
+            )
+
+        strengths = [
+            call.kwargs["randomness_strength"] for call in mock_generate_once.await_args_list
+        ]
+        self.assertEqual(strengths, sorted(strengths))
+        self.assertEqual(strengths[0], 0.5)
+        self.assertGreater(strengths[-1], strengths[0])
+
+    async def test_generate_text_skips_global_duplicate_check_for_short_reply(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        await self.db.save_message_and_update_model(
+            chat_id=8890,
+            raw_text="Привет мир снова",
+            tokens=["Привет", "мир", "снова"],
+        )
+
+        with patch.object(
+            self.generator.db,
+            "message_exists",
+            new=AsyncMock(return_value=True),
+        ) as mock_message_exists:
+            text = await self.generator.generate_text(
+                chat_id=8890,
+                max_chars=50,
+                max_tokens=1,
+                randomness_strength=0.0,
+            )
+
+        self.assertEqual(text, "Привет")
+        mock_message_exists.assert_not_awaited()
 
     def test_context_bias_does_not_override_repetition_penalty(self) -> None:
         random.seed(23)

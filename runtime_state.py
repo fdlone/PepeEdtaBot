@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 
 from config_registry import RUNTIME_FIELDS
@@ -30,6 +31,7 @@ class RuntimeState:
     reply_context_include_current_message: bool
     last_reply_ts: dict[int, float] = field(default_factory=dict)
     learned_messages: dict[int, int] = field(default_factory=dict)
+    recent_short_replies: dict[int, deque[str]] = field(default_factory=dict)
 
 
 def runtime_state_from_settings(settings: Settings) -> RuntimeState:
