@@ -9,6 +9,9 @@ __pycache__
 markov.db
 markov.db-shm
 markov.db-wal
+db_prod_copy/
+.test_tmp/
+Screenshot_*.jpg
 *.pyc
 *.pyo
 *.pyd

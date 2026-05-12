@@ -77,6 +77,10 @@ async def run_bot() -> None:
         encryption_secret=settings.pivo_encryption_secret,
     )
     pivo_service = PivoService(db=db, security=pivo_security)
+    pivo_service.configure_call_limits(
+        explicit_mentions_limit=settings.pivo_explicit_mentions_limit,
+        subscriber_fanout_limit=settings.pivo_subscriber_fanout_limit,
+    )
     learning_service = LearningService(db=db, generator=generator)
     runtime_state = runtime_state_from_settings(settings)
 

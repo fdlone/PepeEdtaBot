@@ -50,6 +50,26 @@ def make_member(
     )
 
 
+def make_member_row(
+    security: PivoSecurity,
+    *,
+    user_id: int,
+    username: str = "",
+    display_name: str = "Тестовый Пользователь",
+) -> dict[str, str]:
+    member = make_member(
+        security,
+        user_id=user_id,
+        username=username,
+        display_name=display_name,
+    )
+    return {
+        "encrypted_user_id": member.encrypted_user_id,
+        "encrypted_username": member.encrypted_username,
+        "encrypted_display_name": member.encrypted_display_name,
+    }
+
+
 class TestPivo(unittest.TestCase):
     def test_normalize_username(self) -> None:
         self.assertEqual(normalize_username("pepe"), "@pepe")
@@ -135,6 +155,66 @@ class TestPivo(unittest.TestCase):
 
 
 class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
+    def _make_service(self, db: AsyncMock, security: PivoSecurity):
+        from app.services.pivo_service import PivoService
+
+        service = PivoService(db=db, security=security)
+        service.configure_call_limits(
+            explicit_mentions_limit=2,
+            subscriber_fanout_limit=2,
+        )
+        return service
+
+    async def test_explicit_mentions_below_limit_are_used_directly(self) -> None:
+        security = make_security()
+        db = AsyncMock()
+        db.get_chat_members = AsyncMock()
+        service = self._make_service(db, security)
+
+        text, mentions_count = await service.build_call_message(
+            chat_id=100,
+            caller_user_id=200,
+            explicit_mentions=("@friend",),
+        )
+
+        self.assertEqual(mentions_count, 1)
+        self.assertIn("@friend", text)
+        db.get_chat_members.assert_not_called()
+
+    async def test_explicit_mentions_exactly_at_limit_are_allowed(self) -> None:
+        security = make_security()
+        db = AsyncMock()
+        db.get_chat_members = AsyncMock()
+        service = self._make_service(db, security)
+
+        text, mentions_count = await service.build_call_message(
+            chat_id=100,
+            caller_user_id=200,
+            explicit_mentions=("@one", "@two"),
+        )
+
+        self.assertEqual(mentions_count, 2)
+        self.assertIn("@one @two", text)
+        db.get_chat_members.assert_not_called()
+
+    async def test_explicit_mentions_above_limit_are_rejected(self) -> None:
+        from app.services.pivo_service import PivoCallLimitError
+
+        security = make_security()
+        db = AsyncMock()
+        db.get_chat_members = AsyncMock()
+        service = self._make_service(db, security)
+
+        with self.assertRaises(PivoCallLimitError) as ctx:
+            await service.build_call_message(
+                chat_id=100,
+                caller_user_id=200,
+                explicit_mentions=("@one", "@two", "@three"),
+            )
+
+        self.assertIn("не больше 2", str(ctx.exception))
+        db.get_chat_members.assert_not_called()
+
     async def test_regular_user_has_three_daily_calls(self) -> None:
         from app.services.pivo_service import PIVO_DAILY_LIMIT_USER, PivoService
 
@@ -230,6 +310,70 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         self.assertIn("watch movie", text)
         self.assertIn("@friend", text)
 
+    async def test_subscriber_fanout_below_limit_is_used(self) -> None:
+        security = make_security()
+        db = AsyncMock()
+        db.get_chat_members = AsyncMock(
+            return_value=[
+                make_member_row(security, user_id=201, username="friend1"),
+                make_member_row(security, user_id=202, username="friend2"),
+            ]
+        )
+        service = self._make_service(db, security)
+
+        text, mentions_count = await service.build_call_message(
+            chat_id=100,
+            caller_user_id=200,
+        )
+
+        self.assertEqual(mentions_count, 2)
+        self.assertIn("@friend1", text)
+        self.assertIn("@friend2", text)
+        db.get_chat_members.assert_awaited_once()
+
+    async def test_subscriber_fanout_exactly_at_limit_is_allowed(self) -> None:
+        security = make_security()
+        db = AsyncMock()
+        db.get_chat_members = AsyncMock(
+            return_value=[
+                make_member_row(security, user_id=201, username="friend1"),
+                make_member_row(security, user_id=202, username="friend2"),
+            ]
+        )
+        service = self._make_service(db, security)
+
+        text, mentions_count = await service.build_call_message(
+            chat_id=100,
+            caller_user_id=200,
+        )
+
+        self.assertEqual(mentions_count, 2)
+        self.assertIn("@friend1", text)
+        self.assertIn("@friend2", text)
+
+    async def test_subscriber_fanout_above_limit_is_rejected(self) -> None:
+        from app.services.pivo_service import PivoCallLimitError
+
+        security = make_security()
+        db = AsyncMock()
+        db.get_chat_members = AsyncMock(
+            return_value=[
+                make_member_row(security, user_id=201, username="friend1"),
+                make_member_row(security, user_id=202, username="friend2"),
+                make_member_row(security, user_id=203, username="friend3"),
+            ]
+        )
+        service = self._make_service(db, security)
+
+        with self.assertRaises(PivoCallLimitError) as ctx:
+            await service.build_call_message(
+                chat_id=100,
+                caller_user_id=200,
+            )
+
+        self.assertIn("слишком много людей", str(ctx.exception))
+        db.get_chat_members.assert_awaited_once()
+
     async def test_build_call_message_builds_contextual_body(self) -> None:
         from app.services.pivo_service import PivoService
 
@@ -258,6 +402,25 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mentions_count, 0)
         self.assertIn("&lt;20:00&gt;", text)
         self.assertIn("movie &amp; chat", text)
+
+    async def test_no_explicit_mentions_uses_subscribers(self) -> None:
+        security = make_security()
+        db = AsyncMock()
+        db.get_chat_members = AsyncMock(
+            return_value=[
+                make_member_row(security, user_id=201, username="friend"),
+            ]
+        )
+        service = self._make_service(db, security)
+
+        text, mentions_count = await service.build_call_message(
+            chat_id=100,
+            caller_user_id=200,
+        )
+
+        self.assertEqual(mentions_count, 1)
+        self.assertIn("@friend", text)
+        db.get_chat_members.assert_awaited_once()
 
 
 class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):

@@ -11,6 +11,7 @@ from app.filters import GroupOnly, is_admin_or_owner
 from app.handlers._helpers import reply_humanized
 from app.services import PivoService
 from app.services.pivo_parser import parse_pivo_command
+from app.services.pivo_service import PivoCallLimitError
 from pivo import PIVO_PRIVACY_MESSAGE
 from runtime_state import RuntimeState
 from settings import Settings
@@ -35,6 +36,24 @@ async def cmd_pivo(
     )
     quota = None
 
+    try:
+        text, mentions_count = await pivo_service.build_call_message(
+            chat_id=message.chat.id,
+            caller_user_id=message.from_user.id,
+            planned_time=command_args.planned_time,
+            target=command_args.target,
+            explicit_mentions=command_args.explicit_mentions,
+        )
+    except PivoCallLimitError as exc:
+        await reply_humanized(
+            message,
+            str(exc),
+            runtime_state.typing_min_ms,
+            runtime_state.typing_max_ms,
+        )
+        logger.info("pivo command rejected by call limit: %s", exc)
+        return
+
     if not is_owner:
         is_privileged = await is_admin_or_owner(message, bot, settings)
         quota = await pivo_service.consume_daily_call_quota(
@@ -57,13 +76,6 @@ async def cmd_pivo(
             return
 
     try:
-        text, mentions_count = await pivo_service.build_call_message(
-            chat_id=message.chat.id,
-            caller_user_id=message.from_user.id,
-            planned_time=command_args.planned_time,
-            target=command_args.target,
-            explicit_mentions=command_args.explicit_mentions,
-        )
         await message.reply(text, parse_mode=ParseMode.HTML)
     except Exception:
         if quota is not None:

@@ -18,6 +18,12 @@ from pivo import (
 
 PIVO_DAILY_LIMIT_USER = 3
 PIVO_DAILY_LIMIT_ADMIN = 5
+PIVO_DEFAULT_EXPLICIT_MENTIONS_LIMIT = 10
+PIVO_DEFAULT_SUBSCRIBER_FANOUT_LIMIT = 20
+
+
+class PivoCallLimitError(ValueError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +40,17 @@ class PivoService:
     def __init__(self, db: Database, security: PivoSecurity) -> None:
         self._db = db
         self._security = security
+        self._explicit_mentions_limit = PIVO_DEFAULT_EXPLICIT_MENTIONS_LIMIT
+        self._subscriber_fanout_limit = PIVO_DEFAULT_SUBSCRIBER_FANOUT_LIMIT
+
+    def configure_call_limits(
+        self,
+        *,
+        explicit_mentions_limit: int,
+        subscriber_fanout_limit: int,
+    ) -> None:
+        self._explicit_mentions_limit = explicit_mentions_limit
+        self._subscriber_fanout_limit = subscriber_fanout_limit
 
     async def subscribe(self, chat_id: int, user: User) -> None:
         await self._db.upsert_chat_member(
@@ -102,6 +119,11 @@ class PivoService:
         """Возвращает готовое сообщение для /pivo и число упомянутых участников."""
         if explicit_mentions:
             mention_items = list(explicit_mentions)
+            if len(mention_items) > self._explicit_mentions_limit:
+                raise PivoCallLimitError(
+                    "В /pivo можно указывать не больше "
+                    f"{self._explicit_mentions_limit} явных упоминаний за раз."
+                )
         else:
             chat_hash = self._security.hmac_value(chat_id)
             rows = await self._db.get_chat_members(chat_hash)
@@ -118,6 +140,11 @@ class PivoService:
                 caller_user_id=caller_user_id,
                 security=self._security,
             )
+            if len(mention_items) > self._subscriber_fanout_limit:
+                raise PivoCallLimitError(
+                    "В списке подписчиков /pivo слишком много людей: "
+                    f"{len(mention_items)} из {self._subscriber_fanout_limit}."
+                )
         mentions = " ".join(mention_items) if mention_items else PIVO_FALLBACK_MENTIONS
         text = build_pivo_message(
             mentions,
