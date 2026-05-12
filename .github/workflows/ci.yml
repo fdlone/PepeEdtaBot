@@ -36,6 +36,12 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover tests -v
 
+      - name: Security scan (bandit)
+        run: python -m bandit -r app main.py db.py settings.py pivo.py markov.py -x tests --severity-level medium --confidence-level medium
+
+      - name: Dependency scan (safety)
+        run: safety check -r requirements.lock
+
   docker-build:
     runs-on: ubuntu-latest
     steps:
