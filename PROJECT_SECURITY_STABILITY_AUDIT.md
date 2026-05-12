@@ -2,23 +2,23 @@
 
 Date: 2026-05-12  
 Branch: `audit-security-stability-review`  
-Mode: audit-only. No production code, tests, configs, dependencies, or deployment files were changed.
+Mode: audit plus dev-tooling update. Production bot code, tests, runtime configs, and deployment files were not changed. Dev-only security tools were added to `requirements-dev.txt` after the initial audit.
 
 ## 1. Executive Summary
 
 Overall risk level: **MEDIUM** for current small-group production usage, **HIGH** before expanding to larger or less trusted chats.
 
-No committed Telegram token, `.env`, or hardcoded production secret was found in tracked files. SQL access is parameterized, admin-only commands use `AdminOrOwner`, `/pivo*` is group-only, `/pivo` subscription data is HMAC-indexed and Fernet-encrypted, and the current unit/lint/type gates pass locally.
+No committed Telegram token, `.env`, or hardcoded production secret was found in tracked files. SQL access is parameterized, admin-only commands use `AdminOrOwner`, `/pivo*` is group-only, `/pivo` subscription data is HMAC-indexed and Fernet-encrypted, and the current unit/lint/type gates pass locally. Dependency scanning with Safety found current vulnerabilities in locked `cryptography==45.0.7`.
 
 Top 5 risks:
 
 | Rank | Risk | Severity | Why it matters |
 |---|---|---:|---|
 | 1 | `/pivo` explicit mentions have no target-count limit | HIGH | Any group user can create several high-fanout mention messages per day. |
-| 2 | Long-running process keeps unbounded per-chat/per-user dictionaries | MEDIUM | Memory grows with every distinct chat/user/command seen until restart. |
-| 3 | Novelty prefix filter fetches all normalized messages and builds an in-memory prefix set | MEDIUM | Large chats can cause RAM/CPU spikes during generation. |
-| 4 | SQLite Markov tables and WAL can grow without retention/compaction policy | MEDIUM | Disk usage grows with continuous operation; WAL/journal handling is only implicit. |
-| 5 | `.dockerignore` is weaker than `.gitignore` for local artifacts | MEDIUM | Local DB/temp/screenshot artifacts can enter Docker build context on local builds. |
+| 2 | Locked `cryptography==45.0.7` is reported vulnerable by Safety | HIGH | Safety reports 3 CVEs affecting the locked version. |
+| 3 | Long-running process keeps unbounded per-chat/per-user dictionaries | MEDIUM | Memory grows with every distinct chat/user/command seen until restart. |
+| 4 | Novelty prefix filter fetches all normalized messages and builds an in-memory prefix set | MEDIUM | Large chats can cause RAM/CPU spikes during generation. |
+| 5 | SQLite Markov tables and WAL can grow without retention/compaction policy | MEDIUM | Disk usage grows with continuous operation; WAL/journal handling is only implicit. |
 
 Production readiness: acceptable for the current controlled chat if operators monitor disk, restarts, and errors. Before expanding usage, fix `/pivo` fanout limits, add bounded runtime-state cleanup, add DB growth policy, and harden Docker context hygiene.
 
@@ -48,8 +48,9 @@ Production readiness: acceptable for the current controlled chat if operators mo
 | AUD-006 | MEDIUM | Operations / logging | `main.py`, Docker/Compose | No application log rotation, structured logs, metrics, or health signal tied to bot health. | `logging.basicConfig()` writes plain stdout; Docker healthcheck only checks Python interpreter. | Production failures may be visible only after manual log review; disk/log growth depends on host runtime settings. | Add operator runbook now; later add structured logs/metrics and meaningful liveness if endpoint exists. | Low/Medium |
 | AUD-007 | MEDIUM | Resilience | `main.py`, handlers | No global Telegram API error policy beyond local `reply_humanized` and `/pivo` quota refund. | `dp.start_polling(bot)` has no project-level error middleware; handler reply failures outside `/pivo` can bubble. | Telegram outages or rate limits can create noisy logs, dropped commands, or unclear user behavior. | Add centralized error middleware/logging policy and targeted tests for Telegram failures. | Medium |
 | AUD-008 | LOW | Configuration drift | `.env`, `.env.example`, `settings.py` | Local `.env` is missing some newer optional keys by name. | Key-name-only check found no `LOG_LEVEL`, `BOT_TEXT_ALIASES`, `REPETITION_PENALTY_STRENGTH`, or `REPLY_CONTEXT_*` in local `.env`; defaults exist. | Current startup can still work, but local/prod behavior may differ from documented `.env.example`. | Manually sync `.env` with `.env.example` without printing or committing values. | Low |
-| AUD-009 | LOW | Dependency hygiene | `requirements.lock` | Some locked packages are outdated. | `pip list --outdated`: `aiogram 3.27.0 -> 3.28.2`, `cryptography 45.0.7 -> 48.0.0`, `pydantic 2.12.5 -> 2.13.4`, others. | Not automatically vulnerable, but update cadence should be explicit. | Run `pip-audit`/Safety in CI or periodic local check, then plan controlled upgrades. | Low |
+| AUD-009 | HIGH | Dependency security | `requirements.lock` | `cryptography==45.0.7` is reported vulnerable by Safety. | `safety check -r requirements.lock` found CVE-2026-34073, CVE-2026-26007, and CVE-2026-39892 affecting `cryptography==45.0.7`. | The bot uses `cryptography` for `/pivo` Fernet payload encryption and HKDF log masking; even if the exact vulnerable code paths need confirmation, the locked dependency is now a supply-chain risk. | Upgrade `cryptography` to a fixed version, regenerate `requirements.lock`, and rerun full checks. | Low/Medium |
 | AUD-010 | LOW | Secrets design | `app/log_masking.py`, `main.py` | Log masking derives from `PIVO_HMAC_SECRET`. | `log_masking.init_masking(settings.pivo_hmac_secret)` couples logging masks to `/pivo` secret rotation. | Rotating `/pivo` secret also rotates log correlation IDs; intended in comments but operationally relevant. | Consider separate `LOG_MASKING_SECRET` only if stable log correlation across `/pivo` rotation becomes necessary. | Low |
+| AUD-011 | LOW | Static analysis | `db.py`, `markov.py`, `app/handlers/_helpers.py`, `app/handlers/learning.py`, `app/services/*` | Bandit reports only Low findings. | 47 Low findings: `assert` usage, non-cryptographic `random`, and one intentional broad `except/pass` around Telegram chat action. | No direct exploitable issue found by Bandit, but `assert` should not guard runtime invariants under optimized Python. | Triage Bandit findings; replace DB/service asserts with explicit runtime errors in a future cleanup. | Low |
 
 ## 4. Deep Dive
 
@@ -157,7 +158,17 @@ Minimum monitoring recommendation: container restarts, process RSS, CPU, DB/WAL 
 
 ### Tests and CI
 
-Current local result: 244 unit tests OK, ruff clean, mypy clean. Tests cover many security-relevant paths: admin filters, group-only filters, pivo parser/escaping, pivo quota/refund, log masking, migrations, runtime config validation, and Markov generation limits.
+Current local result after adding dev security tools: 244 unit tests OK, ruff clean, mypy clean, pip check clean. Tests cover many security-relevant paths: admin filters, group-only filters, pivo parser/escaping, pivo quota/refund, log masking, migrations, runtime config validation, and Markov generation limits.
+
+Dev security tools are now listed in `requirements-dev.txt`: `bandit`, `pip-audit`, and `safety`.
+
+Static/security check results:
+
+| Tool | Result | Interpretation |
+|---|---|---|
+| Bandit 1.9.4 | Completed with 47 Low findings, 0 Medium, 0 High | Findings are mostly `assert` usage and non-cryptographic `random`; no direct critical code-security issue found. |
+| Safety 3.7.0 | Completed with 3 vulnerabilities in `cryptography==45.0.7` | Treat as a real dependency-security finding until upgraded or disproven. |
+| pip-audit 2.10.0 | Installed but did not complete; timed out after 300s against PyPI and 180s against OSV | Current environment cannot produce a pip-audit verdict; keep Safety as the available dependency signal. |
 
 Recommended missing tests before fixes:
 
@@ -178,6 +189,7 @@ Recommended missing tests before fixes:
 | Item | Why first |
 |---|---|
 | Cap `/pivo` explicit mentions and subscriber fanout | Direct spam/mass-mention abuse path |
+| Upgrade vulnerable `cryptography` lock | Safety reports 3 CVEs against the locked version |
 | Mirror local sensitive patterns into `.dockerignore` | Low-risk, prevents accidental Docker context leaks |
 | Add operator guidance for DB/WAL/log rotation | Needed before long unattended runtime |
 
@@ -188,7 +200,7 @@ Recommended missing tests before fixes:
 | Add TTL/LRU cleanup for `RuntimeState` and throttling keys | Prevents slow memory growth |
 | Replace full prefix-cache rebuild with bounded/incremental design | Prevents large-chat CPU/RAM spikes |
 | Add centralized Telegram API error middleware/policy | Improves production failure behavior |
-| Add dependency audit tool to dev/CI workflow | Current `pip-audit`/Safety/Bandit are unavailable locally |
+| Add dependency audit tools to CI workflow | Tools are now in dev deps, but CI does not run them yet |
 
 ### Long-Term Improvements
 
@@ -246,6 +258,15 @@ Recommendation: Option A immediately, then decide whether model retention is acc
 
 Recommendation: Option A.
 
+### Fix AUD-009: vulnerable `cryptography` lock
+
+| Option | Pros | Cons | Risk | Complexity |
+|---|---|---|---|---|
+| A. Upgrade only `cryptography` to a fixed version and regenerate `requirements.lock` | Smallest dependency change | Transitive compatibility still needs checks | Low/Medium | Low |
+| B. Refresh all runtime dependencies from `requirements.txt` and regenerate lock | Brings the stack current | Larger diff and more regression risk | Medium | Medium |
+
+Recommendation: Option A first, then run full unit/lint/type/security checks. If `cryptography` upgrade pulls incompatible transitive changes, use Option B in a dedicated dependency PR.
+
 ## 7. Commands Run
 
 | Command | Result |
@@ -274,11 +295,17 @@ Recommendation: Option A.
 | `.\.venv\Scripts\python.exe -m unittest discover tests -v` | 244 tests OK. |
 | `.\.venv\Scripts\python.exe -m ruff check app/ tests/` | All checks passed. |
 | `.\.venv\Scripts\python.exe -m mypy app/` | Success, 29 source files. |
-| `.\.venv\Scripts\python.exe -m bandit -r ...` | Not run: `No module named bandit`. |
-| `.\.venv\Scripts\python.exe -m pip_audit -r requirements.lock` | Not run: `No module named pip_audit`. |
-| `.\.venv\Scripts\python.exe -m safety check -r requirements.lock` | Not run: `No module named safety`. |
+| `.\.venv\Scripts\python.exe -m bandit -r ...` | Initial attempt failed before dev install: `No module named bandit`; after install, completed with 47 Low findings, 0 Medium, 0 High. |
+| `.\.venv\Scripts\python.exe -m pip_audit -r requirements.lock` | Initial attempt failed before dev install; after install first failed on cache permission, then on Windows encoding, then timed out after 300s with `PYTHONUTF8=1` and local cache. |
+| `.\.venv\Scripts\python.exe -m pip_audit -r requirements.lock --vulnerability-service osv` | Timed out after 180s. |
+| `.\.venv\Scripts\safety.exe check -r requirements.lock` | Initial attempt failed before dev install; after install and local `USERPROFILE`, completed and found 3 vulnerabilities in `cryptography==45.0.7`. |
 | `.\.venv\Scripts\python.exe -m pip list --outdated` | Completed; several packages outdated, no vulnerability assessment. |
 | `.\.venv\Scripts\python.exe -m pip check` | No broken requirements found. |
+| `.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt` | Installed dev security tools: `bandit`, `pip-audit`, `safety` and their dependencies. |
+| `.\.venv\Scripts\python.exe -m ruff check app/ tests/` | Re-run after dev-tool install: all checks passed. |
+| `.\.venv\Scripts\python.exe -m mypy app/` | Re-run after dev-tool install: success, 29 source files. |
+| `.\.venv\Scripts\python.exe -m unittest discover tests -v` | Re-run after dev-tool install: 244 tests OK. |
+| `.\.venv\Scripts\python.exe -m pip check` | Re-run after dev-tool install: no broken requirements. |
 | `docker --version` | Not available: `docker` command not found. |
 | `docker build -t pepe-bot:audit .` | Not run: `docker` command not found. |
 | `git remote -v` | Origin: `https://github.com/fdlone/PepeEdtaBot.git`. |
@@ -300,4 +327,3 @@ Most important files reviewed:
 | Deployment | `Dockerfile`, `docker-entrypoint.sh`, `compose.yaml`, `.dockerignore`, `.github/workflows/ci.yml` |
 | Dependencies | `requirements.txt`, `requirements.lock`, `requirements-dev.txt`, `pyproject.toml` |
 | Docs/audits/tests | `README.md`, `docs/ARCHITECTURE.md`, `PROJECT_AUDIT.md`, `PROJECT_AUDIT_CODEX.md`, `tests/*` |
-
