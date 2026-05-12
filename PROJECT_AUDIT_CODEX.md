@@ -1,5 +1,30 @@
 # PROJECT_AUDIT_CODEX
 
+## 2026-05-12 — Audit tasklist remediation PR 5
+
+Scope:
+- AUD-003: bound the learning prefix cache so it no longer loads the full
+  normalized message history for a chat on each rebuild.
+
+Implemented:
+- Added `PREFIX_CACHE_MAX_MESSAGES` to settings and `.env.example`.
+- `LearningService` now builds its novelty-prefix cache only from the most
+  recent `PREFIX_CACHE_MAX_MESSAGES` normalized chat messages.
+- Replaced the full-history `messages` query with a bounded recent-window query
+  ordered by newest rows in SQL and restored to chronological order in Python.
+- Kept cache invalidation semantics unchanged: a newly learned message still
+  invalidates the per-chat prefix cache, but rebuild cost is now bounded.
+- Marked `AUD-003` complete in `AUDIT_TASKLIST.md`.
+
+Checks:
+- `.\.venv\Scripts\python.exe -m unittest tests.test_learning_service tests.test_settings -v` — passed.
+- `.\.venv\Scripts\python.exe -m ruff check app/services/learning_service.py app/repositories/messages_repo.py settings.py main.py tests/test_learning_service.py tests/test_settings.py tests/test_main.py` — passed.
+- `.\.venv\Scripts\python.exe -m mypy app/ main.py settings.py` — passed.
+- `.\.venv\Scripts\python.exe -m unittest discover tests -v` — passed, 264 tests.
+- `.\.venv\Scripts\python.exe -m ruff check app/ tests/ main.py settings.py` — passed.
+- `.\.venv\Scripts\python.exe -m mypy app/` — passed, 29 source files.
+- `.\.venv\Scripts\python.exe -m bandit -r app main.py settings.py -x tests --severity-level medium --confidence-level medium` — passed; report still contains only Low findings outside the CI failure threshold.
+
 ## 2026-05-12 — Audit tasklist remediation PR 4
 
 Scope:

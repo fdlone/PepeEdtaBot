@@ -28,12 +28,19 @@ class MessagesRepo:
             row = await cursor.fetchone()
         return row is not None
 
-    async def get_all_normalized(self, chat_id: int) -> list[str]:
+    async def get_recent_normalized(self, chat_id: int, limit: int) -> list[str]:
         async with self._lock:
             db = await self._conn_provider()
             cur = await db.execute(
-                "SELECT normalized_text FROM messages WHERE chat_id = ? AND normalized_text != ''",
-                (chat_id,),
+                """
+                SELECT normalized_text
+                FROM messages
+                WHERE chat_id = ? AND normalized_text != ''
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (chat_id, limit),
             )
             rows = await cur.fetchall()
-        return [str(row[0]) for row in rows]
+        ordered_rows = list(rows)
+        return [str(row[0]) for row in reversed(ordered_rows)]

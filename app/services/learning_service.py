@@ -10,11 +10,19 @@ from text_utils import sanitize_text
 class LearningService:
     """Сохранение сообщения, обновление цепи Маркова и эвристика вариативности."""
 
-    def __init__(self, db: Database, generator: MarkovGenerator) -> None:
+    def __init__(
+        self,
+        db: Database,
+        generator: MarkovGenerator,
+        *,
+        prefix_cache_max_messages: int = 2000,
+    ) -> None:
         self._db = db
         self._generator = generator
+        self._prefix_cache_max_messages = prefix_cache_max_messages
         # Кэш префиксов: (chat_id, normalize_lower) → set кортежей токенов длиной 3–5.
-        # Строится при первой проверке, сбрасывается при каждом новом сообщении.
+        # Строится при первой проверке из последних N сообщений чата и
+        # сбрасывается при каждом новом сообщении.
         self._prefix_cache: dict[tuple[int, bool], set[tuple[str, ...]]] = {}
 
     async def record_message(
@@ -39,7 +47,7 @@ class LearningService:
         """True если начало текста совпадает с началом какого-то обучающего сообщения.
 
         Проверяется случайно выбранный префикс длиной 3, 4 или 5 токенов против
-        in-memory кэша префиксов всех сохранённых сообщений чата. Случайная
+        in-memory кэша префиксов последних сохранённых сообщений чата. Случайная
         длина намеренно даёт вариативность: один и тот же кандидат может пройти
         фильтр на одной попытке и быть отклонён на другой.
 
@@ -67,9 +75,12 @@ class LearningService:
     async def _build_prefix_cache(
         self, chat_id: int, normalize_lower: bool
     ) -> None:
-        all_texts = await self._db.get_all_normalized_messages(chat_id)
+        recent_texts = await self._db.get_recent_normalized_messages(
+            chat_id,
+            self._prefix_cache_max_messages,
+        )
         prefixes: set[tuple[str, ...]] = set()
-        for text in all_texts:
+        for text in recent_texts:
             toks = tokenize(text, normalize_lower=normalize_lower)
             for length in (3, 4, 5):
                 if len(toks) >= length:

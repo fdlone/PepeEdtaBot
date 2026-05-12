@@ -83,7 +83,11 @@ async def run_bot() -> None:
         explicit_mentions_limit=settings.pivo_explicit_mentions_limit,
         subscriber_fanout_limit=settings.pivo_subscriber_fanout_limit,
     )
-    learning_service = LearningService(db=db, generator=generator)
+    learning_service = LearningService(
+        db=db,
+        generator=generator,
+        prefix_cache_max_messages=settings.prefix_cache_max_messages,
+    )
     runtime_state = runtime_state_from_settings(settings)
 
     bot = Bot(token=settings.bot_token)
