@@ -19,7 +19,7 @@
 - [x] **[CA-F1 / AUD-005]** Добавить `GroupOnly()` ко всем `/pivo*` хендлерам + regression-тест на отказ в приватном чате *(выполнено в codex-логе — проверено, в `main`)*
 - [x] **[AUD-005 / CA-F7]** Зеркалировать паттерны из `.gitignore` в `.dockerignore`: `db_prod_copy/`, `.test_tmp/`, `Screenshot_*.jpg`
 - [x] **[CA-F2]** Синхронизировать `README.md` — убрать HKDF из описания `/pivo`, исправить privacy-блок про raw `chat_id` в логах
-- [ ] **[AUD-004 / AUD-006]** Добавить операционный runbook — ротация логов, WAL checkpoint, резервное копирование и восстановление БД
+- [x] **[AUD-004 / AUD-006]** Добавить операционный runbook — ротация логов, WAL checkpoint, резервное копирование и восстановление БД
 
 ---
 
@@ -28,7 +28,7 @@
 - [ ] **[AUD-002]** Добавить TTL/LRU для `RuntimeState` и `ThrottlingMiddleware` — очищать неактивные ключи по чату/пользователю
 - [ ] **[AUD-003]** Ограничить prefix-cache — инкрементальное хранение хешей префиксов или сэмплирование последних N строк вместо полного `fetchall()`
 - [ ] **[AUD-007]** Добавить централизованный error middleware для Telegram API — логирование и политика на outage/rate-limit
-- [ ] **[CI]** Добавить `bandit` и `safety` в CI workflow (`ci.yml`) — инструменты уже в `requirements-dev.txt`, но не запускаются в пайплайне
+- [x] **[CI]** Добавить `bandit` и `safety` в CI workflow (`ci.yml`) — инструменты уже в `requirements-dev.txt`, но не запускаются в пайплайне
 - [ ] **[CA-F11 / AUD-008]** Синхронизировать локальный `.env` с `.env.example` вручную, не публикуя значения
 - [ ] **[CA-F5 / CA-F6]** Синхронизировать `.venv` через `pip install -r requirements-dev.txt` или пересоздать окружение
 - [ ] **[CA-F3]** Обновить `docs/ARCHITECTURE.md` — убрать или заменить хрупкую метрику числа тестов
@@ -41,7 +41,7 @@
 
 - [ ] **[AUD-004]** Определить политику retention для таблиц `messages` и transitions — лимит строк на чат, документация по VACUUM/compaction
 - [ ] **[AUD-011]** Заменить `assert` в DB/service-коде на явные runtime-исключения (Bandit Low findings)
-- [ ] **[CA-F14 / AUD-011]** Добавить Docker build job в CI без запуска бота *(выполнено в codex-логе — проверить, влито ли в `main`)*
+- [x] **[CA-F14 / AUD-011]** Добавить Docker build job в CI без запуска бота *(выполнено в codex-логе — проверено, в `main`)*
 - [ ] **[AUD-010]** Рассмотреть отдельный `LOG_MASKING_SECRET` — только если нужна стабильная корреляция логов при ротации `PIVO_HMAC_SECRET`
 - [ ] **[AUD-006]** Улучшить Docker healthcheck — сейчас проверяет только запуск интерпретатора, не polling и не БД
 - [ ] **[AUD-006]** Добавить structured logging / метрики — рестарты контейнера, RSS, ошибки Telegram API, счётчик `/pivo`
@@ -53,9 +53,9 @@
 ## ✅ Проверить статус (помечены как выполненные в codex-логе)
 
 - [x] **[CA-F1 / AUD-005]** `GroupOnly()` на `/pivo*` — влито ли в `main`?
-- [ ] **[CA-F14]** Docker build job в CI — влито ли в `main`?
-- [ ] **[CA-F9]** Корневой `markov.db` — статус resolved, перепроверить
-- [ ] **[CA-F12]** `AGENTS.md` — статус resolved, перепроверить
+- [x] **[CA-F14]** Docker build job в CI — влито ли в `main`?
+- [x] **[CA-F9]** Корневой `markov.db` — статус resolved, перепроверить
+- [x] **[CA-F12]** `AGENTS.md` — статус resolved, перепроверить
 
 ---
 

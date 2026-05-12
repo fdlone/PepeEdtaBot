@@ -1,5 +1,45 @@
 # PROJECT_AUDIT_CODEX
 
+## 2026-05-12 — Audit tasklist remediation PR 2
+
+Scope:
+- AUD-004 / AUD-006: add an operator runbook for logs, WAL maintenance,
+  backup, and restore.
+- CI: add `bandit` and `safety` to the GitHub Actions workflow.
+- CA-F14: verify the Docker build smoke job is present in `main`.
+- CA-F9: verify root `markov.db` is not tracked and remains a local artifact.
+- CA-F12: verify `AGENTS.md` is not tracked and remains git-ignored.
+
+Implemented:
+- Added `docs/OPERATIONS.md` with concrete procedures for:
+  log rotation expectations, WAL checkpointing, cold backups, online SQLite
+  backups, restore, and post-restart checks.
+- Linked the runbook from `README.md`.
+- Updated `README.md` to state that CI now includes `bandit` and `safety`.
+- Added `bandit` and `safety` steps to `.github/workflows/ci.yml`.
+- Verified `docker-build` job is present in `main` and marked CA-F14 complete.
+- Verified `markov.db` is not tracked; README continues to describe it as a
+  local test DB artifact.
+- Verified `AGENTS.md` is not tracked and is still ignored by `.gitignore`.
+
+Checks:
+- `git fetch origin` — updated local view of `origin/main` after merge.
+- `git ls-files AGENTS.md markov.db .github/workflows/ci.yml` — confirmed only
+  the workflow file is tracked.
+- `.\.venv\Scripts\safety.exe scan --target . --output screen` — not usable for
+  CI in this environment; Safety CLI 3 requires interactive login for `scan`
+  and exits on EOF in non-interactive mode.
+- `.\.venv\Scripts\python.exe -m ruff check app/ tests/` — passed.
+- `.\.venv\Scripts\python.exe -m mypy app/` — passed, 29 source files.
+- `.\.venv\Scripts\python.exe -m unittest discover tests -v` — passed, 252 tests.
+- `.\.venv\Scripts\python.exe -m bandit -r app main.py db.py settings.py pivo.py markov.py -x tests` — completed with 47 Low findings, 0 Medium, 0 High; no new findings introduced by this PR.
+- `.\.venv\Scripts\safety.exe check -r requirements.lock` — first plain Windows-console run failed with a `charmap` decoding error; UTF-8 rerun completed with 0 vulnerabilities reported.
+
+Decision:
+- CI keeps `safety check -r requirements.lock` instead of `safety scan` because
+  `scan` currently requires interactive authentication, which is unsuitable for
+  unattended CI in this repository's current setup.
+
 ## 2026-05-12 — Audit tasklist remediation PR 1
 
 Scope:

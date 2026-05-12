@@ -149,6 +149,9 @@ activity-фраз вроде `СИГейм`, `Codenames`, `рисовалка` �
 2. удалите `data/markov.db`, `data/markov.db-wal`, `data/markov.db-shm`;
 3. запустите бота снова.
 
+Операционные процедуры по логам, WAL checkpoint, backup и restore описаны в
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
 ## Важно для групп
 Отключите privacy mode у бота в BotFather:
 `Bot Settings -> Group Privacy -> Turn off`
@@ -210,7 +213,8 @@ python -m unittest discover tests -v
 
 CI-конфиг: [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Тесты
 прогоняются на матрице Python 3.12 / 3.13 / 3.14; отдельный job проверяет
-Docker build без запуска бота.
+Docker build без запуска бота. Security checks в CI включают `bandit` и
+`safety`.
 
 ## Безопасность
 - не коммитьте `.env`;
