@@ -258,17 +258,17 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
 
         await cmd_pivo(msg, pivo_service, state, bot, settings)
 
-        pivo_service.consume_daily_call_quota.assert_awaited_once_with(
-            chat_id=msg.chat.id,
-            user_id=msg.from_user.id,
-            is_admin_or_owner=False,
-        )
         pivo_service.build_call_message.assert_awaited_once_with(
             chat_id=msg.chat.id,
             caller_user_id=msg.from_user.id,
             planned_time=None,
             target=None,
             explicit_mentions=(),
+        )
+        pivo_service.consume_daily_call_quota.assert_awaited_once_with(
+            chat_id=msg.chat.id,
+            user_id=msg.from_user.id,
+            is_admin_or_owner=False,
         )
         msg.reply.assert_awaited_once()
 
@@ -296,6 +296,28 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         )
         msg.reply.assert_awaited_once()
 
+    async def test_pivo_rejects_over_limit_mentions_without_spending_quota(self) -> None:
+        from app.handlers.pivo import cmd_pivo
+        from app.services.pivo_service import PivoCallLimitError
+
+        msg = _fake_message(text="/pivo @one @two @three")
+        pivo_service = AsyncMock()
+        pivo_service.build_call_message = AsyncMock(
+            side_effect=PivoCallLimitError(
+                "В /pivo можно указывать не больше 2 явных упоминаний за раз."
+            )
+        )
+        state = _fake_state()
+        bot = AsyncMock()
+        settings = MagicMock(owner_id=None)
+
+        await cmd_pivo(msg, pivo_service, state, bot, settings)
+
+        pivo_service.build_call_message.assert_awaited_once()
+        pivo_service.consume_daily_call_quota.assert_not_called()
+        msg.reply.assert_awaited_once()
+        assert "не больше 2" in msg.reply.call_args[0][0]
+
     async def test_pivo_rejects_when_daily_quota_is_exhausted(self) -> None:
         from app.handlers.pivo import cmd_pivo
         msg = _fake_message()
@@ -314,8 +336,8 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
 
         await cmd_pivo(msg, pivo_service, state, bot, settings)
 
+        pivo_service.build_call_message.assert_awaited_once()
         pivo_service.consume_daily_call_quota.assert_awaited_once()
-        pivo_service.build_call_message.assert_not_called()
         msg.reply.assert_awaited_once()
         assert "Лимит /pivo" in msg.reply.call_args[0][0]
 

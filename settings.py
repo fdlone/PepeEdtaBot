@@ -36,6 +36,8 @@ class Settings:
     reply_context_include_current_message: bool
     pivo_hmac_secret: str
     pivo_encryption_secret: str
+    pivo_explicit_mentions_limit: int
+    pivo_subscriber_fanout_limit: int
     log_level: str
     bot_text_aliases: frozenset[str]
 
@@ -83,6 +85,26 @@ def load_settings(load_env: bool = True) -> Settings:
     pivo_encryption_secret = os.getenv("PIVO_ENCRYPTION_SECRET", "").strip()
     if len(pivo_encryption_secret) < 16:
         raise ValueError("PIVO_ENCRYPTION_SECRET must be at least 16 characters")
+    pivo_explicit_mentions_limit_raw = os.getenv(
+        "PIVO_EXPLICIT_MENTIONS_LIMIT",
+        "10",
+    ).strip()
+    pivo_subscriber_fanout_limit_raw = os.getenv(
+        "PIVO_SUBSCRIBER_FANOUT_LIMIT",
+        "20",
+    ).strip()
+    try:
+        pivo_explicit_mentions_limit = int(pivo_explicit_mentions_limit_raw)
+    except ValueError as exc:
+        raise ValueError("PIVO_EXPLICIT_MENTIONS_LIMIT must be an integer") from exc
+    if pivo_explicit_mentions_limit < 1:
+        raise ValueError("PIVO_EXPLICIT_MENTIONS_LIMIT must be at least 1")
+    try:
+        pivo_subscriber_fanout_limit = int(pivo_subscriber_fanout_limit_raw)
+    except ValueError as exc:
+        raise ValueError("PIVO_SUBSCRIBER_FANOUT_LIMIT must be an integer") from exc
+    if pivo_subscriber_fanout_limit < 1:
+        raise ValueError("PIVO_SUBSCRIBER_FANOUT_LIMIT must be at least 1")
 
     log_level = os.getenv("LOG_LEVEL", "INFO").strip().upper()
     if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
@@ -112,6 +134,8 @@ def load_settings(load_env: bool = True) -> Settings:
         db_path=db_path,
         pivo_hmac_secret=pivo_hmac_secret,
         pivo_encryption_secret=pivo_encryption_secret,
+        pivo_explicit_mentions_limit=pivo_explicit_mentions_limit,
+        pivo_subscriber_fanout_limit=pivo_subscriber_fanout_limit,
         log_level=log_level,
         bot_text_aliases=bot_text_aliases,
         **runtime_values,  # type: ignore[arg-type]

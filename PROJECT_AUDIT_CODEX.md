@@ -1,5 +1,39 @@
 # PROJECT_AUDIT_CODEX
 
+## 2026-05-12 — Audit tasklist remediation PR 1
+
+Scope:
+- AUD-009: upgrade `cryptography` to a fixed release and regenerate `requirements.lock`.
+- AUD-001: add `/pivo` explicit mention limit.
+- AUD-001: add `/pivo` subscriber fanout limit.
+- CA-F1 / AUD-005: verify `GroupOnly()` on all `/pivo*` handlers in `main`.
+- AUD-005 / CA-F7: mirror local ignore patterns into `.dockerignore`.
+- CA-F2: keep README security/privacy wording aligned with current `/pivo` implementation.
+
+Implemented:
+- Added `PIVO_EXPLICIT_MENTIONS_LIMIT` and `PIVO_SUBSCRIBER_FANOUT_LIMIT` to config.
+- Enforced explicit mention and subscriber fanout limits inside `PivoService`.
+- Updated `/pivo` handler flow to surface limit errors before quota consumption.
+- Updated `requirements.txt` and `requirements.lock` to `cryptography==46.0.7`.
+- Mirrored `db_prod_copy/`, `.test_tmp/`, and `Screenshot_*.jpg` into `.dockerignore`.
+- Added the new limit env vars to `.env.example`.
+- Added regression tests for explicit mentions, subscriber fanout, and handler limit rejection.
+- Verified `GroupOnly()` is already applied to every `/pivo*` handler and marked that task complete.
+- Updated README to mention the configurable `/pivo` limits.
+
+Checks:
+- `.\.venv\Scripts\python.exe -m unittest tests.test_pivo tests.test_handlers -v` — passed.
+- `.\.venv\Scripts\python.exe -m ruff check app/ tests/` — passed.
+- `.\.venv\Scripts\python.exe -m mypy app/` — passed, 29 source files.
+- `.\.venv\Scripts\python.exe -m unittest discover tests -v` — passed, 252 tests.
+- `.\.venv\Scripts\python.exe -m pip check` — passed.
+- `.\.venv\Scripts\python.exe -m bandit -r app main.py db.py settings.py pivo.py markov.py -x tests` — completed with 47 Low findings, 0 Medium, 0 High. Existing Low findings remain in `db.py`, `markov.py`, `app/handlers/_helpers.py`, `app/services/learning_service.py`, `app/services/pivo_message_builder.py`, and `app/handlers/learning.py`.
+- `.\.venv\Scripts\safety.exe check -r requirements.lock` — no known vulnerabilities found.
+- `.\.venv\Scripts\python.exe -X utf8 -m pip_audit -r requirements.lock --format json` — no vulnerabilities reported.
+
+Deferred:
+- AUD-004 runbook items for log rotation, WAL checkpointing, and backup/restore were left for a later PR because they are larger operational work and not a safe add-on to the current security/dependency batch.
+
 ## 2026-05-12 — Security and stability audit report
 
 Mode: audit plus dev-tooling update. Production bot code, tests, runtime
