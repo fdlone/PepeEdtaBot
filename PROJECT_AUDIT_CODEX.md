@@ -1,5 +1,36 @@
 # PROJECT_AUDIT_CODEX
 
+## 2026-05-12 — Audit tasklist remediation PR 3
+
+Scope:
+- CA-F4: make README quickstart explicitly separate runtime install from
+  development install.
+- CA-F3: verify `docs/ARCHITECTURE.md` no longer contains a brittle test-count
+  metric and keep the CI description current.
+- CA-F5 / CA-F6: verify the local `.venv` is now aligned with
+  `requirements-dev.txt` and contains the CI tools.
+
+Implemented:
+- Updated `README.md` to split quickstart into `Runtime install` and
+  `Development install`.
+- Added the standard CI-equivalent local verification commands directly to the
+  development install section of `README.md`.
+- Updated `docs/ARCHITECTURE.md` so the CI section matches the current workflow
+  (`ruff`, `mypy`, `unittest`, `bandit`, `safety`, plus Docker build smoke).
+- Marked CA-F3, CA-F4, and CA-F5 / CA-F6 complete in `AUDIT_TASKLIST.md`.
+
+Verification:
+- `rg` review confirmed `docs/ARCHITECTURE.md` no longer contains a brittle
+  exact test-count claim.
+- `.\.venv\Scripts\python.exe -m pip show ruff mypy bandit safety pip-audit` —
+  confirmed the local `.venv` contains the expected dev tools.
+- `.\.venv\Scripts\python.exe -m pip check` — passed.
+
+Checks:
+- `.\.venv\Scripts\python.exe -m ruff check app/ tests/` — passed.
+- `.\.venv\Scripts\python.exe -m mypy app/` — passed, 29 source files.
+- `.\.venv\Scripts\python.exe -m unittest discover tests -v` — passed, 252 tests.
+
 ## 2026-05-12 — Audit tasklist remediation PR 2
 
 Scope:
