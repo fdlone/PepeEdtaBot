@@ -4,6 +4,16 @@ Date: 2026-05-12
 Branch: `audit-security-stability-review`  
 Mode: audit plus dev-tooling update. Production bot code, tests, runtime configs, and deployment files were not changed. Dev-only security tools were added to `requirements-dev.txt` after the initial audit.
 
+Status update as of 2026-05-12:
+
+- Closed in `main`: `AUD-009`, `AUD-001` explicit mention limit,
+  `AUD-001` subscriber fanout limit, `.dockerignore` parity, `/pivo*`
+  `GroupOnly()`, README sync, operations runbook, CI `bandit`/`safety`
+  integration, and Docker build smoke in CI.
+- Still open: `AUD-002`, `AUD-003`, `AUD-007`, `.env` synchronization,
+  `db_prod_copy/` disposition, Bandit low-finding cleanup, and broader
+  runtime/observability follow-ups.
+
 ## 1. Executive Summary
 
 Overall risk level: **MEDIUM** for current small-group production usage, **HIGH** before expanding to larger or less trusted chats.

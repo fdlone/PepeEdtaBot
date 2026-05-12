@@ -30,9 +30,9 @@
 - [ ] **[AUD-007]** Добавить централизованный error middleware для Telegram API — логирование и политика на outage/rate-limit
 - [x] **[CI]** Добавить `bandit` и `safety` в CI workflow (`ci.yml`) — инструменты уже в `requirements-dev.txt`, но не запускаются в пайплайне
 - [ ] **[CA-F11 / AUD-008]** Синхронизировать локальный `.env` с `.env.example` вручную, не публикуя значения
-- [ ] **[CA-F5 / CA-F6]** Синхронизировать `.venv` через `pip install -r requirements-dev.txt` или пересоздать окружение
-- [ ] **[CA-F3]** Обновить `docs/ARCHITECTURE.md` — убрать или заменить хрупкую метрику числа тестов
-- [ ] **[CA-F4]** Разделить quickstart в `README.md` на runtime-install и dev-install; рекомендовать `requirements-dev.txt` для разработки
+- [x] **[CA-F5 / CA-F6]** Синхронизировать `.venv` через `pip install -r requirements-dev.txt` или пересоздать окружение
+- [x] **[CA-F3]** Обновить `docs/ARCHITECTURE.md` — убрать или заменить хрупкую метрику числа тестов
+- [x] **[CA-F4]** Разделить quickstart в `README.md` на runtime-install и dev-install; рекомендовать `requirements-dev.txt` для разработки
 - [ ] **[CA-F8]** Решить судьбу `db_prod_copy/` — вынести за пределы workspace или добавить явную запись в `.gitignore`/`.dockerignore`
 
 ---

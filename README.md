@@ -10,6 +10,9 @@ Telegram-бот для группового чата. Учится на сооб
 - конфигурация через `.env`
 
 ## Быстрый старт
+
+### Runtime install
+
 Минимальный локальный запуск:
 
 ```bash
@@ -27,11 +30,21 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Для разработки и локальных проверок используйте dev-зависимости — этот путь
+### Development install
+
+Для разработки и локальных проверок используйте dev-зависимости. Этот путь
 ставит `requirements.lock` и инструменты, совпадающие с CI:
 
 ```bash
 pip install -r requirements-dev.txt
+```
+
+После этого используйте те же команды проверки, что и в CI:
+
+```bash
+python -m ruff check app/ tests/
+python -m mypy app/
+python -m unittest discover tests -v
 ```
 
 ## Docker
