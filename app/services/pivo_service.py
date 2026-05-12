@@ -16,8 +16,8 @@ from pivo import (
     display_name_from_user,
 )
 
-PIVO_DAILY_LIMIT_USER = 1
-PIVO_DAILY_LIMIT_ADMIN = 3
+PIVO_DAILY_LIMIT_USER = 3
+PIVO_DAILY_LIMIT_ADMIN = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,5 +123,6 @@ class PivoService:
             mentions,
             planned_time=planned_time,
             target=target,
+            has_explicit_mentions=bool(explicit_mentions),
         )
         return text, len(mention_items)

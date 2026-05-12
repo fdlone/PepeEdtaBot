@@ -4,17 +4,13 @@ import base64
 import hashlib
 import hmac
 import html
-import random
 from dataclasses import dataclass
-from typing import Optional
 
 from cryptography.fernet import Fernet
 
-from pivo_templates import PIVO_TEMPLATES
-
-
 PIVO_FALLBACK_MENTIONS = "Господа дегенераты"
-PIVO_PRIVACY_MESSAGE = """Для /pivo я храню только тех пользователей, которые сами включились командой /pivo_on.
+PIVO_PRIVACY_MESSAGE = """Для /pivo я храню только тех пользователей, которые сами
+включились командой /pivo_on.
 
 Эти данные нужны только для того, чтобы упоминать тебя в шуточном созыве в Discord.
 
@@ -50,7 +46,7 @@ class PivoSecurity:
         return self._fernet.decrypt(value.encode("utf-8")).decode("utf-8")
 
 
-def normalize_username(username: Optional[str]) -> str:
+def normalize_username(username: str | None) -> str:
     if not username:
         return ""
 
@@ -120,5 +116,6 @@ def build_pivo_mentions(
 
 
 def get_random_pivo_message(mentions: str) -> str:
-    template = random.choice(PIVO_TEMPLATES)
-    return template.format(mentions=mentions).strip()
+    from app.services.pivo_message_builder import build_pivo_message
+
+    return build_pivo_message(mentions)
