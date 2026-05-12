@@ -115,11 +115,32 @@ class TestPivoMessageBuilder(unittest.TestCase):
                 "Господа дегенераты",
                 planned_time="tomorrow evening",
                 target="watch movie",
-            )
+        )
 
         self.assertIn("собираемся завтра вечером в Discord", text)
-        self.assertIn("сегодня у нас watch movie", text)
+        self.assertIn("по плану у нас watch movie", text)
         self.assertIn("Пиво приветствуется", text)
+
+    def test_standalone_tomorrow_time_is_embedded_naturally(self) -> None:
+        choices = iter(
+            [
+                PIVO_TARGET_INTROS[0],
+                "подозрительные личности",
+                PIVO_TARGET_TOP_PARTS[2],
+                PIVO_TARGET_BODY_PARTS[1],
+                PIVO_TARGET_BOTTOM_PARTS[2],
+            ]
+        )
+        with patch(RANDOM_CHOICE_PATH, side_effect=lambda _: next(choices)):
+            text = build_pivo_message(
+                "Господа дегенераты",
+                planned_time="завтра",
+                target="сосать бибу",
+            )
+
+        self.assertIn("собираемся завтра в Discord", text)
+        self.assertIn("по плану у нас сосать бибу", text)
+        self.assertNotIn("сегодня у нас завтра", text)
 
     def test_explicit_mentions_are_rendered_inline_without_subscriber_ping_line(self) -> None:
         choices = iter(

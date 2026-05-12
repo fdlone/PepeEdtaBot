@@ -28,6 +28,8 @@ _TIME_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^(?:[01]?\d|2[0-3]):[0-5]\d\b"),
     re.compile(r"^(?:today|tomorrow)\s+evening\b", re.IGNORECASE),
     re.compile(r"^(?:сегодня|завтра)\s+вечером\b", re.IGNORECASE),
+    re.compile(r"^(?:today|tomorrow)\b", re.IGNORECASE),
+    re.compile(r"^(?:сегодня|завтра)\b", re.IGNORECASE),
     re.compile(r"^evening\b", re.IGNORECASE),
     re.compile(r"^вечером\b", re.IGNORECASE),
 )

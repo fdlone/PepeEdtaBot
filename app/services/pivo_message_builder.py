@@ -170,10 +170,18 @@ def _format_time_value(planned_time: str) -> str:
         return f"завтра {_normalize_time_tail(raw[12:])}"
     if normalized.startswith("tomorrow "):
         return f"завтра {_normalize_time_tail(raw[9:])}"
+    if normalized == "today":
+        return "сегодня"
+    if normalized == "tomorrow":
+        return "завтра"
     if normalized.startswith("сегодня в "):
         return f"сегодня {_normalize_time_tail(raw[10:])}"
     if normalized.startswith("завтра в "):
         return f"завтра {_normalize_time_tail(raw[9:])}"
+    if normalized == "сегодня":
+        return "сегодня"
+    if normalized == "завтра":
+        return "завтра"
     if normalized == "evening":
         return "вечером"
     if normalized == "вечером":
@@ -191,4 +199,6 @@ def _normalize_time_tail(value: str) -> str:
 
 
 def _time_value_has_own_preposition(value: str) -> bool:
-    return value.startswith(("сегодня ", "завтра ")) or value == "вечером"
+    return value in {"сегодня", "завтра", "вечером"} or value.startswith(
+        ("сегодня ", "завтра ")
+    )
