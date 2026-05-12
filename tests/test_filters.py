@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiogram.enums import ChatType
 
@@ -125,6 +125,15 @@ class TestThrottlingMiddleware(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "ok")
         handler.assert_awaited_once()
 
+    async def test_first_call_passes_even_if_process_started_recently(self) -> None:
+        mw = self._make_middleware()
+        handler = AsyncMock(return_value="ok")
+        msg = self._make_cmd_message("/pivo")
+        with patch("app.middlewares.throttling.time.monotonic", return_value=1.0):
+            result = await mw(handler, msg, {})
+        self.assertEqual(result, "ok")
+        handler.assert_awaited_once()
+
     async def test_second_call_throttled(self) -> None:
         mw = self._make_middleware()
         handler = AsyncMock(return_value="ok")
@@ -234,3 +243,35 @@ class TestThrottlingMiddleware(unittest.IsolatedAsyncioTestCase):
         result = await mw(handler, msg_confirm, {})
         self.assertIsNone(result)
         msg_confirm.reply.assert_awaited_once()
+
+    async def test_stale_throttle_entries_expire_by_ttl(self) -> None:
+        from app.middlewares import ThrottlingMiddleware
+
+        mw = ThrottlingMiddleware(limits={"pivo": 30.0}, state_ttl_sec=10, state_max_keys=8)
+        handler = AsyncMock(return_value="ok")
+        msg = self._make_cmd_message("/pivo")
+
+        with patch("app.middlewares.throttling.time.monotonic", return_value=100.0):
+            await mw(handler, msg, {})
+        with patch("app.middlewares.throttling.time.monotonic", return_value=111.0):
+            mw._prune_state(111.0)
+            result = await mw(handler, msg, {})
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(handler.await_count, 2)
+
+    async def test_oldest_throttle_entries_are_trimmed_when_capacity_exceeded(self) -> None:
+        from app.middlewares import ThrottlingMiddleware
+
+        mw = ThrottlingMiddleware(limits={"pivo": 30.0}, state_ttl_sec=1000, state_max_keys=2)
+        handler = AsyncMock(return_value="ok")
+
+        with patch("app.middlewares.throttling.time.monotonic", return_value=31.0):
+            await mw(handler, self._make_cmd_message("/pivo", user_id=1), {})
+        with patch("app.middlewares.throttling.time.monotonic", return_value=32.0):
+            await mw(handler, self._make_cmd_message("/pivo", user_id=2), {})
+        with patch("app.middlewares.throttling.time.monotonic", return_value=33.0):
+            await mw(handler, self._make_cmd_message("/pivo", user_id=3), {})
+
+        self.assertEqual(len(mw._last_used), 2)
+        self.assertNotIn((100, 1, "pivo"), mw._last_used)

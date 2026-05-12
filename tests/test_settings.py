@@ -24,6 +24,10 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(settings.bot_token, "123:token")
         self.assertEqual(settings.reply_probability, 0.08)
         self.assertEqual(settings.max_reply_tokens, 45)
+        self.assertEqual(settings.runtime_state_ttl_sec, 86400)
+        self.assertEqual(settings.runtime_state_max_chats, 2048)
+        self.assertEqual(settings.throttle_state_ttl_sec, 21600)
+        self.assertEqual(settings.throttle_state_max_keys, 4096)
 
     def test_load_settings_rejects_missing_bot_token(self) -> None:
         env = minimal_env()
@@ -90,6 +94,20 @@ class TestSettings(unittest.TestCase):
         env["LOG_LEVEL"] = "verbose"
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaisesRegex(ValueError, "LOG_LEVEL"):
+                load_settings(load_env=False)
+
+    def test_load_settings_rejects_invalid_runtime_state_ttl(self) -> None:
+        env = minimal_env()
+        env["RUNTIME_STATE_TTL_SEC"] = "0"
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "RUNTIME_STATE_TTL_SEC"):
+                load_settings(load_env=False)
+
+    def test_load_settings_rejects_invalid_throttle_state_max_keys(self) -> None:
+        env = minimal_env()
+        env["THROTTLE_STATE_MAX_KEYS"] = "abc"
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "THROTTLE_STATE_MAX_KEYS"):
                 load_settings(load_env=False)
 
     def test_load_settings_default_bot_text_aliases(self) -> None:

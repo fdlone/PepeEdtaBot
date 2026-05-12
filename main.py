@@ -41,6 +41,8 @@ def configure_dispatcher(
         ThrottlingMiddleware(
             limits=COMMAND_COOLDOWNS_SECONDS,
             notify_on_throttle={"clear"},
+            state_ttl_sec=settings.throttle_state_ttl_sec,
+            state_max_keys=settings.throttle_state_max_keys,
         )
     )
     dp["db"] = db

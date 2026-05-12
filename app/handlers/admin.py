@@ -191,6 +191,7 @@ async def cmd_clear(
         return
     await db.clear_chat(message.chat.id)
     generator.invalidate_chat_cache(message.chat.id)
+    runtime_state.forget_chat(message.chat.id)
     await reply_humanized(
         message,
         "Данные чата очищены.",
