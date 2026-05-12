@@ -27,6 +27,9 @@ class TestMainWiring(unittest.TestCase):
             "bot_username": "pepebot",
             "bot_id": 12345,
         }
+        dependencies["settings"].bot_text_aliases = frozenset({"pepe"})
+        dependencies["settings"].throttle_state_ttl_sec = 111
+        dependencies["settings"].throttle_state_max_keys = 222
 
         dp = configure_dispatcher(Dispatcher(), **dependencies)
 
@@ -44,6 +47,8 @@ class TestMainWiring(unittest.TestCase):
         middlewares = dp.message.middleware._middlewares
         self.assertEqual(len(middlewares), 1)
         self.assertIsInstance(middlewares[0], ThrottlingMiddleware)
+        self.assertEqual(middlewares[0]._state_ttl_sec, 111.0)
+        self.assertEqual(middlewares[0]._state_max_keys, 222)
 
 
 if __name__ == "__main__":

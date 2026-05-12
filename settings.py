@@ -38,6 +38,10 @@ class Settings:
     pivo_encryption_secret: str
     pivo_explicit_mentions_limit: int
     pivo_subscriber_fanout_limit: int
+    runtime_state_ttl_sec: int
+    runtime_state_max_chats: int
+    throttle_state_ttl_sec: int
+    throttle_state_max_keys: int
     log_level: str
     bot_text_aliases: frozenset[str]
 
@@ -106,6 +110,35 @@ def load_settings(load_env: bool = True) -> Settings:
     if pivo_subscriber_fanout_limit < 1:
         raise ValueError("PIVO_SUBSCRIBER_FANOUT_LIMIT must be at least 1")
 
+    runtime_state_ttl_sec_raw = os.getenv("RUNTIME_STATE_TTL_SEC", "86400").strip()
+    runtime_state_max_chats_raw = os.getenv("RUNTIME_STATE_MAX_CHATS", "2048").strip()
+    throttle_state_ttl_sec_raw = os.getenv("THROTTLE_STATE_TTL_SEC", "21600").strip()
+    throttle_state_max_keys_raw = os.getenv("THROTTLE_STATE_MAX_KEYS", "4096").strip()
+    try:
+        runtime_state_ttl_sec = int(runtime_state_ttl_sec_raw)
+    except ValueError as exc:
+        raise ValueError("RUNTIME_STATE_TTL_SEC must be an integer") from exc
+    if runtime_state_ttl_sec < 1:
+        raise ValueError("RUNTIME_STATE_TTL_SEC must be at least 1")
+    try:
+        runtime_state_max_chats = int(runtime_state_max_chats_raw)
+    except ValueError as exc:
+        raise ValueError("RUNTIME_STATE_MAX_CHATS must be an integer") from exc
+    if runtime_state_max_chats < 1:
+        raise ValueError("RUNTIME_STATE_MAX_CHATS must be at least 1")
+    try:
+        throttle_state_ttl_sec = int(throttle_state_ttl_sec_raw)
+    except ValueError as exc:
+        raise ValueError("THROTTLE_STATE_TTL_SEC must be an integer") from exc
+    if throttle_state_ttl_sec < 1:
+        raise ValueError("THROTTLE_STATE_TTL_SEC must be at least 1")
+    try:
+        throttle_state_max_keys = int(throttle_state_max_keys_raw)
+    except ValueError as exc:
+        raise ValueError("THROTTLE_STATE_MAX_KEYS must be an integer") from exc
+    if throttle_state_max_keys < 1:
+        raise ValueError("THROTTLE_STATE_MAX_KEYS must be at least 1")
+
     log_level = os.getenv("LOG_LEVEL", "INFO").strip().upper()
     if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
         raise ValueError(
@@ -136,6 +169,10 @@ def load_settings(load_env: bool = True) -> Settings:
         pivo_encryption_secret=pivo_encryption_secret,
         pivo_explicit_mentions_limit=pivo_explicit_mentions_limit,
         pivo_subscriber_fanout_limit=pivo_subscriber_fanout_limit,
+        runtime_state_ttl_sec=runtime_state_ttl_sec,
+        runtime_state_max_chats=runtime_state_max_chats,
+        throttle_state_ttl_sec=throttle_state_ttl_sec,
+        throttle_state_max_keys=throttle_state_max_keys,
         log_level=log_level,
         bot_text_aliases=bot_text_aliases,
         **runtime_values,  # type: ignore[arg-type]

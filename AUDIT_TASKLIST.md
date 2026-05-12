@@ -25,7 +25,7 @@
 
 ## 🟡 Средний приоритет
 
-- [ ] **[AUD-002]** Добавить TTL/LRU для `RuntimeState` и `ThrottlingMiddleware` — очищать неактивные ключи по чату/пользователю
+- [x] **[AUD-002]** Добавить TTL/LRU для `RuntimeState` и `ThrottlingMiddleware` — очищать неактивные ключи по чату/пользователю
 - [ ] **[AUD-003]** Ограничить prefix-cache — инкрементальное хранение хешей префиксов или сэмплирование последних N строк вместо полного `fetchall()`
 - [ ] **[AUD-007]** Добавить централизованный error middleware для Telegram API — логирование и политика на outage/rate-limit
 - [x] **[CI]** Добавить `bandit` и `safety` в CI workflow (`ci.yml`) — инструменты уже в `requirements-dev.txt`, но не запускаются в пайплайне

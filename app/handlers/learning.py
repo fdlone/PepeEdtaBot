@@ -120,6 +120,9 @@ async def on_text_message(
     if raw_text.startswith("/"):
         return
 
+    now = time.monotonic()
+    runtime_state.note_chat_activity(message.chat.id, now)
+
     clean = sanitize_text(raw_text)
     if not is_learnable_message_length(clean):
         logger.debug(
@@ -153,7 +156,6 @@ async def on_text_message(
             token_volume,
         )
 
-    now = time.time()
     mentioned = bot_is_mentioned(message, bot_username, bot_id, bot_text_aliases)
 
     enough_data = has_enough_model_data(

@@ -1,5 +1,36 @@
 # PROJECT_AUDIT_CODEX
 
+## 2026-05-12 — Audit tasklist remediation PR 4
+
+Scope:
+- AUD-002: bound in-memory runtime dictionaries used by `RuntimeState` and
+  `ThrottlingMiddleware`.
+
+Implemented:
+- Added configurable TTL and capacity limits for runtime chat state:
+  `RUNTIME_STATE_TTL_SEC` and `RUNTIME_STATE_MAX_CHATS`.
+- Added configurable TTL and capacity limits for throttling state:
+  `THROTTLE_STATE_TTL_SEC` and `THROTTLE_STATE_MAX_KEYS`.
+- Extended `RuntimeState` with bounded cleanup helpers:
+  `note_chat_activity()`, `prune_inactive()`, and `forget_chat()`.
+- `learning` handler now records chat activity with monotonic timestamps so
+  stale per-chat counters can expire naturally during long uptime.
+- `clear confirm` now drops the cleared chat from in-memory runtime state as
+  well as from SQLite and generator caches.
+- `ThrottlingMiddleware` now expires stale keys, trims oldest keys above the
+  configured cap, and no longer mis-throttles the first command after process
+  start when `time.monotonic()` is still below the cooldown value.
+- Marked `AUD-002` complete in `AUDIT_TASKLIST.md`.
+
+Checks:
+- `.\.venv\Scripts\python.exe -m unittest tests.test_runtime_state tests.test_filters tests.test_settings tests.test_main -v` — passed.
+- `.\.venv\Scripts\python.exe -m ruff check runtime_state.py settings.py main.py app/handlers/learning.py app/handlers/admin.py app/middlewares/throttling.py tests/test_runtime_state.py tests/test_filters.py tests/test_settings.py tests/test_main.py` — passed.
+- `.\.venv\Scripts\python.exe -m mypy app/ main.py runtime_state.py settings.py` — passed.
+- `.\.venv\Scripts\python.exe -m unittest discover tests -v` — passed, 261 tests.
+- `.\.venv\Scripts\python.exe -m ruff check app/ tests/ main.py runtime_state.py settings.py` — passed.
+- `.\.venv\Scripts\python.exe -m mypy app/` — passed, 29 source files.
+- `.\.venv\Scripts\python.exe -m bandit -r app main.py runtime_state.py settings.py -x tests --severity-level medium --confidence-level medium` — passed; report still contains only Low findings outside the CI failure threshold.
+
 ## 2026-05-12 — Audit tasklist remediation PR 3
 
 Scope:
