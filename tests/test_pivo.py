@@ -19,7 +19,14 @@ from pivo import (
     get_random_pivo_message,
     normalize_username,
 )
-from pivo_templates import PIVO_TEMPLATES
+from pivo_templates import (
+    PIVO_TARGET_BODY_PARTS,
+    PIVO_TARGET_BOTTOM_PARTS,
+    PIVO_TARGET_INTROS,
+    PIVO_TARGET_TOP_PARTS,
+)
+
+RANDOM_CHOICE_PATH = "app.services.pivo_message_builder.random.choice"
 
 
 def make_security() -> PivoSecurity:
@@ -115,11 +122,10 @@ class TestPivo(unittest.TestCase):
         self.assertEqual(display_name_from_user(SimpleNamespace()), "участник")
 
     def test_get_random_pivo_message_uses_whole_template(self) -> None:
-        with patch("random.choice", return_value=PIVO_TEMPLATES[0]):
-            text = get_random_pivo_message("@pepe")
+        text = get_random_pivo_message("@pepe")
 
         self.assertIn("@pepe", text)
-        self.assertIn("Внимание, заслуженные дегенераты", text)
+        self.assertIn("Discord", text)
 
     def test_pivo_privacy_message_has_no_technical_details(self) -> None:
         self.assertIn("/pivo_on", PIVO_PRIVACY_MESSAGE)
@@ -129,7 +135,7 @@ class TestPivo(unittest.TestCase):
 
 
 class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
-    async def test_regular_user_has_one_daily_call(self) -> None:
+    async def test_regular_user_has_three_daily_calls(self) -> None:
         from app.services.pivo_service import PIVO_DAILY_LIMIT_USER, PivoService
 
         security = make_security()
@@ -154,12 +160,12 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
             limit=PIVO_DAILY_LIMIT_USER,
         )
 
-    async def test_admin_has_three_daily_calls(self) -> None:
+    async def test_admin_has_five_daily_calls(self) -> None:
         from app.services.pivo_service import PIVO_DAILY_LIMIT_ADMIN, PivoService
 
         security = make_security()
         db = AsyncMock()
-        db.consume_pivo_daily_call = AsyncMock(return_value=(True, 3))
+        db.consume_pivo_daily_call = AsyncMock(return_value=(True, 5))
         service = PivoService(db=db, security=security)
 
         result = await service.consume_daily_call_quota(
@@ -170,7 +176,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(result.allowed)
-        self.assertEqual(result.used_count, 3)
+        self.assertEqual(result.used_count, 5)
         self.assertEqual(result.limit, PIVO_DAILY_LIMIT_ADMIN)
 
     async def test_refund_daily_call_uses_same_hashes_and_day(self) -> None:
@@ -201,17 +207,15 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         db.get_chat_members = AsyncMock()
         service = PivoService(db=db, security=security)
 
-        with patch(
-            "random.choice",
-            side_effect=[
-                PIVO_TEMPLATES[0],
-                "{time_phrase} сбор в Discord.",
-                "Повестка вечера: {target}.",
-                "Discord и коллективное моральное разложение прилагаются.",
-                "Пиво приветствуется. Другой напиток тоже переживём.",
-                "Отмазки принимаются, но будут высмеяны.",
-            ],
-        ):
+        choices = iter(
+            [
+                PIVO_TARGET_INTROS[0],
+                PIVO_TARGET_TOP_PARTS[1],
+                PIVO_TARGET_BODY_PARTS[0],
+                PIVO_TARGET_BOTTOM_PARTS[0],
+            ]
+        )
+        with patch(RANDOM_CHOICE_PATH, side_effect=lambda _: next(choices)):
             text, mentions_count = await service.build_call_message(
                 chat_id=100,
                 caller_user_id=200,
@@ -222,8 +226,8 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
 
         db.get_chat_members.assert_not_called()
         self.assertEqual(mentions_count, 1)
-        self.assertIn("сегодня в 20:00 сбор в Discord.", text)
-        self.assertIn("Повестка вечера: watch movie.", text)
+        self.assertIn("общий сбор в 20:00 в Discord.", text)
+        self.assertIn("watch movie", text)
         self.assertIn("@friend", text)
 
     async def test_build_call_message_builds_contextual_body(self) -> None:
@@ -234,17 +238,16 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         db.get_chat_members = AsyncMock(return_value=[])
         service = PivoService(db=db, security=security)
 
-        with patch(
-            "random.choice",
-            side_effect=[
-                PIVO_TEMPLATES[0],
-                "{time_phrase} сбор в Discord.",
-                "Повестка вечера: {target}.",
-                "Discord и коллективное моральное разложение прилагаются.",
-                "Пиво приветствуется. Другой напиток тоже переживём.",
-                "Отмазки принимаются, но будут высмеяны.",
-            ],
-        ):
+        choices = iter(
+            [
+                PIVO_TARGET_INTROS[0],
+                "местные дегенераты",
+                PIVO_TARGET_TOP_PARTS[1],
+                PIVO_TARGET_BODY_PARTS[2],
+                PIVO_TARGET_BOTTOM_PARTS[0],
+            ]
+        )
+        with patch(RANDOM_CHOICE_PATH, side_effect=lambda _: next(choices)):
             text, mentions_count = await service.build_call_message(
                 chat_id=100,
                 caller_user_id=200,
@@ -254,7 +257,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(mentions_count, 0)
         self.assertIn("&lt;20:00&gt;", text)
-        self.assertIn("Повестка вечера: movie &amp; chat.", text)
+        self.assertIn("movie &amp; chat", text)
 
 
 class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
@@ -304,7 +307,25 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(quota.allowed)
         self.assertEqual(quota.used_count, 1)
-        self.assertEqual(quota.limit, 1)
+        self.assertEqual(quota.limit, 3)
+
+        quota = await self.service.consume_daily_call_quota(
+            chat_id=500,
+            user_id=caller.id,
+            is_admin_or_owner=False,
+            today=date(2026, 5, 9),
+        )
+        self.assertTrue(quota.allowed)
+        self.assertEqual(quota.used_count, 2)
+
+        quota = await self.service.consume_daily_call_quota(
+            chat_id=500,
+            user_id=caller.id,
+            is_admin_or_owner=False,
+            today=date(2026, 5, 9),
+        )
+        self.assertTrue(quota.allowed)
+        self.assertEqual(quota.used_count, 3)
 
         quota = await self.service.consume_daily_call_quota(
             chat_id=500,
@@ -313,7 +334,7 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
             today=date(2026, 5, 9),
         )
         self.assertFalse(quota.allowed)
-        self.assertEqual(quota.used_count, 1)
+        self.assertEqual(quota.used_count, 3)
 
         await self.service.unsubscribe(chat_id=500, user_id=friend.id)
         text, mentions_count = await self.service.build_call_message(
@@ -321,7 +342,7 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
             caller_user_id=caller.id,
         )
         self.assertEqual(mentions_count, 0)
-        self.assertIn(PIVO_FALLBACK_MENTIONS, text)
+        self.assertNotIn(PIVO_FALLBACK_MENTIONS, text)
 
 
 if __name__ == "__main__":

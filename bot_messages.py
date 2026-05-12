@@ -24,6 +24,8 @@ def format_help_message() -> str:
         "/ping - проверить, что бот онлайн\n"
         "/stats - краткая статистика модели\n"
         "/pivo [время] [повод] [@кого] - позвать в Discord\n"
+        "  примеры: /pivo, /pivo 20:00, /pivo фильм,\n"
+        "  /pivo 20:00 фильм, /pivo 20:00 фильм @user, /pivo @user\n"
         "/pivo_on - включить себя в список /pivo\n"
         "/pivo_off - выключить себя из списка /pivo\n"
         "/pivo_privacy - как используются данные для /pivo\n"
