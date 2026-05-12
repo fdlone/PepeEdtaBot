@@ -67,8 +67,9 @@ def build_pivo_message_context(
     target: str | None,
     has_explicit_mentions: bool,
 ) -> PivoMessageContext:
-    has_explicit_target = bool(target and target.strip())
-    target_phrase = html.escape(target.strip(), quote=False) if has_explicit_target else ""
+    raw_target = target.strip() if target is not None else ""
+    has_explicit_target = bool(raw_target)
+    target_phrase = html.escape(raw_target, quote=False) if has_explicit_target else ""
     target_bullet = _build_target_bullet(
         target_phrase=target_phrase,
         has_explicit_target=has_explicit_target,
