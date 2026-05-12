@@ -120,11 +120,17 @@ class TestPivoParser(unittest.TestCase):
         self.assertIsNone(args.planned_time)
         self.assertEqual(args.target, "movie at 20:00")
 
-    def test_unsupported_leading_date_word_is_target(self) -> None:
+    def test_leading_date_word_is_time(self) -> None:
         args = parse_pivo_command(_message("/pivo today movie"))  # type: ignore[arg-type]
 
-        self.assertIsNone(args.planned_time)
-        self.assertEqual(args.target, "today movie")
+        self.assertEqual(args.planned_time, "today")
+        self.assertEqual(args.target, "movie")
+
+    def test_russian_leading_date_word_is_time(self) -> None:
+        args = parse_pivo_command(_message("/pivo завтра сосать бибу"))  # type: ignore[arg-type]
+
+        self.assertEqual(args.planned_time, "завтра")
+        self.assertEqual(args.target, "сосать бибу")
 
     def test_telegram_text_mention_without_username(self) -> None:
         text = "/pivo 20:00 Friend"
