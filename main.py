@@ -9,6 +9,7 @@ from aiogram.types import BotCommand
 from app import log_masking
 from app.handlers import admin as admin_handlers
 from app.handlers import common as common_handlers
+from app.handlers import errors as error_handlers
 from app.handlers import learning as learning_handlers
 from app.handlers import pivo as pivo_handlers
 from app.middlewares import ThrottlingMiddleware
@@ -58,6 +59,7 @@ def configure_dispatcher(
     dp.include_router(admin_handlers.router)
     dp.include_router(pivo_handlers.router)
     dp.include_router(learning_handlers.router)
+    dp.include_router(error_handlers.router)
     return dp
 
 

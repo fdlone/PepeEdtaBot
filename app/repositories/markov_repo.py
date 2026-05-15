@@ -121,7 +121,8 @@ class MarkovRepo:
                 (chat_id,),
             )
             row3 = await cursor3.fetchone()
-            assert row3 is not None
+            if row3 is None:
+                raise RuntimeError("COALESCE query returned None in get_chat_token_volume")
             volume3 = int(row3[0] or 0)
             if volume3 > 0:
                 return volume3
@@ -131,5 +132,6 @@ class MarkovRepo:
                 (chat_id,),
             )
             row2 = await cursor2.fetchone()
-            assert row2 is not None
+            if row2 is None:
+                raise RuntimeError("COALESCE query returned None in get_chat_token_volume")
             return int(row2[0] or 0)

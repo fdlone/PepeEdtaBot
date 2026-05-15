@@ -149,14 +149,69 @@ After restart or restore, verify:
 - `/stats` works in a group chat;
 - `data/markov.db` is writable by the runtime user.
 
+## Database Retention
+
+Learning data (`messages`, `starts`, `starts3`, `transitions`, `transitions3`,
+`transitions1`) grows indefinitely. No automatic cleanup is implemented.
+The only table with built-in retention is `pivo_daily_usage` (cleaned up
+automatically on bot startup via `cleanup_pivo_daily_usage`).
+
+### Checking per-table disk usage
+
+```bash
+python -c "
+import sqlite3
+conn = sqlite3.connect('data/markov.db')
+rows = conn.execute('SELECT name, SUM(pgsize) FROM dbstat GROUP BY name ORDER BY 2 DESC').fetchall()
+for name, size in rows:
+    print(f'{name}: {size // 1024} KB')
+conn.close()
+"
+```
+
+### Manual per-chat message cleanup
+
+To keep the last N messages per chat (example: 10 000 rows), run with the bot
+stopped:
+
+```bash
+sqlite3 data/markov.db "
+  DELETE FROM messages
+  WHERE id NOT IN (
+    SELECT id FROM messages
+    WHERE chat_id = <CHAT_ID>
+    ORDER BY id DESC
+    LIMIT 10000
+  ) AND chat_id = <CHAT_ID>;
+  VACUUM;
+"
+```
+
+Replace `<CHAT_ID>` with the actual integer chat ID from `/stats` or logs
+(before masking). Run `PRAGMA integrity_check;` after the operation to verify
+the database is consistent.
+
+Note: `starts`, `starts3`, `transitions`, `transitions3`, `transitions1` tables
+store aggregated counts derived from message text — they are not tied to
+individual `messages` rows. To reset all Markov data for a chat, use the `/clear`
+command inside the group (admin-only). The bot will rebuild its model naturally
+as new messages arrive.
+
+### Recommended maintenance schedule
+
+For a small active group (up to ~10 users, continuous use):
+
+- Monthly: check database file size; checkpoint WAL if needed.
+- Quarterly: review `messages` row count per chat.
+- No automated retention is required until the database exceeds a few hundred MB.
+
 ## Healthcheck Reality
 
-The current Docker `HEALTHCHECK` only verifies that Python starts in the
-container. It does not prove:
+The Docker `HEALTHCHECK` verifies that Python starts and that the SQLite
+database file exists and is readable. It does not prove:
 
 - Telegram polling is healthy;
 - SQLite writes succeed;
 - the event loop is making progress.
 
-Treat the current healthcheck as a minimal smoke probe, not a strong readiness
-signal.
+Treat the healthcheck as a minimal smoke probe, not a strong readiness signal.

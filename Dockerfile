@@ -33,7 +33,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # the container. The bot uses long-poll, so there is no HTTP endpoint to
 # hit.
 HEALTHCHECK --interval=60s --timeout=10s --start-period=20s --retries=3 \
-    CMD python -c "import sys; sys.exit(0)"
+    CMD python -c "import sqlite3, os; sqlite3.connect(os.getenv('DB_PATH', 'data/markov.db')).execute('SELECT 1')"
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["python", "main.py"]
