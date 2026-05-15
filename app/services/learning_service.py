@@ -68,8 +68,11 @@ class LearningService:
         if cache_key not in self._prefix_cache:
             await self._build_prefix_cache(chat_id, normalize_lower)
 
-        prefix_len = min(5, len(tokens))
-        return tuple(tokens[:prefix_len]) in self._prefix_cache[cache_key]
+        prefix_max = min(5, len(tokens))
+        return any(
+            tuple(tokens[:l]) in self._prefix_cache[cache_key]
+            for l in range(3, prefix_max + 1)
+        )
 
     # --- приватные методы ---
 

@@ -232,7 +232,7 @@ def is_context_heavy_reply(
         return True
     if overlap_ratio >= 0.92 and shared_run >= 5:
         return True
-    if shared_run >= max(5, len(generated_content)):
+    if shared_run >= max(4, len(generated_content) - 1):
         return True
     return False
 
