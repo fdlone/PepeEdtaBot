@@ -20,6 +20,7 @@ from bot_policy import (
 from markov import (
     MarkovGenerator,
     escalated_randomness_strength,
+    extract_best_seed,
     is_short_generated_reply,
     tokenize,
 )
@@ -35,7 +36,7 @@ MIN_LEARN_MESSAGE_TOKENS = 2
 # Сколько раз подряд пробуем сгенерировать ответ, прежде чем сдаёмся.
 # Первые попытки идут с reply-контекстом, последние — без.
 MAX_GENERATION_ATTEMPTS = 4
-GENERATION_ATTEMPTS_WITH_CONTEXT = 2
+GENERATION_ATTEMPTS_WITH_CONTEXT = 5
 MAX_TRAINING_PREFIX_RETRY_ATTEMPTS = 6
 RECENT_SHORT_REPLY_LIMIT = 5
 
@@ -123,40 +124,39 @@ async def on_text_message(
     now = time.monotonic()
     runtime_state.note_chat_activity(message.chat.id, now)
 
-    clean = sanitize_text(raw_text)
-    if not is_learnable_message_length(clean):
-        logger.debug(
-            "Skip message by length: chat=%s len=%s",
-            mask_chat_id(message.chat.id),
-            len(clean),
-        )
-        return
-
-    tokens = tokenize(clean, normalize_lower=runtime_state.normalize_lower)
-    if not has_enough_tokens_for_learning(tokens):
-        logger.debug(
-            "Skip message by token count: chat=%s tokens=%s",
-            mask_chat_id(message.chat.id),
-            len(tokens),
-        )
-        return
-
-    token_volume = await learning_service.record_message(
-        chat_id=message.chat.id,
-        raw_text=raw_text,
-        tokens=tokens,
-    )
-    learned = runtime_state.learned_messages.get(message.chat.id, 0) + 1
-    runtime_state.learned_messages[message.chat.id] = learned
-    if learned == 1 or learned % 25 == 0:
-        logger.info(
-            "Прогресс обучения: chat=%s, сообщений=%s, объём_модели=%s",
-            mask_chat_id(message.chat.id),
-            learned,
-            token_volume,
-        )
-
+    # Mention check before learning validation: a 1-token reply to the bot
+    # (e.g. "ок", "?") should still trigger a response even if too short to learn.
     mentioned = bot_is_mentioned(message, bot_username, bot_id, bot_text_aliases)
+
+    clean = sanitize_text(raw_text)
+    tokens = tokenize(clean, normalize_lower=runtime_state.normalize_lower)
+    learnable = is_learnable_message_length(clean) and has_enough_tokens_for_learning(tokens)
+
+    if not learnable:
+        if not mentioned:
+            logger.debug(
+                "Skip message by length/tokens: chat=%s len=%s tokens=%s",
+                mask_chat_id(message.chat.id),
+                len(clean),
+                len(tokens),
+            )
+            return
+        token_volume = await learning_service.get_token_volume(message.chat.id)
+    else:
+        token_volume = await learning_service.record_message(
+            chat_id=message.chat.id,
+            raw_text=raw_text,
+            tokens=tokens,
+        )
+        learned = runtime_state.learned_messages.get(message.chat.id, 0) + 1
+        runtime_state.learned_messages[message.chat.id] = learned
+        if learned == 1 or learned % 25 == 0:
+            logger.info(
+                "Прогресс обучения: chat=%s, сообщений=%s, объём_модели=%s",
+                mask_chat_id(message.chat.id),
+                learned,
+                token_volume,
+            )
 
     enough_data = has_enough_model_data(
         token_volume, runtime_state.min_tokens_for_model
@@ -201,18 +201,25 @@ async def on_text_message(
 
     context_tokens: list[str] = []
     if runtime_state.use_reply_context:
+        only_for_replies = runtime_state.reply_context_only_for_replies
+        include_current = runtime_state.reply_context_include_current_message
+        # When mentioned directly without a reply, override so the current message
+        # itself is used as context instead of generating with no context at all.
+        if mentioned and message.reply_to_message is None:
+            only_for_replies = False
+            include_current = True
         context_tokens = extract_context_tokens(
             message=message,
             current_text=raw_text,
             normalize_lower=runtime_state.normalize_lower,
             max_tokens=runtime_state.reply_context_max_tokens,
-            only_for_replies=runtime_state.reply_context_only_for_replies,
-            include_current_message=runtime_state.reply_context_include_current_message,
+            only_for_replies=only_for_replies,
+            include_current_message=include_current,
         )
 
     seed = None
-    if seed is None and context_tokens:
-        seed = context_tokens[-runtime_state.reply_context_last_tokens :]
+    if context_tokens:
+        seed = extract_best_seed(context_tokens, runtime_state.reply_context_last_tokens)
         logger.debug(
             "Reply context prepared: chat=%s context_tokens=%s seed=%s",
             mask_chat_id(message.chat.id),
@@ -288,10 +295,7 @@ async def on_text_message(
                 reply_text = candidate
                 break
 
-        if attempt == 0 and context_tokens:
-            seed = context_tokens[-runtime_state.reply_context_last_tokens :]
-        else:
-            seed = None
+        seed = None
 
     if not reply_text:
         if mentioned:

@@ -75,6 +75,16 @@ def is_short_generated_reply(tokens: list[str]) -> bool:
     return 0 < len(content) <= SHORT_REPLY_MAX_CONTENT_TOKENS
 
 
+def extract_best_seed(tokens: list[str], seed_length: int) -> list[str]:
+    """Return up to seed_length tokens from the end, skipping trailing punctuation."""
+    trimmed = tokens[:]
+    while trimmed and trimmed[-1] in PUNCT_SET:
+        trimmed.pop()
+    if len(trimmed) >= seed_length:
+        return trimmed[-seed_length:]
+    return tokens[-seed_length:] if len(tokens) >= seed_length else tokens[:]
+
+
 def longest_shared_run(tokens_a: list[str], tokens_b: list[str]) -> int:
     best = 0
     for idx_a in range(len(tokens_a)):
@@ -165,6 +175,21 @@ def trim_repetitive_tail(tokens: list[str]) -> list[str]:
     return trimmed if len(content_tokens(trimmed)) >= 4 else tokens
 
 
+_SENTENCE_END_PUNCT = {".", "!", "?"}
+
+
+def trim_to_sentence_boundary(tokens: list[str], min_content_tokens: int = 4) -> list[str]:
+    """Trim to the last sentence-ending punctuation (.!?) for natural endings."""
+    if len(content_tokens(tokens)) < min_content_tokens:
+        return tokens
+    for i in range(len(tokens) - 1, -1, -1):
+        if tokens[i] in _SENTENCE_END_PUNCT:
+            trimmed = tokens[:i + 1]
+            if len(content_tokens(trimmed)) >= min_content_tokens:
+                return trimmed
+    return tokens
+
+
 def is_low_diversity_reply(
     tokens: list[str],
     min_total_tokens: int = 8,
@@ -205,9 +230,9 @@ def is_context_heavy_reply(
 
     if uses_only_context_tokens and has_local_loops:
         return True
-    if overlap_ratio >= 0.85 and shared_run >= 4:
+    if overlap_ratio >= 0.92 and shared_run >= 5:
         return True
-    if shared_run >= max(4, len(generated_content) - 1):
+    if shared_run >= max(5, len(generated_content)):
         return True
     return False
 
@@ -225,11 +250,7 @@ def is_short_context_copy(generated_tokens: list[str], context_tokens: list[str]
 
 
 def context_decay(step_index: int) -> float:
-    if step_index <= 4:
-        return 1.0
-    if step_index <= 9:
-        return 0.7
-    return 0.4
+    return max(0.25, 0.92 ** step_index)
 
 
 def weighted_next_choice(
@@ -324,12 +345,20 @@ class MarkovGenerator:
     _cache1: OrderedDict[tuple[int, str], list[tuple[str, int]]] = field(
         default_factory=OrderedDict, init=False
     )
+    _cache_starts3: OrderedDict[int, list[tuple[str, str, str, int]]] = field(
+        default_factory=OrderedDict, init=False
+    )
+    _cache_starts2: OrderedDict[int, list[tuple[str, str, int]]] = field(
+        default_factory=OrderedDict, init=False
+    )
 
     def invalidate_chat_cache(self, chat_id: int) -> None:
         for cache in (self._cache3, self._cache2, self._cache1):
             keys = [k for k in cache if k[0] == chat_id]
             for key in keys:
                 cache.pop(key, None)
+        self._cache_starts3.pop(chat_id, None)
+        self._cache_starts2.pop(chat_id, None)
 
     def _touch_cache(
         self, cache: OrderedDict, key: tuple, value: list[tuple[str, int]]
@@ -338,6 +367,24 @@ class MarkovGenerator:
         cache.move_to_end(key)
         if len(cache) > self.cache_limit:
             cache.popitem(last=False)
+
+    async def _get_starts3(self, chat_id: int) -> list[tuple[str, str, str, int]]:
+        if chat_id in self._cache_starts3:
+            return self._cache_starts3[chat_id]
+        rows = await self.db.get_starts3(chat_id)
+        self._cache_starts3[chat_id] = rows
+        if len(self._cache_starts3) > self.cache_limit:
+            self._cache_starts3.popitem(last=False)
+        return rows
+
+    async def _get_starts2(self, chat_id: int) -> list[tuple[str, str, int]]:
+        if chat_id in self._cache_starts2:
+            return self._cache_starts2[chat_id]
+        rows = await self.db.get_starts(chat_id)
+        self._cache_starts2[chat_id] = rows
+        if len(self._cache_starts2) > self.cache_limit:
+            self._cache_starts2.popitem(last=False)
+        return rows
 
     async def _get3(
         self, chat_id: int, w1: str, w2: str, w3: str
@@ -533,8 +580,8 @@ class MarkovGenerator:
         context_pairs = set(build_windows(context_tokens, 2))
         context_triplets = set(build_windows(context_tokens, 3))
 
-        starts3 = await self.db.get_starts3(chat_id) if order >= 3 else []
-        starts2 = await self.db.get_starts(chat_id)
+        starts3 = await self._get_starts3(chat_id) if order >= 3 else []
+        starts2 = await self._get_starts2(chat_id)
         if not starts3 and not starts2:
             return ""
 
@@ -650,6 +697,7 @@ class MarkovGenerator:
                 jump_count += 1
                 continue
 
+            recent_window = generated[-10:]
             pool3 = await self._get3(chat_id, w1, w2, w3) if order >= 3 else []
             if pool3 and order >= 3:
                 candidates = [
@@ -668,7 +716,7 @@ class MarkovGenerator:
                     current_state=(w2, w3),
                     context_bias=context_bias,
                     step_index=step_index,
-                    recent_tokens=generated,
+                    recent_tokens=recent_window,
                     seen_pairs=seen_pairs,
                     seen_triplets=seen_triplets,
                     repetition_penalty_strength=repetition_penalty_strength,
@@ -689,7 +737,7 @@ class MarkovGenerator:
                         current_state=(w2, w3),
                         context_bias=context_bias,
                         step_index=step_index,
-                        recent_tokens=generated,
+                        recent_tokens=recent_window,
                         seen_pairs=seen_pairs,
                         seen_triplets=seen_triplets,
                         repetition_penalty_strength=repetition_penalty_strength,
@@ -709,7 +757,7 @@ class MarkovGenerator:
                         current_state=(w3,),
                         context_bias=context_bias,
                         step_index=step_index,
-                        recent_tokens=generated,
+                        recent_tokens=recent_window,
                         seen_pairs=seen_pairs,
                         repetition_penalty_strength=repetition_penalty_strength,
                     )
@@ -735,6 +783,7 @@ class MarkovGenerator:
                 seen_triplets.pop()
 
         generated = trim_repetitive_tail(generated)
+        generated = trim_to_sentence_boundary(generated)
         result = detokenize(generated, max_chars=max_chars)
         if len(result) < 5:
             return ""
@@ -748,6 +797,6 @@ class MarkovGenerator:
             return ""
         if not is_short_reply and await self.db.message_exists(chat_id, result):
             return ""
-        if strength >= 1.5 and len(generated) > 10 and jump_count == 0:
+        if strength >= 1.5 and not context_tokens and len(generated) > 10 and jump_count == 0:
             return ""
         return result

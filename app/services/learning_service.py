@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import random
-
 from db import Database
 from markov import MarkovGenerator, tokenize
 from text_utils import sanitize_text
@@ -24,6 +22,9 @@ class LearningService:
         # Строится при первой проверке из последних N сообщений чата и
         # сбрасывается при каждом новом сообщении.
         self._prefix_cache: dict[tuple[int, bool], set[tuple[str, ...]]] = {}
+
+    async def get_token_volume(self, chat_id: int) -> int:
+        return await self._db.get_chat_token_volume(chat_id)
 
     async def record_message(
         self, chat_id: int, raw_text: str, tokens: list[str]
@@ -67,7 +68,7 @@ class LearningService:
         if cache_key not in self._prefix_cache:
             await self._build_prefix_cache(chat_id, normalize_lower)
 
-        prefix_len = random.randint(3, min(5, len(tokens)))
+        prefix_len = min(5, len(tokens))
         return tuple(tokens[:prefix_len]) in self._prefix_cache[cache_key]
 
     # --- приватные методы ---
