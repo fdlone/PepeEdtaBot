@@ -4,7 +4,6 @@ from __future__ import annotations
 import unittest
 import uuid
 from pathlib import Path
-from unittest.mock import patch
 
 from db import Database
 from markov import MarkovGenerator
@@ -134,17 +133,16 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         await self._record("новый четыре пять шесть")
         await self._record("новый семь восемь девять")
 
-        with patch("app.services.learning_service.random.randint", return_value=4):
-            self.assertFalse(
-                await self.svc.matches_training_prefix(
-                    self.chat, "старый префикс должен выпасть потом", False
-                )
+        self.assertFalse(
+            await self.svc.matches_training_prefix(
+                self.chat, "старый префикс должен выпасть потом", False
             )
-            self.assertTrue(
-                await self.svc.matches_training_prefix(
-                    self.chat, "новый один два три потом", False
-                )
+        )
+        self.assertTrue(
+            await self.svc.matches_training_prefix(
+                self.chat, "новый один два три потом", False
             )
+        )
 
     async def test_unique_text_passes(self) -> None:
         await self._record("пойдём пить кофе")
