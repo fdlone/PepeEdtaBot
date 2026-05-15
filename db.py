@@ -323,112 +323,45 @@ class Database:
 
     # --- Кросс-доменные операции ---
 
+    async def _fetch_int(
+        self, db: aiosqlite.Connection, sql: str, params: tuple[object, ...]
+    ) -> int:
+        row = await (await db.execute(sql, params)).fetchone()
+        return int(row[0] or 0) if row else 0
+
     async def get_stats(self, chat_id: int) -> dict[str, int]:
+        p = (chat_id,)
         async with self._lock:
             db = await self._get_conn()
-            msg_count = int(
-                (
-                    await (
-                        await db.execute(
-                            "SELECT COUNT(*) FROM messages WHERE chat_id = ?",
-                            (chat_id,),
-                        )
-                    ).fetchone()
-                )[0]
+            f = self._fetch_int
+
+            msg_count    = await f(db, "SELECT COUNT(*) FROM messages WHERE chat_id = ?", p)
+            starts2      = await f(db, "SELECT COUNT(*) FROM starts WHERE chat_id = ?", p)
+            starts3      = await f(db, "SELECT COUNT(*) FROM starts3 WHERE chat_id = ?", p)
+            trans2_count = await f(db, "SELECT COUNT(*) FROM transitions WHERE chat_id = ?", p)
+            trans3_count = await f(db, "SELECT COUNT(*) FROM transitions3 WHERE chat_id = ?", p)
+            trans1_count = await f(db, "SELECT COUNT(*) FROM transitions1 WHERE chat_id = ?", p)
+            volume2 = await f(
+                db, "SELECT COALESCE(SUM(cnt), 0) FROM transitions WHERE chat_id = ?", p
             )
-            starts2_count = int(
-                (
-                    await (
-                        await db.execute(
-                            "SELECT COUNT(*) FROM starts WHERE chat_id = ?", (chat_id,)
-                        )
-                    ).fetchone()
-                )[0]
+            volume3 = await f(
+                db, "SELECT COALESCE(SUM(cnt), 0) FROM transitions3 WHERE chat_id = ?", p
             )
-            starts3_count = int(
-                (
-                    await (
-                        await db.execute(
-                            "SELECT COUNT(*) FROM starts3 WHERE chat_id = ?", (chat_id,)
-                        )
-                    ).fetchone()
-                )[0]
-            )
-            trans2_count = int(
-                (
-                    await (
-                        await db.execute(
-                            "SELECT COUNT(*) FROM transitions WHERE chat_id = ?",
-                            (chat_id,),
-                        )
-                    ).fetchone()
-                )[0]
-            )
-            trans3_count = int(
-                (
-                    await (
-                        await db.execute(
-                            "SELECT COUNT(*) FROM transitions3 WHERE chat_id = ?",
-                            (chat_id,),
-                        )
-                    ).fetchone()
-                )[0]
-            )
-            trans1_count = int(
-                (
-                    await (
-                        await db.execute(
-                            "SELECT COUNT(*) FROM transitions1 WHERE chat_id = ?",
-                            (chat_id,),
-                        )
-                    ).fetchone()
-                )[0]
-            )
-            volume2 = int(
-                (
-                    await (
-                        await db.execute(
-                            "SELECT COALESCE(SUM(cnt), 0) FROM transitions WHERE chat_id = ?",
-                            (chat_id,),
-                        )
-                    ).fetchone()
-                )[0]
-                or 0
-            )
-            volume3 = int(
-                (
-                    await (
-                        await db.execute(
-                            "SELECT COALESCE(SUM(cnt), 0) FROM transitions3 WHERE chat_id = ?",
-                            (chat_id,),
-                        )
-                    ).fetchone()
-                )[0]
-                or 0
-            )
-            volume1 = int(
-                (
-                    await (
-                        await db.execute(
-                            "SELECT COALESCE(SUM(cnt), 0) FROM transitions1 WHERE chat_id = ?",
-                            (chat_id,),
-                        )
-                    ).fetchone()
-                )[0]
-                or 0
+            volume1 = await f(
+                db, "SELECT COALESCE(SUM(cnt), 0) FROM transitions1 WHERE chat_id = ?", p
             )
 
         return {
-            "messages": msg_count,
-            "starts2": starts2_count,
-            "starts3": starts3_count,
+            "messages":     msg_count,
+            "starts2":      starts2,
+            "starts3":      starts3,
             "transitions2": trans2_count,
             "transitions3": trans3_count,
             "transitions1": trans1_count,
-            "volume2": volume2,
-            "volume3": volume3,
-            "volume1": volume1,
-            "volume": volume3 if volume3 > 0 else volume2,
+            "volume2":      volume2,
+            "volume3":      volume3,
+            "volume1":      volume1,
+            "volume":       volume3 if volume3 > 0 else volume2,
         }
 
     async def clear_chat(self, chat_id: int) -> None:
