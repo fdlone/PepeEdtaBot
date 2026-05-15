@@ -43,7 +43,7 @@ class TestMainWiring(unittest.TestCase):
         )
         self.assertEqual(
             [router.name for router in dp.sub_routers],
-            ["common", "admin", "pivo", "learning"],
+            ["common", "admin", "pivo", "learning", "errors"],
         )
         middlewares = dp.message.middleware._middlewares
         self.assertEqual(len(middlewares), 1)

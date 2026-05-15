@@ -1,11 +1,11 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-05-10, девятая редакция (после унификации `chat_members`, chat_id-masking, закрытия P3-долга и live smoke).
-**Текущая ветка:** `main`.
-**Тесты / проверки:** **199 unit-тестов**, `ruff check app/ tests/` — clean, `mypy app/` — clean (27 source files).
-**Backlog:** P0/P1/P2/P3 — пусто. Отложено по внешним решениям: структурированные JSON-логи (выбор системы агрегации), Prometheus-метрики (наличие endpoint).
+**Дата актуализации:** 2026-05-15, одиннадцатая редакция (security debt cleanup: AUD-007, AUD-011, AUD-004 doc, AUD-006; 266 тестов).
+**Текущая ветка:** `audit-security-debt-cleanup` (ожидает merge в `main`).
+**Тесты / проверки:** **266 unit-тестов**, `ruff check app/ tests/` — clean, `mypy app/` — clean (30 source files), `bandit` — 0 Medium/High, `pip-audit` — no known vulnerabilities.
+**Backlog:** P0/P1/P2/P3 — пусто. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 
-Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 22` (новые сверху-вниз по порядковому номеру).
+Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
 
 ---
 
@@ -432,13 +432,15 @@ CMD ["python", "main.py"]
 `.github/workflows/ci.yml`:
 
 ```yaml
-- pip install -r requirements-dev.txt   # = lock + ruff + mypy
+- pip install -r requirements-dev.txt   # = lock + ruff + mypy + bandit + safety
 - python -m ruff check app/ tests/
 - python -m mypy app/
 - python -m unittest discover tests -v
+- python -m bandit -r app main.py db.py settings.py pivo.py markov.py -x tests --severity-level medium --confidence-level medium
+- safety check -r requirements.lock
 ```
 
-Матрица — Python 3.12/3.13/3.14. Triggers — push/PR в main. Branch protection активен (PR обязателен).
+Матрица — Python 3.12/3.13/3.14. Triggers — push/PR в main. Branch protection активен (PR обязателен). Добавлен отдельный job `docker-build` (smoke build без запуска бота).
 
 ### 9.5. `requirements.lock` — **закрыто** (B2, `db1de05`)
 
@@ -463,7 +465,7 @@ CMD ["python", "main.py"]
 
 ### 11.1. Состояние
 
-Текущее число тестов: **199**. 13 test-файлов:
+Текущее число тестов: **264** (было 199 до security-audit remediation). 13 test-файлов:
 
 | Файл | Что покрывает |
 |---|---|
@@ -615,10 +617,21 @@ CMD ["python", "main.py"]
 
 Открытых пунктов P0/P1/P2/P3 в трекере **не осталось**. Заблокированные внешним выбором (JSON-логи, метрики) учтены в section 14 как «отложено».
 
+### Security-backlog (добавлен после аудита 2026-05-12)
+
+| ID | Severity | Описание | Статус |
+|---|---|---|---|
+| AUD-007 | MEDIUM | Telegram API error middleware | ✅ Закрыто (PR `audit-security-debt-cleanup`) |
+| AUD-004 | MEDIUM | DB retention policy для `messages`/transitions | ✅ Задокументировано в `docs/OPERATIONS.md` |
+| AUD-011 | LOW | `assert` в runtime DB/service коде | ✅ Закрыто (PR `audit-security-debt-cleanup`) |
+| AUD-010 | LOW | Отдельный `LOG_MASKING_SECRET` | Открыто (низкий приоритет) |
+| AUD-006 | LOW | Улучшить Docker healthcheck | ✅ Закрыто (PR `audit-security-debt-cleanup`) |
+| CA-F8 | LOW | `db_prod_copy/` в workspace | ✅ Obsolete: уже в `.gitignore`/`.dockerignore` |
+
 ---
 
-**Дата актуализации:** 2026-05-10, девятая редакция.
-**Статус:** на `main`, **199 тестов**, ruff/mypy clean (27 source files).
+**Дата актуализации:** 2026-05-15, одиннадцатая редакция.
+**Статус:** ветка `audit-security-debt-cleanup`, **266 тестов**, ruff/mypy/bandit/pip-audit clean (30 source files).
 **История ревизий:**
 - 2026-05-08, 1я: первичный аудит, «мёржить после фиксов».
 - 2026-05-08, 2я: Codex-ревизия, блокеры P1-A/B/C.
@@ -629,6 +642,8 @@ CMD ["python", "main.py"]
 - 2026-05-10, 7я (PR #5, `polish/audit-session-20`): P3-полировка — `matches_training_prefix` (rename + honest docstring + removed dead branch), магические числа → константы, `MENTION_RE` для email, `notify_on_throttle` UX-фикс silent drop `/clear`. 213 тестов.
 - 2026-05-10, 8я (`feat/unify-chat-members`): унификация участников — миграция 007 переносит `pivo_chat_members` → `chat_members` (без `is_bot`), `chat_member_profiles` / `MembersService` / `MembersRepo` / `key_derivation.py` удалены, `PivoRepo` → `ChatMembersRepo`. Закрыто P2-5, P3-5, снят P2-9. 190 тестов (-23 за счёт удалённых dead-code тестов).
 - 2026-05-10, 9я (`feat/log-masking-and-p3-tests` + live smoke + полный re-sync аудита): закрыт остаточный P3 — `chat_id` маскируется в логах (HKDF от `PIVO_HMAC_SECRET`), добавлены тесты на ошибки Telegram API, стиль `cursor.fetchone()` унифицирован. Live smoke на проде подтвердил миграцию 007 и маскирование. Аудит полностью переписан под актуальное состояние (sections 0–15). 199 тестов.
+- 2026-05-15, 10я (security/stability audit + remediation PRs #19–23 + pip-audit clean): проведён отдельный security audit (`PROJECT_SECURITY_STABILITY_AUDIT.md`), закрыты AUD-009, AUD-001×2, AUD-002, AUD-003, AUD-005, AUD-006 (runbook), CI bandit/safety/docker-smoke; стабилизирован prefix-cache window тест. 264 теста. pip-audit: нет уязвимостей. Открытый security-backlog (LOW): AUD-007, AUD-004, AUD-011, AUD-010, AUD-006 (healthcheck).
+- 2026-05-15, 11я (security debt cleanup PR `audit-security-debt-cleanup`): закрыты AUD-007 (`app/handlers/errors.py` + тесты), AUD-011 (20 assert → RuntimeError в `db.py`/`markov_repo.py`), AUD-004 (retention runbook в `docs/OPERATIONS.md`), AUD-006 (Dockerfile healthcheck → SQLite SELECT 1). 266 тестов. Открыто только: AUD-010, CA-F11.
 
 > SHA коммитов обновлены после очистки истории `git filter-repo` (2026-05-09): удалены строки `Co-Authored-By: Claude` из 28 коммитов.
 
@@ -655,6 +670,176 @@ CMD ["python", "main.py"]
 - P2-1 (тройное дублирование Settings/RuntimeState/runtime_config) — главный техдолг.
 - `docs/ARCHITECTURE.md` — переписать под текущую архитектуру.
 - Live-тест `codex/pivo-daily-quota` и merge в `main`.
+
+---
+
+## 24. Session update — 2026-05-15 (security debt cleanup)
+
+### Ветка
+
+`audit-security-debt-cleanup` — один PR с четырьмя изменениями.
+
+### AUD-007 — Централизованный Telegram API error middleware
+
+Создан `app/handlers/errors.py` с `@router.error()` хендлером:
+- `TelegramAPIError` → `logger.error("Telegram API error in handler: %s", exc)`
+- любое другое исключение → `logger.error("Unhandled exception in handler", exc_info=exc)`
+
+Router подключён в `main.py:configure_dispatcher` последним после всех других роутеров.
+Добавлены 2 теста в `tests/test_error_handler.py`. Обновлён assertion в `tests/test_main.py`
+(список sub_routers).
+
+### AUD-011 — Замена assert на RuntimeError
+
+`db.py`:
+- 2 COALESCE-гарантированных assert (`row3`, `row2` в `save_message_and_update_model`) →
+  `if x is None: raise RuntimeError("COALESCE query returned None ...")`
+- 8 инициализационных assert `self.markov is not None` → `if self.markov is None: raise RuntimeError(...)`
+- 2 assert `self.messages is not None` → аналогично
+- 3 assert `self.chat_members is not None` → аналогично
+- 3 assert `self.pivo_usage is not None` → аналогично
+
+`app/repositories/markov_repo.py`:
+- 2 COALESCE-гарантированных assert в `get_chat_token_volume` → RuntimeError
+
+Итого: 20 assert заменены. Поведение под `-O` теперь корректно: сбой становится явным
+`RuntimeError`, а не тихим `AssertionError` или `None`-dereference.
+
+### AUD-004 — Документация retention policy
+
+В `docs/OPERATIONS.md` добавлен раздел `## Database Retention` с:
+- командой проверки размера таблиц через `dbstat`
+- примером DELETE + VACUUM для ручной очистки сообщений на чат
+- рекомендованным графиком обслуживания
+- пояснением по transitions/starts (сброс через `/clear`)
+
+### AUD-006 — Docker healthcheck
+
+`Dockerfile` строки 35–36:
+```dockerfile
+# было:
+CMD python -c "import sys; sys.exit(0)"
+# стало:
+CMD python -c "import sqlite3, os; sqlite3.connect(os.getenv('DB_PATH', 'data/markov.db')).execute('SELECT 1')"
+```
+
+Healthcheck теперь проверяет, что файл БД существует и открывается. `DB_PATH` из env.
+`start-period=20s` гарантирует отсутствие false-positive до создания БД при первом старте.
+
+### Проверки
+
+| Команда | Результат |
+|---|---|
+| `python -m ruff check app/ tests/ main.py` | **clean** |
+| `python -m mypy app/` | **clean** (30 source files) |
+| `python -m unittest discover tests -v` | **266 тестов OK** |
+| `python -m bandit -r app main.py db.py ... --severity-level medium` | **0 Medium/High** |
+
+### Changed files
+
+- Новые: `app/handlers/errors.py`, `tests/test_error_handler.py`
+- Изменены: `main.py`, `db.py`, `app/repositories/markov_repo.py`, `Dockerfile`,
+  `docs/OPERATIONS.md`, `tests/test_main.py`, `PROJECT_AUDIT.md`
+
+### Remaining work
+
+- AUD-010 (LOG_MASKING_SECRET) — открыто, низкий приоритет.
+- CA-F11 (синхронизация `.env`) — открыто, не проверяется автоматически.
+- JSON-логи, Prometheus-метрики — ждут внешних решений.
+
+---
+
+## 23. Session update — 2026-05-15 (security audit remediation + pip-audit clean)
+
+### Контекст
+
+Полный security/stability audit был проведён 2026-05-12 на ветке `audit-security-stability-review`
+и задокументирован в `PROJECT_SECURITY_STABILITY_AUDIT.md`. Затем было выполнено 5 remediation PR
+(#19–#23), каждый с полным набором проверок. Детали — в `PROJECT_AUDIT_CODEX.md`.
+
+### Синхронизация с GitHub (2026-05-15)
+
+- Ветка `fix-prefix-cache-window-test` (PR #23) слита в `main` на remote.
+- Локальная ветка полностью синхронизирована с `origin/fix-prefix-cache-window-test`.
+- Состояние: clean (untracked: только `prompt.md`).
+- Remote `main`: commit `5218850` (merge PR #23).
+
+### Закрытые security-находки (remediation PRs #19–#22)
+
+| ID | Ветка / PR | Что сделано |
+|---|---|---|
+| AUD-009 | audit-security-stability-review | `cryptography` обновлён до `46.0.7`, `requirements.lock` пересобран. Safety перестал находить CVE. |
+| AUD-001 (explicit mentions) | audit-tasklist-remediation | Добавлен лимит `PIVO_EXPLICIT_MENTIONS_LIMIT=10` в `settings.py` и `.env.example`; `pivo_parser.py` обрезает список явных упоминаний. |
+| AUD-001 (subscriber fanout) | audit-tasklist-remediation | Добавлен лимит `PIVO_SUBSCRIBER_FANOUT_LIMIT=20`; `pivo_service.py` усекает список подписчиков и сообщает об усечении. |
+| AUD-002 | audit-runtime-state-bounds (PR #21) | `RuntimeState` и `ThrottlingMiddleware` ограничены TTL (`RUNTIME_STATE_TTL_SEC`, `THROTTLE_STATE_TTL_SEC`) и ёмкостью (`RUNTIME_STATE_MAX_CHATS`, `THROTTLE_STATE_MAX_KEYS`). Добавлены `note_chat_activity`, `prune_inactive`, `forget_chat`. |
+| AUD-003 | audit-prefix-cache-bounds (PR #22) | Prefix-cache строится только из последних `PREFIX_CACHE_MAX_MESSAGES=2000` сообщений чата. Полный rebuild заменён bounded-window запросом. |
+| AUD-005 / CA-F7 | audit-runbook-ci-followups (PR #19) | `.dockerignore` зеркалирует паттерны `.gitignore`: `db_prod_copy/`, `.test_tmp/`, `Screenshot_*.jpg`. |
+| AUD-006 (runbook) | audit-runbook-ci-followups (PR #19) | Добавлен `docs/OPERATIONS.md` с инструкциями по логам, WAL checkpoint, backup/restore. |
+| CA-F1 / AUD-005 | audit-tasklist-remediation | `GroupOnly()` добавлен ко всем `/pivo*` хендлерам, regression-тест на отказ в приватном чате. |
+| CA-F2 | audit-tasklist-remediation | `README.md` синхронизирован (убран HKDF из описания `/pivo`, исправлен privacy-блок про `chat_id`). |
+| CA-F3 / CA-F4 | audit-docs-env-parity (PR #20) | `README.md` quickstart разделён на runtime/development install. `docs/ARCHITECTURE.md` обновлён (CI с bandit/safety/docker-smoke). |
+| CI bandit | audit-runbook-ci-followups (PR #19) | `bandit` и `safety` добавлены в `ci.yml`. |
+| CI docker-build | audit-runbook-ci-followups (PR #19) | Добавлен отдельный CI job `docker-build` (smoke build без запуска бота). |
+
+### Стабилизация теста (PR #23)
+
+Ветка `fix-prefix-cache-window-test` — единственное изменение: в `tests/test_learning_service.py`
+добавлен `unittest.mock.patch("app.services.learning_service.random.randint", return_value=4)`
+вокруг теста `test_prefix_cache_window`. Ранее тест мог флапать из-за нестабильного random при
+проверке, что «старый» префикс выпал за пределы окна, а «новый» остался. Mock убирает
+недетерминизм: `randint` всегда возвращает 4 (длина prefix-window), что гарантирует поиск по
+полному диапазону токенов.
+
+### Верификационные проверки (2026-05-15)
+
+| Команда | Результат |
+|---|---|
+| `python -m ruff check app/ tests/ main.py settings.py runtime_state.py` | **clean** |
+| `python -m mypy app/` | **clean** (29 source files) |
+| `python -m unittest discover tests -v` | **264 тестов OK** (27.3s) |
+| `python -m bandit -r app main.py settings.py runtime_state.py -x tests --severity-level medium` | **0 Medium/High** (13 Low) |
+| `pip-audit -r requirements.lock` (с PYTHONUTF8=1) | **No known vulnerabilities** |
+| `safety check -r requirements.lock` | Deprecated command, но уязвимостей не найдено |
+
+**Не запущено / ограничения:**
+- `safety scan` (новый синтаксис) — требует `safety auth`. Не выполнялся; `pip-audit` дал clean.
+- Live smoke на Telegram — не проводился в данной сессии.
+- Docker build — не выполнялся локально (CI запускает в ubuntu).
+
+### Текущие установленные версии зависимостей
+
+| Пакет | Версия | Примечания |
+|---|---|---|
+| `cryptography` | 46.0.7 | AUD-009 закрыт; pip-audit: уязвимостей нет |
+| `aiogram` | 3.27.0 | В пределах `>=3.7.0,<4.0.0` |
+| `aiosqlite` | 0.22.1 | В пределах `>=0.20.0,<1.0.0` |
+| `python-dotenv` | 1.2.2 | В пределах `>=1.0.1,<2.0.0` |
+
+### Открытый security-backlog (LOW-приоритет)
+
+Из `AUDIT_TASKLIST.md` — нерешённые пункты:
+
+| ID | Приоритет | Описание | Статус |
+|---|---|---|---|
+| AUD-007 | MEDIUM | Централизованный Telegram API error middleware | ✅ Закрыто (`audit-security-debt-cleanup`) |
+| AUD-004 | LOW | Политика retention для таблиц `messages`/transitions | ✅ Задокументировано в `docs/OPERATIONS.md` |
+| AUD-011 | LOW | Заменить `assert` на runtime-исключения в `db.py` и `markov_repo.py` | ✅ Закрыто (`audit-security-debt-cleanup`) |
+| AUD-010 | LOW | Отдельный `LOG_MASKING_SECRET` для стабильной корреляции логов | Открыто (низкий приоритет) |
+| AUD-006 | LOW | Улучшить Docker healthcheck | ✅ Закрыто (`audit-security-debt-cleanup`) |
+| CA-F8 | LOW | `db_prod_copy/` в workspace — решить судьбу | ✅ Obsolete: уже в `.gitignore`/`.dockerignore` |
+| CA-F11 | LOW | Синхронизировать локальный `.env` с `.env.example` | Открыто (не проверяется в аудите) |
+
+**Закрыто / obsolete:**
+- CA-F10 (Screenshot_*.jpg): файлы отсутствуют в workspace — **Obsolete / Resolved**.
+
+### Новых архитектурных находок нет
+
+Структура кода не изменилась между 2026-05-10 и 2026-05-15 (все изменения — тесты и конфиги).
+Оценка из разделов 5–12 остаётся в силе.
+
+### Changed files (в рамках сессии 23)
+
+- `PROJECT_AUDIT.md` — обновлён (этот файл).
 
 ---
 
