@@ -1,8 +1,8 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-05-15, одиннадцатая редакция (security debt cleanup: AUD-007, AUD-011, AUD-004 doc, AUD-006; 266 тестов).
-**Текущая ветка:** `audit-security-debt-cleanup` (ожидает merge в `main`).
-**Тесты / проверки:** **266 unit-тестов**, `ruff check app/ tests/` — clean, `mypy app/` — clean (30 source files), `bandit` — 0 Medium/High, `pip-audit` — no known vulnerabilities.
+**Дата актуализации:** 2026-05-15, двенадцатая редакция (improve-generation-quality merged; CA-F13 closed: db.py get_stats refactor).
+**Текущая ветка:** `main` (актуальна, commit `0479181`).
+**Тесты / проверки:** `ruff check app/ tests/` — clean, `mypy app/` — clean (30 source files).
 **Backlog:** P0/P1/P2/P3 — пусто. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
@@ -67,6 +67,38 @@ P3-полировка: `matches_training_prefix` (rename + docstring + drop dead
 
 Запуск на тестовом чате: миграция 007 применилась чисто, `/pivo_on` / `/pivo` / `/pivo_off` работают, в логах `chat=1f6bfe93` (8-hex маска, не сырой `chat_id`). Бэкап `data/markov.db.backup-before-migration-007` сохранён.
 
+### 0.10. PR #24 `audit-security-debt-cleanup` — слит в `main` (2026-05-15)
+
+Security debt cleanup (commit `47bd749`): закрыты AUD-007, AUD-011, AUD-004 doc, AUD-006.
+
+| Закрытый пункт | Что сделано |
+|---|---|
+| AUD-007 | Добавлен `app/handlers/errors.py` — централизованный error router, логирует `TelegramAPIError` и неожиданные исключения; зарегистрирован в `configure_dispatcher()` |
+| AUD-011 | `assert` в prod-коде заменены на явные `RuntimeError`/`ValueError`; в `db.py` и сервисах — только runtime-исключения |
+| AUD-004 | `docs/OPERATIONS.md` расширен секцией «Database Retention»: ручная очистка `messages` per-chat, проверка размера через `dbstat`, рекомендуемый schedule |
+| AUD-006 | HEALTHCHECK в `Dockerfile` улучшен: теперь проверяет открытие SQLite-файла, а не только интерпретатор; ограничения probe задокументированы в `docs/OPERATIONS.md` |
+
+### 0.11. PR #25 и #26 `improve-generation-quality` — слиты в `main` (2026-05-15)
+
+Улучшение качества генерации и рефакторинг prefix-cache (commits `182e157`, `bc3a182`, `1ea631d`, `64d15f6`):
+
+| Изменение | Файл | Суть |
+|---|---|---|
+| Переработан prefix-cache | `app/services/learning_service.py` | `matches_training_prefix` → `is_verbatim_copy`: теперь проверяет дословное совпадение нормализованного текста с последними N сообщениями (bounded, `text_cache_max_messages`), а не prefix-эвристику. Закрывает AUD-003. |
+| Bounded text cache | `learning_service.py` | Кэш per-chat загружает только `LIMIT N` строк из БД вместо `fetchall()`; инвалидируется при записи сообщения |
+| Новый метод в MessagesRepo | `app/repositories/messages_repo.py` | `get_recent_normalized(chat_id, limit)` — возвращает последние N нормализованных строк |
+| Удалён старый метод | `messages_repo.py` | `get_all_normalized` удалён (использовал `fetchall()` без лимита) |
+| Исправлен E741 | `markov.py` | Переменная `l` → `length` |
+| Обновлены тесты | `tests/test_learning_service.py` | Тесты переписаны под `is_verbatim_copy` |
+
+### 0.12. CA-F13 closed — db.py get_stats refactor (2026-05-15)
+
+Рефакторинг `get_stats` и `clear_chat` helpers в `db.py` (CA-F13 / AUD-012):
+
+- Добавлен приватный `_fetch_int(db, sql, params) -> int` — устраняет повторение паттерна `(await (await db.execute(...)).fetchone())[0]`
+- `get_stats` упрощён до серии `await f(db, sql, p)` вызовов — читаемость резко улучшилась, логика не изменилась
+- `ruff check app/ tests/` и `mypy app/` — чисто до и после изменения
+
 ---
 
 ## 1. Краткое резюме проекта
@@ -75,7 +107,7 @@ PepeEdtaBot — Telegram-бот для группового чата на `aiogr
 
 После всех итераций проект перешёл из «всё в `main.py`» к слоистой архитектуре `handlers / services / repositories / filters / middlewares / migrations / infrastructure` (плюс корневой `app/log_masking.py` для HKDF-маскирования `chat_id` в логах). Версионированные миграции запускаются атомарно через `BEGIN; ...; COMMIT;` обёртку поверх `sqlite3.executescript`. Throttling-middleware с `notify_on_throttle`-фолбэком для админ-команд. Единый реестр runtime-настроек (`config_registry.py`). Hardened Dockerfile (pin `python:3.14.0-slim`, non-root через root-entrypoint + `runuser`, HEALTHCHECK). CI на матрице Python 3.12/3.13/3.14.
 
-**Серьёзных уязвимостей нет. Открытого техдолга P0/P1/P2/P3 нет.** Отложены два пункта, заблокированные внешними решениями: структурированные JSON-логи (ждём выбор системы агрегации), Prometheus-метрики (ждём endpoint).
+**Серьёзных уязвимостей нет. Открытого техдолга P0/P1/P2/P3 нет.** Prefix-cache переработан на `is_verbatim_copy` с bounded загрузкой (AUD-003 закрыт). `db.py get_stats` рефакторирован (CA-F13 закрыт). Error middleware добавлен (AUD-007 закрыт). Отложены два пункта, заблокированные внешними решениями: структурированные JSON-логи (ждём выбор системы агрегации), Prometheus-метрики (ждём endpoint).
 
 ---
 
@@ -106,13 +138,14 @@ PepeEdtaBot/
 │   │   ├── common.py                    # /ping, /help, /stats
 │   │   ├── admin.py                     # /config, /set, /setprob, /clear + fallback-handlers (denied)
 │   │   ├── pivo.py                      # /pivo (quota check), /pivo_on, /pivo_off, /pivo_privacy
-│   │   └── learning.py                  # F.text + extract_context_tokens, маскированные chat-ids в логах
+│   │   ├── learning.py                  # F.text + extract_context_tokens, маскированные chat-ids в логах
+│   │   └── errors.py                    # централизованный error router — TelegramAPIError + generic
 │   ├── services/
-│   │   ├── learning_service.py          # record_message, matches_training_prefix (prefix-cache)
+│   │   ├── learning_service.py          # record_message, is_verbatim_copy (bounded text-cache)
 │   │   └── pivo_service.py              # subscribe / unsubscribe / build_call_message / consume_daily_call_quota / refund_daily_call_quota
 │   ├── repositories/
 │   │   ├── markov_repo.py               # starts/transitions/transitions3/transitions1
-│   │   ├── messages_repo.py             # exists / get_all_normalized
+│   │   ├── messages_repo.py             # exists / get_recent_normalized
 │   │   ├── chat_members_repo.py         # upsert / list_members / remove (таблица chat_members)
 │   │   └── pivo_usage_repo.py           # consume_daily_call / refund_daily_call / delete_usage_before
 │   ├── filters/
@@ -130,7 +163,7 @@ PepeEdtaBot/
 │       ├── 005_drop_messages_text.py
 │       ├── 006_pivo_daily_usage.sql     # таблица pivo_daily_usage
 │       └── 007_unify_chat_members.sql   # pivo_chat_members + chat_member_profiles → chat_members (без is_bot)
-├── db.py                                # 423 строки — фасад: соединение, save_message_and_update_model, clear_chat, get_stats, делегаты; cleanup_pivo_daily_usage при init()
+├── db.py                                # фасад: соединение, save_message_and_update_model, clear_chat, get_stats (_fetch_int helper), делегаты; cleanup_pivo_daily_usage при init()
 ├── markov.py                            # 674 строки — НЕ ТРОГАТЬ
 ├── pivo.py                              # 124 строки — PivoSecurity, PivoMember (без is_bot)
 ├── pivo_templates.py                    # 487 строк (контент)
