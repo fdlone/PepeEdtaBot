@@ -42,7 +42,7 @@ class Settings:
     runtime_state_max_chats: int
     throttle_state_ttl_sec: int
     throttle_state_max_keys: int
-    prefix_cache_max_messages: int
+    text_cache_max_messages: int
     log_level: str
     bot_text_aliases: frozenset[str]
 
@@ -139,15 +139,15 @@ def load_settings(load_env: bool = True) -> Settings:
         raise ValueError("THROTTLE_STATE_MAX_KEYS must be an integer") from exc
     if throttle_state_max_keys < 1:
         raise ValueError("THROTTLE_STATE_MAX_KEYS must be at least 1")
-    prefix_cache_max_messages_raw = os.getenv(
-        "PREFIX_CACHE_MAX_MESSAGES", "2000"
+    text_cache_max_messages_raw = os.getenv(
+        "TEXT_CACHE_MAX_MESSAGES", "500"
     ).strip()
     try:
-        prefix_cache_max_messages = int(prefix_cache_max_messages_raw)
+        text_cache_max_messages = int(text_cache_max_messages_raw)
     except ValueError as exc:
-        raise ValueError("PREFIX_CACHE_MAX_MESSAGES must be an integer") from exc
-    if prefix_cache_max_messages < 1:
-        raise ValueError("PREFIX_CACHE_MAX_MESSAGES must be at least 1")
+        raise ValueError("TEXT_CACHE_MAX_MESSAGES must be an integer") from exc
+    if text_cache_max_messages < 1:
+        raise ValueError("TEXT_CACHE_MAX_MESSAGES must be at least 1")
 
     log_level = os.getenv("LOG_LEVEL", "INFO").strip().upper()
     if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
@@ -183,7 +183,7 @@ def load_settings(load_env: bool = True) -> Settings:
         runtime_state_max_chats=runtime_state_max_chats,
         throttle_state_ttl_sec=throttle_state_ttl_sec,
         throttle_state_max_keys=throttle_state_max_keys,
-        prefix_cache_max_messages=prefix_cache_max_messages,
+        text_cache_max_messages=text_cache_max_messages,
         log_level=log_level,
         bot_text_aliases=bot_text_aliases,
         **runtime_values,  # type: ignore[arg-type]

@@ -30,7 +30,7 @@ class TestMainWiring(unittest.TestCase):
         dependencies["settings"].bot_text_aliases = frozenset({"pepe"})
         dependencies["settings"].throttle_state_ttl_sec = 111
         dependencies["settings"].throttle_state_max_keys = 222
-        dependencies["settings"].prefix_cache_max_messages = 333
+        dependencies["settings"].text_cache_max_messages = 333
 
         dp = configure_dispatcher(Dispatcher(), **dependencies)
 

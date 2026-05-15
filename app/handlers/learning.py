@@ -276,8 +276,8 @@ async def on_text_message(
                     mask_chat_id(message.chat.id),
                     attempt + 1,
                 )
-            elif (not is_short_candidate) and await learning_service.matches_training_prefix(
-            message.chat.id, candidate, runtime_state.normalize_lower
+            elif not is_short_candidate and await learning_service.is_verbatim_copy(
+                message.chat.id, candidate
             ):
                 logger.debug(
                     "Generated text starts like a training sample, retrying: chat=%s attempt=%s",

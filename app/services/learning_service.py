@@ -1,27 +1,27 @@
 from __future__ import annotations
 
 from db import Database
-from markov import MarkovGenerator, tokenize
+from markov import MarkovGenerator
 from text_utils import sanitize_text
 
 
 class LearningService:
-    """Сохранение сообщения, обновление цепи Маркова и эвристика вариативности."""
+    """Сохранение сообщения, обновление цепи Маркова и проверка дословного повтора."""
 
     def __init__(
         self,
         db: Database,
         generator: MarkovGenerator,
         *,
-        prefix_cache_max_messages: int = 2000,
+        text_cache_max_messages: int = 500,
     ) -> None:
         self._db = db
         self._generator = generator
-        self._prefix_cache_max_messages = prefix_cache_max_messages
-        # Кэш префиксов: (chat_id, normalize_lower) → set кортежей токенов длиной 3–5.
+        self._text_cache_max_messages = text_cache_max_messages
+        # Кэш нормализованных текстов: chat_id → set строк в нижнем регистре.
         # Строится при первой проверке из последних N сообщений чата и
         # сбрасывается при каждом новом сообщении.
-        self._prefix_cache: dict[tuple[int, bool], set[tuple[str, ...]]] = {}
+        self._text_cache: dict[int, set[str]] = {}
 
     async def get_token_volume(self, chat_id: int) -> int:
         return await self._db.get_chat_token_volume(chat_id)
@@ -39,59 +39,26 @@ class LearningService:
             tokens=tokens,
         )
         self._generator.invalidate_chat_cache(chat_id)
-        self._invalidate_prefix_cache(chat_id)
+        self._invalidate_text_cache(chat_id)
         return token_volume
 
-    async def matches_training_prefix(
-        self, chat_id: int, text: str, normalize_lower: bool
-    ) -> bool:
-        """True если начало текста совпадает с началом какого-то обучающего сообщения.
-
-        Проверяется случайно выбранный префикс длиной 3, 4 или 5 токенов против
-        in-memory кэша префиксов последних сохранённых сообщений чата. Случайная
-        длина намеренно даёт вариативность: один и тот же кандидат может пройти
-        фильтр на одной попытке и быть отклонён на другой.
-
-        Это **второстепенный novelty-фильтр**: основные защиты от копий и
-        зацикливаний находятся в :meth:`markov.MarkovGenerator.generate_text`
-        (`is_low_diversity_reply`, `is_context_heavy_reply`,
-        `trim_repetitive_tail`, exact-match `message_exists`).
-
-        Тексты короче 3 токенов фильтр пропускает (нечего сравнивать); такие
-        кандидаты уже отсекаются exact-match'ем внутри генератора.
-        """
-        tokens = tokenize(sanitize_text(text), normalize_lower=normalize_lower)
-        if len(tokens) < 3:
+    async def is_verbatim_copy(self, chat_id: int, text: str) -> bool:
+        """True если текст дословно совпадает с одним из последних обучающих сообщений."""
+        normalized = sanitize_text(text).lower()
+        if not normalized:
             return False
-
-        cache_key = (chat_id, normalize_lower)
-        if cache_key not in self._prefix_cache:
-            await self._build_prefix_cache(chat_id, normalize_lower)
-
-        prefix_max = min(5, len(tokens))
-        return any(
-            tuple(tokens[:length]) in self._prefix_cache[cache_key]
-            for length in range(3, prefix_max + 1)
-        )
+        if chat_id not in self._text_cache:
+            await self._build_text_cache(chat_id)
+        return normalized in self._text_cache[chat_id]
 
     # --- приватные методы ---
 
-    async def _build_prefix_cache(
-        self, chat_id: int, normalize_lower: bool
-    ) -> None:
+    async def _build_text_cache(self, chat_id: int) -> None:
         recent_texts = await self._db.get_recent_normalized_messages(
             chat_id,
-            self._prefix_cache_max_messages,
+            self._text_cache_max_messages,
         )
-        prefixes: set[tuple[str, ...]] = set()
-        for text in recent_texts:
-            toks = tokenize(text, normalize_lower=normalize_lower)
-            for length in (3, 4, 5):
-                if len(toks) >= length:
-                    prefixes.add(tuple(toks[:length]))
-        self._prefix_cache[(chat_id, normalize_lower)] = prefixes
+        self._text_cache[chat_id] = {t.lower() for t in recent_texts}
 
-    def _invalidate_prefix_cache(self, chat_id: int) -> None:
-        keys = [k for k in self._prefix_cache if k[0] == chat_id]
-        for k in keys:
-            del self._prefix_cache[k]
+    def _invalidate_text_cache(self, chat_id: int) -> None:
+        self._text_cache.pop(chat_id, None)
