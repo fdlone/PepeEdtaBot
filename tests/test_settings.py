@@ -28,7 +28,7 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(settings.runtime_state_max_chats, 2048)
         self.assertEqual(settings.throttle_state_ttl_sec, 21600)
         self.assertEqual(settings.throttle_state_max_keys, 4096)
-        self.assertEqual(settings.prefix_cache_max_messages, 2000)
+        self.assertEqual(settings.text_cache_max_messages, 500)
 
     def test_load_settings_rejects_missing_bot_token(self) -> None:
         env = minimal_env()
@@ -111,11 +111,11 @@ class TestSettings(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "THROTTLE_STATE_MAX_KEYS"):
                 load_settings(load_env=False)
 
-    def test_load_settings_rejects_invalid_prefix_cache_max_messages(self) -> None:
+    def test_load_settings_rejects_invalid_text_cache_max_messages(self) -> None:
         env = minimal_env()
-        env["PREFIX_CACHE_MAX_MESSAGES"] = "0"
+        env["TEXT_CACHE_MAX_MESSAGES"] = "0"
         with patch.dict(os.environ, env, clear=True):
-            with self.assertRaisesRegex(ValueError, "PREFIX_CACHE_MAX_MESSAGES"):
+            with self.assertRaisesRegex(ValueError, "TEXT_CACHE_MAX_MESSAGES"):
                 load_settings(load_env=False)
 
     def test_load_settings_default_bot_text_aliases(self) -> None:

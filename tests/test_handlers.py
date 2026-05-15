@@ -566,7 +566,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         msg = _fake_message(text="pepe ответь нормально")
         learning_service = AsyncMock()
         learning_service.record_message = AsyncMock(return_value=100)
-        learning_service.matches_training_prefix = AsyncMock(
+        learning_service.is_verbatim_copy = AsyncMock(
             side_effect=[True, True, True, True, False]
         )
         generator = AsyncMock()
@@ -619,7 +619,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         msg = _fake_message(text="pepe ответь")
         learning_service = AsyncMock()
         learning_service.record_message = AsyncMock(return_value=100)
-        learning_service.matches_training_prefix = AsyncMock(return_value=True)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=True)
         generator = AsyncMock()
         generator.generate_text = AsyncMock(return_value="Привет")
         state = _fake_state(
@@ -654,7 +654,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 frozenset({"pepe", "пепе"}),
             )
 
-        learning_service.matches_training_prefix.assert_not_awaited()
+        learning_service.is_verbatim_copy.assert_not_awaited()
         msg.reply.assert_awaited_once_with("Привет")
         self.assertEqual(list(state.recent_short_replies[msg.chat.id]), ["привет"])
 
@@ -664,7 +664,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         msg = _fake_message(text="pepe ответь")
         learning_service = AsyncMock()
         learning_service.record_message = AsyncMock(return_value=100)
-        learning_service.matches_training_prefix = AsyncMock(return_value=False)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
         generator = AsyncMock()
         generator.generate_text = AsyncMock(side_effect=["Привет", "Нормально"])
         state = _fake_state(
@@ -712,7 +712,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         msg = _fake_message(text="pepe ответь нормально")
         learning_service = AsyncMock()
         learning_service.record_message = AsyncMock(return_value=100)
-        learning_service.matches_training_prefix = AsyncMock(
+        learning_service.is_verbatim_copy = AsyncMock(
             side_effect=[True, True, False]
         )
         generator = AsyncMock()

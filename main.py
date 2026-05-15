@@ -88,7 +88,7 @@ async def run_bot() -> None:
     learning_service = LearningService(
         db=db,
         generator=generator,
-        prefix_cache_max_messages=settings.prefix_cache_max_messages,
+        text_cache_max_messages=settings.text_cache_max_messages,
     )
     runtime_state = runtime_state_from_settings(settings)
 

@@ -795,8 +795,6 @@ class MarkovGenerator:
                 return ""
         elif is_context_heavy_reply(generated, context_tokens):
             return ""
-        if not is_short_reply and await self.db.message_exists(chat_id, result):
-            return ""
         if strength >= 1.5 and not context_tokens and len(generated) > 10 and jump_count == 0:
             return ""
         return result

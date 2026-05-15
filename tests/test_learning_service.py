@@ -1,4 +1,4 @@
-"""Tests for LearningService — prefix-match novelty heuristic."""
+"""Tests for LearningService — verbatim-copy detection via text cache."""
 from __future__ import annotations
 
 import unittest
@@ -27,7 +27,7 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         self.svc = LearningService(
             self.db,
             _make_generator(),
-            prefix_cache_max_messages=3,
+            text_cache_max_messages=3,
         )
         self.chat = 42
 
@@ -64,133 +64,72 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         result = await self.db.get_recent_normalized_messages(self.chat, 2)
         self.assertEqual(result, ["третье сообщение", "четвертое сообщение"])
 
-    # --- prefix cache build and lookup ---
+    # --- text cache build and lookup ---
 
-    async def test_prefix_cache_built_on_first_check(self) -> None:
+    async def test_text_cache_built_on_first_check(self) -> None:
         await self._record("пойдём пить кофе вечером")
-        key = (self.chat, False)
-        self.assertNotIn(key, self.svc._prefix_cache)
-        await self.svc.matches_training_prefix(
-            self.chat, "пойдём пить кофе вечером", False
-        )
-        self.assertIn(key, self.svc._prefix_cache)
-
-    async def test_cache_contains_all_prefix_lengths(self) -> None:
-        await self._record("один два три четыре пять")
-        await self.svc.matches_training_prefix(
-            self.chat, "один два три", False
-        )
-        cache = self.svc._prefix_cache[(self.chat, False)]
-        self.assertIn(("один", "два", "три"), cache)
-        self.assertIn(("один", "два", "три", "четыре"), cache)
-        self.assertIn(("один", "два", "три", "четыре", "пять"), cache)
+        self.assertNotIn(self.chat, self.svc._text_cache)
+        await self.svc.is_verbatim_copy(self.chat, "пойдём пить кофе вечером")
+        self.assertIn(self.chat, self.svc._text_cache)
 
     async def test_cache_invalidated_after_record(self) -> None:
-        await self._record("кофе утром бодрит всех нас")
-        await self.svc.matches_training_prefix(
-            self.chat, "кофе утром бодрит", False
-        )
-        self.assertIn((self.chat, False), self.svc._prefix_cache)
-        await self._record("новое сообщение пришло сюда")
-        self.assertNotIn((self.chat, False), self.svc._prefix_cache)
-
-    async def test_separate_cache_per_normalize_lower(self) -> None:
-        await self._record("Кофе утром бодрит всех нас")
-        await self.svc.matches_training_prefix(
-            self.chat, "кофе утром бодрит", False
-        )
-        await self.svc.matches_training_prefix(
-            self.chat, "кофе утром бодрит", True
-        )
-        self.assertIn((self.chat, False), self.svc._prefix_cache)
-        self.assertIn((self.chat, True), self.svc._prefix_cache)
-
-    # --- similarity heuristic behaviour ---
-
-    async def test_exact_match_treated_as_too_close(self) -> None:
         await self._record("кофе утром бодрит")
-        # 3 tokens → exact match via prefix cache
-        result = await self.svc.matches_training_prefix(
-            self.chat, "кофе утром бодрит", False
-        )
-        self.assertTrue(result)
+        await self.svc.is_verbatim_copy(self.chat, "кофе утром бодрит")
+        self.assertIn(self.chat, self.svc._text_cache)
+        await self._record("новое сообщение")
+        self.assertNotIn(self.chat, self.svc._text_cache)
 
-    async def test_prefix_extension_is_present_in_similarity_cache(self) -> None:
-        """Bot generates stored prefix + new tokens — 3-gram must be in cache."""
-        await self._record("пойдём пить кофе")
-        # Build cache by triggering a check
-        await self.svc.matches_training_prefix(
-            self.chat, "пойдём пить кофе утром вечером", False
-        )
-        cache = self.svc._prefix_cache.get((self.chat, False), set())
-        # The 3-token prefix of the stored message must be in the cache
-        self.assertIn(("пойдём", "пить", "кофе"), cache,
-                      "3-gram from training must be available to the heuristic")
-
-    async def test_prefix_cache_uses_only_recent_messages_window(self) -> None:
-        await self._record("старый префикс должен выпасть")
-        await self._record("новый один два три")
-        await self._record("новый четыре пять шесть")
-        await self._record("новый семь восемь девять")
+    async def test_text_cache_uses_only_recent_window(self) -> None:
+        await self._record("старое сообщение давно было")
+        await self._record("новое одно")
+        await self._record("новое два")
+        await self._record("новое три")
 
         self.assertFalse(
-            await self.svc.matches_training_prefix(
-                self.chat, "старый префикс должен выпасть потом", False
-            )
+            await self.svc.is_verbatim_copy(self.chat, "старое сообщение давно было")
         )
         self.assertTrue(
-            await self.svc.matches_training_prefix(
-                self.chat, "новый один два три потом", False
-            )
+            await self.svc.is_verbatim_copy(self.chat, "новое одно")
         )
 
-    async def test_unique_text_passes(self) -> None:
+    # --- is_verbatim_copy behaviour ---
+
+    async def test_exact_match_detected(self) -> None:
+        await self._record("кофе утром бодрит")
+        result = await self.svc.is_verbatim_copy(self.chat, "кофе утром бодрит")
+        self.assertTrue(result)
+
+    async def test_case_insensitive_match(self) -> None:
+        await self._record("Кофе Утром Бодрит")
+        result = await self.svc.is_verbatim_copy(self.chat, "кофе утром бодрит")
+        self.assertTrue(result)
+
+    async def test_unique_text_not_detected(self) -> None:
         await self._record("пойдём пить кофе")
-        result = await self.svc.matches_training_prefix(
-            self.chat, "совершенно другое предложение здесь", False
-        )
+        result = await self.svc.is_verbatim_copy(self.chat, "совершенно другое предложение")
         self.assertFalse(result)
 
-    async def test_short_text_passes_through(self) -> None:
-        """Text with < 3 tokens is skipped by the prefix filter (returns False).
-
-        Such candidates are already filtered by exact-match `message_exists`
-        inside `MarkovGenerator.generate_text`, so a duplicate check here
-        would be redundant and noisy.
-        """
-        await self._record("привет мир")
-        result = await self.svc.matches_training_prefix(
-            self.chat, "привет мир", False
-        )
+    async def test_partial_match_not_detected(self) -> None:
+        await self._record("кофе утром бодрит и даёт силы")
+        result = await self.svc.is_verbatim_copy(self.chat, "кофе утром бодрит")
         self.assertFalse(result)
 
-    async def test_short_unique_text_passes(self) -> None:
-        result = await self.svc.matches_training_prefix(
-            self.chat, "уникально", False
-        )
+    async def test_empty_text_not_detected(self) -> None:
+        await self._record("кофе утром бодрит")
+        result = await self.svc.is_verbatim_copy(self.chat, "")
         self.assertFalse(result)
 
-    async def test_empty_chat_has_no_too_close_samples(self) -> None:
-        result = await self.svc.matches_training_prefix(
-            self.chat, "никаких сообщений ещё нет тут", False
-        )
+    async def test_empty_chat_not_detected(self) -> None:
+        result = await self.svc.is_verbatim_copy(self.chat, "никаких сообщений ещё нет")
         self.assertFalse(result)
 
-    async def test_different_chat_not_too_close(self) -> None:
-        await self._record("пойдём пить кофе утром всем")
-        result = await self.svc.matches_training_prefix(
-            999, "пойдём пить кофе утром всем", False
-        )
+    async def test_different_chat_not_detected(self) -> None:
+        await self._record("пойдём пить кофе утром")
+        result = await self.svc.is_verbatim_copy(999, "пойдём пить кофе утром")
         self.assertFalse(result)
 
-    async def test_invalidate_clears_all_normalize_variants(self) -> None:
-        await self._record("кофе утром бодрит всех нас")
-        await self.svc.matches_training_prefix(
-            self.chat, "кофе утром", False
-        )
-        await self.svc.matches_training_prefix(
-            self.chat, "кофе утром", True
-        )
-        self.svc._invalidate_prefix_cache(self.chat)
-        self.assertNotIn((self.chat, False), self.svc._prefix_cache)
-        self.assertNotIn((self.chat, True), self.svc._prefix_cache)
+    async def test_invalidate_clears_cache(self) -> None:
+        await self._record("кофе утром бодрит")
+        await self.svc.is_verbatim_copy(self.chat, "кофе утром бодрит")
+        self.svc._invalidate_text_cache(self.chat)
+        self.assertNotIn(self.chat, self.svc._text_cache)

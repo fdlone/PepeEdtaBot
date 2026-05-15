@@ -441,29 +441,21 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(strengths[0], 0.5)
         self.assertGreater(strengths[-1], strengths[0])
 
-    async def test_generate_text_skips_global_duplicate_check_for_short_reply(self) -> None:
-        from unittest.mock import AsyncMock, patch
-
+    async def test_generate_text_returns_short_reply_without_verbatim_check(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=8890,
             raw_text="Привет мир снова",
             tokens=["Привет", "мир", "снова"],
         )
 
-        with patch.object(
-            self.generator.db,
-            "message_exists",
-            new=AsyncMock(return_value=True),
-        ) as mock_message_exists:
-            text = await self.generator.generate_text(
-                chat_id=8890,
-                max_chars=50,
-                max_tokens=1,
-                randomness_strength=0.0,
-            )
+        text = await self.generator.generate_text(
+            chat_id=8890,
+            max_chars=50,
+            max_tokens=1,
+            randomness_strength=0.0,
+        )
 
         self.assertEqual(text, "Привет")
-        mock_message_exists.assert_not_awaited()
 
     def test_context_bias_does_not_override_repetition_penalty(self) -> None:
         random.seed(23)
