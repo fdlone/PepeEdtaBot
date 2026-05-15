@@ -70,8 +70,8 @@ class LearningService:
 
         prefix_max = min(5, len(tokens))
         return any(
-            tuple(tokens[:l]) in self._prefix_cache[cache_key]
-            for l in range(3, prefix_max + 1)
+            tuple(tokens[:length]) in self._prefix_cache[cache_key]
+            for length in range(3, prefix_max + 1)
         )
 
     # --- приватные методы ---
