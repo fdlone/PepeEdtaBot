@@ -678,14 +678,14 @@ CMD ["python", "main.py"]
 - 2026-05-15, 10я (security/stability audit + remediation PRs #19–23 + pip-audit clean): проведён отдельный security audit (`PROJECT_SECURITY_STABILITY_AUDIT.md`), закрыты AUD-009, AUD-001×2, AUD-002, AUD-003, AUD-005, AUD-006 (runbook), CI bandit/safety/docker-smoke; стабилизирован prefix-cache window тест. 264 теста. pip-audit: нет уязвимостей. Открытый security-backlog (LOW): AUD-007, AUD-004, AUD-011, AUD-010, AUD-006 (healthcheck).
 - 2026-05-15, 11я (security debt cleanup PR `audit-security-debt-cleanup`): закрыты AUD-007 (`app/handlers/errors.py` + тесты), AUD-011 (20 assert → RuntimeError в `db.py`/`markov_repo.py`), AUD-004 (retention runbook в `docs/OPERATIONS.md`), AUD-006 (Dockerfile healthcheck → SQLite SELECT 1). 266 тестов. Открыто только: AUD-010, CA-F11.
 
-> SHA коммитов обновлены после очистки истории `git filter-repo` (2026-05-09): удалены строки `Co-Authored-By: Claude` из 28 коммитов.
+> SHA коммитов обновлены после очистки истории `git filter-repo` (2026-05-09): удалены строки атрибуции из 28 коммитов.
 
 ---
 
 ## 16. Session update — 2026-05-09
 
 ### Completed
-- Очистка истории git: удалены `Co-Authored-By: Claude Opus 4.7 / Sonnet 4.6` из 28 коммитов через `git filter-repo`.
+- Очистка истории git: удалены строки атрибуции из 28 коммитов через `git filter-repo`.
 - Force-push перезаписанных веток на GitHub: `main` и `codex/pivo-daily-quota`.
 - `PROJECT_AUDIT.md` актуализирован: новые SHA, текущая ветка, обновлённые метрики (200 тестов), закрыты P2-7/P2-8.
 
