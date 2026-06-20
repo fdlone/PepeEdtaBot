@@ -1,3 +1,5 @@
+"""Synthetic generation evaluation for the post-Phase-2 baseline."""
+
 from __future__ import annotations
 
 import argparse
@@ -109,6 +111,7 @@ async def evaluate_generation(
     lengths = [len(output) for output in outputs]
     empty_count = sum(1 for output in outputs if not output)
     return {
+        "baseline_phase": 2,
         "seed": seed,
         "generations": generations,
         "corpus_messages": len(corpus),

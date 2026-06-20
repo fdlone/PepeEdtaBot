@@ -14,6 +14,7 @@ from app.core.markov import (
     _GenerationAttempt,
     detokenize,
     escalated_randomness_strength,
+    exploration_adjusted_power,
     has_degraded_recent_window,
     is_context_heavy_reply,
     is_low_diversity_reply,
@@ -22,6 +23,7 @@ from app.core.markov import (
     tokenize,
     trim_repetitive_tail,
     weighted_next_choice,
+    weighted_start2_choice,
     weighted_start3_choice,
 )
 from app.core.reply_policy import bot_is_mentioned
@@ -226,6 +228,58 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
                 other_count += 1
 
         self.assertGreater(other_count, same_count)
+
+    def test_high_exploration_keeps_context_and_repetition_weights(self) -> None:
+        rng = random.Random(20260620)
+        context_choice_count = 0
+        repeated_choice_count = 0
+
+        for _ in range(500):
+            context_choice = weighted_next_choice(
+                items=[("context", 1), ("neutral", 1)],
+                explore_probability=1.0,
+                power=1.0,
+                rng=rng,
+                context_token_set={"context"},
+                context_pairs={("state", "context")},
+                context_triplets={("previous", "state", "context")},
+                current_state=("previous", "state"),
+                context_bias=3.0,
+            )
+            if context_choice == "context":
+                context_choice_count += 1
+
+            repetition_choice = weighted_next_choice(
+                items=[("repeat", 10), ("fresh", 1)],
+                explore_probability=1.0,
+                power=1.0,
+                rng=rng,
+                current_state=("state", "repeat"),
+                recent_tokens=["state", "repeat", "repeat"],
+                seen_pairs={("repeat", "repeat")},
+                seen_triplets={("state", "repeat", "repeat")},
+            )
+            if repetition_choice == "repeat":
+                repeated_choice_count += 1
+
+        self.assertGreater(context_choice_count, 400)
+        self.assertLess(repeated_choice_count, 100)
+
+    def test_high_exploration_start_choice_remains_weighted(self) -> None:
+        rng = random.Random(20260620)
+        frequent_count = 0
+        for _ in range(500):
+            choice = weighted_start2_choice(
+                items=[("frequent", "start", 10_000), ("rare", "start", 1)],
+                explore_probability=1.0,
+                power=1.0,
+                rng=rng,
+            )
+            if choice == ("frequent", "start"):
+                frequent_count += 1
+
+        self.assertGreater(frequent_count, 350)
+        self.assertGreater(exploration_adjusted_power(1.0, 1.0), 0.0)
 
     def test_extract_context_tokens_uses_reply_and_current_message(self) -> None:
         message = SimpleNamespace(
@@ -488,11 +542,28 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(text, "")
-        self.assertEqual(trace.attempts_used, 8)
+        self.assertEqual(trace.attempts_used, 1)
         self.assertEqual(trace.markov_order_used, 0)
         self.assertEqual(trace.jump_count, 0)
         self.assertEqual(trace.rejection_reason, "no_starts")
         self.assertEqual(trace.token_count, 0)
+
+    async def test_generation_attempt_budget_is_bounded(self) -> None:
+        rejected_attempt = _GenerationAttempt("", 0, 0, "no_starts", 0)
+        with patch(
+            "app.core.markov.MarkovGenerator._generate_text_once",
+            new=AsyncMock(return_value=rejected_attempt),
+        ) as generate_once:
+            text, trace = await self.generator.generate_text_with_trace(
+                chat_id=7774,
+                max_chars=100,
+                rng=random.Random(8),
+                attempt_budget=3,
+            )
+
+        self.assertEqual(text, "")
+        self.assertEqual(trace.attempts_used, 3)
+        self.assertEqual(generate_once.await_count, 3)
 
     async def test_generation_trace_reports_actual_backoff_order(self) -> None:
         await self.db.save_message_and_update_model(
@@ -602,6 +673,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             text = await self.generator.generate_text(
                 chat_id=8888,
                 max_chars=50,
+                attempt_budget=3,
             )
 
         self.assertEqual(text, "валидный ответ")
@@ -623,6 +695,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
                 chat_id=8889,
                 max_chars=50,
                 randomness_strength=0.5,
+                attempt_budget=3,
             )
 
         strengths = [

@@ -1,11 +1,50 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-06-20, пятнадцатая редакция (STRUCT-001: перенос корневых модулей в пакет `app/`).
-**Текущая ветка:** `refactor/struct-001` (не слита). Phase 0, Phase 1 и оба `chore(deps)` — уже в `main`.
-**Тесты / проверки:** `unittest discover tests` — 278 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (45 files); harness воспроизводит baseline.
-**Backlog:** P0/P1/P2/P3 — пусто. `STRUCT-001` — **выполнен** (flat-раскладка: `app/config`,`app/core`,`app/infrastructure`,`app/domain`,`app/presentation`; seed → `tools/`). Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
+**Дата актуализации:** 2026-06-20, шестнадцатая редакция (generation Phase 2: единый retry-budget + взвешенный explore).
+**Текущая ветка:** `feat/generation-phase2` (не слита). Phase 0, Phase 1, STRUCT-001 и оба `chore(deps)` — уже в `main`.
+**Тесты / проверки:** `unittest discover tests` — 282 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (45 files); harness воспроизводит post-Phase-2 baseline.
+**Backlog:** P0/P1/P2/P3 — пусто. `STRUCT-001` — выполнен. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
+
+---
+
+## Session update - 2026-06-20 (generation Phase 2)
+
+Реализована Фаза 2 на ветке `feat/generation-phase2`. Phase 0/1 + STRUCT-001 + deps уже в `main`.
+
+### Completed
+- **2.1 Единый retry-budget:** вложенные циклы (handler ~10 × `generate_text` 8 ≈
+  до 80 полных генераций) схлопнуты в один бюджет — **worst-case 80 → 10**.
+  Внутренний default снижен до 1; randomness растёт непрерывно по всему бюджету;
+  первые попытки с контекстом, затем без; один RNG на все попытки
+  (детерминизм Phase 1 сохранён).
+- **2.2 Взвешенный explore:** uniform-bypass (`rng.choice(population)`) в
+  `weighted_next_choice`/start-выборе заменён на взвешенное сэмплирование
+  (`exploration_adjusted_power` сглаживает частотный power + exponential-race
+  `expovariate(weights[i])`). Штрафы за повторы и контекст применяются **всегда**,
+  даже при высокой randomness.
+
+### BEFORE/AFTER (harness, seed 20260620, 100 ген.)
+empty 0.0→0.0; distinct-1 0.09681→0.09693; distinct-2 0.15224→0.15245;
+repeated bi/tri 0/0→0/0; avg_len 8.16→8.15; avg_attempts 1.0→1.0;
+latency ~0.17→~1.2 мс (всё ещё ничтожно). Регресса нет; baseline обновлён.
+
+### Changed files
+- `app/core/markov.py`, `app/handlers/learning.py`
+- `tools/eval_generation.py`, `tools/generation_baseline.json`
+- `tests/test_markov_and_text.py`, `tests/test_handlers.py`,
+  `tests/test_eval_generation.py`, `docs/RESPONSE_GENERATION_ROADMAP.md`
+
+### Tests/checks run
+- `unittest discover tests` — **282 OK**; `ruff` — clean; `mypy app/` — clean;
+  harness (CLI) воспроизводит post-Phase-2 значения.
+
+### Remaining work / watch
+- Watch-item: внутренний budget=1 + 10 внешних попыток — на синтетике
+  `empty_rate=0`, но на реальном трафике следить, что доля пустых ответов не
+  растёт (метрики Фазы 1 trace помогут).
+- Далее по дорожной карте: Фаза 3 (ResponseGenerator + многокандидатный скоринг).
 
 ---
 

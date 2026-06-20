@@ -33,11 +33,9 @@ logger = logging.getLogger("chat_markov")
 MIN_LEARN_MESSAGE_CHARS = 3
 MAX_LEARN_MESSAGE_CHARS = 500
 MIN_LEARN_MESSAGE_TOKENS = 2
-# Сколько раз подряд пробуем сгенерировать ответ, прежде чем сдаёмся.
-# Первые попытки идут с reply-контекстом, последние — без.
-MAX_GENERATION_ATTEMPTS = 4
+# Single end-to-end budget: each handler attempt performs one full generation.
+GENERATION_ATTEMPT_BUDGET = 10
 GENERATION_ATTEMPTS_WITH_CONTEXT = 5
-MAX_TRAINING_PREFIX_RETRY_ATTEMPTS = 6
 RECENT_SHORT_REPLY_LIMIT = 5
 
 
@@ -216,19 +214,16 @@ async def on_text_message(
                 seed,
             )
         reply_text = ""
-        # Повторяем генерацию несколько раз: сначала с контекстом, потом без,
-        # и отбрасываем результат, чьё начало совпадает с уже виденным сообщением.
-        total_generation_attempts = (
-            MAX_GENERATION_ATTEMPTS + MAX_TRAINING_PREFIX_RETRY_ATTEMPTS
-        )
-        for attempt in range(total_generation_attempts):
+        # Use one end-to-end attempt budget: first with context, then without it.
+        generation_rng = random.Random()
+        for attempt in range(GENERATION_ATTEMPT_BUDGET):
             attempt_context_tokens = (
                 context_tokens if attempt < GENERATION_ATTEMPTS_WITH_CONTEXT else None
             )
             attempt_randomness_strength = escalated_randomness_strength(
                 runtime_state.randomness_strength,
                 attempt,
-                total_generation_attempts,
+                GENERATION_ATTEMPT_BUDGET,
             )
             candidate = await generator.generate_text(
                 chat_id=message.chat.id,
@@ -243,6 +238,8 @@ async def on_text_message(
                 markov_order=runtime_state.markov_order,
                 enable_backoff=runtime_state.enable_backoff,
                 backoff_min_order=runtime_state.backoff_min_order,
+                rng=generation_rng,
+                attempt_budget=1,
             )
             if not candidate:
                 logger.debug(
