@@ -573,7 +573,8 @@ class MarkovGenerator:
         next_power = max(0.15, 0.72 - 0.16 * strength)
         start_explore = min(0.98, 0.20 + 0.20 * strength)
         start_power = max(0.15, 0.75 - 0.18 * strength)
-        jump_probability = min(0.32, 0.03 + 0.08 * strength)
+        # Disabled until a jump can splice tokens into the returned text safely.
+        jump_probability = 0.0
 
         context_tokens = context_tokens or []
         context_token_set = set(context_tokens)
@@ -787,14 +788,13 @@ class MarkovGenerator:
         result = detokenize(generated, max_chars=max_chars)
         if len(result) < 5:
             return ""
-        is_short_reply = is_short_generated_reply(generated)
-        if not is_short_reply and is_low_diversity_reply(generated):
+        result_tokens = tokenize(result)
+        is_short_reply = is_short_generated_reply(result_tokens)
+        if not is_short_reply and is_low_diversity_reply(result_tokens):
             return ""
         if is_short_reply:
-            if is_short_context_copy(generated, context_tokens):
+            if is_short_context_copy(result_tokens, context_tokens):
                 return ""
-        elif is_context_heavy_reply(generated, context_tokens):
-            return ""
-        if strength >= 1.5 and not context_tokens and len(generated) > 10 and jump_count == 0:
+        elif is_context_heavy_reply(result_tokens, context_tokens):
             return ""
         return result
