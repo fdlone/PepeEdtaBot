@@ -1,17 +1,56 @@
 from __future__ import annotations
 
+import logging
 import random
 import re
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import NamedTuple, Optional, TypeVar
 
 from db import Database
+
+logger = logging.getLogger("chat_markov")
 
 TOKEN_RE = re.compile(r"\w+|[.,!?;:]", re.UNICODE)
 PUNCT_SET = {".", ",", "!", "?", ";", ":"}
 VALIDATION_RETRY_ATTEMPTS = 8
 SHORT_REPLY_MAX_CONTENT_TOKENS = 3
+REJECTION_NO_STARTS = "no_starts"
+REJECTION_NO_START_TRANSITION = "no_start_transition"
+REJECTION_RESULT_TOO_SHORT = "result_too_short"
+REJECTION_LOW_DIVERSITY = "low_diversity"
+REJECTION_SHORT_CONTEXT_COPY = "short_context_copy"
+REJECTION_CONTEXT_HEAVY = "context_heavy"
+
+T = TypeVar("T")
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationTrace:
+    attempts_used: int
+    markov_order_used: int
+    jump_count: int
+    rejection_reason: str | None
+    token_count: int
+
+
+class _GenerationAttempt(NamedTuple):
+    text: str
+    markov_order_used: int
+    jump_count: int
+    rejection_reason: str | None
+    token_count: int
+
+
+def remember_bounded(
+    values: OrderedDict[T, None],
+    value: T,
+    limit: int,
+) -> None:
+    if value not in values:
+        values[value] = None
+    if len(values) > limit:
+        values.popitem(last=False)
 
 
 def tokenize(text: str, normalize_lower: bool = False) -> list[str]:
@@ -257,6 +296,7 @@ def weighted_next_choice(
     items: list[tuple[str, int]],
     explore_probability: float,
     power: float,
+    rng: random.Random,
     context_token_set: Optional[set[str]] = None,
     context_pairs: Optional[set[tuple[str, str]]] = None,
     context_triplets: Optional[set[tuple[str, str, str]]] = None,
@@ -268,15 +308,16 @@ def weighted_next_choice(
     seen_triplets: Optional[set[tuple[str, str, str]]] = None,
     repetition_penalty_strength: float = 1.0,
 ) -> str:
-    population = [token for token, _ in items]
-    if random.random() < explore_probability:
-        return random.choice(population)
+    ordered_items = sorted(items, key=lambda item: item[0])
+    population = [token for token, _ in ordered_items]
+    if rng.random() < explore_probability:
+        return rng.choice(population)
 
     step_bias = 1.0 + (max(1.0, context_bias) - 1.0) * context_decay(step_index)
     penalty_strength = max(0.0, repetition_penalty_strength)
     recent_tokens = recent_tokens or []
     weights: list[float] = []
-    for token, cnt in items:
+    for token, cnt in ordered_items:
         weight = max(cnt, 1) ** power
         if context_token_set and token in context_token_set:
             weight *= step_bias
@@ -307,27 +348,35 @@ def weighted_next_choice(
 
         weight = max(weight, 0.01)
         weights.append(weight)
-    return random.choices(population=population, weights=weights, k=1)[0]
+    return rng.choices(population=population, weights=weights, k=1)[0]
 
 
 def weighted_start2_choice(
-    items: list[tuple[str, str, int]], explore_probability: float, power: float
+    items: list[tuple[str, str, int]],
+    explore_probability: float,
+    power: float,
+    rng: random.Random,
 ) -> tuple[str, str]:
-    population = [(w1, w2) for w1, w2, _ in items]
-    if random.random() < explore_probability:
-        return random.choice(population)
-    weights = [max(cnt, 1) ** power for _, _, cnt in items]
-    return random.choices(population=population, weights=weights, k=1)[0]
+    ordered_items = sorted(items, key=lambda item: (item[0], item[1]))
+    population = [(w1, w2) for w1, w2, _ in ordered_items]
+    if rng.random() < explore_probability:
+        return rng.choice(population)
+    weights = [max(cnt, 1) ** power for _, _, cnt in ordered_items]
+    return rng.choices(population=population, weights=weights, k=1)[0]
 
 
 def weighted_start3_choice(
-    items: list[tuple[str, str, str, int]], explore_probability: float, power: float
+    items: list[tuple[str, str, str, int]],
+    explore_probability: float,
+    power: float,
+    rng: random.Random,
 ) -> tuple[str, str, str]:
-    population = [(w1, w2, w3) for w1, w2, w3, _ in items]
-    if random.random() < explore_probability:
-        return random.choice(population)
-    weights = [max(cnt, 1) ** power for _, _, _, cnt in items]
-    return random.choices(population=population, weights=weights, k=1)[0]
+    ordered_items = sorted(items, key=lambda item: (item[0], item[1], item[2]))
+    population = [(w1, w2, w3) for w1, w2, w3, _ in ordered_items]
+    if rng.random() < explore_probability:
+        return rng.choice(population)
+    weights = [max(cnt, 1) ** power for _, _, _, cnt in ordered_items]
+    return rng.choices(population=population, weights=weights, k=1)[0]
 
 
 @dataclass(slots=True)
@@ -422,6 +471,7 @@ class MarkovGenerator:
         explore_probability: float,
         power: float,
         context_start_bias: float,
+        rng: random.Random,
     ) -> Optional[tuple[str, str, str]]:
         windows = build_windows(context_tokens, 3)
         if not windows:
@@ -445,9 +495,9 @@ class MarkovGenerator:
 
         if not candidates:
             return None
-        if random.random() < explore_probability:
-            return random.choice([start for start, _ in candidates])
-        return random.choices(
+        if rng.random() < explore_probability:
+            return rng.choice([start for start, _ in candidates])
+        return rng.choices(
             population=[start for start, _ in candidates],
             weights=[weight for _, weight in candidates],
             k=1,
@@ -466,6 +516,7 @@ class MarkovGenerator:
         context_pairs: set[tuple[str, str]],
         context_triplets: set[tuple[str, str, str]],
         repetition_penalty_strength: float,
+        rng: random.Random,
     ) -> Optional[tuple[str, str, str]]:
         windows = build_windows(context_tokens, 2)
         if not windows:
@@ -487,10 +538,10 @@ class MarkovGenerator:
 
         if not candidates:
             return None
-        if random.random() < explore_probability:
-            w1, w2 = random.choice([start for start, _ in candidates])
+        if rng.random() < explore_probability:
+            w1, w2 = rng.choice([start for start, _ in candidates])
         else:
-            w1, w2 = random.choices(
+            w1, w2 = rng.choices(
                 population=[start for start, _ in candidates],
                 weights=[weight for _, weight in candidates],
                 k=1,
@@ -503,6 +554,7 @@ class MarkovGenerator:
             variants,
             next_explore,
             next_power,
+            rng,
             context_token_set=context_token_set,
             context_pairs=context_pairs,
             context_triplets=context_triplets,
@@ -527,14 +579,57 @@ class MarkovGenerator:
         markov_order: int = 3,
         enable_backoff: bool = True,
         backoff_min_order: int = 1,
+        rng: random.Random | None = None,
     ) -> str:
+        text, _ = await self.generate_text_with_trace(
+            chat_id=chat_id,
+            max_chars=max_chars,
+            max_tokens=max_tokens,
+            seed_tokens=seed_tokens,
+            context_tokens=context_tokens,
+            context_bias=context_bias,
+            context_start_bias=context_start_bias,
+            randomness_strength=randomness_strength,
+            repetition_penalty_strength=repetition_penalty_strength,
+            markov_order=markov_order,
+            enable_backoff=enable_backoff,
+            backoff_min_order=backoff_min_order,
+            rng=rng,
+        )
+        return text
+
+    async def generate_text_with_trace(
+        self,
+        chat_id: int,
+        max_chars: int,
+        max_tokens: int = 45,
+        seed_tokens: Optional[list[str]] = None,
+        context_tokens: Optional[list[str]] = None,
+        context_bias: float = 1.0,
+        context_start_bias: float = 1.0,
+        randomness_strength: float = 1.0,
+        repetition_penalty_strength: float = 1.0,
+        markov_order: int = 3,
+        enable_backoff: bool = True,
+        backoff_min_order: int = 1,
+        rng: random.Random | None = None,
+    ) -> tuple[str, GenerationTrace]:
+        generation_rng = rng or random.Random()
+        last_attempt = _GenerationAttempt(
+            text="",
+            markov_order_used=0,
+            jump_count=0,
+            rejection_reason=REJECTION_NO_STARTS,
+            token_count=0,
+        )
+        total_jump_count = 0
         for attempt_index in range(VALIDATION_RETRY_ATTEMPTS):
             attempt_randomness_strength = escalated_randomness_strength(
                 randomness_strength,
                 attempt_index,
                 VALIDATION_RETRY_ATTEMPTS,
             )
-            result = await self._generate_text_once(
+            last_attempt = await self._generate_text_once(
                 chat_id=chat_id,
                 max_chars=max_chars,
                 max_tokens=max_tokens,
@@ -547,10 +642,39 @@ class MarkovGenerator:
                 markov_order=markov_order,
                 enable_backoff=enable_backoff,
                 backoff_min_order=backoff_min_order,
+                rng=generation_rng,
             )
-            if result:
-                return result
-        return ""
+            total_jump_count += last_attempt.jump_count
+            if last_attempt.text:
+                trace = GenerationTrace(
+                    attempts_used=attempt_index + 1,
+                    markov_order_used=last_attempt.markov_order_used,
+                    jump_count=total_jump_count,
+                    rejection_reason=None,
+                    token_count=last_attempt.token_count,
+                )
+                self._log_trace(trace)
+                return last_attempt.text, trace
+
+        trace = GenerationTrace(
+            attempts_used=VALIDATION_RETRY_ATTEMPTS,
+            markov_order_used=last_attempt.markov_order_used,
+            jump_count=total_jump_count,
+            rejection_reason=last_attempt.rejection_reason,
+            token_count=0,
+        )
+        self._log_trace(trace)
+        return "", trace
+
+    def _log_trace(self, trace: GenerationTrace) -> None:
+        logger.debug(
+            "Generation trace: attempts=%s order=%s jumps=%s rejection=%s tokens=%s",
+            trace.attempts_used,
+            trace.markov_order_used,
+            trace.jump_count,
+            trace.rejection_reason,
+            trace.token_count,
+        )
 
     async def _generate_text_once(
         self,
@@ -566,8 +690,11 @@ class MarkovGenerator:
         markov_order: int = 3,
         enable_backoff: bool = True,
         backoff_min_order: int = 1,
-    ) -> str:
+        rng: random.Random | None = None,
+    ) -> _GenerationAttempt:
+        generation_rng = rng or random.Random()
         order = 3 if markov_order >= 3 else 2
+        order_used = order
         strength = max(0.0, min(3.0, randomness_strength))
         next_explore = min(0.98, 0.12 + 0.18 * strength)
         next_power = max(0.15, 0.72 - 0.16 * strength)
@@ -584,7 +711,7 @@ class MarkovGenerator:
         starts3 = await self._get_starts3(chat_id) if order >= 3 else []
         starts2 = await self._get_starts2(chat_id)
         if not starts3 and not starts2:
-            return ""
+            return _GenerationAttempt("", 0, 0, REJECTION_NO_STARTS, 0)
 
         start3: Optional[tuple[str, str, str]] = None
         if seed_tokens and len(seed_tokens) >= 3:
@@ -605,6 +732,7 @@ class MarkovGenerator:
                         variants,
                         next_explore,
                         next_power,
+                        generation_rng,
                         context_token_set=context_token_set,
                         context_pairs=context_pairs,
                         context_triplets=context_triplets,
@@ -614,6 +742,7 @@ class MarkovGenerator:
                         repetition_penalty_strength=repetition_penalty_strength,
                     )
                     start3 = (w1, w2, w3)
+                    order_used = 2
 
         if start3 is None and context_tokens:
             if order >= 3:
@@ -623,6 +752,7 @@ class MarkovGenerator:
                     start_explore,
                     start_power,
                     context_start_bias,
+                    generation_rng,
                 )
             if start3 is None:
                 start3 = await self._select_contextual_start2(
@@ -637,20 +767,40 @@ class MarkovGenerator:
                     context_pairs=context_pairs,
                     context_triplets=context_triplets,
                     repetition_penalty_strength=repetition_penalty_strength,
+                    rng=generation_rng,
                 )
+                if start3 is not None:
+                    order_used = 2
 
         if start3 is None:
             if starts3:
-                start3 = weighted_start3_choice(starts3, start_explore, start_power)
+                start3 = weighted_start3_choice(
+                    starts3,
+                    start_explore,
+                    start_power,
+                    generation_rng,
+                )
             elif starts2:
-                w1, w2 = weighted_start2_choice(starts2, start_explore, start_power)
+                w1, w2 = weighted_start2_choice(
+                    starts2,
+                    start_explore,
+                    start_power,
+                    generation_rng,
+                )
                 variants = await self._get2(chat_id, w1, w2)
                 if not variants:
-                    return ""
+                    return _GenerationAttempt(
+                        "",
+                        2,
+                        0,
+                        REJECTION_NO_START_TRANSITION,
+                        0,
+                    )
                 w3 = weighted_next_choice(
                     variants,
                     next_explore,
                     next_power,
+                    generation_rng,
                     context_token_set=context_token_set,
                     context_pairs=context_pairs,
                     context_triplets=context_triplets,
@@ -660,16 +810,23 @@ class MarkovGenerator:
                     repetition_penalty_strength=repetition_penalty_strength,
                 )
                 start3 = (w1, w2, w3)
+                order_used = 2
 
         if start3 is None:
-            return ""
+            return _GenerationAttempt(
+                "",
+                order_used,
+                0,
+                REJECTION_NO_START_TRANSITION,
+                0,
+            )
 
         token_limit = max(1, max_tokens)
         w1, w2, w3 = start3
         generated: list[str] = [w1, w2, w3][:token_limit]
-        visited_triplets: set[tuple[str, str, str]] = {(w1, w2, w3)}
-        seen_pairs = set(build_windows(generated, 2))
-        seen_triplets = set(build_windows(generated, 3))
+        visited_triplets = OrderedDict.fromkeys([(w1, w2, w3)])
+        seen_pairs = OrderedDict.fromkeys(build_windows(generated, 2))
+        seen_triplets = OrderedDict.fromkeys(build_windows(generated, 3))
         jump_count = 0
 
         for step_index in range(self.max_steps):
@@ -677,7 +834,7 @@ class MarkovGenerator:
                 break
             if (
                 len(generated) > 8
-                and random.random() < jump_probability
+                and generation_rng.random() < jump_probability
                 and starts3
                 and order >= 3
             ):
@@ -689,10 +846,14 @@ class MarkovGenerator:
                         start_explore,
                         start_power,
                         context_start_bias,
+                        generation_rng,
                     )
                 if contextual_jump is None:
                     contextual_jump = weighted_start3_choice(
-                        starts3, start_explore, start_power
+                        starts3,
+                        start_explore,
+                        start_power,
+                        generation_rng,
                     )
                 w1, w2, w3 = contextual_jump
                 jump_count += 1
@@ -711,6 +872,7 @@ class MarkovGenerator:
                     pool,
                     next_explore,
                     next_power,
+                    generation_rng,
                     context_token_set=context_token_set,
                     context_pairs=context_pairs,
                     context_triplets=context_triplets,
@@ -732,6 +894,7 @@ class MarkovGenerator:
                         pool2,
                         next_explore,
                         next_power,
+                        generation_rng,
                         context_token_set=context_token_set,
                         context_pairs=context_pairs,
                         context_triplets=context_triplets,
@@ -743,6 +906,7 @@ class MarkovGenerator:
                         seen_triplets=seen_triplets,
                         repetition_penalty_strength=repetition_penalty_strength,
                     )
+                    order_used = min(order_used, 2)
                 else:
                     if not enable_backoff or backoff_min_order > 1:
                         break
@@ -753,6 +917,7 @@ class MarkovGenerator:
                         pool1,
                         next_explore,
                         next_power,
+                        generation_rng,
                         context_token_set=context_token_set,
                         context_pairs=context_pairs,
                         current_state=(w3,),
@@ -762,6 +927,7 @@ class MarkovGenerator:
                         seen_pairs=seen_pairs,
                         repetition_penalty_strength=repetition_penalty_strength,
                     )
+                    order_used = 1
 
             generated.append(w4)
             if has_degraded_recent_window(generated):
@@ -771,30 +937,62 @@ class MarkovGenerator:
                 break
 
             w1, w2, w3 = w2, w3, w4
-            visited_triplets.add((w1, w2, w3))
+            remember_bounded(visited_triplets, (w1, w2, w3), 40)
             if len(generated) >= 2:
-                seen_pairs.add((generated[-2], generated[-1]))
+                remember_bounded(
+                    seen_pairs,
+                    (generated[-2], generated[-1]),
+                    80,
+                )
             if len(generated) >= 3:
-                seen_triplets.add((generated[-3], generated[-2], generated[-1]))
-            if len(visited_triplets) > 40:
-                visited_triplets.pop()
-            if len(seen_pairs) > 80:
-                seen_pairs.pop()
-            if len(seen_triplets) > 80:
-                seen_triplets.pop()
+                remember_bounded(
+                    seen_triplets,
+                    (generated[-3], generated[-2], generated[-1]),
+                    80,
+                )
 
         generated = trim_repetitive_tail(generated)
         generated = trim_to_sentence_boundary(generated)
         result = detokenize(generated, max_chars=max_chars)
         if len(result) < 5:
-            return ""
+            return _GenerationAttempt(
+                "",
+                order_used,
+                jump_count,
+                REJECTION_RESULT_TOO_SHORT,
+                0,
+            )
         result_tokens = tokenize(result)
         is_short_reply = is_short_generated_reply(result_tokens)
         if not is_short_reply and is_low_diversity_reply(result_tokens):
-            return ""
+            return _GenerationAttempt(
+                "",
+                order_used,
+                jump_count,
+                REJECTION_LOW_DIVERSITY,
+                0,
+            )
         if is_short_reply:
             if is_short_context_copy(result_tokens, context_tokens):
-                return ""
+                return _GenerationAttempt(
+                    "",
+                    order_used,
+                    jump_count,
+                    REJECTION_SHORT_CONTEXT_COPY,
+                    0,
+                )
         elif is_context_heavy_reply(result_tokens, context_tokens):
-            return ""
-        return result
+            return _GenerationAttempt(
+                "",
+                order_used,
+                jump_count,
+                REJECTION_CONTEXT_HEAVY,
+                0,
+            )
+        return _GenerationAttempt(
+            result,
+            order_used,
+            jump_count,
+            None,
+            len(result_tokens),
+        )

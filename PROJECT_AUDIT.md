@@ -1,11 +1,51 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-06-20, тринадцатая редакция (generation Phase 0: дефекты связности + generate-before-learn).
-**Текущая ветка:** `feat/generation-phase0` (Phase 0 дорожной карты генерации; не слита).
-**Тесты / проверки:** `unittest discover tests` — 271 OK; `ruff check app/ tests/` — clean.
-**Backlog:** P0/P1/P2/P3 — пусто. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
+**Дата актуализации:** 2026-06-20, четырнадцатая редакция (generation Phase 1: injected RNG, trace, offline-харнесс).
+**Текущая ветка:** `feat/generation-phase1` (Phase 1 дорожной карты генерации; не слита). Phase 0 и оба `chore(deps)` — уже в `main`.
+**Тесты / проверки:** `unittest discover tests` — 278 OK; `ruff check app/ tests/ tools/` — clean; `mypy app/` — clean.
+**Backlog:** P0/P1/P2/P3 — пусто. Открытый техдолг: `STRUCT-001` (плоские модули в корне vs пакет `app/`) — выполняется между Фазой 1 и Фазой 2, см. `docs/RESPONSE_GENERATION_ROADMAP.md`. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
+
+---
+
+## Session update - 2026-06-20 (generation Phase 1)
+
+Реализована Фаза 1 дорожной карты на ветке `feat/generation-phase1`. Phase 0 и
+обновление зависимостей (`idna` 3.18, общий `chore(deps)`) уже слиты в `main`
+(PR #30, #31).
+
+### Completed
+- **1.1 Injected RNG + детерминизм:** через весь генерационный контур проброшен
+  `random.Random` (хелперы `weighted_*_choice`, contextual starts); публичный
+  `generate_text(..., rng=None)` создаёт свежий RNG по умолчанию, контракт `str`
+  сохранён. Недетерминированный `set.pop()`-eviction заменён на FIFO через
+  `OrderedDict` (`remember_bounded`). SQL-пулы переходов и weighted-populations
+  получили стабильную сортировку (`app/repositories/markov_repo.py`).
+- **1.2 Trace:** добавлен frozen `GenerationTrace` (attempts, фактический order,
+  jump_count, rejection reason, token count) + `generate_text_with_trace()`;
+  DEBUG-лог trace без текста/идентификаторов.
+- **1.3 Offline-харнесс:** `tools/eval_generation.py` на синтетическом корпусе
+  (`tools/fixtures/synthetic_generation_corpus.txt`) с фикс-seed; зафиксирован
+  post-Phase-0 baseline (`tools/generation_baseline.json`).
+
+### Changed files
+- `markov.py`, `app/repositories/markov_repo.py`
+- `tools/eval_generation.py`, `tools/fixtures/synthetic_generation_corpus.txt`,
+  `tools/generation_baseline.json`
+- `tests/test_markov_and_text.py`, `tests/test_db_logic.py`,
+  `tests/test_eval_generation.py`
+- `docs/RESPONSE_GENERATION_ROADMAP.md` (запись STRUCT-001 между Фазой 1 и 2)
+
+### Tests/checks run
+- `unittest discover tests` — **278 OK**.
+- `ruff check app/ tests/ tools/` — clean; `mypy app/` — clean.
+- Независимая проверка детерминизма харнесса: один seed → идентичные контентные
+  метрики (различается лишь wall-clock latency); разный seed → различие.
+
+### Remaining work
+- **STRUCT-001** (техдолг структуры) — следующий шаг, ДО Фазы 2.
+- Затем Фазы 2–4 дорожной карты.
 
 ---
 

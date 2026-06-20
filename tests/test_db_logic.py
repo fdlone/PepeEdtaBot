@@ -87,6 +87,38 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["transitions1"], 4)
         self.assertEqual(stats["volume3"], 2)
 
+    async def test_markov_query_results_have_stable_lexical_order(self) -> None:
+        messages = [
+            ["zeta", "start", "shared", "omega"],
+            ["alpha", "start", "shared", "beta"],
+            ["zeta", "start", "shared", "alpha"],
+        ]
+        for tokens in messages:
+            await self.db.save_message_and_update_model(
+                chat_id=2003,
+                raw_text=" ".join(tokens),
+                tokens=tokens,
+            )
+
+        self.assertEqual(
+            await self.db.get_starts(2003),
+            [
+                ("alpha", "start", 1),
+                ("zeta", "start", 2),
+            ],
+        )
+        self.assertEqual(
+            await self.db.get_starts3(2003),
+            [
+                ("alpha", "start", "shared", 1),
+                ("zeta", "start", "shared", 2),
+            ],
+        )
+        self.assertEqual(
+            await self.db.get_transitions3(2003, "zeta", "start", "shared"),
+            [("alpha", 1), ("omega", 1)],
+        )
+
     async def test_clear_chat(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=3003,
