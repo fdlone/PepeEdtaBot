@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from bot_messages import (
+from app.presentation.bot_messages import (
     TELEGRAM_COMMANDS,
     format_clear_confirmation_message,
     format_config_message,

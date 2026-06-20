@@ -4,7 +4,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from settings import load_settings
+from app.config.settings import load_settings
 
 
 def minimal_env(db_path: str = "test_settings.db") -> dict[str, str]:

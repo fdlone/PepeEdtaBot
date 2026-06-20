@@ -7,9 +7,9 @@ from typing import Optional
 
 import aiosqlite
 
+from app.core.text import sanitize_text
 from app.infrastructure import migrator
 from app.repositories import ChatMembersRepo, MarkovRepo, MessagesRepo, PivoUsageRepo
-from text_utils import sanitize_text
 
 PIVO_DAILY_USAGE_RETENTION_DAYS = 7
 

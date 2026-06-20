@@ -8,24 +8,24 @@ from collections import deque
 from aiogram import F, Router
 from aiogram.types import Message
 
-from app.handlers._helpers import is_group_message, reply_humanized
-from app.log_masking import mask_chat_id
-from app.services import LearningService
-from bot_policy import (
-    bot_is_mentioned,
-    cooldown_allows_reply,
-    has_enough_model_data,
-    should_reply_to_message,
-)
-from markov import (
+from app.config.runtime_state import RuntimeState
+from app.core.markov import (
     MarkovGenerator,
     escalated_randomness_strength,
     extract_best_seed,
     is_short_generated_reply,
     tokenize,
 )
-from runtime_state import RuntimeState
-from text_utils import sanitize_text
+from app.core.reply_policy import (
+    bot_is_mentioned,
+    cooldown_allows_reply,
+    has_enough_model_data,
+    should_reply_to_message,
+)
+from app.core.text import sanitize_text
+from app.handlers._helpers import is_group_message, reply_humanized
+from app.log_masking import mask_chat_id
+from app.services import LearningService
 
 router = Router(name="learning")
 logger = logging.getLogger("chat_markov")

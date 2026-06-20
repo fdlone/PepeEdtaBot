@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from bot_policy import (
+from app.core.reply_policy import (
     bot_is_mentioned,
     cooldown_allows_reply,
     has_enough_model_data,

@@ -44,8 +44,9 @@
                   │
                   ▼
         ┌────────────────────────────────────────────────────────┐
-        │  db.Database  (фасад: соединение + кросс-доменные      │
-        │  транзакции типа save_message_and_update_model)        │
+        │  infrastructure/database.py (фасад: соединение +      │
+        │  кросс-доменные транзакции типа                        │
+        │  save_message_and_update_model)                        │
         └────────────────────────────────────────────────────────┘
                   │
                   ▼
@@ -69,29 +70,33 @@
 
 | Подпакет | Содержимое |
 |---|---|
+| `config/` | `registry.py`, `settings.py`, `runtime_config.py`, `runtime_state.py` |
+| `core/` | `markov.py`, `reply_policy.py`, `text.py` |
+| `domain/` | `pivo.py`, `pivo_templates.py` |
+| `presentation/` | `bot_messages.py` |
 | `handlers/` | `common.py`, `admin.py`, `pivo.py`, `learning.py` — `aiogram.Router` per file. `_helpers.py` — `reply_humanized`. |
 | `services/` | `learning_service.py`, `pivo_service.py` |
 | `repositories/` | `markov_repo.py`, `messages_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py` |
 | `filters/` | `group_only.py` (только `GROUP`/`SUPERGROUP`), `admin_or_owner.py` (`OWNER_ID` или админ чата, fail-closed при ошибке Telegram API) |
 | `middlewares/` | `throttling.py` — per-user-per-command cooldown, `clear`=3600 сек; команды из `notify_on_throttle` получают явный ответ при throttle вместо silent drop |
-| `infrastructure/` | `migrator.py` — пробегает `app/migrations/NNN_*` ровно один раз. `.sql`-файлы оборачиваются в `BEGIN; ... COMMIT;` и проходят через `executescript`; на исключении вызывается `conn.rollback()` и схема не остаётся в полу-применённом состоянии |
+| `infrastructure/` | `database.py` — фасад БД; `migrator.py` — пробегает `app/migrations/NNN_*` ровно один раз. `.sql`-файлы оборачиваются в `BEGIN; ... COMMIT;` и проходят через `executescript`; на исключении вызывается `conn.rollback()` и схема не остаётся в полу-применённом состоянии |
 | `migrations/` | `001_initial.sql` … `007_unify_chat_members.sql` |
 
-### Корневые legacy/utility модули
+### Внутренние модули пакета
 
 | Файл | Назначение |
 |---|---|
-| `db.py` | Фасад над репозиториями: соединение `aiosqlite`, кросс-доменные транзакции (`save_message_and_update_model`, `clear_chat`, `get_stats`), retention `pivo_daily_usage`. |
-| `markov.py` | Variable-order генератор (3 → 2 → 1). Не трогать. |
-| `pivo.py` | `PivoSecurity` (HMAC + Fernet), `PivoMember`. |
-| `pivo_templates.py` | Контент сообщений `/pivo`. |
-| `bot_messages.py` | Форматирование `/help`, `/stats`, `/config`. |
-| `bot_policy.py` | `bot_is_mentioned`, cooldown, `should_reply` + `DEFAULT_BOT_TEXT_ALIASES` (встроенные «прозвища», на которые бот отзывается). |
-| `settings.py` | `Settings` dataclass + `load_settings(env)`. |
-| `runtime_state.py` | `RuntimeState` dataclass + `runtime_state_from_settings`. |
-| `runtime_config.py` | Тонкая обёртка вокруг `config_registry.try_apply` для `/set`. |
-| `config_registry.py` | **Единый реестр** runtime-mutable полей (`FieldSpec` × 20 + `validate_cross_fields`). |
-| `text_utils.py` | `sanitize_text` — убирает `@mention`, схлопывает пробелы. |
+| `app/infrastructure/database.py` | Фасад над репозиториями: соединение `aiosqlite`, кросс-доменные транзакции (`save_message_and_update_model`, `clear_chat`, `get_stats`), retention `pivo_daily_usage`. |
+| `app/core/markov.py` | Variable-order генератор (3 → 2 → 1). |
+| `app/domain/pivo.py` | `PivoSecurity` (HMAC + Fernet), `PivoMember`. |
+| `app/domain/pivo_templates.py` | Контент сообщений `/pivo`. |
+| `app/presentation/bot_messages.py` | Форматирование `/help`, `/stats`, `/config`. |
+| `app/core/reply_policy.py` | `bot_is_mentioned`, cooldown, `should_reply` + `DEFAULT_BOT_TEXT_ALIASES` (встроенные «прозвища», на которые бот отзывается). |
+| `app/config/settings.py` | `Settings` dataclass + `load_settings(env)`. |
+| `app/config/runtime_state.py` | `RuntimeState` dataclass + `runtime_state_from_settings`. |
+| `app/config/runtime_config.py` | Тонкая обёртка вокруг `app.config.registry.try_apply` для `/set`. |
+| `app/config/registry.py` | **Единый реестр** runtime-mutable полей (`FieldSpec` × 20 + `validate_cross_fields`). |
+| `app/core/text.py` | `sanitize_text` — убирает `@mention`, схлопывает пробелы. |
 
 ## DI
 
@@ -118,7 +123,7 @@ dp["bot_text_aliases"] = settings.bot_text_aliases
 
 ## Конфигурация
 
-Single source of truth для runtime-mutable полей — `config_registry.py`:
+Single source of truth для runtime-mutable полей — `app/config/registry.py`:
 
 ```python
 RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
@@ -128,11 +133,11 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
 )
 ```
 
-- `load_settings()` (settings.py) итерируется по реестру и читает
+- `load_settings()` (`app/config/settings.py`) итерируется по реестру и читает
   значения из env через `spec.parse`.
 - `runtime_state_from_settings()` копирует runtime-mutable значения
   в `RuntimeState` через тот же реестр.
-- `apply_runtime_setting()` (runtime_config.py) ищет `FieldSpec` по имени
+- `apply_runtime_setting()` (`app/config/runtime_config.py`) ищет `FieldSpec` по имени
   ключа из `/set`, парсит, проверяет на shallow copy через
   `validate_cross_fields`, и только потом мутирует живой state.
 
@@ -149,7 +154,7 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
 
 `BOT_TEXT_ALIASES` имеет специальное поведение «безопасного fallback'а»:
 если переменная не задана или содержит только разделители — берутся
-встроенные `bot_policy.DEFAULT_BOT_TEXT_ALIASES = {"pepe", "пепе"}`, чтобы
+встроенные `app.core.reply_policy.DEFAULT_BOT_TEXT_ALIASES = {"pepe", "пепе"}`, чтобы
 бот отвечал на свои стандартные прозвища даже без редактируемого
 `.env` (например, на проде с ограниченным доступом к контейнеру).
 

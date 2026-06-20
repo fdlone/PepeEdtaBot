@@ -7,14 +7,14 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from app.config.runtime_state import RuntimeState
+from app.config.settings import Settings
+from app.domain.pivo import PIVO_PRIVACY_MESSAGE
 from app.filters import GroupOnly, is_admin_or_owner
 from app.handlers._helpers import reply_humanized
 from app.services import PivoService
 from app.services.pivo_parser import parse_pivo_command
 from app.services.pivo_service import PivoCallLimitError
-from pivo import PIVO_PRIVACY_MESSAGE
-from runtime_state import RuntimeState
-from settings import Settings
 
 router = Router(name="pivo")
 logger = logging.getLogger("chat_markov")

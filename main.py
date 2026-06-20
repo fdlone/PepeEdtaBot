@@ -7,19 +7,19 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
 
 from app import log_masking
+from app.config.runtime_state import runtime_state_from_settings
+from app.config.settings import Settings, load_settings
+from app.core.markov import MarkovGenerator
+from app.domain.pivo import PivoSecurity
 from app.handlers import admin as admin_handlers
 from app.handlers import common as common_handlers
 from app.handlers import errors as error_handlers
 from app.handlers import learning as learning_handlers
 from app.handlers import pivo as pivo_handlers
+from app.infrastructure.database import Database
 from app.middlewares import ThrottlingMiddleware
+from app.presentation.bot_messages import TELEGRAM_COMMANDS
 from app.services import LearningService, PivoService
-from bot_messages import TELEGRAM_COMMANDS
-from db import Database
-from markov import MarkovGenerator
-from pivo import PivoSecurity
-from runtime_state import runtime_state_from_settings
-from settings import Settings, load_settings
 
 COMMAND_COOLDOWNS_SECONDS = {
     "clear": 60.0 * 60.0,

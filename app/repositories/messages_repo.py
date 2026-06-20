@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 
 import aiosqlite
 
-from text_utils import sanitize_text
+from app.core.text import sanitize_text
 
 ConnProvider = Callable[[], Awaitable[aiosqlite.Connection]]
 

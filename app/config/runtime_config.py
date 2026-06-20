@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from config_registry import runtime_field_names, try_apply
+from app.config.registry import runtime_field_names, try_apply
 
 ALLOWED_RUNTIME_KEYS: tuple[str, ...] = runtime_field_names()
 

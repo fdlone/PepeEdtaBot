@@ -7,7 +7,7 @@ from pathlib import Path
 
 import aiosqlite
 
-from db import PIVO_DAILY_USAGE_RETENTION_DAYS, Database
+from app.infrastructure.database import PIVO_DAILY_USAGE_RETENTION_DAYS, Database
 
 
 class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):

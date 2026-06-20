@@ -1,9 +1,9 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-06-20, четырнадцатая редакция (generation Phase 1: injected RNG, trace, offline-харнесс).
-**Текущая ветка:** `feat/generation-phase1` (Phase 1 дорожной карты генерации; не слита). Phase 0 и оба `chore(deps)` — уже в `main`.
-**Тесты / проверки:** `unittest discover tests` — 278 OK; `ruff check app/ tests/ tools/` — clean; `mypy app/` — clean.
-**Backlog:** P0/P1/P2/P3 — пусто. Открытый техдолг: `STRUCT-001` (плоские модули в корне vs пакет `app/`) — выполняется между Фазой 1 и Фазой 2, см. `docs/RESPONSE_GENERATION_ROADMAP.md`. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
+**Дата актуализации:** 2026-06-20, пятнадцатая редакция (STRUCT-001: перенос корневых модулей в пакет `app/`).
+**Текущая ветка:** `refactor/struct-001` (не слита). Phase 0, Phase 1 и оба `chore(deps)` — уже в `main`.
+**Тесты / проверки:** `unittest discover tests` — 278 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (45 files); harness воспроизводит baseline.
+**Backlog:** P0/P1/P2/P3 — пусто. `STRUCT-001` — **выполнен** (flat-раскладка: `app/config`,`app/core`,`app/infrastructure`,`app/domain`,`app/presentation`; seed → `tools/`). Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
 

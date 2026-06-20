@@ -11,18 +11,23 @@ is_verbatim_copy давал честный результат на свежем 
 Назначение: smoke-тестирование генерации в реальном Telegram-чате на
 датасете, на котором генератор гарантированно выдаёт варианты, не
 совпадающие с префиксами обучающего корпуса.
+
+Usage:
+    python -m tools.seed_diverse [--chat-id CHAT_ID] [--messages N] [--db PATH]
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import random
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-from db import Database
+from app.infrastructure.database import Database
 
 # ~500 русских слов общеупотребительной лексики, разные части речи и темы.
 VOCAB: list[str] = [

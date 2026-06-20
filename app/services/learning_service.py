@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from db import Database
-from markov import MarkovGenerator
-from text_utils import sanitize_text
+from app.core.markov import MarkovGenerator
+from app.core.text import sanitize_text
+from app.infrastructure.database import Database
 
 
 class LearningService:

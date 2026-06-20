@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from markov import tokenize
+from app.core.markov import tokenize
 
 # Default text aliases the bot answers to when used as plain words in chat
 # (i.e. without a Telegram @-mention). Frozen so callers can't mutate it

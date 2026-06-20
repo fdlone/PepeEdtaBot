@@ -6,23 +6,23 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.filters import AdminOrOwner, GroupOnly
-from app.handlers._helpers import reply_humanized
-from bot_messages import (
-    format_clear_confirmation_message,
-    format_config_message,
-    format_set_help_message,
-)
-from db import Database
-from markov import MarkovGenerator
-from runtime_config import (
+from app.config.runtime_config import (
     UNKNOWN_RUNTIME_KEY_MESSAGE,
     InvalidRuntimeSettingValueError,
     UnknownRuntimeSettingError,
     apply_runtime_setting,
 )
-from runtime_state import RuntimeState
-from settings import Settings
+from app.config.runtime_state import RuntimeState
+from app.config.settings import Settings
+from app.core.markov import MarkovGenerator
+from app.filters import AdminOrOwner, GroupOnly
+from app.handlers._helpers import reply_humanized
+from app.infrastructure.database import Database
+from app.presentation.bot_messages import (
+    format_clear_confirmation_message,
+    format_config_message,
+    format_set_help_message,
+)
 
 router = Router(name="admin")
 logger = logging.getLogger("chat_markov")

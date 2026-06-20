@@ -5,7 +5,7 @@ import random
 import re
 from dataclasses import asdict, dataclass
 
-from pivo_templates import (
+from app.domain.pivo_templates import (
     PIVO_DEFAULT_BODY_PARTS,
     PIVO_DEFAULT_BOTTOM_PARTS,
     PIVO_DEFAULT_TARGET_INTROS,
