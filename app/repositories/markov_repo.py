@@ -19,7 +19,12 @@ class MarkovRepo:
         async with self._lock:
             db = await self._conn_provider()
             cursor = await db.execute(
-                "SELECT w1, w2, cnt FROM starts WHERE chat_id = ?",
+                """
+                SELECT w1, w2, cnt
+                FROM starts
+                WHERE chat_id = ?
+                ORDER BY w1, w2
+                """,
                 (chat_id,),
             )
             rows = await cursor.fetchall()
@@ -29,7 +34,12 @@ class MarkovRepo:
         async with self._lock:
             db = await self._conn_provider()
             cursor = await db.execute(
-                "SELECT w1, w2, w3, cnt FROM starts3 WHERE chat_id = ?",
+                """
+                SELECT w1, w2, w3, cnt
+                FROM starts3
+                WHERE chat_id = ?
+                ORDER BY w1, w2, w3
+                """,
                 (chat_id,),
             )
             rows = await cursor.fetchall()
@@ -77,6 +87,7 @@ class MarkovRepo:
                 SELECT w3, cnt
                 FROM transitions
                 WHERE chat_id = ? AND w1 = ? AND w2 = ?
+                ORDER BY w3
                 """,
                 (chat_id, w1, w2),
             )
@@ -93,6 +104,7 @@ class MarkovRepo:
                 SELECT w4, cnt
                 FROM transitions3
                 WHERE chat_id = ? AND w1 = ? AND w2 = ? AND w3 = ?
+                ORDER BY w4
                 """,
                 (chat_id, w1, w2, w3),
             )
@@ -107,6 +119,7 @@ class MarkovRepo:
                 SELECT w2, cnt
                 FROM transitions1
                 WHERE chat_id = ? AND w1 = ?
+                ORDER BY w2
                 """,
                 (chat_id, w1),
             )

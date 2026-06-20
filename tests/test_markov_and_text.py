@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import unittest
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -11,13 +12,16 @@ from app.handlers.learning import extract_context_tokens
 from bot_policy import bot_is_mentioned
 from db import Database
 from markov import (
+    GenerationTrace,
     MarkovGenerator,
+    _GenerationAttempt,
     detokenize,
     escalated_randomness_strength,
     has_degraded_recent_window,
     is_context_heavy_reply,
     is_low_diversity_reply,
     is_short_generated_reply,
+    remember_bounded,
     tokenize,
     trim_repetitive_tail,
     weighted_next_choice,
@@ -75,6 +79,16 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(values[-1], values[0])
         self.assertLessEqual(values[-1], 3.0)
         self.assertEqual(values, sorted(values))
+
+    def test_remember_bounded_evicts_oldest_entry(self) -> None:
+        values: OrderedDict[str, None] = OrderedDict()
+
+        remember_bounded(values, "first", 2)
+        remember_bounded(values, "second", 2)
+        remember_bounded(values, "first", 2)
+        remember_bounded(values, "third", 2)
+
+        self.assertEqual(list(values), ["second", "third"])
 
     def test_context_heavy_reply_detects_loop_on_parent_tokens(self) -> None:
         self.assertTrue(
@@ -168,7 +182,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_context_bias_prefers_context_tokens(self) -> None:
-        random.seed(7)
+        rng = random.Random(7)
         tea_count = 0
         coffee_count = 0
         for _ in range(400):
@@ -176,6 +190,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
                 items=[("кофе", 1), ("чай", 1)],
                 explore_probability=0.0,
                 power=1.0,
+                rng=rng,
                 context_token_set={"чай"},
                 context_pairs={("утром", "чай")},
                 context_triplets={("люблю", "утром", "чай")},
@@ -191,7 +206,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(tea_count, coffee_count)
 
     def test_repetition_penalty_avoids_immediate_loop(self) -> None:
-        random.seed(17)
+        rng = random.Random(17)
         same_count = 0
         other_count = 0
         for _ in range(400):
@@ -199,6 +214,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
                 items=[("эхо", 4), ("ответ", 4)],
                 explore_probability=0.0,
                 power=1.0,
+                rng=rng,
                 current_state=("скажи", "эхо"),
                 recent_tokens=["скажи", "эхо", "эхо"],
                 seen_pairs={("эхо", "эхо")},
@@ -285,7 +301,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             tokens=["Люблю", "кофе", "утром"],
         )
 
-        random.seed(42)
         text = await self.generator.generate_text(
             chat_id=4444,
             max_chars=12,
@@ -294,6 +309,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             markov_order=3,
             enable_backoff=True,
             backoff_min_order=1,
+            rng=random.Random(42),
         )
         self.assertTrue(text)
         self.assertTrue(text.startswith("Я очень"))
@@ -306,7 +322,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             tokens=["Привет", "мир", "снова"],
         )
 
-        random.seed(42)
         text = await self.generator.generate_text(
             chat_id=4445,
             max_chars=100,
@@ -315,6 +330,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             markov_order=3,
             enable_backoff=True,
             backoff_min_order=1,
+            rng=random.Random(42),
         )
 
         self.assertEqual(text, "Привет")
@@ -331,7 +347,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             tokens=["Люблю", "кофе", "вечером", "иногда"],
         )
 
-        random.seed(11)
         text = await self.generator.generate_text(
             chat_id=5555,
             max_chars=25,
@@ -342,6 +357,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             markov_order=3,
             enable_backoff=True,
             backoff_min_order=1,
+            rng=random.Random(11),
         )
 
         self.assertTrue(text)
@@ -364,7 +380,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             tokens=["солнце", "ярко", "греет", "дом"],
         )
 
-        random.seed(5)
         text = await self.generator.generate_text(
             chat_id=6666,
             max_chars=17,
@@ -375,6 +390,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             markov_order=3,
             enable_backoff=True,
             backoff_min_order=1,
+            rng=random.Random(5),
         )
 
         self.assertTrue(text)
@@ -393,7 +409,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             tokens=["утром", "люблю", "кофе", "дома"],
         )
 
-        random.seed(13)
         text = await self.generator.generate_text(
             chat_id=7777,
             max_chars=15,
@@ -401,10 +416,106 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             markov_order=3,
             enable_backoff=True,
             backoff_min_order=1,
+            rng=random.Random(13),
         )
 
         self.assertTrue(text)
         self.assertTrue(text.startswith("утром люблю"))
+
+    async def test_generate_text_is_deterministic_with_injected_rng(self) -> None:
+        corpus = [
+            ["alpha", "beta", "gamma", "delta", "one"],
+            ["alpha", "beta", "gamma", "delta", "two"],
+            ["alpha", "beta", "gamma", "other", "three"],
+            ["fresh", "path", "continues", "into", "four"],
+        ]
+        for tokens in corpus:
+            await self.db.save_message_and_update_model(
+                chat_id=7776,
+                raw_text=" ".join(tokens),
+                tokens=tokens,
+            )
+
+        first = await self.generator.generate_text(
+            chat_id=7776,
+            max_chars=100,
+            max_tokens=10,
+            randomness_strength=1.8,
+            rng=random.Random(12345),
+        )
+        second = await self.generator.generate_text(
+            chat_id=7776,
+            max_chars=100,
+            max_tokens=10,
+            randomness_strength=1.8,
+            rng=random.Random(12345),
+        )
+
+        self.assertEqual(first, second)
+
+    async def test_generation_trace_contains_safe_metrics(self) -> None:
+        await self.db.save_message_and_update_model(
+            chat_id=7775,
+            raw_text="alpha beta gamma delta",
+            tokens=["alpha", "beta", "gamma", "delta"],
+        )
+
+        with self.assertLogs("chat_markov", level="DEBUG") as captured_logs:
+            text, trace = await self.generator.generate_text_with_trace(
+                chat_id=7775,
+                max_chars=100,
+                randomness_strength=0.0,
+                rng=random.Random(7),
+            )
+
+        self.assertTrue(text)
+        self.assertIsInstance(trace, GenerationTrace)
+        self.assertEqual(trace.attempts_used, 1)
+        self.assertEqual(trace.markov_order_used, 3)
+        self.assertEqual(trace.jump_count, 0)
+        self.assertIsNone(trace.rejection_reason)
+        self.assertEqual(trace.token_count, len(tokenize(text)))
+        self.assertNotIn(text, repr(trace))
+        joined_logs = " ".join(captured_logs.output)
+        self.assertIn("attempts=1", joined_logs)
+        self.assertNotIn(text, joined_logs)
+
+    async def test_generation_trace_reports_final_rejection(self) -> None:
+        text, trace = await self.generator.generate_text_with_trace(
+            chat_id=7774,
+            max_chars=100,
+            rng=random.Random(8),
+        )
+
+        self.assertEqual(text, "")
+        self.assertEqual(trace.attempts_used, 8)
+        self.assertEqual(trace.markov_order_used, 0)
+        self.assertEqual(trace.jump_count, 0)
+        self.assertEqual(trace.rejection_reason, "no_starts")
+        self.assertEqual(trace.token_count, 0)
+
+    async def test_generation_trace_reports_actual_backoff_order(self) -> None:
+        await self.db.save_message_and_update_model(
+            chat_id=7773,
+            raw_text="alpha beta gamma delta",
+            tokens=["alpha", "beta", "gamma", "delta"],
+        )
+        conn = await self.db._get_conn()
+        await conn.execute("DELETE FROM starts3 WHERE chat_id = ?", (7773,))
+        await conn.execute("DELETE FROM transitions3 WHERE chat_id = ?", (7773,))
+        await conn.commit()
+
+        text, trace = await self.generator.generate_text_with_trace(
+            chat_id=7773,
+            max_chars=100,
+            markov_order=3,
+            enable_backoff=True,
+            backoff_min_order=1,
+            rng=random.Random(9),
+        )
+
+        self.assertTrue(text)
+        self.assertEqual(trace.markov_order_used, 2)
 
     async def test_high_randomness_long_reply_without_context_is_not_force_rejected(
         self,
@@ -416,16 +527,16 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             tokens=tokens,
         )
 
-        with patch("markov.random.random", return_value=1.0):
-            text = await self.generator.generate_text(
-                chat_id=7778,
-                max_chars=500,
-                max_tokens=14,
-                randomness_strength=2.0,
-                markov_order=3,
-                enable_backoff=True,
-                backoff_min_order=1,
-            )
+        text = await self.generator.generate_text(
+            chat_id=7778,
+            max_chars=500,
+            max_tokens=14,
+            randomness_strength=2.0,
+            markov_order=3,
+            enable_backoff=True,
+            backoff_min_order=1,
+            rng=random.Random(3),
+        )
 
         self.assertEqual(text, " ".join(tokens))
 
@@ -437,13 +548,10 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             tokens=tokens,
         )
 
-        with (
-            patch("markov.random.random", return_value=0.0),
-            patch(
-                "markov.weighted_start3_choice",
-                wraps=weighted_start3_choice,
-            ) as mock_start_choice,
-        ):
+        with patch(
+            "markov.weighted_start3_choice",
+            wraps=weighted_start3_choice,
+        ) as mock_start_choice:
             text = await self.generator.generate_text(
                 chat_id=7779,
                 max_chars=500,
@@ -452,6 +560,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
                 markov_order=3,
                 enable_backoff=True,
                 backoff_min_order=1,
+                rng=random.Random(4),
             )
 
         self.assertEqual(text, " ".join(tokens))
@@ -482,7 +591,13 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             MarkovGenerator,
             "_generate_text_once",
-            new=AsyncMock(side_effect=["", "", "валидный ответ"]),
+            new=AsyncMock(
+                side_effect=[
+                    _GenerationAttempt("", 3, 0, "low_diversity", 0),
+                    _GenerationAttempt("", 3, 0, "context_heavy", 0),
+                    _GenerationAttempt("валидный ответ", 3, 0, None, 2),
+                ]
+            ),
         ) as mock_generate_once:
             text = await self.generator.generate_text(
                 chat_id=8888,
@@ -496,7 +611,13 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             MarkovGenerator,
             "_generate_text_once",
-            new=AsyncMock(side_effect=["", "", "валидный ответ"]),
+            new=AsyncMock(
+                side_effect=[
+                    _GenerationAttempt("", 3, 0, "low_diversity", 0),
+                    _GenerationAttempt("", 3, 0, "context_heavy", 0),
+                    _GenerationAttempt("валидный ответ", 3, 0, None, 2),
+                ]
+            ),
         ) as mock_generate_once:
             await self.generator.generate_text(
                 chat_id=8889,
@@ -528,7 +649,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(text, "Привет")
 
     def test_context_bias_does_not_override_repetition_penalty(self) -> None:
-        random.seed(23)
+        rng = random.Random(23)
         repeated_count = 0
         fresh_count = 0
         for _ in range(400):
@@ -536,6 +657,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
                 items=[("кофе", 3), ("бодрит", 3)],
                 explore_probability=0.0,
                 power=1.0,
+                rng=rng,
                 context_token_set={"кофе"},
                 context_pairs={("утром", "кофе")},
                 context_triplets={("люблю", "утром", "кофе")},
@@ -554,7 +676,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(fresh_count, repeated_count)
 
     def test_repetition_penalty_strength_zero_disables_loop_penalty(self) -> None:
-        random.seed(29)
+        rng = random.Random(29)
         repeated_count = 0
         fresh_count = 0
         for _ in range(400):
@@ -562,6 +684,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
                 items=[("эхо", 4), ("ответ", 4)],
                 explore_probability=0.0,
                 power=1.0,
+                rng=rng,
                 current_state=("скажи", "эхо"),
                 recent_tokens=["скажи", "эхо", "эхо"],
                 seen_pairs={("эхо", "эхо")},
