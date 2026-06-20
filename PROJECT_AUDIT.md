@@ -4,6 +4,7 @@
 **Текущая ветка:** `feat/generation-phase3.2` (не слита). Phase 0/1/2, Phase 3.1, STRUCT-001 и оба `chore(deps)` — уже в `main`.
 **Тесты / проверки:** `unittest discover tests` — 295 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (47 files); harness воспроизводит post-Phase-3.2 baseline.
 **Backlog:** P0/P1/P2/P3 — пусто. `STRUCT-001` — выполнен. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
+**Аудит-файлы:** `AUDIT_TASKLIST.md` ретайрен (2026-06-21) — его пункты закрыты/obsolete (см. секцию «Открытый security-backlog» ниже), а единственные открытые (AUD-010, CA-F11) уже в backlog выше; исходный security-baseline сохранён в `PROJECT_SECURITY_STABILITY_AUDIT.md`. Активные аудит-документы: `PROJECT_AUDIT.md` (трекер) и `PROJECT_AUDIT_CODEX.md` (reference).
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
 
