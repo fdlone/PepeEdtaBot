@@ -7,8 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from db import Database
-from pivo import (
+from app.domain.pivo import (
     PIVO_FALLBACK_MENTIONS,
     PIVO_PRIVACY_MESSAGE,
     PivoMember,
@@ -19,12 +18,13 @@ from pivo import (
     get_random_pivo_message,
     normalize_username,
 )
-from pivo_templates import (
+from app.domain.pivo_templates import (
     PIVO_TARGET_BODY_PARTS,
     PIVO_TARGET_BOTTOM_PARTS,
     PIVO_TARGET_INTROS,
     PIVO_TARGET_TOP_PARTS,
 )
+from app.infrastructure.database import Database
 
 RANDOM_CHOICE_PATH = "app.services.pivo_message_builder.random.choice"
 

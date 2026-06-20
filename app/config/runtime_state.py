@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 
-from config_registry import RUNTIME_FIELDS
-from settings import Settings
+from app.config.registry import RUNTIME_FIELDS
+from app.config.settings import Settings
 
 
 @dataclass(slots=True)

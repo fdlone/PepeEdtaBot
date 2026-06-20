@@ -4,8 +4,7 @@ import unittest
 from collections.abc import Iterable
 from unittest.mock import patch
 
-from app.services.pivo_message_builder import build_pivo_message
-from pivo_templates import (
+from app.domain.pivo_templates import (
     PIVO_DEFAULT_BODY_PARTS,
     PIVO_DEFAULT_BOTTOM_PARTS,
     PIVO_DEFAULT_TARGET_INTROS,
@@ -15,6 +14,7 @@ from pivo_templates import (
     PIVO_TARGET_INTROS,
     PIVO_TARGET_TOP_PARTS,
 )
+from app.services.pivo_message_builder import build_pivo_message
 
 RANDOM_CHOICE_PATH = "app.services.pivo_message_builder.random.choice"
 

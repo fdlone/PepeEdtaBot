@@ -4,11 +4,11 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from app.config.runtime_state import RuntimeState
 from app.filters import GroupOnly
 from app.handlers._helpers import reply_humanized
-from bot_messages import format_help_message, format_stats_message
-from db import Database
-from runtime_state import RuntimeState
+from app.infrastructure.database import Database
+from app.presentation.bot_messages import format_help_message, format_stats_message
 
 router = Router(name="common")
 

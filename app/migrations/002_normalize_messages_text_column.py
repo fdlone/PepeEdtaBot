@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import aiosqlite
 
-from text_utils import sanitize_text
+from app.core.text import sanitize_text
 
 
 async def apply(conn: aiosqlite.Connection) -> None:

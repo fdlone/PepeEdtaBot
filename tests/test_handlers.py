@@ -100,8 +100,9 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         assert "Использование" in msg.reply.call_args[0][0]
 
     async def test_set_valid_key_applies(self) -> None:
+        from app.config.runtime_state import RuntimeState
         from app.handlers.admin import cmd_set
-        from runtime_state import RuntimeState
+
         msg = _fake_message(text="/set reply_probability 0.5")
         real_state = MagicMock(spec=RuntimeState)
         real_state.reply_probability = 0.1

@@ -7,7 +7,7 @@ from aiogram.enums import ChatType
 from aiogram.filters import Filter
 from aiogram.types import Message
 
-from settings import Settings
+from app.config.settings import Settings
 
 logger = logging.getLogger("chat_markov")
 

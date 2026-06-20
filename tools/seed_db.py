@@ -3,7 +3,7 @@ Seed script: inserts random Markov training data via save_message_and_update_mod
 Generates sentences from a fixed vocabulary so transitions accumulate realistic weights.
 
 Usage:
-    python seed_db.py [--chat-id CHAT_ID] [--messages N] [--db PATH]
+    python -m tools.seed_db [--chat-id CHAT_ID] [--messages N] [--db PATH]
 
 Defaults:
     --chat-id  -1001147461458  (existing chat in markov.db)
@@ -18,13 +18,13 @@ import asyncio
 import os
 import random
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-import aiosqlite
-
-from app.infrastructure import migrator
-from db import Database
+from app.infrastructure.database import Database
 
 VOCAB: list[str] = [
     "привет", "пока", "да", "нет", "ну", "вот", "тут", "там", "так", "ещё",

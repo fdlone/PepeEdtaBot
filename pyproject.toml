@@ -5,6 +5,13 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+"app/core/markov.py" = ["UP045", "UP047"]
+"app/domain/pivo_templates.py" = ["E501"]
+"app/infrastructure/database.py" = ["UP045"]
+"tools/seed_db.py" = ["E402", "E501"]
+"tools/seed_diverse.py" = ["E402", "E501"]
+
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true
@@ -16,15 +23,16 @@ strict = true
 # Модули, помеченные «НЕ ТРОГАТЬ» или содержащие legacy-код без аннотаций
 [[tool.mypy.overrides]]
 module = [
-    "markov",
-    "bot_messages",
-    "runtime_config",
-    "runtime_state",
-    "bot_policy",
-    "text_utils",
-    "pivo",
-    "pivo_templates",
-    "settings",
-    "db",
+    "app.config.registry",
+    "app.config.runtime_config",
+    "app.config.runtime_state",
+    "app.config.settings",
+    "app.core.markov",
+    "app.core.reply_policy",
+    "app.core.text",
+    "app.domain.pivo",
+    "app.domain.pivo_templates",
+    "app.infrastructure.database",
+    "app.presentation.bot_messages",
 ]
 ignore_errors = true

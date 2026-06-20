@@ -5,8 +5,8 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-from bot_policy import DEFAULT_BOT_TEXT_ALIASES
-from config_registry import RUNTIME_FIELDS, validate_cross_fields
+from app.config.registry import RUNTIME_FIELDS, validate_cross_fields
+from app.core.reply_policy import DEFAULT_BOT_TEXT_ALIASES
 
 
 @dataclass(slots=True)

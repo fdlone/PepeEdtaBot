@@ -5,8 +5,8 @@ import unittest
 import uuid
 from pathlib import Path
 
-from db import Database
-from markov import MarkovGenerator
+from app.core.markov import MarkovGenerator
+from app.infrastructure.database import Database
 
 
 def _make_generator() -> MarkovGenerator:
@@ -36,7 +36,7 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         self.db_path.unlink(missing_ok=True)
 
     async def _record(self, text: str) -> None:
-        from markov import tokenize
+        from app.core.markov import tokenize
         tokens = tokenize(text)
         await self.svc.record_message(self.chat, text, tokens)
 

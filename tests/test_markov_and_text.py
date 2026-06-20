@@ -8,10 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app.handlers.learning import extract_context_tokens
-from bot_policy import bot_is_mentioned
-from db import Database
-from markov import (
+from app.core.markov import (
     GenerationTrace,
     MarkovGenerator,
     _GenerationAttempt,
@@ -27,7 +24,10 @@ from markov import (
     weighted_next_choice,
     weighted_start3_choice,
 )
-from text_utils import sanitize_text
+from app.core.reply_policy import bot_is_mentioned
+from app.core.text import sanitize_text
+from app.handlers.learning import extract_context_tokens
+from app.infrastructure.database import Database
 
 
 class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
@@ -549,7 +549,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "markov.weighted_start3_choice",
+            "app.core.markov.weighted_start3_choice",
             wraps=weighted_start3_choice,
         ) as mock_start_choice:
             text = await self.generator.generate_text(

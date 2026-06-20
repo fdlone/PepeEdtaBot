@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from collections import deque
 
-from runtime_state import RuntimeState
+from app.config.runtime_state import RuntimeState
 
 
 def make_runtime_state(**overrides: object) -> RuntimeState:

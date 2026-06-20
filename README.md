@@ -42,7 +42,7 @@ pip install -r requirements-dev.txt
 После этого используйте те же команды проверки, что и в CI:
 
 ```bash
-python -m ruff check app/ tests/
+python -m ruff check app/ tests/ tools/ main.py
 python -m mypy app/
 python -m unittest discover tests -v
 ```
@@ -165,13 +165,21 @@ activity-фраз вроде `СИГейм`, `Codenames`, `рисовалка` �
 Операционные процедуры по логам, WAL checkpoint, backup и restore описаны в
 [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
+Синтетические данные для локального smoke-теста можно загрузить командами:
+
+```bash
+python -m tools.seed_db --db markov.db
+python -m tools.seed_diverse --db markov.db
+```
+
 ## Важно для групп
 Отключите privacy mode у бота в BotFather:
 `Bot Settings -> Group Privacy -> Turn off`
 
 ## Архитектура
-Подробное описание слоёв (`handlers / services / repositories / filters /
-middlewares / migrations / security / infrastructure`), DI через
+Подробное описание слоёв (`config / core / domain / presentation / handlers /
+services / repositories / filters / middlewares / migrations / security /
+infrastructure`), DI через
 `Dispatcher` и compose root — в [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 Краткий обзор:
@@ -180,14 +188,19 @@ middlewares / migrations / security / infrastructure`), DI через
 - `app/handlers/` — четыре `aiogram.Router`'а: `common`, `admin`, `pivo`,
   `learning`. Хендлеры зависят только от сервисов.
 - `app/services/` — бизнес-логика (`LearningService`, `PivoService`).
+- `app/config/` — настройки, runtime-state и реестр изменяемых параметров.
+- `app/core/` — генератор Маркова, текстовая нормализация и reply policy.
+- `app/domain/` — доменная логика и шаблоны `/pivo`.
+- `app/presentation/` — пользовательские тексты и форматирование ответов.
 - `app/repositories/` — SQL по доменам (`markov`, `messages`,
   `chat_members`, `pivo_usage`).
 - `app/filters/` и `app/middlewares/` — `GroupOnly`, `AdminOrOwner`,
   `ThrottlingMiddleware`.
-- `app/infrastructure/migrator.py` — пробегает по `app/migrations/NNN_*.sql|.py`
-  один раз и записывает в `schema_migrations`.
+- `app/infrastructure/` — фасад БД и migrator, который пробегает по
+  `app/migrations/NNN_*.sql|.py` один раз и записывает в `schema_migrations`.
 
-Реестр runtime-настроек живёт в [`config_registry.py`](config_registry.py):
+Реестр runtime-настроек живёт в
+[`app/config/registry.py`](app/config/registry.py):
 любое поле, доступное через `/set`, описано там одной строкой и
 автоматически попадает в `Settings`, `RuntimeState` и
 `apply_runtime_setting`.
@@ -219,7 +232,7 @@ pip install -r requirements-dev.txt
 Локальные проверки:
 
 ```bash
-python -m ruff check app/ tests/
+python -m ruff check app/ tests/ tools/ main.py
 python -m mypy app/
 python -m unittest discover tests -v
 ```

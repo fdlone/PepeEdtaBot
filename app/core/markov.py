@@ -7,7 +7,7 @@ from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 from typing import NamedTuple, Optional, TypeVar
 
-from db import Database
+from app.infrastructure.database import Database
 
 logger = logging.getLogger("chat_markov")
 
