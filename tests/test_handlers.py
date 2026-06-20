@@ -670,7 +670,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         msg.reply.assert_not_awaited()
 
     async def test_message_is_persisted_when_generation_fails(self) -> None:
-        from app.handlers.learning import on_text_message
+        from app.handlers.learning import GENERATION_ATTEMPT_BUDGET, on_text_message
 
         msg = _fake_message(text="pepe generate something")
         learning_service = AsyncMock()
@@ -692,7 +692,20 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             )
 
         learning_service.record_message.assert_awaited_once()
-        self.assertGreater(generator.generate_text.await_count, 0)
+        self.assertEqual(
+            generator.generate_text.await_count,
+            GENERATION_ATTEMPT_BUDGET,
+        )
+        self.assertTrue(
+            all(
+                call.kwargs["attempt_budget"] == 1
+                for call in generator.generate_text.await_args_list
+            )
+        )
+        generation_rngs = [
+            call.kwargs["rng"] for call in generator.generate_text.await_args_list
+        ]
+        self.assertTrue(all(rng is generation_rngs[0] for rng in generation_rngs))
         msg.reply.assert_awaited_once_with(
             "Собираю мысли... Напишите ещё пару сообщений 🙂"
         )

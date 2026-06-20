@@ -13,7 +13,9 @@ logger = logging.getLogger("chat_markov")
 
 TOKEN_RE = re.compile(r"\w+|[.,!?;:]", re.UNICODE)
 PUNCT_SET = {".", ",", "!", "?", ";", ":"}
-VALIDATION_RETRY_ATTEMPTS = 8
+DEFAULT_GENERATION_ATTEMPT_BUDGET = 1
+EXPLORATION_FLATTENING = 1.5
+EXPLORATION_POWER_FLOOR = 0.02
 SHORT_REPLY_MAX_CONTENT_TOKENS = 3
 REJECTION_NO_STARTS = "no_starts"
 REJECTION_NO_START_TRANSITION = "no_start_transition"
@@ -292,6 +294,39 @@ def context_decay(step_index: int) -> float:
     return max(0.25, 0.92 ** step_index)
 
 
+def exploration_adjusted_power(power: float, explore_probability: float) -> float:
+    exploration = max(0.0, min(1.0, explore_probability))
+    return max(
+        EXPLORATION_POWER_FLOOR,
+        max(0.0, power) * (1.0 - EXPLORATION_FLATTENING * exploration),
+    )
+
+
+def sampled_exploration(
+    explore_probability: float,
+    exploring: bool,
+    rng: random.Random,
+) -> float:
+    if not exploring:
+        return 0.0
+    # A triangular temperature sample avoids both an abrupt uniform branch and
+    # extreme single-draw temperatures while remaining deterministic per RNG.
+    sample_mean = (rng.random() + rng.random()) / 2.0
+    return max(0.0, min(1.0, explore_probability)) * sample_mean
+
+
+def exploration_weighted_choice(
+    population: list[T],
+    weights: list[float],
+    rng: random.Random,
+) -> T:
+    index = min(
+        range(len(population)),
+        key=lambda candidate_index: rng.expovariate(weights[candidate_index]),
+    )
+    return population[index]
+
+
 def weighted_next_choice(
     items: list[tuple[str, int]],
     explore_probability: float,
@@ -310,15 +345,17 @@ def weighted_next_choice(
 ) -> str:
     ordered_items = sorted(items, key=lambda item: item[0])
     population = [token for token, _ in ordered_items]
-    if rng.random() < explore_probability:
-        return rng.choice(population)
-
+    exploring = rng.random() < explore_probability
+    frequency_power = exploration_adjusted_power(
+        power,
+        sampled_exploration(explore_probability, exploring, rng),
+    )
     step_bias = 1.0 + (max(1.0, context_bias) - 1.0) * context_decay(step_index)
     penalty_strength = max(0.0, repetition_penalty_strength)
     recent_tokens = recent_tokens or []
     weights: list[float] = []
     for token, cnt in ordered_items:
-        weight = max(cnt, 1) ** power
+        weight = max(cnt, 1) ** frequency_power
         if context_token_set and token in context_token_set:
             weight *= step_bias
         if current_state and context_pairs and len(current_state) >= 1:
@@ -348,6 +385,8 @@ def weighted_next_choice(
 
         weight = max(weight, 0.01)
         weights.append(weight)
+    if exploring:
+        return exploration_weighted_choice(population, weights, rng)
     return rng.choices(population=population, weights=weights, k=1)[0]
 
 
@@ -359,9 +398,14 @@ def weighted_start2_choice(
 ) -> tuple[str, str]:
     ordered_items = sorted(items, key=lambda item: (item[0], item[1]))
     population = [(w1, w2) for w1, w2, _ in ordered_items]
-    if rng.random() < explore_probability:
-        return rng.choice(population)
-    weights = [max(cnt, 1) ** power for _, _, cnt in ordered_items]
+    exploring = rng.random() < explore_probability
+    frequency_power = exploration_adjusted_power(
+        power,
+        sampled_exploration(explore_probability, exploring, rng),
+    )
+    weights = [max(cnt, 1) ** frequency_power for _, _, cnt in ordered_items]
+    if exploring:
+        return exploration_weighted_choice(population, weights, rng)
     return rng.choices(population=population, weights=weights, k=1)[0]
 
 
@@ -373,9 +417,14 @@ def weighted_start3_choice(
 ) -> tuple[str, str, str]:
     ordered_items = sorted(items, key=lambda item: (item[0], item[1], item[2]))
     population = [(w1, w2, w3) for w1, w2, w3, _ in ordered_items]
-    if rng.random() < explore_probability:
-        return rng.choice(population)
-    weights = [max(cnt, 1) ** power for _, _, _, cnt in ordered_items]
+    exploring = rng.random() < explore_probability
+    frequency_power = exploration_adjusted_power(
+        power,
+        sampled_exploration(explore_probability, exploring, rng),
+    )
+    weights = [max(cnt, 1) ** frequency_power for _, _, _, cnt in ordered_items]
+    if exploring:
+        return exploration_weighted_choice(population, weights, rng)
     return rng.choices(population=population, weights=weights, k=1)[0]
 
 
@@ -477,6 +526,11 @@ class MarkovGenerator:
         if not windows:
             return None
 
+        exploring = rng.random() < explore_probability
+        frequency_power = exploration_adjusted_power(
+            power,
+            sampled_exploration(explore_probability, exploring, rng),
+        )
         candidates: list[tuple[tuple[str, str, str], float]] = []
         total = len(windows)
         for index, window in enumerate(windows):
@@ -487,7 +541,7 @@ class MarkovGenerator:
                 continue
             recency_bonus = 1.0 + ((index + 1) / total) * 0.35
             weight = (
-                (max(seeded3[3], 1) ** power)
+                (max(seeded3[3], 1) ** frequency_power)
                 * max(1.0, context_start_bias)
                 * recency_bonus
             )
@@ -495,13 +549,11 @@ class MarkovGenerator:
 
         if not candidates:
             return None
-        if rng.random() < explore_probability:
-            return rng.choice([start for start, _ in candidates])
-        return rng.choices(
-            population=[start for start, _ in candidates],
-            weights=[weight for _, weight in candidates],
-            k=1,
-        )[0]
+        population = [start for start, _ in candidates]
+        weights = [weight for _, weight in candidates]
+        if exploring:
+            return exploration_weighted_choice(population, weights, rng)
+        return rng.choices(population=population, weights=weights, k=1)[0]
 
     async def _select_contextual_start2(
         self,
@@ -522,6 +574,11 @@ class MarkovGenerator:
         if not windows:
             return None
 
+        exploring = rng.random() < explore_probability
+        frequency_power = exploration_adjusted_power(
+            power,
+            sampled_exploration(explore_probability, exploring, rng),
+        )
         candidates: list[tuple[tuple[str, str], float]] = []
         total = len(windows)
         for index, window in enumerate(windows):
@@ -530,7 +587,7 @@ class MarkovGenerator:
                 continue
             recency_bonus = 1.0 + ((index + 1) / total) * 0.30
             weight = (
-                (max(seeded2[2], 1) ** power)
+                (max(seeded2[2], 1) ** frequency_power)
                 * max(1.0, context_start_bias)
                 * recency_bonus
             )
@@ -538,14 +595,12 @@ class MarkovGenerator:
 
         if not candidates:
             return None
-        if rng.random() < explore_probability:
-            w1, w2 = rng.choice([start for start, _ in candidates])
+        population = [start for start, _ in candidates]
+        weights = [weight for _, weight in candidates]
+        if exploring:
+            w1, w2 = exploration_weighted_choice(population, weights, rng)
         else:
-            w1, w2 = rng.choices(
-                population=[start for start, _ in candidates],
-                weights=[weight for _, weight in candidates],
-                k=1,
-            )[0]
+            w1, w2 = rng.choices(population=population, weights=weights, k=1)[0]
 
         variants = await self._get2(chat_id, w1, w2)
         if not variants:
@@ -580,6 +635,7 @@ class MarkovGenerator:
         enable_backoff: bool = True,
         backoff_min_order: int = 1,
         rng: random.Random | None = None,
+        attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> str:
         text, _ = await self.generate_text_with_trace(
             chat_id=chat_id,
@@ -595,6 +651,7 @@ class MarkovGenerator:
             enable_backoff=enable_backoff,
             backoff_min_order=backoff_min_order,
             rng=rng,
+            attempt_budget=attempt_budget,
         )
         return text
 
@@ -613,8 +670,10 @@ class MarkovGenerator:
         enable_backoff: bool = True,
         backoff_min_order: int = 1,
         rng: random.Random | None = None,
+        attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> tuple[str, GenerationTrace]:
         generation_rng = rng or random.Random()
+        total_attempts = max(1, attempt_budget)
         last_attempt = _GenerationAttempt(
             text="",
             markov_order_used=0,
@@ -623,11 +682,11 @@ class MarkovGenerator:
             token_count=0,
         )
         total_jump_count = 0
-        for attempt_index in range(VALIDATION_RETRY_ATTEMPTS):
+        for attempt_index in range(total_attempts):
             attempt_randomness_strength = escalated_randomness_strength(
                 randomness_strength,
                 attempt_index,
-                VALIDATION_RETRY_ATTEMPTS,
+                total_attempts,
             )
             last_attempt = await self._generate_text_once(
                 chat_id=chat_id,
@@ -657,7 +716,7 @@ class MarkovGenerator:
                 return last_attempt.text, trace
 
         trace = GenerationTrace(
-            attempts_used=VALIDATION_RETRY_ATTEMPTS,
+            attempts_used=total_attempts,
             markov_order_used=last_attempt.markov_order_used,
             jump_count=total_jump_count,
             rejection_reason=last_attempt.rejection_reason,
