@@ -1,11 +1,50 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-06-20, семнадцатая редакция (generation Phase 3.1: извлечение `ResponseGenerator`, behavior-preserving).
-**Текущая ветка:** `feat/generation-phase3.1` (не слита). Phase 0/1/2, STRUCT-001 и оба `chore(deps)` — уже в `main`.
-**Тесты / проверки:** `unittest discover tests` — 285 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (46 files); harness воспроизводит post-Phase-2 baseline (поведение не изменилось).
+**Дата актуализации:** 2026-06-21, восемнадцатая редакция (generation Phase 3.2: многокандидатный выбор + `CandidateScorer`).
+**Текущая ветка:** `feat/generation-phase3.2` (не слита). Phase 0/1/2, Phase 3.1, STRUCT-001 и оба `chore(deps)` — уже в `main`.
+**Тесты / проверки:** `unittest discover tests` — 295 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (47 files); harness воспроизводит post-Phase-3.2 baseline.
 **Backlog:** P0/P1/P2/P3 — пусто. `STRUCT-001` — выполнен. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
+
+---
+
+## Session update - 2026-06-21 (generation Phase 3.2)
+
+Реализована подфаза 3.2 — best-of-N выбор вместо первого приемлемого кандидата.
+
+### Completed
+- Новый `app/core/candidate_scorer.py`: чистый, тестируемый scorer
+  `completion_quality + lexical_diversity + natural_length +
+  capped_context_relevance − repetition_penalty`. Context-relevance исключает
+  stopwords (RU/EN) и ограничен `0.80`; natural_length — мягкая полоса 5–14
+  токенов (без «чем длиннее, тем лучше»); короткие ответы — отдельная diversity-
+  база; model-confidence не используется (чтобы частотность не доминировала).
+- `ResponseGenerator` собирает до 5 уникальных acceptable-кандидатов в прежнем
+  бюджете 10 попыток (worst-case не вырос), hard-фильтры и их порядок сохранены,
+  выбирает максимальный score, tie-break детерминированный (первый увиденный).
+- Харнесс расширен: измеряет полный selection path + метрика
+  `context_token_overlap`.
+
+### BEFORE/AFTER (harness, seed 20260620, 100 ген.)
+empty 0.0→0.0; distinct-1 0.09705→0.09518; distinct-2 0.15266→0.14951;
+repeated bi/tri 0/0; avg_len 8.14→8.09; **context overlap 0.4371→0.5926**;
+avg candidates scored 1.0→4.81; latency ~20→~32 мс. Релевантность к контексту
+существенно выросла; пустые/повторы не ухудшились (лёгкое снижение distinct —
+ожидаемый размен на релевантность/завершённость). Baseline обновлён.
+
+### Changed files
+- `app/core/candidate_scorer.py` (new), `app/core/response_generator.py`
+- `tools/eval_generation.py`, `tools/generation_baseline.json`
+- `tests/test_candidate_scorer.py` (new), `tests/test_response_generator.py`,
+  `tests/test_handlers.py`, `docs/RESPONSE_GENERATION_ROADMAP.md`
+
+### Tests/checks run
+- `unittest discover tests` — **295 OK**; `ruff` — clean; `mypy app/` — clean
+  (47 files); harness (CLI) воспроизводит post-Phase-3.2 baseline.
+
+### Remaining work
+- Фаза 3 завершена (3.1 + 3.2). Далее — Фаза 4 (естественность, корпус, privacy).
 
 ---
 

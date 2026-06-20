@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
 from app.config.runtime_state import RuntimeState
+from app.core.candidate_scorer import CandidateScore, score_candidate
 from app.core.markov import (
     MarkovGenerator,
     escalated_randomness_strength,
@@ -19,6 +21,9 @@ logger = logging.getLogger("chat_markov")
 
 GENERATION_ATTEMPT_BUDGET = 10
 GENERATION_ATTEMPTS_WITH_CONTEXT = 5
+CANDIDATE_TARGET = 5
+
+CandidateScorer = Callable[[str, list[str], list[str]], CandidateScore]
 
 
 class VerbatimCopyChecker(Protocol):
@@ -31,6 +36,18 @@ class GenerationRequest:
     context_tokens: list[str]
     seed: list[str] | None
     current_message_normalized: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResponseGenerationResult:
+    text: str | None
+    candidates_scored: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ScoredCandidate:
+    text: str
+    score: CandidateScore
 
 
 def was_recent_short_reply(
@@ -49,14 +66,32 @@ class ResponseGenerator:
     generator: MarkovGenerator
     learning_service: VerbatimCopyChecker
     runtime_state: RuntimeState
+    scorer: CandidateScorer = score_candidate
 
     async def generate(
         self,
         request: GenerationRequest,
         rng: random.Random | None = None,
+        candidate_target: int = CANDIDATE_TARGET,
     ) -> str | None:
+        result = await self.generate_with_result(
+            request,
+            rng=rng,
+            candidate_target=candidate_target,
+        )
+        return result.text
+
+    async def generate_with_result(
+        self,
+        request: GenerationRequest,
+        rng: random.Random | None = None,
+        candidate_target: int = CANDIDATE_TARGET,
+    ) -> ResponseGenerationResult:
         generation_rng = rng or random.Random()
         seed = request.seed
+        target = max(1, min(candidate_target, GENERATION_ATTEMPT_BUDGET))
+        candidates: list[_ScoredCandidate] = []
+        seen_candidates: set[str] = set()
 
         for attempt in range(GENERATION_ATTEMPT_BUDGET):
             attempt_context_tokens = (
@@ -139,8 +174,27 @@ class ResponseGenerator:
                         len(candidate.split()),
                         bool(attempt_context_tokens),
                     )
-                    return candidate
+                    if candidate not in seen_candidates:
+                        seen_candidates.add(candidate)
+                        candidates.append(
+                            _ScoredCandidate(
+                                text=candidate,
+                                score=self.scorer(
+                                    candidate,
+                                    candidate_tokens,
+                                    request.context_tokens,
+                                ),
+                            )
+                        )
+                        if len(candidates) >= target:
+                            break
 
             seed = None
 
-        return None
+        if not candidates:
+            return ResponseGenerationResult(text=None, candidates_scored=0)
+        selected = max(candidates, key=lambda candidate: candidate.score.total)
+        return ResponseGenerationResult(
+            text=selected.text,
+            candidates_scored=len(candidates),
+        )
