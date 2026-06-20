@@ -1,11 +1,56 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-05-15, двенадцатая редакция (improve-generation-quality merged; CA-F13 closed: db.py get_stats refactor).
-**Текущая ветка:** `main` (актуальна, commit `0479181`).
-**Тесты / проверки:** `ruff check app/ tests/` — clean, `mypy app/` — clean (30 source files).
+**Дата актуализации:** 2026-06-20, тринадцатая редакция (generation Phase 0: дефекты связности + generate-before-learn).
+**Текущая ветка:** `feat/generation-phase0` (Phase 0 дорожной карты генерации; не слита).
+**Тесты / проверки:** `unittest discover tests` — 271 OK; `ruff check app/ tests/` — clean.
 **Backlog:** P0/P1/P2/P3 — пусто. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
+
+---
+
+## Session update - 2026-06-20 (generation Phase 0)
+
+Работа ведётся по согласованной дорожной карте `docs/RESPONSE_GENERATION_ROADMAP.md`
+(совместный анализ Claude + Codex). Реализована Фаза 0 на ветке
+`feat/generation-phase0`.
+
+### Completed
+- **0.1+0.2 (атомарно):** в `markov.py` отключена ветка «прыжков»
+  (`jump_probability = 0.0`) и удалена forced-jump-отбраковка длинных no-context
+  ответов (бывшая проверка `... and jump_count == 0: return ""`). Устранён разрыв
+  связности (jump-splice не дописывал стартовые токены в вывод).
+- **0.3 generate-before-learn:** в `app/handlers/learning.py` ответ генерируется
+  по состоянию модели **до** обучения на входящем сообщении; гейт «достаточно
+  данных» использует pre-message объём; `record_message` вынесен в `try/finally`
+  → каждое learnable-сообщение персистится ровно один раз на всех путях (мало
+  данных / cooldown / `should_reply=false` / провал генерации / успех /
+  исключение); добавлен guard, отклоняющий кандидат, равный нормализованному
+  текущему сообщению.
+- **0.4:** post-generation-валидация в `markov.py` выполняется по фактически
+  усечённому тексту (`tokenize(result)`), а не по полному буферу `generated`.
+
+### Changed files
+- `app/handlers/learning.py`, `markov.py`
+- `tests/test_handlers.py`, `tests/test_markov_and_text.py`
+- `docs/RESPONSE_GENERATION_ROADMAP.md` (+ входные доки
+  `GENERATION_IMPROVEMENT_PROPOSAL.md`, `RESPONSE_GENERATION_IMPROVEMENT_PLAN.md`)
+
+### Tests/checks run
+- `unittest discover tests` — **271 OK** (вкл. новые регресс-тесты:
+  threshold-crossing без self-reply, отклонение копии текущего сообщения,
+  persist при cooldown/провале, отключённые jumps, отсутствие D1-отбраковки,
+  валидация усечённого текста).
+- `ruff check app/ tests/` — clean.
+
+### Not run / limitations
+- `mypy` не запускался (в окружении не сконфигурирован под текущий `.venv`).
+- `markov.py` всё ещё вне strict `ruff`/`mypy` (15 пред­существующих `UP045`);
+  включение запланировано как отдельный пункт DoD дорожной карты.
+
+### Remaining work
+- Фаза 1 (P0): injected RNG, инструментация (trace), offline-харнесс + baseline.
+- Далее по дорожной карте: Фазы 2–4.
 
 ---
 

@@ -535,6 +535,30 @@ class TestLearningMessageLength(unittest.TestCase):
 
 
 class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
+    def _reply_state(self, **overrides: object) -> MagicMock:
+        values: dict[str, object] = {
+            "normalize_lower": False,
+            "learned_messages": {},
+            "recent_short_replies": {},
+            "min_tokens_for_model": 10,
+            "min_cooldown_sec": 0,
+            "last_reply_ts": {},
+            "reply_probability": 0.0,
+            "use_reply_context": False,
+            "reply_context_last_tokens": 3,
+            "reply_context_bias": 1.8,
+            "reply_context_start_bias": 2.2,
+            "max_reply_chars": 280,
+            "max_reply_tokens": 45,
+            "randomness_strength": 0.0,
+            "repetition_penalty_strength": 1.0,
+            "markov_order": 3,
+            "enable_backoff": True,
+            "backoff_min_order": 1,
+        }
+        values.update(overrides)
+        return _fake_state(**values)
+
     async def test_single_token_message_is_not_learned(self) -> None:
         from app.handlers.learning import on_text_message
 
@@ -560,11 +584,124 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.record_message.assert_not_called()
         msg.reply.assert_not_awaited()
 
+    async def test_threshold_crossing_message_is_learned_without_replying_to_itself(
+        self,
+    ) -> None:
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="pepe threshold crossing")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=9)
+        learning_service.record_message = AsyncMock(return_value=11)
+        generator = AsyncMock()
+        state = self._reply_state()
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+        learning_service.get_token_volume.assert_awaited_once_with(msg.chat.id)
+        learning_service.record_message.assert_awaited_once()
+        generator.generate_text.assert_not_awaited()
+        msg.reply.assert_awaited_once_with("Пока мало материала, поболтайте ещё 🙂")
+
+    async def test_current_incoming_message_copy_is_rejected(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="pepe ответь")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=102)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(side_effect=["pepe ответь", "Нормально"])
+        state = self._reply_state()
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+        self.assertEqual(generator.generate_text.await_count, 2)
+        learning_service.record_message.assert_awaited_once()
+        msg.reply.assert_awaited_once_with("Нормально")
+
+    async def test_message_is_persisted_when_cooldown_blocks_reply(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="обычное сообщение")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=102)
+        generator = AsyncMock()
+        state = self._reply_state(
+            last_reply_ts={msg.chat.id: 10**20},
+            min_cooldown_sec=60,
+            reply_probability=1.0,
+        )
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+        learning_service.record_message.assert_awaited_once()
+        generator.generate_text.assert_not_awaited()
+        msg.reply.assert_not_awaited()
+
+    async def test_message_is_persisted_when_generation_fails(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="pepe generate something")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=103)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="")
+        state = self._reply_state()
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+        learning_service.record_message.assert_awaited_once()
+        self.assertGreater(generator.generate_text.await_count, 0)
+        msg.reply.assert_awaited_once_with(
+            "Собираю мысли... Напишите ещё пару сообщений 🙂"
+        )
+
     async def test_prefix_rejection_gets_extra_retry_budget(self) -> None:
         from app.handlers.learning import on_text_message
 
         msg = _fake_message(text="pepe ответь нормально")
         learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=100)
         learning_service.is_verbatim_copy = AsyncMock(
             side_effect=[True, True, True, True, False]
@@ -618,6 +755,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
 
         msg = _fake_message(text="pepe ответь")
         learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=100)
         learning_service.is_verbatim_copy = AsyncMock(return_value=True)
         generator = AsyncMock()
@@ -663,6 +801,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
 
         msg = _fake_message(text="pepe ответь")
         learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=100)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
         generator = AsyncMock()
@@ -711,6 +850,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
 
         msg = _fake_message(text="pepe ответь нормально")
         learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=100)
         learning_service.is_verbatim_copy = AsyncMock(
             side_effect=[True, True, False]

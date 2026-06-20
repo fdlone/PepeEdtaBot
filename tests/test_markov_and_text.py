@@ -5,6 +5,7 @@ import unittest
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from app.handlers.learning import extract_context_tokens
 from bot_policy import bot_is_mentioned
@@ -20,6 +21,7 @@ from markov import (
     tokenize,
     trim_repetitive_tail,
     weighted_next_choice,
+    weighted_start3_choice,
 )
 from text_utils import sanitize_text
 
@@ -332,7 +334,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         random.seed(11)
         text = await self.generator.generate_text(
             chat_id=5555,
-            max_chars=18,
+            max_chars=25,
             context_tokens=["сегодня", "Люблю", "кофе", "утром"],
             context_bias=1.8,
             context_start_bias=2.2,
@@ -404,9 +406,79 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(text)
         self.assertTrue(text.startswith("утром люблю"))
 
-    async def test_generate_text_retries_after_internal_validation_failure(self) -> None:
-        from unittest.mock import AsyncMock, patch
+    async def test_high_randomness_long_reply_without_context_is_not_force_rejected(
+        self,
+    ) -> None:
+        tokens = [f"token{index}" for index in range(14)]
+        await self.db.save_message_and_update_model(
+            chat_id=7778,
+            raw_text=" ".join(tokens),
+            tokens=tokens,
+        )
 
+        with patch("markov.random.random", return_value=1.0):
+            text = await self.generator.generate_text(
+                chat_id=7778,
+                max_chars=500,
+                max_tokens=14,
+                randomness_strength=2.0,
+                markov_order=3,
+                enable_backoff=True,
+                backoff_min_order=1,
+            )
+
+        self.assertEqual(text, " ".join(tokens))
+
+    async def test_jump_branch_is_disabled(self) -> None:
+        tokens = [f"token{index}" for index in range(12)]
+        await self.db.save_message_and_update_model(
+            chat_id=7779,
+            raw_text=" ".join(tokens),
+            tokens=tokens,
+        )
+
+        with (
+            patch("markov.random.random", return_value=0.0),
+            patch(
+                "markov.weighted_start3_choice",
+                wraps=weighted_start3_choice,
+            ) as mock_start_choice,
+        ):
+            text = await self.generator.generate_text(
+                chat_id=7779,
+                max_chars=500,
+                max_tokens=12,
+                randomness_strength=2.0,
+                markov_order=3,
+                enable_backoff=True,
+                backoff_min_order=1,
+            )
+
+        self.assertEqual(text, " ".join(tokens))
+        mock_start_choice.assert_called_once()
+
+    async def test_validation_uses_actual_char_truncated_output(self) -> None:
+        await self.db.save_message_and_update_model(
+            chat_id=7780,
+            raw_text="fresh ctx1 ctx2 ctx3 ctx4",
+            tokens=["fresh", "ctx1", "ctx2", "ctx3", "ctx4"],
+        )
+
+        text = await self.generator.generate_text(
+            chat_id=7780,
+            max_chars=6,
+            max_tokens=5,
+            seed_tokens=["fresh", "ctx1", "ctx2"],
+            context_tokens=["ctx1", "ctx2", "ctx3", "ctx4"],
+            randomness_strength=0.0,
+            markov_order=3,
+            enable_backoff=True,
+            backoff_min_order=1,
+        )
+
+        self.assertEqual(text, "fresh")
+
+    async def test_generate_text_retries_after_internal_validation_failure(self) -> None:
         with patch.object(
             MarkovGenerator,
             "_generate_text_once",
@@ -421,8 +493,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mock_generate_once.await_count, 3)
 
     async def test_generate_text_increases_randomness_on_retries(self) -> None:
-        from unittest.mock import AsyncMock, patch
-
         with patch.object(
             MarkovGenerator,
             "_generate_text_once",
