@@ -536,6 +536,14 @@ class TestLearningMessageLength(unittest.TestCase):
 
 
 class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        mask_patcher = patch(
+            "app.core.response_generator.mask_chat_id",
+            return_value="chat",
+        )
+        mask_patcher.start()
+        self.addCleanup(mask_patcher.stop)
+
     def _reply_state(self, **overrides: object) -> MagicMock:
         values: dict[str, object] = {
             "normalize_lower": False,
@@ -670,7 +678,8 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         msg.reply.assert_not_awaited()
 
     async def test_message_is_persisted_when_generation_fails(self) -> None:
-        from app.handlers.learning import GENERATION_ATTEMPT_BUDGET, on_text_message
+        from app.core.response_generator import GENERATION_ATTEMPT_BUDGET
+        from app.handlers.learning import on_text_message
 
         msg = _fake_message(text="pepe generate something")
         learning_service = AsyncMock()

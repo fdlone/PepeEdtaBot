@@ -1,11 +1,43 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-06-20, шестнадцатая редакция (generation Phase 2: единый retry-budget + взвешенный explore).
-**Текущая ветка:** `feat/generation-phase2` (не слита). Phase 0, Phase 1, STRUCT-001 и оба `chore(deps)` — уже в `main`.
-**Тесты / проверки:** `unittest discover tests` — 282 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (45 files); harness воспроизводит post-Phase-2 baseline.
+**Дата актуализации:** 2026-06-20, семнадцатая редакция (generation Phase 3.1: извлечение `ResponseGenerator`, behavior-preserving).
+**Текущая ветка:** `feat/generation-phase3.1` (не слита). Phase 0/1/2, STRUCT-001 и оба `chore(deps)` — уже в `main`.
+**Тесты / проверки:** `unittest discover tests` — 285 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (46 files); harness воспроизводит post-Phase-2 baseline (поведение не изменилось).
 **Backlog:** P0/P1/P2/P3 — пусто. `STRUCT-001` — выполнен. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
+
+---
+
+## Session update - 2026-06-20 (generation Phase 3.1)
+
+Реализована подфаза 3.1 (Фаза 3 делится на два PR: 3.1 извлечение, 3.2 скоринг).
+Behavior-preserving извлечение оркестрации генерации из хендлера.
+
+### Completed
+- Новый `app/core/response_generator.py`: `ResponseGenerator(generator,
+  learning_service, runtime_state)` с `generate(request, rng=None) -> str | None`;
+  `GenerationRequest` (frozen) и `VerbatimCopyChecker` Protocol (развязка от
+  `app.services`, без цикла).
+- В `ResponseGenerator` перенесён весь цикл: единый бюджет (10), контекст→без
+  контекста, эскалация randomness, вызовы `generate_text`, проверки приёма
+  (current-message copy → recent short reply → verbatim copy), прежние DEBUG-логи.
+- В `app/handlers/learning.py` осталась Telegram-специфика: gating, извлечение
+  context/seed, fallback-сообщения, отправка, `remember_short_reply`, обучение
+  в `finally`. RNG-семантика идентична (один свежий `random.Random()` на вызов).
+
+### Changed files
+- `app/core/response_generator.py` (new), `app/handlers/learning.py`
+- `tests/test_response_generator.py` (new), `tests/test_handlers.py`
+- `docs/RESPONSE_GENERATION_ROADMAP.md`
+
+### Tests/checks run
+- `unittest discover tests` — **285 OK**; `ruff` — clean; `mypy app/` — clean
+  (46 files); harness воспроизводит post-Phase-2 baseline → поведение не менялось.
+
+### Remaining work
+- Подфаза 3.2: многокандидатная генерация (3–5) + консервативный скоринг.
+- Затем Фаза 4.
 
 ---
 
