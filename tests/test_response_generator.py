@@ -5,7 +5,9 @@ import unittest
 from collections import deque
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+from app.core.candidate_scorer import CandidateScore
 from app.core.response_generator import (
+    CANDIDATE_TARGET,
     GENERATION_ATTEMPT_BUDGET,
     GENERATION_ATTEMPTS_WITH_CONTEXT,
     GenerationRequest,
@@ -38,6 +40,10 @@ def _request() -> GenerationRequest:
     )
 
 
+def _score(value: float) -> CandidateScore:
+    return CandidateScore(value, 0.0, 0.0, 0.0, 0.0)
+
+
 class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
     async def test_acceptance_checks_keep_existing_order(self) -> None:
         state = _runtime_state()
@@ -53,20 +59,24 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         )
         learning_service = AsyncMock()
         learning_service.is_verbatim_copy = AsyncMock(side_effect=[True, False])
+        scorer = MagicMock(return_value=_score(1.0))
         response_generator = ResponseGenerator(
             generator=generator,
             learning_service=learning_service,
             runtime_state=state,
+            scorer=scorer,
         )
 
         with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
             result = await response_generator.generate(
                 _request(),
                 rng=random.Random(7),
+                candidate_target=1,
             )
 
         self.assertEqual(result, "fresh response has four tokens")
         self.assertEqual(generator.generate_text.await_count, 4)
+        scorer.assert_called_once()
         self.assertEqual(
             learning_service.is_verbatim_copy.await_args_list,
             [
@@ -91,7 +101,11 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         request = _request()
 
         with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
-            result = await response_generator.generate(request, rng=rng)
+            result = await response_generator.generate(
+                request,
+                rng=rng,
+                candidate_target=1,
+            )
 
         self.assertEqual(result, "accepted")
         calls = generator.generate_text.await_args_list
@@ -137,3 +151,83 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
                 for call in generator.generate_text.await_args_list
             )
         )
+
+    async def test_collects_multiple_candidates_and_picks_highest_score(self) -> None:
+        state = _runtime_state()
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(
+            side_effect=["first candidate", "best candidate", "third candidate"]
+        )
+        learning_service = AsyncMock()
+        scores = {
+            "first candidate": _score(1.0),
+            "best candidate": _score(3.0),
+            "third candidate": _score(2.0),
+        }
+        scorer = MagicMock(side_effect=lambda text, tokens, context: scores[text])
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=scorer,
+        )
+
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            result = await response_generator.generate_with_result(
+                _request(),
+                rng=random.Random(17),
+                candidate_target=3,
+            )
+
+        self.assertEqual(result.text, "best candidate")
+        self.assertEqual(result.candidates_scored, 3)
+        self.assertEqual(generator.generate_text.await_count, 3)
+        self.assertEqual(scorer.call_count, 3)
+
+    async def test_duplicate_candidates_are_scored_once(self) -> None:
+        state = _runtime_state()
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(
+            side_effect=["same candidate"] * GENERATION_ATTEMPT_BUDGET
+        )
+        learning_service = AsyncMock()
+        scorer = MagicMock(return_value=_score(1.0))
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=scorer,
+        )
+
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            result = await response_generator.generate_with_result(
+                _request(),
+                rng=random.Random(19),
+            )
+
+        self.assertEqual(result.text, "same candidate")
+        self.assertEqual(result.candidates_scored, 1)
+        self.assertEqual(generator.generate_text.await_count, GENERATION_ATTEMPT_BUDGET)
+        scorer.assert_called_once()
+
+    async def test_equal_scores_use_first_seen_candidate(self) -> None:
+        state = _runtime_state()
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(side_effect=["first choice", "second choice"])
+        learning_service = AsyncMock()
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(2.0)),
+        )
+
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            result = await response_generator.generate(
+                _request(),
+                rng=random.Random(23),
+                candidate_target=2,
+            )
+
+        self.assertEqual(result, "first choice")
+        self.assertLessEqual(CANDIDATE_TARGET, GENERATION_ATTEMPT_BUDGET)

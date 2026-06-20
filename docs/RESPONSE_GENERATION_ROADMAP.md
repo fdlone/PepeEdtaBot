@@ -153,9 +153,12 @@ Post-Phase-2 baseline фиксируется в `tools/generation_baseline.json`
   (харнесс 1.3) показывает выигрыш в пределах latency-бюджета + консервативный
   скоринг: жёсткие safety-фильтры → completion → repetition → умеренная длина →
   **capped** context-relevance. *(M-L / Medium)*
-- **Расхождение с доками:** старт с 6–8 кандидатов преждевременен; capped
-  model-confidence обязателен, иначе движок начнёт воспроизводить заученные
-  частые фразы.
+- **Расхождение с доками:** старт с 6–8 кандидатов преждевременен; если
+  model-confidence используется, он обязан быть capped, иначе движок начнёт
+  воспроизводить заученные частые фразы.
+
+Post-Phase-3.2 baseline измеряет весь selection path через `ResponseGenerator`
+с target=5; target=1 используется для воспроизводимого first-acceptable BEFORE.
 
 ### Фаза 4 — Естественность, корпус, privacy (🔵 P2-P3)
 

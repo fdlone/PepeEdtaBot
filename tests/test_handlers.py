@@ -630,7 +630,9 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.record_message = AsyncMock(return_value=102)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
         generator = AsyncMock()
-        generator.generate_text = AsyncMock(side_effect=["pepe ответь", "Нормально"])
+        generator.generate_text = AsyncMock(
+            side_effect=["pepe ответь", "Нормально"] + [""] * 8
+        )
         state = self._reply_state()
 
         with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
@@ -644,7 +646,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 frozenset({"pepe", "пепе"}),
             )
 
-        self.assertEqual(generator.generate_text.await_count, 2)
+        self.assertEqual(generator.generate_text.await_count, 10)
         learning_service.record_message.assert_awaited_once()
         msg.reply.assert_awaited_once_with("Нормально")
 
@@ -738,6 +740,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "один два три четыре",
                 "новый ответ теперь",
             ]
+            + [""] * 5
         )
         state = _fake_state(
             normalize_lower=False,
@@ -770,7 +773,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 frozenset({"pepe", "пепе"}),
             )
 
-        self.assertEqual(generator.generate_text.await_count, 5)
+        self.assertEqual(generator.generate_text.await_count, 10)
         msg.reply.assert_awaited_once_with("новый ответ теперь")
 
     async def test_short_reply_skips_training_prefix_filter(self) -> None:
@@ -828,7 +831,9 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.record_message = AsyncMock(return_value=100)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
         generator = AsyncMock()
-        generator.generate_text = AsyncMock(side_effect=["Привет", "Нормально"])
+        generator.generate_text = AsyncMock(
+            side_effect=["Привет", "Нормально"] + [""] * 8
+        )
         state = _fake_state(
             normalize_lower=False,
             learned_messages={},
@@ -861,7 +866,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 frozenset({"pepe", "пепе"}),
             )
 
-        self.assertEqual(generator.generate_text.await_count, 2)
+        self.assertEqual(generator.generate_text.await_count, 10)
         msg.reply.assert_awaited_once_with("Нормально")
         self.assertEqual(
             list(state.recent_short_replies[msg.chat.id]),
@@ -885,6 +890,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "второй ответ заметно длиннее",
                 "третий ответ заметно длиннее",
             ]
+            + [""] * 7
         )
         state = _fake_state(
             normalize_lower=False,
