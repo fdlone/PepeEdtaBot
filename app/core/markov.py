@@ -742,6 +742,7 @@ class MarkovGenerator:
                 enable_backoff=enable_backoff,
                 backoff_min_order=backoff_min_order,
                 rng=generation_rng,
+                emit_start=True,
             )
             total_jump_count += last_attempt.jump_count
             if last_attempt.text:
@@ -790,6 +791,7 @@ class MarkovGenerator:
         enable_backoff: bool = True,
         backoff_min_order: int = 1,
         rng: random.Random | None = None,
+        emit_start: bool = True,
     ) -> _GenerationAttempt:
         generation_rng = rng or random.Random()
         order = 3 if markov_order >= 3 else 2
@@ -925,15 +927,17 @@ class MarkovGenerator:
 
         token_limit = max(1, max_tokens)
         w1, w2, w3 = start3
-        generated: list[str] = [w1, w2, w3][:token_limit]
+        start_tokens = [w1, w2, w3]
+        generated: list[str] = start_tokens[:token_limit] if emit_start else []
+        dedup_seed = generated if emit_start else start_tokens
         visited_triplets: OrderedDict[tuple[str, str, str], None] = (
             OrderedDict.fromkeys([(w1, w2, w3)])
         )
         seen_pairs: OrderedDict[tuple[str, ...], None] = OrderedDict.fromkeys(
-            build_windows(generated, 2)
+            build_windows(dedup_seed, 2)
         )
         seen_triplets: OrderedDict[tuple[str, ...], None] = OrderedDict.fromkeys(
-            build_windows(generated, 3)
+            build_windows(dedup_seed, 3)
         )
         jump_count = 0
 
