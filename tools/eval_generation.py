@@ -173,7 +173,7 @@ async def evaluate_generation(
     lengths = [len(output) for output in outputs]
     empty_count = sum(1 for output in outputs if not output)
     return {
-        "baseline_phase": 3.2,
+        "baseline_phase": 4.1,
         "seed": seed,
         "generations": generations,
         "corpus_messages": len(corpus),
