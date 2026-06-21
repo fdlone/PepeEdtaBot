@@ -106,6 +106,54 @@ class TestFinalizeReplyEnding(unittest.TestCase):
         self.assertEqual(finalize_reply_ending(tokens), [*tokens[:-1], "."])
 
 
+class TestHiddenStartGeneration(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.db_path = Path(f"test_hidden_start_{uuid.uuid4().hex}.sqlite")
+        self.db = Database(str(self.db_path))
+        await self.db.init()
+        self.generator = MarkovGenerator(self.db)
+
+    async def asyncTearDown(self) -> None:
+        await self.db.close()
+        self.db_path.unlink(missing_ok=True)
+
+    async def test_hidden_start_emits_successors_and_seeds_dedup_from_state(
+        self,
+    ) -> None:
+        chat_id = 4401
+        start_triplet = ["alpha", "beta", "gamma"]
+        await self.db.save_message_and_update_model(
+            chat_id=chat_id,
+            raw_text="alpha beta gamma alpha beta",
+            tokens=[*start_triplet, "alpha", "beta"],
+        )
+        await self.db.save_message_and_update_model(
+            chat_id=chat_id,
+            raw_text="gamma alpha beta gamma",
+            tokens=["gamma", "alpha", "beta", "gamma"],
+        )
+        await self.db.save_message_and_update_model(
+            chat_id=chat_id,
+            raw_text="gamma alpha beta delta continues safely",
+            tokens=["gamma", "alpha", "beta", "delta", "continues", "safely"],
+        )
+
+        attempt = await self.generator._generate_text_once(
+            chat_id=chat_id,
+            max_chars=100,
+            max_tokens=6,
+            seed_tokens=start_triplet,
+            randomness_strength=0.0,
+            rng=random.Random(42),
+            emit_start=False,
+        )
+
+        self.assertTrue(attempt.text, attempt.rejection_reason)
+        self.assertFalse(attempt.text.startswith("alpha beta gamma"))
+        self.assertNotIn("alpha beta gamma", attempt.text)
+        self.assertTrue(attempt.text.startswith("alpha beta delta"))
+
+
 class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.db_path = Path(f"test_markov_{uuid.uuid4().hex}.sqlite")

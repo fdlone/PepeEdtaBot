@@ -1,12 +1,48 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-06-21, двадцать вторая редакция (generation Phase 4.1 инкремент A: `context_start_bias` стал реальным — вероятностный chooser).
-**Текущая ветка:** `feat/generation-phase4.1` (не слита). Phase 0/1/2, Phase 3.1, Phase 3.2, Phase 4.2b, `chore` markov-strict, Phase 4.2a, STRUCT-001 и оба `chore(deps)` — уже в `main` (PR #30–#40).
-**Тесты / проверки:** `unittest discover tests` — 330 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (49 files); `bandit` — 0 medium/high; harness — **новый baseline 4.1** (`context_token_overlap` 0.593→0.475 — bias теперь реально управляет долей контекстных стартов).
+**Дата актуализации:** 2026-06-21, двадцать третья редакция (generation Phase 4.1 инкремент B: разделение transition-state и output-buffer — behavior-preserving, фундамент под C).
+**Текущая ветка:** `feat/generation-phase4.1b` (не слита). Phase 0/1/2, Phase 3.1, Phase 3.2, Phase 4.2b, `chore` markov-strict, Phase 4.2a, Phase 4.1-A, STRUCT-001 и оба `chore(deps)` — уже в `main` (PR #30–#41).
+**Тесты / проверки:** `unittest discover tests` — 331 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (49 files); `bandit` — 0 medium/high; harness — baseline 4.1 **идентичен** (B не меняет production-поведение).
 **Backlog:** P0/P1/P2/P3 — пусто. `STRUCT-001` — выполнен. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 **Аудит-файлы:** `AUDIT_TASKLIST.md` ретайрен (2026-06-21) — его пункты закрыты/obsolete (см. секцию «Открытый security-backlog» ниже), а единственные открытые (AUD-010, CA-F11) уже в backlog выше; исходный security-baseline сохранён в `PROJECT_SECURITY_STABILITY_AUDIT.md`. Активные аудит-документы: `PROJECT_AUDIT.md` (трекер) и `PROJECT_AUDIT_CODEX.md` (reference).
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
+
+---
+
+## Session update - 2026-06-21 (generation Phase 4.1 — инкремент B)
+
+**Инкремент B** (Codex-impl ~60%, Claude — ревью/harness/docs): behavior-
+preserving разделение rolling transition-state и output-buffer в
+`_generate_text_once`. Фундамент под C (скрытое контекстное продолжение).
+
+### Completed
+- Введён приватный `emit_start: bool = True` в `_generate_text_once`. Стартовый
+  триплет теперь — это начальное **состояние** перехода независимо от эмиссии:
+  - `emit_start=True` (единственный production-путь): `generated` сеется
+    `start_tokens[:token_limit]`, dedup-структуры — как раньше → **байт-в-байт
+    идентичное поведение** (порядок RNG-вызовов не менялся).
+  - `emit_start=False` (скрытый старт, пока НЕ в production): `generated`
+    начинается пустым, состояние = стартовый триплет, dedup
+    (`visited_triplets`/`seen_pairs`/`seen_triplets`) сеется из триплета, а не из
+    вывода → первый successor становится первым выводимым токеном.
+- Публичные `generate_text`/`generate_text_with_trace` — без изменений сигнатур.
+
+### Changed files
+- `app/core/markov.py`, `tests/test_markov_and_text.py` (+ детерминированный
+  SQLite-тест скрытого старта)
+
+### Tests/checks run
+- `unittest discover tests` — **331 OK**; `ruff` — clean; `mypy app/` — clean
+  (49 files); `bandit` — 0 medium/high.
+- harness — все метрики **идентичны** `generation_baseline.json` →
+  подтверждает byte-identical production-путь (`emit_start=True`).
+
+### Remaining work
+- Инкремент **C** (использовать скрытый старт для контекста: инициализировать
+  состояние любым context n-gram с transitions, НЕ эмитить его → убрать
+  literal-эхо; High-risk, новые harness-метрики + новый baseline), **D** (убрать
+  production context-seed из хендлера). Затем Фаза 4.3.
 
 ---
 
