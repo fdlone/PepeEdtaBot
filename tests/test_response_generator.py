@@ -27,6 +27,7 @@ def _runtime_state() -> MagicMock:
     state.enable_backoff = True
     state.backoff_min_order = 1
     state.normalize_lower = False
+    state.auto_capitalize_replies = False
     state.recent_short_replies = {}
     return state
 
@@ -231,3 +232,32 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "first choice")
         self.assertLessEqual(CANDIDATE_TARGET, GENERATION_ATTEMPT_BUDGET)
+
+    async def test_auto_capitalization_only_changes_final_selected_text(self) -> None:
+        candidate = "привет. hello!"
+        scorer = MagicMock(return_value=_score(1.0))
+
+        async def generate_with_flag(enabled: bool) -> str | None:
+            state = _runtime_state()
+            state.auto_capitalize_replies = enabled
+            generator = AsyncMock()
+            generator.generate_text = AsyncMock(return_value=candidate)
+            response_generator = ResponseGenerator(
+                generator=generator,
+                learning_service=AsyncMock(),
+                runtime_state=state,
+                scorer=scorer,
+            )
+            return await response_generator.generate(
+                _request(),
+                rng=random.Random(29),
+                candidate_target=1,
+            )
+
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            self.assertEqual(await generate_with_flag(False), candidate)
+            self.assertEqual(await generate_with_flag(True), "Привет. Hello!")
+        self.assertEqual(
+            [call.args[0] for call in scorer.call_args_list],
+            [candidate, candidate],
+        )

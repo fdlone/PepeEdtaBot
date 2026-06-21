@@ -83,6 +83,12 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("max_reply_tokens", "MAX_REPLY_TOKENS", "45",
               _int_in_range(1, 300)),
     FieldSpec("normalize_lower", "NORMALIZE_LOWER", "false", _parse_bool),
+    FieldSpec(
+        "auto_capitalize_replies",
+        "AUTO_CAPITALIZE_REPLIES",
+        "false",
+        _parse_bool,
+    ),
     FieldSpec("typing_min_ms", "TYPING_MIN_MS", "350", _int_min(0)),
     FieldSpec("typing_max_ms", "TYPING_MAX_MS", "1100", _int_min(0)),
     FieldSpec("randomness_strength", "RANDOMNESS_STRENGTH", "2.0",

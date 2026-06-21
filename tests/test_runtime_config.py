@@ -20,6 +20,7 @@ def make_state() -> SimpleNamespace:
         max_reply_chars=280,
         max_reply_tokens=45,
         normalize_lower=False,
+        auto_capitalize_replies=False,
         typing_min_ms=350,
         typing_max_ms=1100,
         randomness_strength=2.0,
@@ -56,6 +57,12 @@ class TestRuntimeConfig(unittest.TestCase):
         apply_runtime_setting(state, "  NORMALIZE_LOWER  ", "true")
 
         self.assertTrue(state.normalize_lower)
+
+    def test_apply_runtime_setting_updates_auto_capitalize_replies(self) -> None:
+        state = make_state()
+        apply_runtime_setting(state, "auto_capitalize_replies", "true")
+
+        self.assertTrue(state.auto_capitalize_replies)
 
     def test_apply_runtime_setting_rejects_probability_out_of_range(self) -> None:
         state = make_state()
@@ -131,6 +138,7 @@ class TestRuntimeConfig(unittest.TestCase):
         self.assertIn(
             "reply_context_include_current_message", UNKNOWN_RUNTIME_KEY_MESSAGE
         )
+        self.assertIn("auto_capitalize_replies", UNKNOWN_RUNTIME_KEY_MESSAGE)
 
 
 if __name__ == "__main__":

@@ -40,6 +40,9 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s = MagicMock()
     s.typing_min_ms = 0
     s.typing_max_ms = 0
+    # Off by default so generated reply text is asserted verbatim; a bare
+    # MagicMock attribute would be truthy and trigger reply capitalization.
+    s.auto_capitalize_replies = False
     for k, v in kwargs.items():
         setattr(s, k, v)
     return s

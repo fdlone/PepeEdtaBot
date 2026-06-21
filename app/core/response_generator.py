@@ -14,7 +14,7 @@ from app.core.markov import (
     is_short_generated_reply,
     tokenize,
 )
-from app.core.text import sanitize_text
+from app.core.text import capitalize_reply_sentences, sanitize_text
 from app.log_masking import mask_chat_id
 
 logger = logging.getLogger("chat_markov")
@@ -194,7 +194,12 @@ class ResponseGenerator:
         if not candidates:
             return ResponseGenerationResult(text=None, candidates_scored=0)
         selected = max(candidates, key=lambda candidate: candidate.score.total)
+        text = (
+            capitalize_reply_sentences(selected.text)
+            if self.runtime_state.auto_capitalize_replies
+            else selected.text
+        )
         return ResponseGenerationResult(
-            text=selected.text,
+            text=text,
             candidates_scored=len(candidates),
         )
