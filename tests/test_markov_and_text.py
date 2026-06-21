@@ -512,24 +512,28 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(text, "Привет")
 
-    async def test_generate_text_uses_context_windows_for_start(self) -> None:
+    async def test_context_trigram_uses_hidden_transition_state(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=5555,
-            raw_text="Люблю кофе утром всегда",
-            tokens=["Люблю", "кофе", "утром", "всегда"],
-        )
-        await self.db.save_message_and_update_model(
-            chat_id=5555,
-            raw_text="Люблю кофе вечером иногда",
-            tokens=["Люблю", "кофе", "вечером", "иногда"],
+            raw_text="global lead Люблю кофе утром продолжается вполне безопасно",
+            tokens=[
+                "global",
+                "lead",
+                "Люблю",
+                "кофе",
+                "утром",
+                "продолжается",
+                "вполне",
+                "безопасно",
+            ],
         )
 
-        text = await self.generator.generate_text(
+        text, trace = await self.generator.generate_text_with_trace(
             chat_id=5555,
-            max_chars=25,
+            max_chars=100,
             context_tokens=["сегодня", "Люблю", "кофе", "утром"],
             context_bias=1.8,
-            context_start_bias=2.2,
+            context_start_bias=4.0,
             randomness_strength=0.0,
             markov_order=3,
             enable_backoff=True,
@@ -538,7 +542,10 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(text)
-        self.assertTrue(text.startswith("Люблю кофе утром"))
+        self.assertFalse(text.startswith("Люблю кофе утром"))
+        self.assertTrue(text.startswith("продолжается вполне безопасно"))
+        self.assertEqual(trace.start_source, "hidden_context")
+        self.assertEqual(trace.markov_order_used, 3)
 
     async def test_context_start_bias_gates_contextual_start_path(self) -> None:
         chat_id = 5556
@@ -563,18 +570,55 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             rng=random.Random(1),
         )
-        with_contextual_start = await self.generator.generate_text(
+        with_contextual_start, contextual_trace = (
+            await self.generator.generate_text_with_trace(
+                chat_id=chat_id,
+                max_chars=100,
+                context_tokens=context_tokens,
+                context_start_bias=4.0,
+                randomness_strength=0.0,
+                rng=random.Random(1),
+            )
+        )
+
+        self.assertTrue(without_contextual_start)
+        self.assertFalse(without_contextual_start.startswith("context alpha beta"))
+        self.assertTrue(with_contextual_start)
+        self.assertFalse(with_contextual_start.startswith("context alpha beta"))
+        self.assertTrue(with_contextual_start.startswith("continues safely"))
+        self.assertEqual(contextual_trace.start_source, "hidden_context")
+
+    async def test_context_pair_backoff_builds_hidden_state(self) -> None:
+        chat_id = 5557
+        await self.db.save_message_and_update_model(
+            chat_id=chat_id,
+            raw_text="global lead alpha beta hidden output continues safely",
+            tokens=[
+                "global",
+                "lead",
+                "alpha",
+                "beta",
+                "hidden",
+                "output",
+                "continues",
+                "safely",
+            ],
+        )
+
+        text, trace = await self.generator.generate_text_with_trace(
             chat_id=chat_id,
             max_chars=100,
-            context_tokens=context_tokens,
+            context_tokens=["alpha", "beta"],
             context_start_bias=4.0,
             randomness_strength=0.0,
             rng=random.Random(1),
         )
 
-        self.assertTrue(without_contextual_start)
-        self.assertFalse(without_contextual_start.startswith("context alpha beta"))
-        self.assertTrue(with_contextual_start.startswith("context alpha beta"))
+        self.assertTrue(text)
+        self.assertFalse(text.startswith("alpha beta"))
+        self.assertTrue(text.startswith("output continues safely"))
+        self.assertEqual(trace.start_source, "hidden_context")
+        self.assertEqual(trace.markov_order_used, 2)
 
     async def test_generate_text_falls_back_when_context_not_found(self) -> None:
         await self.db.save_message_and_update_model(
@@ -593,12 +637,12 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             tokens=["солнце", "ярко", "греет", "дом"],
         )
 
-        text = await self.generator.generate_text(
+        text, trace = await self.generator.generate_text_with_trace(
             chat_id=6666,
             max_chars=17,
             context_tokens=["совсем", "другой", "контекст"],
             context_bias=2.4,
-            context_start_bias=2.6,
+            context_start_bias=4.0,
             randomness_strength=0.0,
             markov_order=3,
             enable_backoff=True,
@@ -609,6 +653,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(text)
         self.assertFalse(text.startswith("совсем другой"))
         self.assertIn(text.split()[0], {"кошка", "солнце"})
+        self.assertEqual(trace.start_source, "global")
 
     async def test_generate_text_without_context_matches_legacy_path(self) -> None:
         await self.db.save_message_and_update_model(
@@ -688,6 +733,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.jump_count, 0)
         self.assertIsNone(trace.rejection_reason)
         self.assertEqual(trace.token_count, len(tokenize(text)))
+        self.assertEqual(trace.start_source, "global")
         self.assertNotIn(text, repr(trace))
         joined_logs = " ".join(captured_logs.output)
         self.assertIn("attempts=1", joined_logs)
@@ -706,9 +752,30 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.jump_count, 0)
         self.assertEqual(trace.rejection_reason, "no_starts")
         self.assertEqual(trace.token_count, 0)
+        self.assertEqual(trace.start_source, "global")
+
+    async def test_generation_trace_reports_seed_start_source(self) -> None:
+        chat_id = 7772
+        await self.db.save_message_and_update_model(
+            chat_id=chat_id,
+            raw_text="seed alpha beta continues safely",
+            tokens=["seed", "alpha", "beta", "continues", "safely"],
+        )
+
+        text, trace = await self.generator.generate_text_with_trace(
+            chat_id=chat_id,
+            max_chars=100,
+            seed_tokens=["seed", "alpha", "beta"],
+            randomness_strength=0.0,
+            rng=random.Random(4),
+        )
+
+        self.assertTrue(text)
+        self.assertTrue(text.startswith("seed alpha beta"))
+        self.assertEqual(trace.start_source, "seed")
 
     async def test_generation_attempt_budget_is_bounded(self) -> None:
-        rejected_attempt = _GenerationAttempt("", 0, 0, "no_starts", 0)
+        rejected_attempt = _GenerationAttempt("", 0, 0, "no_starts", 0, "global")
         with patch(
             "app.core.markov.MarkovGenerator._generate_text_once",
             new=AsyncMock(return_value=rejected_attempt),
@@ -823,9 +890,9 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             "_generate_text_once",
             new=AsyncMock(
                 side_effect=[
-                    _GenerationAttempt("", 3, 0, "low_diversity", 0),
-                    _GenerationAttempt("", 3, 0, "context_heavy", 0),
-                    _GenerationAttempt("валидный ответ", 3, 0, None, 2),
+                    _GenerationAttempt("", 3, 0, "low_diversity", 0, "global"),
+                    _GenerationAttempt("", 3, 0, "context_heavy", 0, "global"),
+                    _GenerationAttempt("валидный ответ", 3, 0, None, 2, "global"),
                 ]
             ),
         ) as mock_generate_once:
@@ -844,9 +911,9 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             "_generate_text_once",
             new=AsyncMock(
                 side_effect=[
-                    _GenerationAttempt("", 3, 0, "low_diversity", 0),
-                    _GenerationAttempt("", 3, 0, "context_heavy", 0),
-                    _GenerationAttempt("валидный ответ", 3, 0, None, 2),
+                    _GenerationAttempt("", 3, 0, "low_diversity", 0, "global"),
+                    _GenerationAttempt("", 3, 0, "context_heavy", 0, "global"),
+                    _GenerationAttempt("валидный ответ", 3, 0, None, 2, "global"),
                 ]
             ),
         ) as mock_generate_once:

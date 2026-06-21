@@ -90,6 +90,27 @@ def context_token_overlap(
     return len(output & context) / len(output)
 
 
+def starts_with_context_run(
+    output_tokens: list[str],
+    context_tokens: list[str],
+    min_run: int = 3,
+) -> bool:
+    """True if the reply's leading content tokens reproduce a contiguous context run.
+
+    Direct indicator of literal context echo at the start of the reply — the
+    defect that phase 4.1 increment C (hidden context state) targets.
+    """
+    context = meaningful_tokens(context_tokens)
+    run = min(min_run, len(output_tokens))
+    if run < 2 or len(context) < run:
+        return False
+    prefix = output_tokens[:run]
+    return any(
+        context[start : start + run] == prefix
+        for start in range(len(context) - run + 1)
+    )
+
+
 async def evaluate_generation(
     *,
     seed: int = DEFAULT_SEED,
@@ -107,6 +128,7 @@ async def evaluate_generation(
     rng = random.Random(seed)
     outputs: list[list[str]] = []
     context_overlaps: list[float] = []
+    context_prefix_copies: list[bool] = []
     candidates_scored: list[int] = []
     latencies_ms: list[float] = []
     log_masking.init_masking("synthetic-generation-evaluation")
@@ -166,6 +188,9 @@ async def evaluate_generation(
                 context_overlaps.append(
                     context_token_overlap(output, context_tokens)
                 )
+                context_prefix_copies.append(
+                    starts_with_context_run(output, context_tokens)
+                )
                 candidates_scored.append(selection.candidates_scored)
         finally:
             await db.close()
@@ -186,6 +211,9 @@ async def evaluate_generation(
         "avg_length_tokens": mean(lengths),
         "median_length_tokens": median(lengths),
         "context_token_overlap": mean(context_overlaps),
+        "context_prefix_copy_rate": (
+            sum(context_prefix_copies) / generations if generations else 0.0
+        ),
         "avg_candidates_scored": mean(candidates_scored),
         "avg_generation_latency_ms": mean(latencies_ms),
         "median_generation_latency_ms": median(latencies_ms),
