@@ -1,12 +1,48 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-06-21, девятнадцатая редакция (generation Phase 4.2b: фильтрация корпуса/privacy — email/телефоны/секреты/boilerplate).
-**Текущая ветка:** `feat/generation-phase4.2b` (не слита). Phase 0/1/2, Phase 3.1, Phase 3.2, STRUCT-001 и оба `chore(deps)` — уже в `main` (PR #30–#37).
-**Тесты / проверки:** `unittest discover tests` — 318 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (48 files); `bandit` — 0 medium/high; harness воспроизводит post-Phase-3.2 baseline без изменений (в синтетике PII нет).
+**Дата актуализации:** 2026-06-21, двадцатая редакция (DoD §6.2: `markov.py` под строгими ruff/mypy — prerequisite для generation Phase 4.2a).
+**Текущая ветка:** `chore/markov-strict-checks` (не слита). Phase 0/1/2, Phase 3.1, Phase 3.2, Phase 4.2b, STRUCT-001 и оба `chore(deps)` — уже в `main` (PR #30–#38).
+**Тесты / проверки:** `unittest discover tests` — 318 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (48 files, **включая `app/core/markov.py`**); `bandit` — 0 medium/high; harness воспроизводит post-Phase-3.2 baseline без изменений (правки только типовые).
 **Backlog:** P0/P1/P2/P3 — пусто. `STRUCT-001` — выполнен. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 **Аудит-файлы:** `AUDIT_TASKLIST.md` ретайрен (2026-06-21) — его пункты закрыты/obsolete (см. секцию «Открытый security-backlog» ниже), а единственные открытые (AUD-010, CA-F11) уже в backlog выше; исходный security-baseline сохранён в `PROJECT_SECURITY_STABILITY_AUDIT.md`. Активные аудит-документы: `PROJECT_AUDIT.md` (трекер) и `PROJECT_AUDIT_CODEX.md` (reference).
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
+
+---
+
+## Session update - 2026-06-21 (chore: markov.py под строгими проверками)
+
+Prerequisite для Фазы 4.2a (DoD §6.2): `app/core/markov.py` выведен из-под
+ослаблений статанализа — теперь под строгими `ruff` и `mypy strict`. Изменения
+**только типовые/аннотации, поведение не менялось** (harness-baseline идентичен).
+
+### Completed
+- `pyproject.toml`: `app.core.markov` убран из `[[tool.mypy.overrides]]
+  ignore_errors`; снят ruff per-file-ignore `["UP045","UP047"]` для `markov.py`.
+- `ruff`: авто-фикс `Optional[X]` → `X | None` (UP045) и переход на PEP 695
+  generics `def f[T](...)` (UP047); удалён ставший мёртвым `T = TypeVar("T")` и
+  неиспользуемые импорты (`TypeVar`, позже `Literal`/`overload`).
+- `mypy strict` (вскрылся 21 скрытый arg-type/type-arg): membership-only
+  контейнеры переходов аннотированы как `Container[tuple[str, ...]]`
+  (`weighted_next_choice`, `_select_contextual_start2`); bounded-«множества»
+  `seen_pairs`/`seen_triplets` — `OrderedDict[tuple[str, ...], None]`;
+  `_touch_cache` получил generic-ключ `K`; `invalidate_chat_cache` развёрнут по
+  каждому кэшу отдельно (конкретный тип ключа вместо union). Без `cast` и
+  `type: ignore`. (Распределение: Codex — основная партия аннотаций; Claude —
+  ruff-часть, `Container`-выравнивание, упрощение overload'ов, финальные фиксы.)
+
+### Changed files
+- `pyproject.toml`, `app/core/markov.py`
+
+### Tests/checks run
+- `unittest discover tests` — **318 OK**; `ruff` — clean; `mypy app/` — clean
+  (48 files, теперь включая `markov.py`); `bandit` — 0 medium/high.
+- harness (`tools/eval_generation.py`) — все метрики идентичны
+  `generation_baseline.json` → поведение не изменилось.
+
+### Remaining work
+- Фаза 4.2a (поведение: окончания фраз / границы предложений) — следующий
+  отдельный PR поверх этой страховки. Затем 4.1 → 4.3.
 
 ---
 

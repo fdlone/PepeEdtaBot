@@ -4,8 +4,9 @@ import logging
 import random
 import re
 from collections import Counter, OrderedDict
+from collections.abc import Container
 from dataclasses import dataclass, field
-from typing import NamedTuple, Optional, TypeVar
+from typing import NamedTuple
 
 from app.infrastructure.database import Database
 
@@ -24,9 +25,6 @@ REJECTION_LOW_DIVERSITY = "low_diversity"
 REJECTION_SHORT_CONTEXT_COPY = "short_context_copy"
 REJECTION_CONTEXT_HEAVY = "context_heavy"
 
-T = TypeVar("T")
-
-
 @dataclass(frozen=True, slots=True)
 class GenerationTrace:
     attempts_used: int
@@ -44,7 +42,7 @@ class _GenerationAttempt(NamedTuple):
     token_count: int
 
 
-def remember_bounded(
+def remember_bounded[T](
     values: OrderedDict[T, None],
     value: T,
     limit: int,
@@ -184,7 +182,7 @@ def find_repetitive_tail_start(
     min_prefix_tokens: int = 4,
     tail_scan_limit: int = 12,
     dominance_threshold: float = 0.7,
-) -> Optional[int]:
+) -> int | None:
     content_indexes = content_token_indexes(tokens)
     if len(content_indexes) < min_prefix_tokens + min_tail_tokens:
         return None
@@ -315,7 +313,7 @@ def sampled_exploration(
     return max(0.0, min(1.0, explore_probability)) * sample_mean
 
 
-def exploration_weighted_choice(
+def exploration_weighted_choice[T](
     population: list[T],
     weights: list[float],
     rng: random.Random,
@@ -332,15 +330,15 @@ def weighted_next_choice(
     explore_probability: float,
     power: float,
     rng: random.Random,
-    context_token_set: Optional[set[str]] = None,
-    context_pairs: Optional[set[tuple[str, str]]] = None,
-    context_triplets: Optional[set[tuple[str, str, str]]] = None,
-    current_state: Optional[tuple[str, ...]] = None,
+    context_token_set: set[str] | None = None,
+    context_pairs: Container[tuple[str, ...]] | None = None,
+    context_triplets: Container[tuple[str, ...]] | None = None,
+    current_state: tuple[str, ...] | None = None,
     context_bias: float = 1.0,
     step_index: int = 0,
-    recent_tokens: Optional[list[str]] = None,
-    seen_pairs: Optional[set[tuple[str, str]]] = None,
-    seen_triplets: Optional[set[tuple[str, str, str]]] = None,
+    recent_tokens: list[str] | None = None,
+    seen_pairs: Container[tuple[str, ...]] | None = None,
+    seen_triplets: Container[tuple[str, ...]] | None = None,
     repetition_penalty_strength: float = 1.0,
 ) -> str:
     ordered_items = sorted(items, key=lambda item: item[0])
@@ -451,15 +449,22 @@ class MarkovGenerator:
     )
 
     def invalidate_chat_cache(self, chat_id: int) -> None:
-        for cache in (self._cache3, self._cache2, self._cache1):
-            keys = [k for k in cache if k[0] == chat_id]
-            for key in keys:
-                cache.pop(key, None)
+        # Each cache is unrolled separately so its concrete key type is preserved
+        # (a shared loop would widen the key to a union and break .pop typing).
+        for key3 in [k for k in self._cache3 if k[0] == chat_id]:
+            self._cache3.pop(key3, None)
+        for key2 in [k for k in self._cache2 if k[0] == chat_id]:
+            self._cache2.pop(key2, None)
+        for key1 in [k for k in self._cache1 if k[0] == chat_id]:
+            self._cache1.pop(key1, None)
         self._cache_starts3.pop(chat_id, None)
         self._cache_starts2.pop(chat_id, None)
 
-    def _touch_cache(
-        self, cache: OrderedDict, key: tuple, value: list[tuple[str, int]]
+    def _touch_cache[K](
+        self,
+        cache: OrderedDict[K, list[tuple[str, int]]],
+        key: K,
+        value: list[tuple[str, int]],
     ) -> None:
         cache[key] = value
         cache.move_to_end(key)
@@ -521,7 +526,7 @@ class MarkovGenerator:
         power: float,
         context_start_bias: float,
         rng: random.Random,
-    ) -> Optional[tuple[str, str, str]]:
+    ) -> tuple[str, str, str] | None:
         windows = build_windows(context_tokens, 3)
         if not windows:
             return None
@@ -565,11 +570,11 @@ class MarkovGenerator:
         next_explore: float,
         next_power: float,
         context_token_set: set[str],
-        context_pairs: set[tuple[str, str]],
-        context_triplets: set[tuple[str, str, str]],
+        context_pairs: set[tuple[str, ...]],
+        context_triplets: set[tuple[str, ...]],
         repetition_penalty_strength: float,
         rng: random.Random,
-    ) -> Optional[tuple[str, str, str]]:
+    ) -> tuple[str, str, str] | None:
         windows = build_windows(context_tokens, 2)
         if not windows:
             return None
@@ -625,8 +630,8 @@ class MarkovGenerator:
         chat_id: int,
         max_chars: int,
         max_tokens: int = 45,
-        seed_tokens: Optional[list[str]] = None,
-        context_tokens: Optional[list[str]] = None,
+        seed_tokens: list[str] | None = None,
+        context_tokens: list[str] | None = None,
         context_bias: float = 1.0,
         context_start_bias: float = 1.0,
         randomness_strength: float = 1.0,
@@ -660,8 +665,8 @@ class MarkovGenerator:
         chat_id: int,
         max_chars: int,
         max_tokens: int = 45,
-        seed_tokens: Optional[list[str]] = None,
-        context_tokens: Optional[list[str]] = None,
+        seed_tokens: list[str] | None = None,
+        context_tokens: list[str] | None = None,
         context_bias: float = 1.0,
         context_start_bias: float = 1.0,
         randomness_strength: float = 1.0,
@@ -740,8 +745,8 @@ class MarkovGenerator:
         chat_id: int,
         max_chars: int,
         max_tokens: int = 45,
-        seed_tokens: Optional[list[str]] = None,
-        context_tokens: Optional[list[str]] = None,
+        seed_tokens: list[str] | None = None,
+        context_tokens: list[str] | None = None,
         context_bias: float = 1.0,
         context_start_bias: float = 1.0,
         randomness_strength: float = 1.0,
@@ -772,7 +777,7 @@ class MarkovGenerator:
         if not starts3 and not starts2:
             return _GenerationAttempt("", 0, 0, REJECTION_NO_STARTS, 0)
 
-        start3: Optional[tuple[str, str, str]] = None
+        start3: tuple[str, str, str] | None = None
         if seed_tokens and len(seed_tokens) >= 3:
             seeded3 = await self.db.get_start3_if_exists(
                 chat_id, seed_tokens[0], seed_tokens[1], seed_tokens[2]
@@ -883,9 +888,15 @@ class MarkovGenerator:
         token_limit = max(1, max_tokens)
         w1, w2, w3 = start3
         generated: list[str] = [w1, w2, w3][:token_limit]
-        visited_triplets = OrderedDict.fromkeys([(w1, w2, w3)])
-        seen_pairs = OrderedDict.fromkeys(build_windows(generated, 2))
-        seen_triplets = OrderedDict.fromkeys(build_windows(generated, 3))
+        visited_triplets: OrderedDict[tuple[str, str, str], None] = (
+            OrderedDict.fromkeys([(w1, w2, w3)])
+        )
+        seen_pairs: OrderedDict[tuple[str, ...], None] = OrderedDict.fromkeys(
+            build_windows(generated, 2)
+        )
+        seen_triplets: OrderedDict[tuple[str, ...], None] = OrderedDict.fromkeys(
+            build_windows(generated, 3)
+        )
         jump_count = 0
 
         for step_index in range(self.max_steps):

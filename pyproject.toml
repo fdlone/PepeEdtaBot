@@ -6,7 +6,6 @@ target-version = "py312"
 select = ["E", "F", "I", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
-"app/core/markov.py" = ["UP045", "UP047"]
 "app/domain/pivo_templates.py" = ["E501"]
 "app/infrastructure/database.py" = ["UP045"]
 "tools/seed_db.py" = ["E402", "E501"]
@@ -27,7 +26,6 @@ module = [
     "app.config.runtime_config",
     "app.config.runtime_state",
     "app.config.settings",
-    "app.core.markov",
     "app.core.reply_policy",
     "app.core.text",
     "app.domain.pivo",
