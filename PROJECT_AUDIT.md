@@ -1,12 +1,58 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-06-21, двадцатая редакция (DoD §6.2: `markov.py` под строгими ruff/mypy — prerequisite для generation Phase 4.2a).
-**Текущая ветка:** `chore/markov-strict-checks` (не слита). Phase 0/1/2, Phase 3.1, Phase 3.2, Phase 4.2b, STRUCT-001 и оба `chore(deps)` — уже в `main` (PR #30–#38).
-**Тесты / проверки:** `unittest discover tests` — 318 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (48 files, **включая `app/core/markov.py`**); `bandit` — 0 medium/high; harness воспроизводит post-Phase-3.2 baseline без изменений (правки только типовые).
+**Дата актуализации:** 2026-06-21, двадцать первая редакция (generation Phase 4.2a: окончания фраз — `finalize_reply_ending`).
+**Текущая ветка:** `feat/generation-phase4.2a` (не слита). Phase 0/1/2, Phase 3.1, Phase 3.2, Phase 4.2b, `chore` markov-strict, STRUCT-001 и оба `chore(deps)` — уже в `main` (PR #30–#39).
+**Тесты / проверки:** `unittest discover tests` — 327 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (49 files); `bandit` — 0 medium/high; harness — content-метрики идентичны baseline (finalize меняет только пунктуацию окончаний, которую content-харнесс не измеряет).
 **Backlog:** P0/P1/P2/P3 — пусто. `STRUCT-001` — выполнен. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 **Аудит-файлы:** `AUDIT_TASKLIST.md` ретайрен (2026-06-21) — его пункты закрыты/obsolete (см. секцию «Открытый security-backlog» ниже), а единственные открытые (AUD-010, CA-F11) уже в backlog выше; исходный security-baseline сохранён в `PROJECT_SECURITY_STABILITY_AUDIT.md`. Активные аудит-документы: `PROJECT_AUDIT.md` (трекер) и `PROJECT_AUDIT_CODEX.md` (reference).
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
+
+---
+
+## Session update - 2026-06-21 (generation Phase 4.2a)
+
+Реализована подфаза 4.2a — естественные окончания фраз. Двухагентный воркфлоу:
+ТЗ и ревью-гейт — Claude; реализация ядра + тесты — Codex (primary implementer),
+с одним review-циклом (см. ниже); harness/baseline/docs — Claude.
+
+### Completed
+- Новый `app/core/lexicon.py`: `STOPWORDS` и `BAD_ENDING_WORDS` вынесены из
+  `candidate_scorer.py` (разрыв потенциального цикла: `markov` ← `lexicon` →
+  `candidate_scorer`, который уже импортирует из `markov`). `candidate_scorer`
+  теперь импортирует обе константы из `lexicon` (имена и поведение сохранены).
+- `app/core/markov.py`: `finalize_reply_ending(tokens, min_content_tokens=4)` —
+  срезает завершающую **не-терминальную** пунктуацию (`, ; :`) и «висящие»
+  служебные слова (`BAD_ENDING_WORDS`), не опускаясь ниже порога content-токенов,
+  и добавляет `.`, если ответ не оканчивается на `. ! ?`. **Терминальные `!`/`?`
+  сохраняются** (не переписываются в `.`). Подключён в пайплайн после
+  `trim_to_sentence_boundary` (`markov.py:1054`). Раньше скорер лишь *штрафовал*
+  плохие окончания — теперь генератор их *срезает*.
+- Короткие ответы (<4 content-токенов) не трогаются — поведение и тесты
+  short-reply неизменны.
+
+### Review-цикл (quality gate)
+- Codex корректно оспорил буквальный первый спек: он срезал бы и терминальные
+  `!`/`?` (они в `PUNCT_SET`) и заменял их на `.`. Claude вернул исправленный
+  алгоритм (срезать только `, ; :` + bad-words, сохранять `. ! ?`); Codex
+  переделал функцию и тесты.
+
+### Changed files
+- `app/core/lexicon.py` (new), `app/core/candidate_scorer.py`, `app/core/markov.py`
+- `tests/test_lexicon.py` (new), `tests/test_markov_and_text.py`
+
+### Tests/checks run
+- `unittest discover tests` — **327 OK** (+9); `ruff` — clean; `mypy app/` —
+  clean (49 files); `bandit` — 0 medium/high.
+- harness (`tools/eval_generation.py`) — content-метрики (distinct/length/
+  context overlap) идентичны `generation_baseline.json`: finalize меняет лишь
+  пунктуацию окончаний (точка не считается content-токеном) и редко срезает
+  слова (скорер и так избегает плохих окончаний на синтетике). Поэтому baseline
+  не перегенерировался; новое поведение покрыто unit-тестами `finalize_reply_ending`.
+
+### Remaining work
+- Фаза 4: 4.1 (семантика контекста, правки ядра) → 4.3 (капитализация/
+  токенизация + совместимость модели). Каждая — отдельный под-PR.
 
 ---
 

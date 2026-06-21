@@ -8,6 +8,7 @@ from collections.abc import Container
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
+from app.core.lexicon import BAD_ENDING_WORDS
 from app.infrastructure.database import Database
 
 logger = logging.getLogger("chat_markov")
@@ -215,6 +216,7 @@ def trim_repetitive_tail(tokens: list[str]) -> list[str]:
 
 
 _SENTENCE_END_PUNCT = {".", "!", "?"}
+_NON_TERMINAL_PUNCT = PUNCT_SET - _SENTENCE_END_PUNCT
 
 
 def trim_to_sentence_boundary(tokens: list[str], min_content_tokens: int = 4) -> list[str]:
@@ -227,6 +229,32 @@ def trim_to_sentence_boundary(tokens: list[str], min_content_tokens: int = 4) ->
             if len(content_tokens(trimmed)) >= min_content_tokens:
                 return trimmed
     return tokens
+
+
+def finalize_reply_ending(
+    tokens: list[str],
+    min_content_tokens: int = 4,
+) -> list[str]:
+    if len(content_tokens(tokens)) < min_content_tokens:
+        return tokens[:]
+
+    finalized = tokens[:]
+    content_count = len(content_tokens(finalized))
+    while finalized:
+        last = finalized[-1]
+        is_bad_word = last not in PUNCT_SET and last.lower() in BAD_ENDING_WORDS
+        is_non_terminal_punct = last in _NON_TERMINAL_PUNCT
+        if not (is_bad_word or is_non_terminal_punct):
+            break
+        if is_bad_word and content_count <= min_content_tokens:
+            break
+        finalized.pop()
+        if is_bad_word:
+            content_count -= 1
+
+    if finalized and finalized[-1] not in _SENTENCE_END_PUNCT:
+        finalized.append(".")
+    return finalized
 
 
 def is_low_diversity_reply(
@@ -1023,6 +1051,7 @@ class MarkovGenerator:
 
         generated = trim_repetitive_tail(generated)
         generated = trim_to_sentence_boundary(generated)
+        generated = finalize_reply_ending(generated)
         result = detokenize(generated, max_chars=max_chars)
         if len(result) < 5:
             return _GenerationAttempt(
