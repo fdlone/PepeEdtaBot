@@ -1,12 +1,52 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-06-21, двадцать третья редакция (generation Phase 4.1 инкремент B: разделение transition-state и output-buffer — behavior-preserving, фундамент под C).
-**Текущая ветка:** `feat/generation-phase4.1b` (не слита). Phase 0/1/2, Phase 3.1, Phase 3.2, Phase 4.2b, `chore` markov-strict, Phase 4.2a, Phase 4.1-A, STRUCT-001 и оба `chore(deps)` — уже в `main` (PR #30–#41).
-**Тесты / проверки:** `unittest discover tests` — 331 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (49 files); `bandit` — 0 medium/high; harness — baseline 4.1 **идентичен** (B не меняет production-поведение).
+**Дата актуализации:** 2026-06-21, двадцать четвёртая редакция (generation Phase 4.1 инкремент C: скрытое контекстное состояние — убрано literal-эхо).
+**Текущая ветка:** `feat/generation-phase4.1c` (не слита). Phase 0/1/2, Phase 3.1, Phase 3.2, Phase 4.2b, `chore` markov-strict, Phase 4.2a, Phase 4.1-A/B, STRUCT-001 и оба `chore(deps)` — уже в `main` (PR #30–#42).
+**Тесты / проверки:** `unittest discover tests` — 333 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (49 files); `bandit` — 0 medium/high; harness — **новый baseline 4.1c** (`context_prefix_copy_rate` 0.45→0.24, `context_token_overlap` 0.475→0.378, empty 0.0).
 **Backlog:** P0/P1/P2/P3 — пусто. `STRUCT-001` — выполнен. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 **Аудит-файлы:** `AUDIT_TASKLIST.md` ретайрен (2026-06-21) — его пункты закрыты/obsolete (см. секцию «Открытый security-backlog» ниже), а единственные открытые (AUD-010, CA-F11) уже в backlog выше; исходный security-baseline сохранён в `PROJECT_SECURITY_STABILITY_AUDIT.md`. Активные аудит-документы: `PROJECT_AUDIT.md` (трекер) и `PROJECT_AUDIT_CODEX.md` (reference).
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
+
+---
+
+## Session update - 2026-06-21 (generation Phase 4.1 — инкремент C)
+
+**Инкремент C** (Codex-impl ~60%, Claude — ревью/harness-метрики/baseline/QA):
+самый рискованный шаг Фазы 4 — контекст влияет на генерацию через **скрытое
+состояние**, БЕЗ дословного эха начала промпта.
+
+### Completed
+- Новый `_select_contextual_state`: выбирает контекстный n-gram, у которого есть
+  **исходящие переходы** (trigram через `_get3`, backoff на bigram через `_get2`)
+  — не только message-starts. Возвращает (state_triplet, order_used) или None
+  (dead-end).
+- В `_generate_text_once`: при контекстном пути (gated инкрементом A) вызывается
+  `_select_contextual_state`; найдено → `start3=state`, **`emit_start=False`**
+  (механизм инкремента B), `start_source="hidden_context"`. Контекстный n-gram
+  больше не эмитится — первый успешный successor становится первым токеном
+  ответа. Dead-end → прежний global-start (`emit_start=True`).
+- `GenerationTrace.start_source` (`hidden_context`/`global`/`seed`) — DEBUG-лог.
+- Удалён мёртвый `_select_contextual_start2`; `_select_contextual_start3`
+  сохранён для НЕизменённого in-loop jump-пути (jump в C не трогали).
+- Guards (`is_context_heavy_reply`, `is_short_context_copy`) — без изменений.
+- Harness расширен метрикой `context_prefix_copy_rate` (доля ответов, чьё начало
+  дословно воспроизводит непрерывный фрагмент контекста).
+
+### Tests/checks run
+- `unittest discover tests` — **333 OK**; `ruff` — clean; `mypy app/` — clean
+  (49 files); `bandit` — 0 medium/high.
+- harness BEFORE(4.1B)/AFTER(C): **`context_prefix_copy_rate` 0.45→0.24**
+  (literal-эхо почти вдвое меньше), `context_token_overlap` 0.475→0.378,
+  distinct-1 0.0978→0.1023, distinct-2 0.154→0.162, avg_len 8.08→7.72,
+  **`empty_result_rate` 0.0→0.0** (главный риск hidden-continuation —
+  пустые ответы — не реализовался). Новый baseline зафиксирован.
+
+### Remaining work
+- Инкремент **D**: убрать production context-derived seed из хендлера
+  (`extract_best_seed` для reply-контекста), чтобы контекст шёл только через
+  hidden-state; explicit `seed_tokens` API остаётся для тестов/прямых callers.
+  Затем Фаза 4.3.
 
 ---
 

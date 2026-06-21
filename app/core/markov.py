@@ -33,6 +33,7 @@ class GenerationTrace:
     jump_count: int
     rejection_reason: str | None
     token_count: int
+    start_source: str
 
 
 class _GenerationAttempt(NamedTuple):
@@ -41,6 +42,7 @@ class _GenerationAttempt(NamedTuple):
     jump_count: int
     rejection_reason: str | None
     token_count: int
+    start_source: str
 
 
 def remember_bounded[T](
@@ -595,56 +597,70 @@ class MarkovGenerator:
             return exploration_weighted_choice(population, weights, rng)
         return rng.choices(population=population, weights=weights, k=1)[0]
 
-    async def _select_contextual_start2(
+    async def _select_contextual_state(
         self,
         chat_id: int,
         context_tokens: list[str],
-        explore_probability: float,
-        power: float,
-        context_start_bias: float,
+        start_explore: float,
+        start_power: float,
         next_explore: float,
         next_power: float,
         context_token_set: set[str],
         context_pairs: set[tuple[str, ...]],
         context_triplets: set[tuple[str, ...]],
+        context_bias: float,
         repetition_penalty_strength: float,
         rng: random.Random,
-    ) -> tuple[str, str, str] | None:
-        windows = build_windows(context_tokens, 2)
-        if not windows:
-            return None
-
-        exploring = rng.random() < explore_probability
+    ) -> tuple[tuple[str, str, str], int] | None:
+        exploring = rng.random() < start_explore
         frequency_power = exploration_adjusted_power(
-            power,
-            sampled_exploration(explore_probability, exploring, rng),
+            start_power,
+            sampled_exploration(start_explore, exploring, rng),
         )
-        candidates: list[tuple[tuple[str, str], float]] = []
-        total = len(windows)
-        for index, window in enumerate(windows):
-            seeded2 = await self.db.get_start_if_exists(chat_id, window[0], window[1])
-            if not seeded2:
-                continue
-            recency_bonus = 1.0 + ((index + 1) / total) * 0.30
-            weight = (
-                (max(seeded2[2], 1) ** frequency_power)
-                * max(1.0, context_start_bias)
-                * recency_bonus
-            )
-            candidates.append(((seeded2[0], seeded2[1]), weight))
+        windows3 = build_windows(context_tokens, 3)
+        candidates3: list[tuple[tuple[str, str, str], float]] = []
+        total3 = len(windows3)
+        for index, window in enumerate(windows3):
+            transitions = await self._get3(chat_id, window[0], window[1], window[2])
+            if transitions:
+                transition_count = sum(count for _, count in transitions)
+                recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
+                weight = max(transition_count, 1) ** frequency_power * recency_bonus
+                candidates3.append(((window[0], window[1], window[2]), weight))
 
-        if not candidates:
+        if candidates3:
+            population3 = [state for state, _ in candidates3]
+            weights3 = [weight for _, weight in candidates3]
+            if exploring:
+                state3 = exploration_weighted_choice(population3, weights3, rng)
+            else:
+                state3 = rng.choices(population=population3, weights=weights3, k=1)[0]
+            return state3, 3
+
+        windows2 = build_windows(context_tokens, 2)
+        candidates2: list[tuple[tuple[str, str], list[tuple[str, int]], float]] = []
+        total2 = len(windows2)
+        for index, window in enumerate(windows2):
+            transitions = await self._get2(chat_id, window[0], window[1])
+            if transitions:
+                transition_count = sum(count for _, count in transitions)
+                recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
+                weight = max(transition_count, 1) ** frequency_power * recency_bonus
+                candidates2.append(((window[0], window[1]), transitions, weight))
+
+        if not candidates2:
             return None
-        population = [start for start, _ in candidates]
-        weights = [weight for _, weight in candidates]
+        population2 = [index for index in range(len(candidates2))]
+        weights2 = [weight for _, _, weight in candidates2]
         if exploring:
-            w1, w2 = exploration_weighted_choice(population, weights, rng)
+            selected_index = exploration_weighted_choice(population2, weights2, rng)
         else:
-            w1, w2 = rng.choices(population=population, weights=weights, k=1)[0]
-
-        variants = await self._get2(chat_id, w1, w2)
-        if not variants:
-            return None
+            selected_index = rng.choices(
+                population=population2,
+                weights=weights2,
+                k=1,
+            )[0]
+        (w1, w2), variants, _ = candidates2[selected_index]
         w3 = weighted_next_choice(
             variants,
             next_explore,
@@ -654,11 +670,11 @@ class MarkovGenerator:
             context_pairs=context_pairs,
             context_triplets=context_triplets,
             current_state=(w1, w2),
-            context_bias=context_start_bias,
+            context_bias=context_bias,
             step_index=0,
             repetition_penalty_strength=repetition_penalty_strength,
         )
-        return (w1, w2, w3)
+        return (w1, w2, w3), 2
 
     async def generate_text(
         self,
@@ -720,6 +736,7 @@ class MarkovGenerator:
             jump_count=0,
             rejection_reason=REJECTION_NO_STARTS,
             token_count=0,
+            start_source="global",
         )
         total_jump_count = 0
         for attempt_index in range(total_attempts):
@@ -752,6 +769,7 @@ class MarkovGenerator:
                     jump_count=total_jump_count,
                     rejection_reason=None,
                     token_count=last_attempt.token_count,
+                    start_source=last_attempt.start_source,
                 )
                 self._log_trace(trace)
                 return last_attempt.text, trace
@@ -762,18 +780,21 @@ class MarkovGenerator:
             jump_count=total_jump_count,
             rejection_reason=last_attempt.rejection_reason,
             token_count=0,
+            start_source=last_attempt.start_source,
         )
         self._log_trace(trace)
         return "", trace
 
     def _log_trace(self, trace: GenerationTrace) -> None:
         logger.debug(
-            "Generation trace: attempts=%s order=%s jumps=%s rejection=%s tokens=%s",
+            "Generation trace: attempts=%s order=%s jumps=%s rejection=%s tokens=%s "
+            "start_source=%s",
             trace.attempts_used,
             trace.markov_order_used,
             trace.jump_count,
             trace.rejection_reason,
             trace.token_count,
+            trace.start_source,
         )
 
     async def _generate_text_once(
@@ -812,15 +833,17 @@ class MarkovGenerator:
         starts3 = await self._get_starts3(chat_id) if order >= 3 else []
         starts2 = await self._get_starts2(chat_id)
         if not starts3 and not starts2:
-            return _GenerationAttempt("", 0, 0, REJECTION_NO_STARTS, 0)
+            return _GenerationAttempt("", 0, 0, REJECTION_NO_STARTS, 0, "global")
 
         start3: tuple[str, str, str] | None = None
+        start_source = "global"
         if seed_tokens and len(seed_tokens) >= 3:
             seeded3 = await self.db.get_start3_if_exists(
                 chat_id, seed_tokens[0], seed_tokens[1], seed_tokens[2]
             )
             if seeded3:
                 start3 = (seeded3[0], seeded3[1], seeded3[2])
+                start_source = "seed"
         if start3 is None and seed_tokens and len(seed_tokens) >= 2:
             seeded2 = await self.db.get_start_if_exists(
                 chat_id, seed_tokens[0], seed_tokens[1]
@@ -844,37 +867,30 @@ class MarkovGenerator:
                     )
                     start3 = (w1, w2, w3)
                     order_used = 2
+                    start_source = "seed"
 
         use_contextual_start = generation_rng.random() < context_start_probability(
             context_start_bias
         )
         if start3 is None and context_tokens and use_contextual_start:
-            if order >= 3:
-                start3 = await self._select_contextual_start3(
-                    chat_id,
-                    context_tokens,
-                    start_explore,
-                    start_power,
-                    context_start_bias,
-                    generation_rng,
-                )
-            if start3 is None:
-                start3 = await self._select_contextual_start2(
-                    chat_id=chat_id,
-                    context_tokens=context_tokens,
-                    explore_probability=start_explore,
-                    power=start_power,
-                    context_start_bias=context_start_bias,
-                    next_explore=next_explore,
-                    next_power=next_power,
-                    context_token_set=context_token_set,
-                    context_pairs=context_pairs,
-                    context_triplets=context_triplets,
-                    repetition_penalty_strength=repetition_penalty_strength,
-                    rng=generation_rng,
-                )
-                if start3 is not None:
-                    order_used = 2
+            contextual_state = await self._select_contextual_state(
+                chat_id=chat_id,
+                context_tokens=context_tokens,
+                start_explore=start_explore,
+                start_power=start_power,
+                next_explore=next_explore,
+                next_power=next_power,
+                context_token_set=context_token_set,
+                context_pairs=context_pairs,
+                context_triplets=context_triplets,
+                context_bias=context_bias,
+                repetition_penalty_strength=repetition_penalty_strength,
+                rng=generation_rng,
+            )
+            if contextual_state is not None:
+                start3, order_used = contextual_state
+                emit_start = False
+                start_source = "hidden_context"
 
         if start3 is None:
             if starts3:
@@ -899,6 +915,7 @@ class MarkovGenerator:
                         0,
                         REJECTION_NO_START_TRANSITION,
                         0,
+                        start_source,
                     )
                 w3 = weighted_next_choice(
                     variants,
@@ -923,6 +940,7 @@ class MarkovGenerator:
                 0,
                 REJECTION_NO_START_TRANSITION,
                 0,
+                start_source,
             )
 
         token_limit = max(1, max_tokens)
@@ -1074,6 +1092,7 @@ class MarkovGenerator:
                 jump_count,
                 REJECTION_RESULT_TOO_SHORT,
                 0,
+                start_source,
             )
         result_tokens = tokenize(result)
         is_short_reply = is_short_generated_reply(result_tokens)
@@ -1084,6 +1103,7 @@ class MarkovGenerator:
                 jump_count,
                 REJECTION_LOW_DIVERSITY,
                 0,
+                start_source,
             )
         if is_short_reply:
             if is_short_context_copy(result_tokens, context_tokens):
@@ -1093,6 +1113,7 @@ class MarkovGenerator:
                     jump_count,
                     REJECTION_SHORT_CONTEXT_COPY,
                     0,
+                    start_source,
                 )
         elif is_context_heavy_reply(result_tokens, context_tokens):
             return _GenerationAttempt(
@@ -1101,6 +1122,7 @@ class MarkovGenerator:
                 jump_count,
                 REJECTION_CONTEXT_HEAVY,
                 0,
+                start_source,
             )
         return _GenerationAttempt(
             result,
@@ -1108,4 +1130,5 @@ class MarkovGenerator:
             jump_count,
             None,
             len(result_tokens),
+            start_source,
         )
