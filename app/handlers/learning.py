@@ -12,7 +12,6 @@ from aiogram.types import Message
 from app.config.runtime_state import RuntimeState
 from app.core.markov import (
     MarkovGenerator,
-    extract_best_seed,
     is_short_generated_reply,
     tokenize,
 )
@@ -219,14 +218,15 @@ async def on_text_message(
                 include_current_message=include_current,
             )
 
-        seed = None
+        # Phase 4.1d: context influences generation only through the hidden
+        # contextual state (increment C); we no longer derive a literal seed from
+        # the reply context, which used to make replies echo the prompt prefix.
+        # The explicit seed_tokens API on the generator remains for direct callers.
         if context_tokens:
-            seed = extract_best_seed(context_tokens, runtime_state.reply_context_last_tokens)
             logger.debug(
-                "Reply context prepared: chat=%s context_tokens=%s seed=%s",
+                "Reply context prepared: chat=%s context_tokens=%s",
                 mask_chat_id(message.chat.id),
                 len(context_tokens),
-                seed,
             )
         response_generator = ResponseGenerator(
             generator=generator,
@@ -237,7 +237,7 @@ async def on_text_message(
             GenerationRequest(
                 chat_id=message.chat.id,
                 context_tokens=context_tokens,
-                seed=seed,
+                seed=None,
                 current_message_normalized=current_message_normalized,
             ),
             rng=random.Random(),
