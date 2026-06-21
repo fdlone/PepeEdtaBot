@@ -1,12 +1,77 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-06-21, восемнадцатая редакция (generation Phase 3.2: многокандидатный выбор + `CandidateScorer`).
-**Текущая ветка:** `feat/generation-phase3.2` (не слита). Phase 0/1/2, Phase 3.1, STRUCT-001 и оба `chore(deps)` — уже в `main`.
-**Тесты / проверки:** `unittest discover tests` — 295 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (47 files); harness воспроизводит post-Phase-3.2 baseline.
+**Дата актуализации:** 2026-06-21, девятнадцатая редакция (generation Phase 4.2b: фильтрация корпуса/privacy — email/телефоны/секреты/boilerplate).
+**Текущая ветка:** `feat/generation-phase4.2b` (не слита). Phase 0/1/2, Phase 3.1, Phase 3.2, STRUCT-001 и оба `chore(deps)` — уже в `main` (PR #30–#37).
+**Тесты / проверки:** `unittest discover tests` — 318 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (48 files); `bandit` — 0 medium/high; harness воспроизводит post-Phase-3.2 baseline без изменений (в синтетике PII нет).
 **Backlog:** P0/P1/P2/P3 — пусто. `STRUCT-001` — выполнен. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 **Аудит-файлы:** `AUDIT_TASKLIST.md` ретайрен (2026-06-21) — его пункты закрыты/obsolete (см. секцию «Открытый security-backlog» ниже), а единственные открытые (AUD-010, CA-F11) уже в backlog выше; исходный security-baseline сохранён в `PROJECT_SECURITY_STABILITY_AUDIT.md`. Активные аудит-документы: `PROJECT_AUDIT.md` (трекер) и `PROJECT_AUDIT_CODEX.md` (reference).
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
+
+---
+
+## Session update - 2026-06-21 (generation Phase 4.2b)
+
+Реализована подфаза 4.2b — фильтрация корпуса/privacy. Начало Фазы 4 (scope:
+4.2b → 4.2a → 4.1 → 4.3, доставка отдельными под-PR). Двухагентный воркфлоу:
+дизайн и детекторы — Codex (Security Reviewer), композиция/интеграция/тесты/
+docs — Claude; финальная верификация — Claude.
+
+### Completed
+- Новый strict-модуль `app/core/privacy_filter.py`: `redact_sensitive_data` =
+  email → phone → secret; матч заменяется **пробелом** (не плейсхолдером, иначе
+  маркер стал бы частым токеном и начал генерироваться). Публичные детекторы
+  `redact_emails` / `redact_phones` / `redact_secrets` (тестируемы изолированно).
+  - **Email:** консервативный regex (local + `@` + host с точкой). Раньше email
+    **намеренно сохранялся** — теперь редактируется.
+  - **Phone:** двухэтапно (regex-кандидат + подсчёт цифр). Покрывает RU (`+7`/`8`,
+    11 цифр), UA (`+380`; нац. `0XX` — 10 цифр с `0`), intl (`+`, 8–15),
+    форматированные (скобки/дефисы/точки). Списки цифр через **пробелы**
+    (счёт/оценки/перечисления) сохраняются — generic-ветка требует phone-
+    пунктуацию `+()-.` (правка по review-замечанию Claude).
+  - **Secret:** known-forms (JWT, Telegram-token, prefixed `sk-`/`ghp_`/`xox*-`/
+    `AIza`/`AKIA`) + generic (24–128 ASCII, entropy ≥3.5 bit/char или hex ≥32,
+    ≥3 класса символов, UUID исключён, не-ASCII не трогается → RU/UA слова
+    безопасны).
+- `sanitize_text` (`app/core/text.py`) композирует `redact_sensitive_data`
+  между URL-removal и mention-removal → единый chokepoint покрывает токены
+  модели, `normalized_text` (`database.py:94`), reply-context и verbatim-check.
+- `strip_leading_bot_vocative(text, aliases)` в `app/handlers/learning.py`:
+  снимает только ведущий alias бота + сепаратор (`Пепе, …`), mid-sentence alias
+  и чужие вокативы («Ребята, …») не трогает. В хендлере `learn_source` (vocative
+  stripped) идёт **и** в токены модели, **и** в `record_message` →
+  `normalized_text` — модель и хранимый текст консистентны.
+
+### Changed files
+- `app/core/privacy_filter.py` (new), `tests/test_privacy_filter.py` (new, 18 тестов)
+- `app/core/text.py`, `app/handlers/learning.py`
+- `tests/test_handlers.py` (TestStripLeadingBotVocative + integration), 
+  `tests/test_markov_and_text.py` (regression-тест email перевёрнут: теперь email
+  редактируется)
+- `docs/RESPONSE_GENERATION_ROADMAP.md`
+
+### Audit findings updated
+- Privacy-постура корпуса усилена: email/телефоны/секреты больше не попадают в
+  модель и `normalized_text` на новой ingestion.
+- **Остаточный риск (решение пользователя — оставить):** редакция действует
+  только на новую ingestion; уже накопленные `normalized_text` + starts/
+  transitions содержат ранее впитанные PII/секреты. Backfill/rebuild не делаем.
+
+### Tests/checks run
+- `unittest discover tests` — **318 OK** (+23 к 295); `ruff` — clean;
+  `mypy app/` — clean (48 files); `bandit -r app main.py` — 0 medium/high.
+- harness (`tools/eval_generation.py`, seed по умолчанию) — все метрики
+  идентичны `tools/generation_baseline.json` (в синтетике PII нет, регрессии
+  генерации нет).
+
+### Not run / limitations
+- DoD §6.2 (включить `markov.py` в строгие ruff/mypy) — **не относится к 4.2b**
+  (ядро не трогалось; вся новая логика в strict `privacy_filter.py`). Требование
+  актуально для 4.1/4.3, которые правят `markov.py`.
+
+### Remaining work
+- Фаза 4: 4.2a (окончания фраз) → 4.1 (семантика контекста, правки ядра) →
+  4.3 (капитализация/токенизация + совместимость модели). Каждая — отдельный под-PR.
 
 ---
 

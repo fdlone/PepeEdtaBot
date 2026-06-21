@@ -535,6 +535,43 @@ class TestLearningMessageLength(unittest.TestCase):
         self.assertTrue(has_enough_tokens_for_learning(["один", "два"]))
 
 
+class TestStripLeadingBotVocative(unittest.TestCase):
+    aliases = frozenset({"pepe", "пепе"})
+
+    def test_strips_leading_alias_with_separators(self) -> None:
+        from app.handlers.learning import strip_leading_bot_vocative
+
+        for text, expected in (
+            ("Пепе, расскажи анекдот", "расскажи анекдот"),
+            ("pepe: what is up", "what is up"),
+            ("Пепе — скажи что-нибудь", "скажи что-нибудь"),
+            ("  пепе,  привет всем", "привет всем"),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    strip_leading_bot_vocative(text, self.aliases), expected
+                )
+
+    def test_preserves_alias_without_separator(self) -> None:
+        from app.handlers.learning import strip_leading_bot_vocative
+
+        text = "Пепе хороший бот"
+        self.assertEqual(strip_leading_bot_vocative(text, self.aliases), text)
+
+    def test_preserves_mid_sentence_alias_and_other_vocatives(self) -> None:
+        from app.handlers.learning import strip_leading_bot_vocative
+
+        for text in ("Ребята, привет", "скажи пепе, что делать", "Москва, я люблю"):
+            with self.subTest(text=text):
+                self.assertEqual(strip_leading_bot_vocative(text, self.aliases), text)
+
+    def test_empty_aliases_is_noop(self) -> None:
+        from app.handlers.learning import strip_leading_bot_vocative
+
+        text = "Пепе, привет"
+        self.assertEqual(strip_leading_bot_vocative(text, frozenset()), text)
+
+
 class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         mask_patcher = patch(
@@ -592,6 +629,37 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
 
         learning_service.record_message.assert_not_called()
         msg.reply.assert_not_awaited()
+
+    async def test_vocative_stripped_and_pii_redacted_before_learning(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        # Leading bot vocative + a phone number: the vocative is stripped from the
+        # text fed to record_message, and the phone is redacted out of the model
+        # tokens (via sanitize_text), keeping the corpus clean.
+        msg = _fake_message(text="pepe, мой телефон +380441234567 ладно")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=102)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="")
+        state = self._reply_state()
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+        learning_service.record_message.assert_awaited_once()
+        kwargs = learning_service.record_message.await_args.kwargs
+        self.assertEqual(kwargs["raw_text"], "мой телефон +380441234567 ладно")
+        self.assertEqual(kwargs["tokens"], ["мой", "телефон", "ладно"])
 
     async def test_threshold_crossing_message_is_learned_without_replying_to_itself(
         self,

@@ -52,10 +52,11 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         tokens = tokenize(clean)
         self.assertEqual(tokens, ["Привеет", "!", "!", "Как", "дела", "?", "?"])
 
-    def test_sanitize_preserves_email_host(self) -> None:
-        # Regression: `@host` inside an email must NOT be stripped as a mention.
+    def test_sanitize_redacts_email_keeping_surrounding_words(self) -> None:
+        # Phase 4.2b: emails are PII and must be redacted out of the corpus,
+        # while the surrounding words are preserved.
         clean = sanitize_text("Напиши на user@example.com если что")
-        self.assertEqual(clean, "Напиши на user@example.com если что")
+        self.assertEqual(clean, "Напиши на если что")
 
     def test_sanitize_still_strips_leading_mentions(self) -> None:
         clean = sanitize_text("@PepeEdta_Bot привет")

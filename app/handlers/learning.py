@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import time
 from collections import deque
 
@@ -37,6 +38,23 @@ MIN_LEARN_MESSAGE_CHARS = 3
 MAX_LEARN_MESSAGE_CHARS = 500
 MIN_LEARN_MESSAGE_TOKENS = 2
 RECENT_SHORT_REPLY_LIMIT = 5
+
+# Leading direct-address to the bot: "<alias><separator> ...". Only a leading
+# bot alias followed by a vocative separator is stripped, so the corpus does not
+# learn boilerplate openings like "Пепе, ...". A mid-sentence alias is preserved.
+_LEADING_VOCATIVE_RE = re.compile(r"^\s*([^\s,:;—–-]+)\s*[,:;—–-]+\s*")
+
+
+def strip_leading_bot_vocative(text: str, aliases: frozenset[str]) -> str:
+    """Remove a leading "<bot-alias><separator>" direct address, if present."""
+    if not aliases:
+        return text
+    match = _LEADING_VOCATIVE_RE.match(text)
+    if match is None:
+        return text
+    if match.group(1).lower() not in {alias.lower() for alias in aliases}:
+        return text
+    return text[match.end() :]
 
 
 def is_learnable_message_length(clean_text: str) -> bool:
@@ -117,7 +135,13 @@ async def on_text_message(
     # (e.g. "ок", "?") should still trigger a response even if too short to learn.
     mentioned = bot_is_mentioned(message, bot_username, bot_id, bot_text_aliases)
 
-    clean = sanitize_text(raw_text)
+    # Strip a leading "<bot-alias>, ..." direct address before learning so the
+    # corpus does not absorb boilerplate openings. Mention detection above still
+    # sees the original text. The same stripped text feeds both the model tokens
+    # and the persisted normalized_text (see record_message below) to keep them
+    # consistent.
+    learn_source = strip_leading_bot_vocative(raw_text, bot_text_aliases)
+    clean = sanitize_text(learn_source)
     tokens = tokenize(clean, normalize_lower=runtime_state.normalize_lower)
     learnable = is_learnable_message_length(clean) and has_enough_tokens_for_learning(tokens)
 
@@ -250,7 +274,7 @@ async def on_text_message(
         if learnable:
             learned_token_volume = await learning_service.record_message(
                 chat_id=message.chat.id,
-                raw_text=raw_text,
+                raw_text=learn_source,
                 tokens=tokens,
             )
             learned = runtime_state.learned_messages.get(message.chat.id, 0) + 1
