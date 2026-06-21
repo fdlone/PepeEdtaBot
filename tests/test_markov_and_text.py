@@ -12,6 +12,7 @@ from app.core.markov import (
     GenerationTrace,
     MarkovGenerator,
     _GenerationAttempt,
+    context_start_probability,
     detokenize,
     escalated_randomness_strength,
     exploration_adjusted_power,
@@ -31,6 +32,27 @@ from app.core.reply_policy import bot_is_mentioned
 from app.core.text import sanitize_text
 from app.handlers.learning import extract_context_tokens
 from app.infrastructure.database import Database
+
+
+class TestContextStartProbability(unittest.TestCase):
+    def test_expected_probabilities(self) -> None:
+        self.assertEqual(context_start_probability(1.0), 0.0)
+        self.assertAlmostEqual(context_start_probability(2.2), 0.5454545454545454)
+        self.assertEqual(context_start_probability(4.0), 0.75)
+        self.assertEqual(context_start_probability(0.5), 0.0)
+        self.assertEqual(context_start_probability(0.0), 0.0)
+
+    def test_is_monotonically_increasing(self) -> None:
+        biases = [1.0, 1.5, 2.2, 3.0, 4.0]
+        probabilities = [context_start_probability(bias) for bias in biases]
+
+        self.assertEqual(probabilities, sorted(probabilities))
+        self.assertTrue(
+            all(
+                lower < upper
+                for lower, upper in zip(probabilities, probabilities[1:])
+            )
+        )
 
 
 class TestFinalizeReplyEnding(unittest.TestCase):
@@ -469,6 +491,42 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(text)
         self.assertTrue(text.startswith("Люблю кофе утром"))
+
+    async def test_context_start_bias_gates_contextual_start_path(self) -> None:
+        chat_id = 5556
+        context_tokens = ["topic", "context", "alpha", "beta"]
+        await self.db.save_message_and_update_model(
+            chat_id=chat_id,
+            raw_text="context alpha beta continues safely",
+            tokens=["context", "alpha", "beta", "continues", "safely"],
+        )
+        for _ in range(12):
+            await self.db.save_message_and_update_model(
+                chat_id=chat_id,
+                raw_text="global path starts elsewhere safely",
+                tokens=["global", "path", "starts", "elsewhere", "safely"],
+            )
+
+        without_contextual_start = await self.generator.generate_text(
+            chat_id=chat_id,
+            max_chars=100,
+            context_tokens=context_tokens,
+            context_start_bias=1.0,
+            randomness_strength=0.0,
+            rng=random.Random(1),
+        )
+        with_contextual_start = await self.generator.generate_text(
+            chat_id=chat_id,
+            max_chars=100,
+            context_tokens=context_tokens,
+            context_start_bias=4.0,
+            randomness_strength=0.0,
+            rng=random.Random(1),
+        )
+
+        self.assertTrue(without_contextual_start)
+        self.assertFalse(without_contextual_start.startswith("context alpha beta"))
+        self.assertTrue(with_contextual_start.startswith("context alpha beta"))
 
     async def test_generate_text_falls_back_when_context_not_found(self) -> None:
         await self.db.save_message_and_update_model(

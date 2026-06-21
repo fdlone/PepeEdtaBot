@@ -1,12 +1,55 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-06-21, двадцать первая редакция (generation Phase 4.2a: окончания фраз — `finalize_reply_ending`).
-**Текущая ветка:** `feat/generation-phase4.2a` (не слита). Phase 0/1/2, Phase 3.1, Phase 3.2, Phase 4.2b, `chore` markov-strict, STRUCT-001 и оба `chore(deps)` — уже в `main` (PR #30–#39).
-**Тесты / проверки:** `unittest discover tests` — 327 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (49 files); `bandit` — 0 medium/high; harness — content-метрики идентичны baseline (finalize меняет только пунктуацию окончаний, которую content-харнесс не измеряет).
+**Дата актуализации:** 2026-06-21, двадцать вторая редакция (generation Phase 4.1 инкремент A: `context_start_bias` стал реальным — вероятностный chooser).
+**Текущая ветка:** `feat/generation-phase4.1` (не слита). Phase 0/1/2, Phase 3.1, Phase 3.2, Phase 4.2b, `chore` markov-strict, Phase 4.2a, STRUCT-001 и оба `chore(deps)` — уже в `main` (PR #30–#40).
+**Тесты / проверки:** `unittest discover tests` — 330 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (49 files); `bandit` — 0 medium/high; harness — **новый baseline 4.1** (`context_token_overlap` 0.593→0.475 — bias теперь реально управляет долей контекстных стартов).
 **Backlog:** P0/P1/P2/P3 — пусто. `STRUCT-001` — выполнен. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 **Аудит-файлы:** `AUDIT_TASKLIST.md` ретайрен (2026-06-21) — его пункты закрыты/obsolete (см. секцию «Открытый security-backlog» ниже), а единственные открытые (AUD-010, CA-F11) уже в backlog выше; исходный security-baseline сохранён в `PROJECT_SECURITY_STABILITY_AUDIT.md`. Активные аудит-документы: `PROJECT_AUDIT.md` (трекер) и `PROJECT_AUDIT_CODEX.md` (reference).
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
+
+---
+
+## Session update - 2026-06-21 (generation Phase 4.1 — инкремент A)
+
+Начата Фаза 4.1 (семантика контекста) — самая рискованная, поэтому делится на
+4 инкремента (A→D, по возрастанию риска), отдельными под-PR. Анализ — Codex-first
+(вскрыл, что `context_start_bias` для order=3 — математический no-op: общий
+множитель сокращается при нормализации, 1.0/2.2/4.0 давали одинаковый результат,
+а совпавший контекстный старт работал безусловным переключателем). Доля Codex на
+4.1 временно поднята до ~60% (решение пользователя; стандарт 50/50).
+
+**Реализован инкремент A** (Codex-impl, Claude — ревью/harness/baseline/docs):
+- `context_start_probability(bias) = max(0, (bias-1)/bias)` — вероятность входа в
+  контекстный старт-путь (1.0→0%, 2.2→54.5%, 4.0→75%). Семантика согласована с
+  пользователем; дефолт 2.2 пока сохранён, тюнинг по harness позже.
+- Контекстный старт-блок (`markov.py`) загейтен `use_contextual_start` (один
+  RNG-draw на попытку, детерминизм Phase 1 сохранён); при неудаче — прежний
+  global-start path. Seeded-start и guard'ы (`is_context_heavy_reply`,
+  short-copy) не тронуты.
+
+### Продуктовые решения пользователя (для всей 4.1)
+1. Эхо: допускать отдельные слова контекста, но **не** literal-префикс/цепочку.
+2. Источник контекстного состояния (инкремент C): любые n-gram с transitions.
+3. Bias: `p=(bias-1)/bias`, дефолт 2.2.
+4. Explicit `seed_tokens` API сохраняется для тестов/прямых callers; production
+   перестанет формировать seed из контекста (инкремент D).
+
+### Changed files
+- `app/core/markov.py`, `tests/test_markov_and_text.py`, `tools/eval_generation.py`
+  (метка `baseline_phase` 3.2→4.1), `tools/generation_baseline.json` (новый baseline)
+
+### Tests/checks run
+- `unittest discover tests` — **330 OK**; `ruff` — clean; `mypy app/` — clean
+  (49 files); `bandit` — 0 medium/high.
+- harness BEFORE/AFTER: `context_token_overlap` 0.5926→0.4755; distinct-1
+  0.0952→0.0978; distinct-2 0.1495→0.1540; avg_len 8.09→8.08; empty 0.0→0.0;
+  avg_candidates 4.81→4.99. Bias стал монотонным и измеримым.
+
+### Remaining work
+- Инкремент **B** (behavior-preserving разделение state/output), **C** (скрытое
+  контекстное продолжение — убрать literal-эхо; High-risk, новые harness-метрики),
+  **D** (убрать production context-seed из хендлера). Затем Фаза 4.3.
 
 ---
 

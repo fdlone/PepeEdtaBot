@@ -96,6 +96,13 @@ def escalated_randomness_strength(
     return min(max_strength, base + (max_strength - base) * progress)
 
 
+def context_start_probability(context_start_bias: float) -> float:
+    """Probability of entering the contextual-start path: (bias-1)/bias, clamped to [0, 1)."""
+    if context_start_bias <= 1.0:
+        return 0.0
+    return max(0.0, (context_start_bias - 1.0) / context_start_bias)
+
+
 def build_windows(tokens: list[str], size: int) -> list[tuple[str, ...]]:
     if size <= 0 or len(tokens) < size:
         return []
@@ -836,7 +843,10 @@ class MarkovGenerator:
                     start3 = (w1, w2, w3)
                     order_used = 2
 
-        if start3 is None and context_tokens:
+        use_contextual_start = generation_rng.random() < context_start_probability(
+            context_start_bias
+        )
+        if start3 is None and context_tokens and use_contextual_start:
             if order >= 3:
                 start3 = await self._select_contextual_start3(
                     chat_id,
