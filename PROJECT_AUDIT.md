@@ -1,12 +1,43 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-06-21, двадцать четвёртая редакция (generation Phase 4.1 инкремент C: скрытое контекстное состояние — убрано literal-эхо).
-**Текущая ветка:** `feat/generation-phase4.1c` (не слита). Phase 0/1/2, Phase 3.1, Phase 3.2, Phase 4.2b, `chore` markov-strict, Phase 4.2a, Phase 4.1-A/B, STRUCT-001 и оба `chore(deps)` — уже в `main` (PR #30–#42).
-**Тесты / проверки:** `unittest discover tests` — 333 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (49 files); `bandit` — 0 medium/high; harness — **новый baseline 4.1c** (`context_prefix_copy_rate` 0.45→0.24, `context_token_overlap` 0.475→0.378, empty 0.0).
+**Дата актуализации:** 2026-06-21, двадцать пятая редакция (generation Phase 4.1 инкремент D: убран production context-seed — **Фаза 4.1 завершена**).
+**Текущая ветка:** `feat/generation-phase4.1d` (не слита). Phase 0/1/2, Phase 3.1, Phase 3.2, Phase 4.2b, `chore` markov-strict, Phase 4.2a, Phase 4.1-A/B/C, STRUCT-001 и оба `chore(deps)` — уже в `main` (PR #30–#43).
+**Тесты / проверки:** `unittest discover tests` — 333 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (49 files); `bandit` — 0 medium/high; harness — baseline 4.1 **идентичен** (D: context-seed был no-op на fixture).
 **Backlog:** P0/P1/P2/P3 — пусто. `STRUCT-001` — выполнен. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 **Аудит-файлы:** `AUDIT_TASKLIST.md` ретайрен (2026-06-21) — его пункты закрыты/obsolete (см. секцию «Открытый security-backlog» ниже), а единственные открытые (AUD-010, CA-F11) уже в backlog выше; исходный security-baseline сохранён в `PROJECT_SECURITY_STABILITY_AUDIT.md`. Активные аудит-документы: `PROJECT_AUDIT.md` (трекер) и `PROJECT_AUDIT_CODEX.md` (reference).
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
+
+---
+
+## Session update - 2026-06-21 (generation Phase 4.1 — инкремент D, ЗАВЕРШЕНИЕ 4.1)
+
+**Инкремент D** (Claude): убран production context-derived seed. Контекст теперь
+влияет на генерацию **только** через скрытое состояние (инкремент C); хендлер
+больше не строит literal seed из reply-контекста (бывший источник эха префикса).
+Explicit `seed_tokens` API генератора сохранён для прямых callers/тестов.
+
+### Completed
+- `app/handlers/learning.py`: удалён вызов `extract_best_seed` для reply-контекста;
+  `GenerationRequest(... seed=None ...)`; убран неиспользуемый импорт.
+- `tools/eval_generation.py`: harness зеркалит production (`seed=None`) — на
+  fixture baseline идентичен (seed никогда не совпадал со стартами, был no-op).
+
+### Tests/checks run
+- `unittest discover tests` — **333 OK**; `ruff` — clean; `mypy app/` — clean
+  (49 files); `bandit` — 0 medium/high; harness — baseline **идентичен**.
+
+### Итог Фазы 4.1 (A→D)
+Семантика контекста переработана: `context_start_bias` стал реально влияющим
+(A); state и output разделены (B); контекст влияет через скрытое состояние без
+literal-эха (C); production-seed убран (D). Кумулятивно (от pre-4.1 к 4.1d):
+`context_token_overlap` 0.593→0.378, `context_prefix_copy_rate` ~0.45→0.24
+(на C; D на fixture нейтрален), distinct-1/2 выросли, `empty_result_rate` 0.0.
+
+### Remaining work
+- **Фаза 4.3** (последняя): капитализация + токенизация (эмодзи, апострофы) +
+  стратегия совместимости модели при смене токенизации — только после
+  offline-проверки; конфликт с `NORMALIZE_LOWER`. Затем Фаза 4 закрыта.
 
 ---
 

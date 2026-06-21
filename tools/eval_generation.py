@@ -23,7 +23,6 @@ from app.core.candidate_scorer import meaningful_tokens  # noqa: E402
 from app.core.markov import (  # noqa: E402
     MarkovGenerator,
     content_tokens,
-    extract_best_seed,
     tokenize,
 )
 from app.core.response_generator import (  # noqa: E402
@@ -174,7 +173,7 @@ async def evaluate_generation(
                     GenerationRequest(
                         chat_id=SYNTHETIC_CHAT_ID,
                         context_tokens=context_tokens,
-                        seed=extract_best_seed(context_tokens, 3),
+                        seed=None,
                         current_message_normalized="__synthetic_evaluation_input__",
                     ),
                     rng=rng,
