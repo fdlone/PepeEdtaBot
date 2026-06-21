@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 
+from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
 from app.core.markov import content_tokens
 
 SHORT_REPLY_MAX_TOKENS = 3
@@ -25,111 +26,6 @@ CONTEXT_RELEVANCE_CAP = 0.80
 REPEATED_TOKEN_WEIGHT = 0.60
 REPEATED_BIGRAM_WEIGHT = 1.00
 REPEATED_TRIGRAM_WEIGHT = 1.30
-
-STOPWORDS = frozenset(
-    {
-        "a",
-        "an",
-        "and",
-        "are",
-        "as",
-        "at",
-        "be",
-        "by",
-        "for",
-        "from",
-        "in",
-        "is",
-        "it",
-        "of",
-        "on",
-        "or",
-        "that",
-        "the",
-        "this",
-        "to",
-        "with",
-        "а",
-        "без",
-        "бы",
-        "в",
-        "во",
-        "да",
-        "для",
-        "до",
-        "же",
-        "за",
-        "и",
-        "из",
-        "или",
-        "к",
-        "как",
-        "ли",
-        "на",
-        "не",
-        "но",
-        "о",
-        "об",
-        "от",
-        "по",
-        "с",
-        "со",
-        "то",
-        "у",
-        "что",
-        "это",
-    }
-)
-
-BAD_ENDING_WORDS = frozenset(
-    {
-        "a",
-        "an",
-        "and",
-        "at",
-        "because",
-        "but",
-        "by",
-        "for",
-        "from",
-        "if",
-        "in",
-        "not",
-        "of",
-        "on",
-        "or",
-        "the",
-        "to",
-        "with",
-        "а",
-        "без",
-        "бы",
-        "в",
-        "во",
-        "для",
-        "до",
-        "же",
-        "за",
-        "и",
-        "из",
-        "или",
-        "к",
-        "ли",
-        "на",
-        "не",
-        "ни",
-        "но",
-        "о",
-        "об",
-        "от",
-        "по",
-        "с",
-        "со",
-        "у",
-        "ведь",
-    }
-)
-
 
 @dataclass(frozen=True, slots=True)
 class CandidateScore:

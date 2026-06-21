@@ -15,6 +15,7 @@ from app.core.markov import (
     detokenize,
     escalated_randomness_strength,
     exploration_adjusted_power,
+    finalize_reply_ending,
     has_degraded_recent_window,
     is_context_heavy_reply,
     is_low_diversity_reply,
@@ -30,6 +31,57 @@ from app.core.reply_policy import bot_is_mentioned
 from app.core.text import sanitize_text
 from app.handlers.learning import extract_context_tokens
 from app.infrastructure.database import Database
+
+
+class TestFinalizeReplyEnding(unittest.TestCase):
+    def test_trims_dangling_russian_connector_and_adds_period(self) -> None:
+        tokens = ["я", "думаю", "что", "это", "и"]
+
+        result = finalize_reply_ending(tokens)
+
+        self.assertEqual(result, ["я", "думаю", "что", "это", "."])
+        self.assertEqual(tokens, ["я", "думаю", "что", "это", "и"])
+
+    def test_keeps_already_terminated_text_unchanged(self) -> None:
+        tokens = ["привет", "всем", "сегодня", "друзья", "."]
+
+        self.assertEqual(finalize_reply_ending(tokens), tokens)
+
+    def test_preserves_terminal_question_mark(self) -> None:
+        tokens = ["как", "у", "тебя", "дела", "?"]
+
+        self.assertEqual(finalize_reply_ending(tokens), tokens)
+
+    def test_preserves_terminal_exclamation_mark_for_short_reply(self) -> None:
+        tokens = ["привет", "всем", "!"]
+
+        self.assertEqual(finalize_reply_ending(tokens), tokens)
+
+    def test_adds_period_when_terminal_punctuation_is_missing(self) -> None:
+        tokens = ["это", "полностью", "готовый", "ответ"]
+
+        self.assertEqual(finalize_reply_ending(tokens), [*tokens, "."])
+
+    def test_leaves_short_reply_unchanged(self) -> None:
+        tokens = ["ну", "да", "ладно"]
+
+        result = finalize_reply_ending(tokens)
+
+        self.assertEqual(result, tokens)
+        self.assertIsNot(result, tokens)
+
+    def test_never_strips_below_minimum_content_tokens(self) -> None:
+        tokens = ["да", "нет", "и", "но"]
+
+        result = finalize_reply_ending(tokens)
+
+        self.assertEqual(result, ["да", "нет", "и", "но", "."])
+        self.assertGreaterEqual(len([token for token in result if token.isalpha()]), 4)
+
+    def test_cleans_trailing_comma(self) -> None:
+        tokens = ["это", "точно", "готовый", "ответ", ","]
+
+        self.assertEqual(finalize_reply_ending(tokens), [*tokens[:-1], "."])
 
 
 class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
@@ -610,7 +662,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             rng=random.Random(3),
         )
 
-        self.assertEqual(text, " ".join(tokens))
+        self.assertEqual(text, " ".join(tokens) + ".")
 
     async def test_jump_branch_is_disabled(self) -> None:
         tokens = [f"token{index}" for index in range(12)]
@@ -635,7 +687,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
                 rng=random.Random(4),
             )
 
-        self.assertEqual(text, " ".join(tokens))
+        self.assertEqual(text, " ".join(tokens) + ".")
         mock_start_choice.assert_called_once()
 
     async def test_validation_uses_actual_char_truncated_output(self) -> None:
