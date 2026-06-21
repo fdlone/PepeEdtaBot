@@ -166,8 +166,21 @@ Post-Phase-3.2 baseline измеряет весь selection path через `Res
   отделить скрытое контекстное состояние от токенов, попадающих в ответ.
   *(L / Med-High)*
 - **4.2a.** Окончания фраз (улучшение границ предложений). *(M / Medium)*
-- **4.2b.** Фильтрация корпуса/privacy: секреты/email/телефоны/boilerplate
-  прямого обращения. Отдельный risk-профиль от 4.2a. *(M / Medium)*
+- ✅ **4.2b (ВЫПОЛНЕНО, 2026-06-21).** Фильтрация корпуса/privacy: секреты/email/
+  телефоны/boilerplate прямого обращения. Отдельный risk-профиль от 4.2a.
+  Реализация: новый strict-модуль `app/core/privacy_filter.py`
+  (`redact_sensitive_data` = email → phone → secret, спан → пробел, без
+  плейсхолдеров) скомпонован в `sanitize_text` (между URL-removal и
+  mention-removal) — единый chokepoint покрывает токены модели,
+  `normalized_text`, reply-context и verbatim-check. Телефоны — консервативно
+  (RU `+7`/`8`, UA `+380`/нац. `0XX`, intl `+`, форматированные), списки цифр
+  через пробелы сохраняются. Секреты — known-forms (JWT/Telegram/prefixed) +
+  generic (entropy ≥3.5, UUID исключён, не трогает не-ASCII). Boilerplate —
+  `strip_leading_bot_vocative` в хендлере (только ведущий alias бота + сепаратор;
+  тот же текст идёт и в токены, и в `normalized_text`). **Остаточный риск:**
+  редакция действует только на новую ingestion; старые `normalized_text` +
+  starts/transitions не очищаются (решение пользователя — оставить, отдельный
+  backfill не делаем). Baseline harness сохранён (в синтетике PII нет). *(M / Medium)*
 - **4.3.** Капитализация и токенизация (эмодзи, апострофы) **вместе со**
   стратегией совместимости модели при смене токенизации — **только** после
   offline-проверки: может конфликтовать с `NORMALIZE_LOWER` и стилем чата.
