@@ -1,12 +1,60 @@
 # Технический аудит проекта PepeEdtaBot
 
-**Дата актуализации:** 2026-06-21, двадцать пятая редакция (generation Phase 4.1 инкремент D: убран production context-seed — **Фаза 4.1 завершена**).
-**Текущая ветка:** `feat/generation-phase4.1d` (не слита). Phase 0/1/2, Phase 3.1, Phase 3.2, Phase 4.2b, `chore` markov-strict, Phase 4.2a, Phase 4.1-A/B/C, STRUCT-001 и оба `chore(deps)` — уже в `main` (PR #30–#43).
-**Тесты / проверки:** `unittest discover tests` — 333 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (49 files); `bandit` — 0 medium/high; harness — baseline 4.1 **идентичен** (D: context-seed был no-op на fixture).
+**Дата актуализации:** 2026-06-21, двадцать шестая редакция (generation Phase 4.3: output-side капитализация off-by-default — **Фаза 4 и вся дорожная карта генерации ЗАВЕРШЕНЫ**).
+**Текущая ветка:** `feat/generation-phase4.3` (не слита). Вся Фаза 4 (4.2b, 4.2a, 4.1-A/B/C/D), `chore` markov-strict, Phase 0–3.2, STRUCT-001 и оба `chore(deps)` — уже в `main` (PR #30–#44).
+**Тесты / проверки:** `unittest discover tests` — 342 OK; `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` — clean (49 files); `bandit` — 0 medium/high; harness — baseline **идентичен** (капитализация off-by-default byte-identical).
 **Backlog:** P0/P1/P2/P3 — пусто. `STRUCT-001` — выполнен. Security-backlog (LOW): AUD-010, CA-F11. Отложено по внешним решениям: структурированные JSON-логи, Prometheus-метрики.
 **Аудит-файлы:** `AUDIT_TASKLIST.md` ретайрен (2026-06-21) — его пункты закрыты/obsolete (см. секцию «Открытый security-backlog» ниже), а единственные открытые (AUD-010, CA-F11) уже в backlog выше; исходный security-baseline сохранён в `PROJECT_SECURITY_STABILITY_AUDIT.md`. Активные аудит-документы: `PROJECT_AUDIT.md` (трекер) и `PROJECT_AUDIT_CODEX.md` (reference).
 
 Полная история редакций — в конце файла (после session updates). Подробные log-style записи по каждой сессии — в секциях `## 16` — `## 24` (новые сверху-вниз по порядковому номеру).
+
+---
+
+## Session update - 2026-06-21 (generation Phase 4.3 — ЗАВЕРШЕНИЕ ДОРОЖНОЙ КАРТЫ)
+
+**Финальная подфаза 4.3** (Codex-impl helper+config+тесты, Claude — анализ
+совместимости/ревью/offline-gate/docs/QA). Дорожная карта улучшения генерации
+закрыта.
+
+### Completed
+- **Капитализация (реализовано):** `capitalize_reply_sentences` в
+  `app/core/text.py` — output-side helper (заглавная в начале ответа и после
+  `. ! ?`; пропускает emoji/кавычки/скобки/цифры; не трогает середину токена
+  `3d`/`_name`; сохраняет длину; идемпотентна; RU+Latin). Применяется в
+  `ResponseGenerator` **после** выбора кандидата → модель/scoring/RNG/токены не
+  затрагиваются. Флаг `AUTO_CAPITALIZE_REPLIES` (registry/settings/runtime_state,
+  авто-заполнение через config_registry), **дефолт `false`**.
+- **Токенизация (отложено — tokenizer v2):** смена `TOKEN_RE` (апострофы/дефисы/
+  emoji) меняет формат модели, несовместима с накопленными переходами; честный
+  rebuild невозможен (`messages.text` удалён). Решение пользователя: отложить.
+
+### Why off-by-default (offline-gate)
+`NORMALIZE_LOWER=false` уже сохраняет стиль чата (вкл. намеренный lowercase);
+роадмап §7 запрещает default-on без offline-проверки. Известное ограничение:
+«после точки» капитализирует сокращения («т.е.»→«Т.Е.»). Offline-gate: флаг-off
+даёт **byte-identical** harness-baseline; флаг-on покрыт unit/integration-тестами.
+
+### Changed files
+- `app/core/text.py`, `app/core/response_generator.py`,
+  `app/config/{registry,settings,runtime_state}.py`
+- `tests/` (test_text/capitalize unit + integration + config-тесты),
+  `tools/eval_generation.py` (флаг в harness state), `.env.example`,
+  `docs/RESPONSE_GENERATION_ROADMAP.md`
+
+### Tests/checks run
+- `unittest discover tests` — **342 OK**; `ruff` — clean; `mypy app/` — clean
+  (49 files); `bandit` — 0 medium/high; harness baseline **идентичен** (флаг off).
+
+### Итог: дорожная карта генерации завершена
+Phase 0 (связность/контаминация) → 1 (детерминизм/харнесс) → STRUCT-001 →
+2 (retry-budget/explore) → 3.1/3.2 (`ResponseGenerator`/best-of-N) →
+4.2b (privacy) → markov-strict → 4.2a (окончания) → 4.1 A–D (контекст без эха) →
+4.3 (капитализация). Открытый осознанно отложенный пункт — **tokenizer v2**.
+
+### Remaining work
+- Нет открытых пунктов дорожной карты генерации. Вне её: tokenizer v2 (отложен),
+  JSON-логи и Prometheus-метрики (ждут внешних решений), хвосты
+  `PROJECT_AUDIT_CODEX.md`/`.mcp.json` (по решению пользователя — позже).
 
 ---
 

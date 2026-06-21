@@ -14,6 +14,7 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
         "max_reply_chars": 280,
         "max_reply_tokens": 45,
         "normalize_lower": False,
+        "auto_capitalize_replies": False,
         "typing_min_ms": 350,
         "typing_max_ms": 1100,
         "randomness_strength": 2.0,

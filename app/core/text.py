@@ -11,6 +11,7 @@ URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 MENTION_RE = re.compile(r"(?<!\w)@\w+", re.UNICODE)
 SPACE_RE = re.compile(r"\s+")
 REPEAT_RE = re.compile(r"(.)\1{2,}", re.UNICODE)
+SENTENCE_ENDINGS = frozenset(".!?")
 
 
 def remove_links(text: str) -> str:
@@ -23,6 +24,41 @@ def remove_mentions(text: str) -> str:
 
 def normalize_repeats(text: str) -> str:
     return REPEAT_RE.sub(r"\1\1", text)
+
+
+def capitalize_reply_sentences(text: str) -> str:
+    """Capitalize eligible sentence-start letters without changing text length."""
+    characters = list(text)
+    sentence_start_pending = True
+
+    for index, character in enumerate(characters):
+        if character in SENTENCE_ENDINGS:
+            sentence_start_pending = True
+            continue
+        if not sentence_start_pending or not character.isalpha():
+            continue
+
+        previous = characters[index - 1] if index > 0 else ""
+        if previous.isalnum() or previous == "_":
+            sentence_start_pending = False
+            continue
+
+        token_end = index
+        while (
+            token_end < len(characters)
+            and (characters[token_end].isalnum() or characters[token_end] == "_")
+        ):
+            token_end += 1
+        if "_" in characters[index:token_end]:
+            sentence_start_pending = False
+            continue
+
+        uppercase = character.upper()
+        if len(uppercase) == 1:
+            characters[index] = uppercase
+        sentence_start_pending = False
+
+    return "".join(characters)
 
 
 def sanitize_text(text: str) -> str:

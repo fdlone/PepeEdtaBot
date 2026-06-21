@@ -24,6 +24,7 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(settings.bot_token, "123:token")
         self.assertEqual(settings.reply_probability, 0.08)
         self.assertEqual(settings.max_reply_tokens, 45)
+        self.assertFalse(settings.auto_capitalize_replies)
         self.assertEqual(settings.runtime_state_ttl_sec, 86400)
         self.assertEqual(settings.runtime_state_max_chats, 2048)
         self.assertEqual(settings.throttle_state_ttl_sec, 21600)
@@ -57,6 +58,14 @@ class TestSettings(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaisesRegex(ValueError, "Invalid boolean"):
                 load_settings(load_env=False)
+
+    def test_load_settings_enables_auto_capitalize_replies(self) -> None:
+        env = minimal_env()
+        env["AUTO_CAPITALIZE_REPLIES"] = "true"
+        with patch.dict(os.environ, env, clear=True):
+            settings = load_settings(load_env=False)
+
+        self.assertTrue(settings.auto_capitalize_replies)
 
     def test_load_settings_rejects_negative_min_cooldown(self) -> None:
         env = minimal_env()

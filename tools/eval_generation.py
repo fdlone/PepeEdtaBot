@@ -156,6 +156,7 @@ async def evaluate_generation(
                 enable_backoff=True,
                 backoff_min_order=1,
                 normalize_lower=True,
+                auto_capitalize_replies=False,
                 recent_short_replies={},
             )
             response_generator = ResponseGenerator(

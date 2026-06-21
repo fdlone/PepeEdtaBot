@@ -15,6 +15,7 @@ class RuntimeState:
     max_reply_chars: int
     max_reply_tokens: int
     normalize_lower: bool
+    auto_capitalize_replies: bool
     typing_min_ms: int
     typing_max_ms: int
     randomness_strength: float

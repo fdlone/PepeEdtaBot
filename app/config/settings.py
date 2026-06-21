@@ -19,6 +19,7 @@ class Settings:
     max_reply_tokens: int
     owner_id: int | None
     normalize_lower: bool
+    auto_capitalize_replies: bool
     db_path: str
     typing_min_ms: int
     typing_max_ms: int
