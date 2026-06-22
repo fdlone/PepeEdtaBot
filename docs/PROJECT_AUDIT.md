@@ -739,9 +739,12 @@ PepeEdtaBot/
 ├── requirements.lock                    # фиксированные версии, используется Dockerfile + CI
 ├── requirements-dev.txt                 # `-r requirements.lock` + ruff/mypy для CI
 ├── .github/workflows/ci.yml             # ruff + mypy + tests на 3.12/3.13/3.14
-├── docs/ARCHITECTURE.md
 ├── README.md
-└── PROJECT_AUDIT.md (этот файл)
+└── docs/
+    ├── ARCHITECTURE.md
+    ├── PROJECT_AUDIT.md (этот файл)
+    ├── PROJECT_AUDIT_CODEX.md
+    └── PROJECT_SECURITY_STABILITY_AUDIT.md
 ```
 
 **Метрики (актуальное состояние):**
