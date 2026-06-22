@@ -23,6 +23,7 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
         "enable_backoff": True,
         "backoff_min_order": 1,
         "use_reply_context": True,
+        "fuzzy_context_casefold": False,
         "reply_context_max_tokens": 12,
         "reply_context_last_tokens": 3,
         "reply_context_bias": 1.8,

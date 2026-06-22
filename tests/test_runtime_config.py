@@ -29,6 +29,7 @@ def make_state() -> SimpleNamespace:
         enable_backoff=True,
         backoff_min_order=1,
         use_reply_context=True,
+        fuzzy_context_casefold=False,
         reply_context_max_tokens=12,
         reply_context_last_tokens=3,
         reply_context_bias=1.8,
@@ -63,6 +64,12 @@ class TestRuntimeConfig(unittest.TestCase):
         apply_runtime_setting(state, "auto_capitalize_replies", "true")
 
         self.assertTrue(state.auto_capitalize_replies)
+
+    def test_apply_runtime_setting_updates_fuzzy_context_casefold(self) -> None:
+        state = make_state()
+        apply_runtime_setting(state, "fuzzy_context_casefold", "true")
+
+        self.assertTrue(state.fuzzy_context_casefold)
 
     def test_apply_runtime_setting_rejects_probability_out_of_range(self) -> None:
         state = make_state()

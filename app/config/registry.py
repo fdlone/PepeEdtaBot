@@ -99,6 +99,12 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("enable_backoff", "ENABLE_BACKOFF", "true", _parse_bool),
     FieldSpec("backoff_min_order", "BACKOFF_MIN_ORDER", "1", _int_in_set({1, 2})),
     FieldSpec("use_reply_context", "USE_REPLY_CONTEXT", "true", _parse_bool),
+    FieldSpec(
+        "fuzzy_context_casefold",
+        "FUZZY_CONTEXT_CASEFOLD",
+        "false",
+        _parse_bool,
+    ),
     FieldSpec("reply_context_max_tokens", "REPLY_CONTEXT_MAX_TOKENS", "12",
               _int_min(2)),
     FieldSpec("reply_context_last_tokens", "REPLY_CONTEXT_LAST_TOKENS", "3",

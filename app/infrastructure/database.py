@@ -224,6 +224,15 @@ class Database:
             raise RuntimeError("Database not initialized: call await Database.init() first")
         return await self.markov.get_transitions1(chat_id, w1)
 
+    async def get_markov_states(
+        self,
+        chat_id: int,
+        order: int,
+    ) -> list[tuple[tuple[str, ...], int]]:
+        if self.markov is None:
+            raise RuntimeError("Database not initialized: call await Database.init() first")
+        return await self.markov.get_states(chat_id, order)
+
     async def get_chat_token_volume(self, chat_id: int) -> int:
         if self.markov is None:
             raise RuntimeError("Database not initialized: call await Database.init() first")

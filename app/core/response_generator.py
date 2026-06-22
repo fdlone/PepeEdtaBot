@@ -117,6 +117,7 @@ class ResponseGenerator:
                 markov_order=self.runtime_state.markov_order,
                 enable_backoff=self.runtime_state.enable_backoff,
                 backoff_min_order=self.runtime_state.backoff_min_order,
+                fuzzy_context_casefold=self.runtime_state.fuzzy_context_casefold,
                 rng=generation_rng,
                 attempt_budget=1,
             )

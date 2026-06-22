@@ -68,10 +68,16 @@ class _InstrumentedMarkovGenerator(MarkovGenerator):
     def __init__(self, db: Database) -> None:
         super().__init__(db)
         self.leading_punctuation_stripped = 0
+        self.context_exact_matches = 0
+        self.context_casefold_matches = 0
+        self.hidden_context_fallbacks = 0
 
     async def generate_text(self, *args: Any, **kwargs: Any) -> str:
         text, trace = await self.generate_text_with_trace(*args, **kwargs)
         self.leading_punctuation_stripped += trace.leading_punctuation_stripped
+        self.context_exact_matches += trace.context_exact_matches
+        self.context_casefold_matches += trace.context_casefold_matches
+        self.hidden_context_fallbacks += trace.hidden_context_fallbacks
         return text
 
 
@@ -139,6 +145,7 @@ async def evaluate_generation(
     generations: int = DEFAULT_GENERATIONS,
     candidate_target: int = CANDIDATE_TARGET,
     normalize_lower: bool = True,
+    fuzzy_context_casefold: bool = False,
 ) -> dict[str, int | float]:
     if generations <= 0:
         raise ValueError("generations must be positive")
@@ -181,6 +188,7 @@ async def evaluate_generation(
                 enable_backoff=True,
                 backoff_min_order=1,
                 normalize_lower=normalize_lower,
+                fuzzy_context_casefold=fuzzy_context_casefold,
                 auto_capitalize_replies=False,
                 recent_short_replies={},
             )
@@ -194,6 +202,15 @@ async def evaluate_generation(
                     corpus[index % len(corpus)],
                     normalize_lower=normalize_lower,
                 )
+                if (
+                    fuzzy_context_casefold
+                    and not normalize_lower
+                    and index % 10 == 0
+                ):
+                    context_tokens = [
+                        token.swapcase() if token not in PUNCT_SET else token
+                        for token in context_tokens
+                    ]
                 started_at = time.perf_counter()
                 selection = await response_generator.generate_with_result(
                     GenerationRequest(
@@ -228,12 +245,18 @@ async def evaluate_generation(
 
     lengths = [len(output) for output in outputs]
     empty_count = sum(1 for output in outputs if not output)
+    context_resolution_attempts = (
+        generator.context_exact_matches
+        + generator.context_casefold_matches
+        + generator.hidden_context_fallbacks
+    )
     return {
         "baseline_phase": 4.1,
         "seed": seed,
         "generations": generations,
         "corpus_messages": len(corpus),
         "normalize_lower": normalize_lower,
+        "fuzzy_context_casefold": fuzzy_context_casefold,
         "candidate_target": effective_candidate_target,
         "empty_result_rate": empty_count / generations,
         "distinct_1": distinct_ratio(outputs, 1),
@@ -248,6 +271,21 @@ async def evaluate_generation(
         ),
         "leading_punctuation_rate": leading_punctuation_replies / generations,
         "leading_punctuation_stripped": generator.leading_punctuation_stripped,
+        "context_exact_match_rate": (
+            generator.context_exact_matches / context_resolution_attempts
+            if context_resolution_attempts
+            else 0.0
+        ),
+        "context_casefold_match_rate": (
+            generator.context_casefold_matches / context_resolution_attempts
+            if context_resolution_attempts
+            else 0.0
+        ),
+        "hidden_context_fallback_to_global_rate": (
+            generator.hidden_context_fallbacks / context_resolution_attempts
+            if context_resolution_attempts
+            else 0.0
+        ),
         "avg_candidates_scored": mean(candidates_scored),
         "avg_generation_latency_ms": mean(latencies_ms),
         "median_generation_latency_ms": median(latencies_ms),
@@ -266,6 +304,7 @@ def parse_args() -> argparse.Namespace:
         choices=("normalize-lower", "case-preserved"),
         default="normalize-lower",
     )
+    parser.add_argument("--fuzzy-context-casefold", action="store_true")
     return parser.parse_args()
 
 
@@ -277,6 +316,7 @@ def main() -> None:
             generations=args.generations,
             candidate_target=args.candidate_target,
             normalize_lower=args.profile == "normalize-lower",
+            fuzzy_context_casefold=args.fuzzy_context_casefold,
         )
     )
     print(json.dumps(report, indent=2, sort_keys=True))

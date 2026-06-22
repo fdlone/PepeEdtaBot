@@ -25,6 +25,7 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(settings.reply_probability, 0.08)
         self.assertEqual(settings.max_reply_tokens, 45)
         self.assertFalse(settings.auto_capitalize_replies)
+        self.assertFalse(settings.fuzzy_context_casefold)
         self.assertEqual(settings.runtime_state_ttl_sec, 86400)
         self.assertEqual(settings.runtime_state_max_chats, 2048)
         self.assertEqual(settings.throttle_state_ttl_sec, 21600)
@@ -66,6 +67,14 @@ class TestSettings(unittest.TestCase):
             settings = load_settings(load_env=False)
 
         self.assertTrue(settings.auto_capitalize_replies)
+
+    def test_load_settings_enables_fuzzy_context_casefold(self) -> None:
+        env = minimal_env()
+        env["FUZZY_CONTEXT_CASEFOLD"] = "true"
+        with patch.dict(os.environ, env, clear=True):
+            settings = load_settings(load_env=False)
+
+        self.assertTrue(settings.fuzzy_context_casefold)
 
     def test_load_settings_rejects_negative_min_cooldown(self) -> None:
         env = minimal_env()

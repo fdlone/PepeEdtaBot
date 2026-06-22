@@ -126,6 +126,49 @@ class MarkovRepo:
             rows = await cursor.fetchall()
         return [(str(r[0]), int(r[1])) for r in rows]
 
+    async def get_states(
+        self,
+        chat_id: int,
+        order: int,
+    ) -> list[tuple[tuple[str, ...], int]]:
+        if order not in {2, 3}:
+            raise ValueError("order must be 2 or 3")
+
+        async with self._lock:
+            db = await self._conn_provider()
+            if order == 3:
+                cursor = await db.execute(
+                    """
+                    SELECT w1, w2, w3, SUM(cnt)
+                    FROM transitions3
+                    WHERE chat_id = ?
+                    GROUP BY w1, w2, w3
+                    ORDER BY w1, w2, w3
+                    """,
+                    (chat_id,),
+                )
+            else:
+                cursor = await db.execute(
+                    """
+                    SELECT w1, w2, SUM(cnt)
+                    FROM transitions
+                    WHERE chat_id = ?
+                    GROUP BY w1, w2
+                    ORDER BY w1, w2
+                    """,
+                    (chat_id,),
+                )
+            rows = await cursor.fetchall()
+
+        state_size = order
+        return [
+            (
+                tuple(str(row[index]) for index in range(state_size)),
+                int(row[state_size]),
+            )
+            for row in rows
+        ]
+
     async def get_chat_token_volume(self, chat_id: int) -> int:
         async with self._lock:
             db = await self._conn_provider()

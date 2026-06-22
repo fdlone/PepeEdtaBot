@@ -228,6 +228,15 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         await self.db.close()
         self.db_path.unlink(missing_ok=True)
 
+    def test_invalidate_chat_cache_invalidates_context_matcher(self) -> None:
+        with patch.object(
+            self.generator._context_state_matcher,
+            "invalidate_chat_cache",
+        ) as invalidate:
+            self.generator.invalidate_chat_cache(123)
+
+        invalidate.assert_called_once_with(123)
+
     def test_sanitize_and_tokenize(self) -> None:
         clean = sanitize_text(
             "Привееееет!!!   https://x.y  @PepeEdta_Bot  Как   дела??"
@@ -609,6 +618,38 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(text.startswith("продолжается вполне безопасно"))
         self.assertEqual(trace.start_source, "hidden_context")
         self.assertEqual(trace.markov_order_used, 3)
+        self.assertEqual(trace.context_exact_matches, 1)
+        self.assertEqual(trace.context_casefold_matches, 0)
+
+    async def test_context_trigram_uses_casefold_fallback_when_enabled(self) -> None:
+        await self.db.save_message_and_update_model(
+            chat_id=5554,
+            raw_text="global lead Alpha Beta Gamma continues safely",
+            tokens=[
+                "global",
+                "lead",
+                "Alpha",
+                "Beta",
+                "Gamma",
+                "continues",
+                "safely",
+            ],
+        )
+
+        text, trace = await self.generator.generate_text_with_trace(
+            chat_id=5554,
+            max_chars=100,
+            context_tokens=["alpha", "beta", "gamma"],
+            context_start_bias=4.0,
+            randomness_strength=0.0,
+            fuzzy_context_casefold=True,
+            rng=random.Random(11),
+        )
+
+        self.assertTrue(text.startswith("continues safely"))
+        self.assertEqual(trace.start_source, "hidden_context")
+        self.assertEqual(trace.context_exact_matches, 0)
+        self.assertEqual(trace.context_casefold_matches, 1)
 
     async def test_context_start_bias_gates_contextual_start_path(self) -> None:
         chat_id = 5556
@@ -717,6 +758,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(text.startswith("совсем другой"))
         self.assertIn(text.split()[0], {"кошка", "солнце"})
         self.assertEqual(trace.start_source, "global")
+        self.assertEqual(trace.hidden_context_fallbacks, 1)
 
     async def test_generate_text_without_context_matches_legacy_path(self) -> None:
         await self.db.save_message_and_update_model(
