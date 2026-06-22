@@ -151,10 +151,19 @@ After restart or restore, verify:
 
 ## Database Retention
 
-Learning data (`messages`, `starts`, `starts3`, `transitions`, `transitions3`,
-`transitions1`) grows indefinitely. No automatic cleanup is implemented.
-The only table with built-in retention is `pivo_daily_usage` (cleaned up
-automatically on bot startup via `cleanup_pivo_daily_usage`).
+The `messages` table is bounded automatically per chat. After each insert, the
+bot atomically keeps only the newest `MESSAGES_RETENTION_PER_CHAT` rows for that
+chat. The configured cap must be at least `TEXT_CACHE_MAX_MESSAGES`, otherwise
+startup fails to protect verbatim-copy detection.
+
+The aggregated Markov tables (`starts`, `starts3`, `transitions`,
+`transitions3`, `transitions1`) are not pruned and continue to represent all
+learned history. `pivo_daily_usage` is cleaned up automatically on bot startup
+via `cleanup_pivo_daily_usage`.
+
+Deleting rows does not shrink the main SQLite file by itself. Run `VACUUM`
+during a maintenance window to return unused pages to the filesystem. A manual
+`PRAGMA wal_checkpoint(TRUNCATE)` may still be needed to shrink the WAL file.
 
 ### Checking per-table disk usage
 
@@ -169,28 +178,6 @@ conn.close()
 "
 ```
 
-### Manual per-chat message cleanup
-
-To keep the last N messages per chat (example: 10 000 rows), run with the bot
-stopped:
-
-```bash
-sqlite3 data/markov.db "
-  DELETE FROM messages
-  WHERE id NOT IN (
-    SELECT id FROM messages
-    WHERE chat_id = <CHAT_ID>
-    ORDER BY id DESC
-    LIMIT 10000
-  ) AND chat_id = <CHAT_ID>;
-  VACUUM;
-"
-```
-
-Replace `<CHAT_ID>` with the actual integer chat ID from `/stats` or logs
-(before masking). Run `PRAGMA integrity_check;` after the operation to verify
-the database is consistent.
-
 Note: `starts`, `starts3`, `transitions`, `transitions3`, `transitions1` tables
 store aggregated counts derived from message text — they are not tied to
 individual `messages` rows. To reset all Markov data for a chat, use the `/clear`
@@ -202,8 +189,8 @@ as new messages arrive.
 For a small active group (up to ~10 users, continuous use):
 
 - Monthly: check database file size; checkpoint WAL if needed.
-- Quarterly: review `messages` row count per chat.
-- No automated retention is required until the database exceeds a few hundred MB.
+- Quarterly: review per-table size and schedule `VACUUM` if deleted pages should
+  be returned to the filesystem.
 
 ## Healthcheck Reality
 

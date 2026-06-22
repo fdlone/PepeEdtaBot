@@ -22,7 +22,7 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         from app.services.learning_service import LearningService
 
         self.db_path = Path(f"test_ls_{uuid.uuid4().hex}.sqlite")
-        self.db = Database(str(self.db_path))
+        self.db = Database(str(self.db_path), messages_retention_per_chat=3)
         await self.db.init()
         self.svc = LearningService(
             self.db,
@@ -91,6 +91,15 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             await self.svc.is_verbatim_copy(self.chat, "новое одно")
         )
+
+    async def test_copy_is_detected_after_retention_pruning(self) -> None:
+        for text in ("old", "retained one", "retained two", "retained three"):
+            await self._record(text)
+
+        self.assertTrue(
+            await self.svc.is_verbatim_copy(self.chat, "retained one")
+        )
+        self.assertFalse(await self.svc.is_verbatim_copy(self.chat, "old"))
 
     # --- is_verbatim_copy behaviour ---
 

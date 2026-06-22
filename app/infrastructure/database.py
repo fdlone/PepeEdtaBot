@@ -7,6 +7,11 @@ from typing import Optional
 
 import aiosqlite
 
+from app.config.defaults import (
+    MESSAGES_RETENTION_PER_CHAT,
+    SQLITE_BUSY_TIMEOUT_MS,
+    SQLITE_WAL_AUTOCHECKPOINT_PAGES,
+)
 from app.core.text import sanitize_text
 from app.infrastructure import migrator
 from app.repositories import ChatMembersRepo, MarkovRepo, MessagesRepo, PivoUsageRepo
@@ -17,8 +22,24 @@ PIVO_DAILY_USAGE_RETENTION_DAYS = 7
 class Database:
     """Фасад над SQLite: владеет соединением, миграциями и репозиториями."""
 
-    def __init__(self, path: str) -> None:
+    def __init__(
+        self,
+        path: str,
+        *,
+        messages_retention_per_chat: int = MESSAGES_RETENTION_PER_CHAT,
+        busy_timeout_ms: int = SQLITE_BUSY_TIMEOUT_MS,
+        wal_autocheckpoint_pages: int = SQLITE_WAL_AUTOCHECKPOINT_PAGES,
+    ) -> None:
+        if messages_retention_per_chat < 1:
+            raise ValueError("messages_retention_per_chat must be at least 1")
+        if busy_timeout_ms < 0:
+            raise ValueError("busy_timeout_ms must be non-negative")
+        if wal_autocheckpoint_pages < 0:
+            raise ValueError("wal_autocheckpoint_pages must be non-negative")
         self.path = path
+        self.messages_retention_per_chat = messages_retention_per_chat
+        self.busy_timeout_ms = busy_timeout_ms
+        self.wal_autocheckpoint_pages = wal_autocheckpoint_pages
         self._conn: Optional[aiosqlite.Connection] = None
         self._lock = asyncio.Lock()
         self.markov: Optional[MarkovRepo] = None
@@ -39,6 +60,10 @@ class Database:
         db = await self._get_conn()
 
         await db.execute("PRAGMA journal_mode=WAL;")
+        await db.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms};")
+        await db.execute(
+            f"PRAGMA wal_autocheckpoint = {self.wal_autocheckpoint_pages};"
+        )
         await db.execute("PRAGMA foreign_keys=ON;")
 
         await migrator.run(db)
@@ -92,6 +117,24 @@ class Database:
             await db.execute(
                 "INSERT INTO messages(chat_id, author_id, normalized_text) VALUES (?, ?, ?)",
                 (chat_id, 0, sanitize_text(raw_text)),
+            )
+            await db.execute(
+                """
+                DELETE FROM messages
+                WHERE chat_id = ?
+                  AND id <= (
+                      SELECT id
+                      FROM messages
+                      WHERE chat_id = ?
+                      ORDER BY id DESC
+                      LIMIT 1 OFFSET ?
+                  )
+                """,
+                (
+                    chat_id,
+                    chat_id,
+                    self.messages_retention_per_chat,
+                ),
             )
 
             if starts2_pair:
