@@ -28,6 +28,7 @@ def _runtime_state() -> MagicMock:
     state.backoff_min_order = 1
     state.normalize_lower = False
     state.fuzzy_context_casefold = False
+    state.fuzzy_context_prefix = False
     state.auto_capitalize_replies = False
     state.recent_short_replies = {}
     return state

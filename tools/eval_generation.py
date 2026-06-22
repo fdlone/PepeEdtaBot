@@ -42,6 +42,9 @@ CORPUS_PATH = Path(__file__).with_name("fixtures") / "synthetic_generation_corpu
 CASE_CONTEXT_PATH = (
     Path(__file__).with_name("fixtures") / "synthetic_generation_case_context.txt"
 )
+PREFIX_CONTEXT_PATH = (
+    Path(__file__).with_name("fixtures") / "synthetic_generation_prefix_context.txt"
+)
 
 
 class _NoVerbatimCopies:
@@ -49,7 +52,11 @@ class _NoVerbatimCopies:
         return False
 
 
-def load_synthetic_corpus(*, normalize_lower: bool) -> list[str]:
+def load_synthetic_corpus(
+    *,
+    normalize_lower: bool,
+    include_prefix_fixture: bool = False,
+) -> list[str]:
     corpus = [
         line.strip()
         for line in CORPUS_PATH.read_text(encoding="utf-8").splitlines()
@@ -61,6 +68,12 @@ def load_synthetic_corpus(*, normalize_lower: bool) -> list[str]:
             for line in CASE_CONTEXT_PATH.read_text(encoding="utf-8").splitlines()
             if line.strip()
         )
+    if include_prefix_fixture:
+        corpus.extend(
+            line.strip()
+            for line in PREFIX_CONTEXT_PATH.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
     return corpus
 
 
@@ -70,6 +83,8 @@ class _InstrumentedMarkovGenerator(MarkovGenerator):
         self.leading_punctuation_stripped = 0
         self.context_exact_matches = 0
         self.context_casefold_matches = 0
+        self.context_prefix_matches = 0
+        self.context_prefix_singleton_matches = 0
         self.hidden_context_fallbacks = 0
 
     async def generate_text(self, *args: Any, **kwargs: Any) -> str:
@@ -77,6 +92,10 @@ class _InstrumentedMarkovGenerator(MarkovGenerator):
         self.leading_punctuation_stripped += trace.leading_punctuation_stripped
         self.context_exact_matches += trace.context_exact_matches
         self.context_casefold_matches += trace.context_casefold_matches
+        self.context_prefix_matches += trace.context_prefix_matches
+        self.context_prefix_singleton_matches += (
+            trace.context_prefix_singleton_matches
+        )
         self.hidden_context_fallbacks += trace.hidden_context_fallbacks
         return text
 
@@ -146,6 +165,7 @@ async def evaluate_generation(
     candidate_target: int = CANDIDATE_TARGET,
     normalize_lower: bool = True,
     fuzzy_context_casefold: bool = False,
+    fuzzy_context_prefix: bool = False,
 ) -> dict[str, int | float]:
     if generations <= 0:
         raise ValueError("generations must be positive")
@@ -154,7 +174,10 @@ async def evaluate_generation(
         min(candidate_target, GENERATION_ATTEMPT_BUDGET),
     )
 
-    corpus = load_synthetic_corpus(normalize_lower=normalize_lower)
+    corpus = load_synthetic_corpus(
+        normalize_lower=normalize_lower,
+        include_prefix_fixture=fuzzy_context_prefix,
+    )
     rng = random.Random(seed)
     outputs: list[list[str]] = []
     context_overlaps: list[float] = []
@@ -189,6 +212,7 @@ async def evaluate_generation(
                 backoff_min_order=1,
                 normalize_lower=normalize_lower,
                 fuzzy_context_casefold=fuzzy_context_casefold,
+                fuzzy_context_prefix=fuzzy_context_prefix,
                 auto_capitalize_replies=False,
                 recent_short_replies={},
             )
@@ -211,6 +235,21 @@ async def evaluate_generation(
                         token.swapcase() if token not in PUNCT_SET else token
                         for token in context_tokens
                     ]
+                if (
+                    fuzzy_context_prefix
+                    and not normalize_lower
+                    and any(
+                        any("а" <= char.casefold() <= "я" for char in token)
+                        for token in context_tokens
+                    )
+                ):
+                    for token_index, token in enumerate(context_tokens):
+                        if (
+                            len(token) >= 6
+                            and token.isalpha()
+                            and any("а" <= char.casefold() <= "я" for char in token)
+                        ):
+                            context_tokens[token_index] = token + "а"
                 started_at = time.perf_counter()
                 selection = await response_generator.generate_with_result(
                     GenerationRequest(
@@ -248,6 +287,7 @@ async def evaluate_generation(
     context_resolution_attempts = (
         generator.context_exact_matches
         + generator.context_casefold_matches
+        + generator.context_prefix_matches
         + generator.hidden_context_fallbacks
     )
     return {
@@ -257,6 +297,7 @@ async def evaluate_generation(
         "corpus_messages": len(corpus),
         "normalize_lower": normalize_lower,
         "fuzzy_context_casefold": fuzzy_context_casefold,
+        "fuzzy_context_prefix": fuzzy_context_prefix,
         "candidate_target": effective_candidate_target,
         "empty_result_rate": empty_count / generations,
         "distinct_1": distinct_ratio(outputs, 1),
@@ -279,6 +320,17 @@ async def evaluate_generation(
         "context_casefold_match_rate": (
             generator.context_casefold_matches / context_resolution_attempts
             if context_resolution_attempts
+            else 0.0
+        ),
+        "context_prefix_match_rate": (
+            generator.context_prefix_matches / context_resolution_attempts
+            if context_resolution_attempts
+            else 0.0
+        ),
+        "context_prefix_singleton_rate": (
+            generator.context_prefix_singleton_matches
+            / generator.context_prefix_matches
+            if generator.context_prefix_matches
             else 0.0
         ),
         "hidden_context_fallback_to_global_rate": (
@@ -305,6 +357,7 @@ def parse_args() -> argparse.Namespace:
         default="normalize-lower",
     )
     parser.add_argument("--fuzzy-context-casefold", action="store_true")
+    parser.add_argument("--fuzzy-context-prefix", action="store_true")
     return parser.parse_args()
 
 
@@ -317,6 +370,7 @@ def main() -> None:
             candidate_target=args.candidate_target,
             normalize_lower=args.profile == "normalize-lower",
             fuzzy_context_casefold=args.fuzzy_context_casefold,
+            fuzzy_context_prefix=args.fuzzy_context_prefix,
         )
     )
     print(json.dumps(report, indent=2, sort_keys=True))

@@ -105,6 +105,12 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
         "false",
         _parse_bool,
     ),
+    FieldSpec(
+        "fuzzy_context_prefix",
+        "FUZZY_CONTEXT_PREFIX",
+        "false",
+        _parse_bool,
+    ),
     FieldSpec("reply_context_max_tokens", "REPLY_CONTEXT_MAX_TOKENS", "12",
               _int_min(2)),
     FieldSpec("reply_context_last_tokens", "REPLY_CONTEXT_LAST_TOKENS", "3",
