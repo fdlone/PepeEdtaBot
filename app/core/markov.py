@@ -34,6 +34,7 @@ class GenerationTrace:
     rejection_reason: str | None
     token_count: int
     start_source: str
+    leading_punctuation_stripped: int = 0
 
 
 class _GenerationAttempt(NamedTuple):
@@ -43,6 +44,7 @@ class _GenerationAttempt(NamedTuple):
     rejection_reason: str | None
     token_count: int
     start_source: str
+    leading_punctuation_stripped: int = 0
 
 
 def remember_bounded[T](
@@ -264,6 +266,16 @@ def finalize_reply_ending(
     if finalized and finalized[-1] not in _SENTENCE_END_PUNCT:
         finalized.append(".")
     return finalized
+
+
+def strip_leading_punctuation(tokens: list[str]) -> list[str]:
+    first_content_index = 0
+    while (
+        first_content_index < len(tokens)
+        and tokens[first_content_index] in PUNCT_SET
+    ):
+        first_content_index += 1
+    return tokens[first_content_index:]
 
 
 def is_low_diversity_reply(
@@ -739,6 +751,7 @@ class MarkovGenerator:
             start_source="global",
         )
         total_jump_count = 0
+        total_leading_punctuation_stripped = 0
         for attempt_index in range(total_attempts):
             attempt_randomness_strength = escalated_randomness_strength(
                 randomness_strength,
@@ -762,6 +775,9 @@ class MarkovGenerator:
                 emit_start=True,
             )
             total_jump_count += last_attempt.jump_count
+            total_leading_punctuation_stripped += (
+                last_attempt.leading_punctuation_stripped
+            )
             if last_attempt.text:
                 trace = GenerationTrace(
                     attempts_used=attempt_index + 1,
@@ -770,6 +786,9 @@ class MarkovGenerator:
                     rejection_reason=None,
                     token_count=last_attempt.token_count,
                     start_source=last_attempt.start_source,
+                    leading_punctuation_stripped=(
+                        total_leading_punctuation_stripped
+                    ),
                 )
                 self._log_trace(trace)
                 return last_attempt.text, trace
@@ -781,6 +800,7 @@ class MarkovGenerator:
             rejection_reason=last_attempt.rejection_reason,
             token_count=0,
             start_source=last_attempt.start_source,
+            leading_punctuation_stripped=total_leading_punctuation_stripped,
         )
         self._log_trace(trace)
         return "", trace
@@ -788,13 +808,14 @@ class MarkovGenerator:
     def _log_trace(self, trace: GenerationTrace) -> None:
         logger.debug(
             "Generation trace: attempts=%s order=%s jumps=%s rejection=%s tokens=%s "
-            "start_source=%s",
+            "start_source=%s leading_punctuation_stripped=%s",
             trace.attempts_used,
             trace.markov_order_used,
             trace.jump_count,
             trace.rejection_reason,
             trace.token_count,
             trace.start_source,
+            trace.leading_punctuation_stripped,
         )
 
     async def _generate_text_once(
@@ -1084,6 +1105,9 @@ class MarkovGenerator:
         generated = trim_repetitive_tail(generated)
         generated = trim_to_sentence_boundary(generated)
         generated = finalize_reply_ending(generated)
+        finalized_token_count = len(generated)
+        generated = strip_leading_punctuation(generated)
+        leading_punctuation_stripped = finalized_token_count - len(generated)
         result = detokenize(generated, max_chars=max_chars)
         if len(result) < 5:
             return _GenerationAttempt(
@@ -1093,6 +1117,7 @@ class MarkovGenerator:
                 REJECTION_RESULT_TOO_SHORT,
                 0,
                 start_source,
+                leading_punctuation_stripped,
             )
         result_tokens = tokenize(result)
         is_short_reply = is_short_generated_reply(result_tokens)
@@ -1104,6 +1129,7 @@ class MarkovGenerator:
                 REJECTION_LOW_DIVERSITY,
                 0,
                 start_source,
+                leading_punctuation_stripped,
             )
         if is_short_reply:
             if is_short_context_copy(result_tokens, context_tokens):
@@ -1114,6 +1140,7 @@ class MarkovGenerator:
                     REJECTION_SHORT_CONTEXT_COPY,
                     0,
                     start_source,
+                    leading_punctuation_stripped,
                 )
         elif is_context_heavy_reply(result_tokens, context_tokens):
             return _GenerationAttempt(
@@ -1123,6 +1150,7 @@ class MarkovGenerator:
                 REJECTION_CONTEXT_HEAVY,
                 0,
                 start_source,
+                leading_punctuation_stripped,
             )
         return _GenerationAttempt(
             result,
@@ -1131,4 +1159,5 @@ class MarkovGenerator:
             None,
             len(result_tokens),
             start_source,
+            leading_punctuation_stripped,
         )

@@ -7,6 +7,9 @@ from pathlib import Path
 from tools.eval_generation import evaluate_generation
 
 BASELINE_PATH = Path(__file__).parents[1] / "tools" / "generation_baseline.json"
+CASE_BASELINE_PATH = (
+    Path(__file__).parents[1] / "tools" / "generation_baseline_case_preserved.json"
+)
 
 
 class TestGenerationEvaluation(unittest.IsolatedAsyncioTestCase):
@@ -26,6 +29,29 @@ class TestGenerationEvaluation(unittest.IsolatedAsyncioTestCase):
         }
 
         self.assertEqual(actual_metrics, expected_metrics)
+        self.assertEqual(actual["leading_punctuation_rate"], 0.0)
+
+    async def test_case_preserved_baseline_matches_key_metrics(self) -> None:
+        actual = await evaluate_generation(
+            seed=20260620,
+            generations=100,
+            normalize_lower=False,
+        )
+        expected = json.loads(CASE_BASELINE_PATH.read_text(encoding="utf-8"))
+        latency_keys = {
+            "avg_generation_latency_ms",
+            "median_generation_latency_ms",
+        }
+
+        actual_metrics = {
+            key: value for key, value in actual.items() if key not in latency_keys
+        }
+        expected_metrics = {
+            key: value for key, value in expected.items() if key not in latency_keys
+        }
+
+        self.assertEqual(actual_metrics, expected_metrics)
+        self.assertEqual(actual["leading_punctuation_rate"], 0.0)
 
     async def test_same_seed_produces_same_quality_metrics(self) -> None:
         first = await evaluate_generation(seed=1234, generations=12)

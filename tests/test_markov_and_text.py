@@ -22,6 +22,7 @@ from app.core.markov import (
     is_low_diversity_reply,
     is_short_generated_reply,
     remember_bounded,
+    strip_leading_punctuation,
     tokenize,
     trim_repetitive_tail,
     weighted_next_choice,
@@ -103,6 +104,18 @@ class TestContextStartProbability(unittest.TestCase):
                 for lower, upper in zip(probabilities, probabilities[1:])
             )
         )
+
+
+class TestStripLeadingPunctuation(unittest.TestCase):
+    def test_strips_all_supported_leading_punctuation(self) -> None:
+        tokens = [".", ",", "!", "?", ";", ":", "hello", "!"]
+
+        self.assertEqual(strip_leading_punctuation(tokens), ["hello", "!"])
+        self.assertEqual(tokens, [".", ",", "!", "?", ";", ":", "hello", "!"])
+
+    def test_preserves_content_and_empty_tokens(self) -> None:
+        self.assertEqual(strip_leading_punctuation(["hello", "."]), ["hello", "."])
+        self.assertEqual(strip_leading_punctuation([]), [])
 
 
 class TestFinalizeReplyEnding(unittest.TestCase):
@@ -784,10 +797,31 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(trace.rejection_reason)
         self.assertEqual(trace.token_count, len(tokenize(text)))
         self.assertEqual(trace.start_source, "global")
+        self.assertEqual(trace.leading_punctuation_stripped, 0)
         self.assertNotIn(text, repr(trace))
         joined_logs = " ".join(captured_logs.output)
         self.assertIn("attempts=1", joined_logs)
+        self.assertIn("leading_punctuation_stripped=0", joined_logs)
         self.assertNotIn(text, joined_logs)
+
+    async def test_generation_strips_leading_punctuation_and_traces_count(
+        self,
+    ) -> None:
+        await self.db.save_message_and_update_model(
+            chat_id=7771,
+            raw_text="., alpha beta gamma delta epsilon",
+            tokens=[".", ",", "alpha", "beta", "gamma", "delta", "epsilon"],
+        )
+
+        text, trace = await self.generator.generate_text_with_trace(
+            chat_id=7771,
+            max_chars=100,
+            randomness_strength=0.0,
+            rng=random.Random(6),
+        )
+
+        self.assertEqual(text, "alpha beta gamma delta epsilon.")
+        self.assertEqual(trace.leading_punctuation_stripped, 2)
 
     async def test_generation_trace_reports_final_rejection(self) -> None:
         text, trace = await self.generator.generate_text_with_trace(
