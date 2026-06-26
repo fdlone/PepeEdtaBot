@@ -8,6 +8,7 @@ from collections.abc import Container
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
+from app.core.context_state_matcher import ContextStateMatcher
 from app.core.lexicon import BAD_ENDING_WORDS
 from app.infrastructure.database import Database
 
@@ -34,6 +35,12 @@ class GenerationTrace:
     rejection_reason: str | None
     token_count: int
     start_source: str
+    leading_punctuation_stripped: int = 0
+    context_exact_matches: int = 0
+    context_casefold_matches: int = 0
+    context_prefix_matches: int = 0
+    context_prefix_singleton_matches: int = 0
+    hidden_context_fallbacks: int = 0
 
 
 class _GenerationAttempt(NamedTuple):
@@ -43,6 +50,19 @@ class _GenerationAttempt(NamedTuple):
     rejection_reason: str | None
     token_count: int
     start_source: str
+    leading_punctuation_stripped: int = 0
+    context_exact_matches: int = 0
+    context_casefold_matches: int = 0
+    context_prefix_matches: int = 0
+    context_prefix_singleton_matches: int = 0
+    hidden_context_fallbacks: int = 0
+
+
+class _ContextualStateSelection(NamedTuple):
+    state: tuple[str, str, str]
+    order: int
+    match_kind: str
+    transition_count: int = 0
 
 
 def remember_bounded[T](
@@ -266,6 +286,16 @@ def finalize_reply_ending(
     return finalized
 
 
+def strip_leading_punctuation(tokens: list[str]) -> list[str]:
+    first_content_index = 0
+    while (
+        first_content_index < len(tokens)
+        and tokens[first_content_index] in PUNCT_SET
+    ):
+        first_content_index += 1
+    return tokens[first_content_index:]
+
+
 def is_low_diversity_reply(
     tokens: list[str],
     min_total_tokens: int = 8,
@@ -484,6 +514,13 @@ class MarkovGenerator:
     _cache_starts2: OrderedDict[int, list[tuple[str, str, int]]] = field(
         default_factory=OrderedDict, init=False
     )
+    _context_state_matcher: ContextStateMatcher = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._context_state_matcher = ContextStateMatcher(
+            self.db,
+            cache_limit=self.cache_limit,
+        )
 
     def invalidate_chat_cache(self, chat_id: int) -> None:
         # Each cache is unrolled separately so its concrete key type is preserved
@@ -496,6 +533,7 @@ class MarkovGenerator:
             self._cache1.pop(key1, None)
         self._cache_starts3.pop(chat_id, None)
         self._cache_starts2.pop(chat_id, None)
+        self._context_state_matcher.invalidate_chat_cache(chat_id)
 
     def _touch_cache[K](
         self,
@@ -610,8 +648,10 @@ class MarkovGenerator:
         context_triplets: set[tuple[str, ...]],
         context_bias: float,
         repetition_penalty_strength: float,
+        fuzzy_context_casefold: bool,
+        fuzzy_context_prefix: bool,
         rng: random.Random,
-    ) -> tuple[tuple[str, str, str], int] | None:
+    ) -> _ContextualStateSelection | None:
         exploring = rng.random() < start_explore
         frequency_power = exploration_adjusted_power(
             start_power,
@@ -635,7 +675,7 @@ class MarkovGenerator:
                 state3 = exploration_weighted_choice(population3, weights3, rng)
             else:
                 state3 = rng.choices(population=population3, weights=weights3, k=1)[0]
-            return state3, 3
+            return _ContextualStateSelection(state3, 3, "exact")
 
         windows2 = build_windows(context_tokens, 2)
         candidates2: list[tuple[tuple[str, str], list[tuple[str, int]], float]] = []
@@ -647,6 +687,150 @@ class MarkovGenerator:
                 recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
                 weight = max(transition_count, 1) ** frequency_power * recency_bonus
                 candidates2.append(((window[0], window[1]), transitions, weight))
+
+        match_kind = "exact"
+        prefix_transition_counts: dict[tuple[str, str], int] = {}
+        if not candidates2 and fuzzy_context_casefold:
+            casefold_candidates3: list[
+                tuple[tuple[str, str, str], float]
+            ] = []
+            for index, window in enumerate(windows3):
+                matches = await self._context_state_matcher.match(
+                    chat_id,
+                    window,
+                    3,
+                )
+                recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
+                for match in matches:
+                    if match.match_kind != "casefold":
+                        continue
+                    state3 = (match.state[0], match.state[1], match.state[2])
+                    weight = (
+                        max(match.transition_count, 1) ** frequency_power
+                        * recency_bonus
+                    )
+                    casefold_candidates3.append((state3, weight))
+
+            if casefold_candidates3:
+                population3 = [state for state, _ in casefold_candidates3]
+                weights3 = [weight for _, weight in casefold_candidates3]
+                if exploring:
+                    selected_state3 = exploration_weighted_choice(
+                        population3,
+                        weights3,
+                        rng,
+                    )
+                else:
+                    selected_state3 = rng.choices(
+                        population=population3,
+                        weights=weights3,
+                        k=1,
+                    )[0]
+                return _ContextualStateSelection(
+                    selected_state3,
+                    3,
+                    "casefold",
+                )
+
+            for index, window in enumerate(windows2):
+                matches = await self._context_state_matcher.match(
+                    chat_id,
+                    window,
+                    2,
+                )
+                recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
+                for match in matches:
+                    if match.match_kind != "casefold":
+                        continue
+                    state2 = (match.state[0], match.state[1])
+                    transitions = await self._get2(chat_id, state2[0], state2[1])
+                    if not transitions:
+                        continue
+                    weight = (
+                        max(match.transition_count, 1) ** frequency_power
+                        * recency_bonus
+                    )
+                    candidates2.append((state2, transitions, weight))
+            match_kind = "casefold"
+
+        if not candidates2 and fuzzy_context_prefix:
+            prefix_candidates3: list[
+                tuple[tuple[str, str, str], float, int]
+            ] = []
+            for index, window in enumerate(windows3):
+                matches = await self._context_state_matcher.match(
+                    chat_id,
+                    window,
+                    3,
+                    include_prefix=True,
+                )
+                recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
+                for match in matches:
+                    if match.match_kind != "prefix":
+                        continue
+                    state3 = (match.state[0], match.state[1], match.state[2])
+                    weight = (
+                        max(match.transition_count, 1) ** frequency_power
+                        * match.similarity
+                        * recency_bonus
+                    )
+                    prefix_candidates3.append(
+                        (state3, weight, match.transition_count)
+                    )
+
+            if prefix_candidates3:
+                population3 = [state for state, _, _ in prefix_candidates3]
+                weights3 = [weight for _, weight, _ in prefix_candidates3]
+                if exploring:
+                    selected_state3 = exploration_weighted_choice(
+                        population3,
+                        weights3,
+                        rng,
+                    )
+                else:
+                    selected_state3 = rng.choices(
+                        population=population3,
+                        weights=weights3,
+                        k=1,
+                    )[0]
+                selected_count = max(
+                    transition_count
+                    for state, _, transition_count in prefix_candidates3
+                    if state == selected_state3
+                )
+                return _ContextualStateSelection(
+                    selected_state3,
+                    3,
+                    "prefix",
+                    selected_count,
+                )
+
+            for index, window in enumerate(windows2):
+                matches = await self._context_state_matcher.match(
+                    chat_id,
+                    window,
+                    2,
+                    include_prefix=True,
+                )
+                recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
+                for match in matches:
+                    if match.match_kind != "prefix":
+                        continue
+                    state2 = (match.state[0], match.state[1])
+                    transitions = await self._get2(chat_id, state2[0], state2[1])
+                    if not transitions:
+                        continue
+                    weight = (
+                        max(match.transition_count, 1) ** frequency_power
+                        * match.similarity
+                        * recency_bonus
+                    )
+                    candidates2.append((state2, transitions, weight))
+                    prefix_transition_counts[state2] = max(
+                        prefix_transition_counts.get(state2, 0),
+                        match.transition_count,
+                    )
+            match_kind = "prefix"
 
         if not candidates2:
             return None
@@ -674,7 +858,12 @@ class MarkovGenerator:
             step_index=0,
             repetition_penalty_strength=repetition_penalty_strength,
         )
-        return (w1, w2, w3), 2
+        return _ContextualStateSelection(
+            (w1, w2, w3),
+            2,
+            match_kind,
+            prefix_transition_counts.get((w1, w2), 0),
+        )
 
     async def generate_text(
         self,
@@ -690,6 +879,8 @@ class MarkovGenerator:
         markov_order: int = 3,
         enable_backoff: bool = True,
         backoff_min_order: int = 1,
+        fuzzy_context_casefold: bool = False,
+        fuzzy_context_prefix: bool = False,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> str:
@@ -706,6 +897,8 @@ class MarkovGenerator:
             markov_order=markov_order,
             enable_backoff=enable_backoff,
             backoff_min_order=backoff_min_order,
+            fuzzy_context_casefold=fuzzy_context_casefold,
+            fuzzy_context_prefix=fuzzy_context_prefix,
             rng=rng,
             attempt_budget=attempt_budget,
         )
@@ -725,6 +918,8 @@ class MarkovGenerator:
         markov_order: int = 3,
         enable_backoff: bool = True,
         backoff_min_order: int = 1,
+        fuzzy_context_casefold: bool = False,
+        fuzzy_context_prefix: bool = False,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> tuple[str, GenerationTrace]:
@@ -739,6 +934,12 @@ class MarkovGenerator:
             start_source="global",
         )
         total_jump_count = 0
+        total_leading_punctuation_stripped = 0
+        total_context_exact_matches = 0
+        total_context_casefold_matches = 0
+        total_context_prefix_matches = 0
+        total_context_prefix_singleton_matches = 0
+        total_hidden_context_fallbacks = 0
         for attempt_index in range(total_attempts):
             attempt_randomness_strength = escalated_randomness_strength(
                 randomness_strength,
@@ -758,10 +959,22 @@ class MarkovGenerator:
                 markov_order=markov_order,
                 enable_backoff=enable_backoff,
                 backoff_min_order=backoff_min_order,
+                fuzzy_context_casefold=fuzzy_context_casefold,
+                fuzzy_context_prefix=fuzzy_context_prefix,
                 rng=generation_rng,
                 emit_start=True,
             )
             total_jump_count += last_attempt.jump_count
+            total_leading_punctuation_stripped += (
+                last_attempt.leading_punctuation_stripped
+            )
+            total_context_exact_matches += last_attempt.context_exact_matches
+            total_context_casefold_matches += last_attempt.context_casefold_matches
+            total_context_prefix_matches += last_attempt.context_prefix_matches
+            total_context_prefix_singleton_matches += (
+                last_attempt.context_prefix_singleton_matches
+            )
+            total_hidden_context_fallbacks += last_attempt.hidden_context_fallbacks
             if last_attempt.text:
                 trace = GenerationTrace(
                     attempts_used=attempt_index + 1,
@@ -770,6 +983,16 @@ class MarkovGenerator:
                     rejection_reason=None,
                     token_count=last_attempt.token_count,
                     start_source=last_attempt.start_source,
+                    leading_punctuation_stripped=(
+                        total_leading_punctuation_stripped
+                    ),
+                    context_exact_matches=total_context_exact_matches,
+                    context_casefold_matches=total_context_casefold_matches,
+                    context_prefix_matches=total_context_prefix_matches,
+                    context_prefix_singleton_matches=(
+                        total_context_prefix_singleton_matches
+                    ),
+                    hidden_context_fallbacks=total_hidden_context_fallbacks,
                 )
                 self._log_trace(trace)
                 return last_attempt.text, trace
@@ -781,6 +1004,14 @@ class MarkovGenerator:
             rejection_reason=last_attempt.rejection_reason,
             token_count=0,
             start_source=last_attempt.start_source,
+            leading_punctuation_stripped=total_leading_punctuation_stripped,
+            context_exact_matches=total_context_exact_matches,
+            context_casefold_matches=total_context_casefold_matches,
+            context_prefix_matches=total_context_prefix_matches,
+            context_prefix_singleton_matches=(
+                total_context_prefix_singleton_matches
+            ),
+            hidden_context_fallbacks=total_hidden_context_fallbacks,
         )
         self._log_trace(trace)
         return "", trace
@@ -788,13 +1019,21 @@ class MarkovGenerator:
     def _log_trace(self, trace: GenerationTrace) -> None:
         logger.debug(
             "Generation trace: attempts=%s order=%s jumps=%s rejection=%s tokens=%s "
-            "start_source=%s",
+            "start_source=%s leading_punctuation_stripped=%s context_exact=%s "
+            "context_casefold=%s context_prefix=%s prefix_singletons=%s "
+            "hidden_context_fallbacks=%s",
             trace.attempts_used,
             trace.markov_order_used,
             trace.jump_count,
             trace.rejection_reason,
             trace.token_count,
             trace.start_source,
+            trace.leading_punctuation_stripped,
+            trace.context_exact_matches,
+            trace.context_casefold_matches,
+            trace.context_prefix_matches,
+            trace.context_prefix_singleton_matches,
+            trace.hidden_context_fallbacks,
         )
 
     async def _generate_text_once(
@@ -811,6 +1050,8 @@ class MarkovGenerator:
         markov_order: int = 3,
         enable_backoff: bool = True,
         backoff_min_order: int = 1,
+        fuzzy_context_casefold: bool = False,
+        fuzzy_context_prefix: bool = False,
         rng: random.Random | None = None,
         emit_start: bool = True,
     ) -> _GenerationAttempt:
@@ -837,6 +1078,11 @@ class MarkovGenerator:
 
         start3: tuple[str, str, str] | None = None
         start_source = "global"
+        context_exact_matches = 0
+        context_casefold_matches = 0
+        context_prefix_matches = 0
+        context_prefix_singleton_matches = 0
+        hidden_context_fallbacks = 0
         if seed_tokens and len(seed_tokens) >= 3:
             seeded3 = await self.db.get_start3_if_exists(
                 chat_id, seed_tokens[0], seed_tokens[1], seed_tokens[2]
@@ -885,12 +1131,25 @@ class MarkovGenerator:
                 context_triplets=context_triplets,
                 context_bias=context_bias,
                 repetition_penalty_strength=repetition_penalty_strength,
+                fuzzy_context_casefold=fuzzy_context_casefold,
+                fuzzy_context_prefix=fuzzy_context_prefix,
                 rng=generation_rng,
             )
             if contextual_state is not None:
-                start3, order_used = contextual_state
+                start3 = contextual_state.state
+                order_used = contextual_state.order
                 emit_start = False
                 start_source = "hidden_context"
+                if contextual_state.match_kind == "exact":
+                    context_exact_matches = 1
+                elif contextual_state.match_kind == "casefold":
+                    context_casefold_matches = 1
+                else:
+                    context_prefix_matches = 1
+                    if contextual_state.transition_count == 1:
+                        context_prefix_singleton_matches = 1
+            else:
+                hidden_context_fallbacks = 1
 
         if start3 is None:
             if starts3:
@@ -916,6 +1175,12 @@ class MarkovGenerator:
                         REJECTION_NO_START_TRANSITION,
                         0,
                         start_source,
+                        0,
+                        context_exact_matches,
+                        context_casefold_matches,
+                        context_prefix_matches,
+                        context_prefix_singleton_matches,
+                        hidden_context_fallbacks,
                     )
                 w3 = weighted_next_choice(
                     variants,
@@ -941,6 +1206,12 @@ class MarkovGenerator:
                 REJECTION_NO_START_TRANSITION,
                 0,
                 start_source,
+                0,
+                context_exact_matches,
+                context_casefold_matches,
+                context_prefix_matches,
+                context_prefix_singleton_matches,
+                hidden_context_fallbacks,
             )
 
         token_limit = max(1, max_tokens)
@@ -1084,6 +1355,9 @@ class MarkovGenerator:
         generated = trim_repetitive_tail(generated)
         generated = trim_to_sentence_boundary(generated)
         generated = finalize_reply_ending(generated)
+        finalized_token_count = len(generated)
+        generated = strip_leading_punctuation(generated)
+        leading_punctuation_stripped = finalized_token_count - len(generated)
         result = detokenize(generated, max_chars=max_chars)
         if len(result) < 5:
             return _GenerationAttempt(
@@ -1093,6 +1367,12 @@ class MarkovGenerator:
                 REJECTION_RESULT_TOO_SHORT,
                 0,
                 start_source,
+                leading_punctuation_stripped,
+                context_exact_matches,
+                context_casefold_matches,
+                context_prefix_matches,
+                context_prefix_singleton_matches,
+                hidden_context_fallbacks,
             )
         result_tokens = tokenize(result)
         is_short_reply = is_short_generated_reply(result_tokens)
@@ -1104,6 +1384,12 @@ class MarkovGenerator:
                 REJECTION_LOW_DIVERSITY,
                 0,
                 start_source,
+                leading_punctuation_stripped,
+                context_exact_matches,
+                context_casefold_matches,
+                context_prefix_matches,
+                context_prefix_singleton_matches,
+                hidden_context_fallbacks,
             )
         if is_short_reply:
             if is_short_context_copy(result_tokens, context_tokens):
@@ -1114,6 +1400,12 @@ class MarkovGenerator:
                     REJECTION_SHORT_CONTEXT_COPY,
                     0,
                     start_source,
+                    leading_punctuation_stripped,
+                    context_exact_matches,
+                    context_casefold_matches,
+                    context_prefix_matches,
+                    context_prefix_singleton_matches,
+                    hidden_context_fallbacks,
                 )
         elif is_context_heavy_reply(result_tokens, context_tokens):
             return _GenerationAttempt(
@@ -1123,6 +1415,12 @@ class MarkovGenerator:
                 REJECTION_CONTEXT_HEAVY,
                 0,
                 start_source,
+                leading_punctuation_stripped,
+                context_exact_matches,
+                context_casefold_matches,
+                context_prefix_matches,
+                context_prefix_singleton_matches,
+                hidden_context_fallbacks,
             )
         return _GenerationAttempt(
             result,
@@ -1131,4 +1429,10 @@ class MarkovGenerator:
             None,
             len(result_tokens),
             start_source,
+            leading_punctuation_stripped,
+            context_exact_matches,
+            context_casefold_matches,
+            context_prefix_matches,
+            context_prefix_singleton_matches,
+            hidden_context_fallbacks,
         )

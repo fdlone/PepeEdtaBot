@@ -1,0 +1,22 @@
+{
+  "avg_candidates_scored": 4.95,
+  "avg_generation_latency_ms": 2.0867180079221725,
+  "avg_length_tokens": 7.41,
+  "baseline_phase": 4.1,
+  "candidate_target": 5,
+  "context_prefix_copy_rate": 0.14,
+  "context_token_overlap": 0.2388095238095238,
+  "corpus_messages": 30,
+  "distinct_1": 0.13900134952766532,
+  "distinct_2": 0.1934477379095164,
+  "empty_result_rate": 0.0,
+  "generations": 100,
+  "leading_punctuation_rate": 0.0,
+  "leading_punctuation_stripped": 102,
+  "median_generation_latency_ms": 1.427150098606944,
+  "median_length_tokens": 8.0,
+  "normalize_lower": false,
+  "repeated_bigram_ratio": 0.0,
+  "repeated_trigram_ratio": 0.0,
+  "seed": 20260620
+}

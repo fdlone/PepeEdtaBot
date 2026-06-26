@@ -13,6 +13,7 @@ from collections import Counter
 from pathlib import Path
 from statistics import mean, median
 from types import SimpleNamespace
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -21,6 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from app import log_masking  # noqa: E402
 from app.core.candidate_scorer import meaningful_tokens  # noqa: E402
 from app.core.markov import (  # noqa: E402
+    PUNCT_SET,
     MarkovGenerator,
     content_tokens,
     tokenize,
@@ -37,6 +39,12 @@ DEFAULT_SEED = 20260620
 DEFAULT_GENERATIONS = 100
 SYNTHETIC_CHAT_ID = 1
 CORPUS_PATH = Path(__file__).with_name("fixtures") / "synthetic_generation_corpus.txt"
+CASE_CONTEXT_PATH = (
+    Path(__file__).with_name("fixtures") / "synthetic_generation_case_context.txt"
+)
+PREFIX_CONTEXT_PATH = (
+    Path(__file__).with_name("fixtures") / "synthetic_generation_prefix_context.txt"
+)
 
 
 class _NoVerbatimCopies:
@@ -44,12 +52,52 @@ class _NoVerbatimCopies:
         return False
 
 
-def load_synthetic_corpus() -> list[str]:
-    return [
+def load_synthetic_corpus(
+    *,
+    normalize_lower: bool,
+    include_prefix_fixture: bool = False,
+) -> list[str]:
+    corpus = [
         line.strip()
         for line in CORPUS_PATH.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+    if not normalize_lower:
+        corpus.extend(
+            line.strip()
+            for line in CASE_CONTEXT_PATH.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    if include_prefix_fixture:
+        corpus.extend(
+            line.strip()
+            for line in PREFIX_CONTEXT_PATH.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+    return corpus
+
+
+class _InstrumentedMarkovGenerator(MarkovGenerator):
+    def __init__(self, db: Database) -> None:
+        super().__init__(db)
+        self.leading_punctuation_stripped = 0
+        self.context_exact_matches = 0
+        self.context_casefold_matches = 0
+        self.context_prefix_matches = 0
+        self.context_prefix_singleton_matches = 0
+        self.hidden_context_fallbacks = 0
+
+    async def generate_text(self, *args: Any, **kwargs: Any) -> str:
+        text, trace = await self.generate_text_with_trace(*args, **kwargs)
+        self.leading_punctuation_stripped += trace.leading_punctuation_stripped
+        self.context_exact_matches += trace.context_exact_matches
+        self.context_casefold_matches += trace.context_casefold_matches
+        self.context_prefix_matches += trace.context_prefix_matches
+        self.context_prefix_singleton_matches += (
+            trace.context_prefix_singleton_matches
+        )
+        self.hidden_context_fallbacks += trace.hidden_context_fallbacks
+        return text
 
 
 def build_ngrams(tokens: list[str], size: int) -> list[tuple[str, ...]]:
@@ -115,6 +163,9 @@ async def evaluate_generation(
     seed: int = DEFAULT_SEED,
     generations: int = DEFAULT_GENERATIONS,
     candidate_target: int = CANDIDATE_TARGET,
+    normalize_lower: bool = True,
+    fuzzy_context_casefold: bool = False,
+    fuzzy_context_prefix: bool = False,
 ) -> dict[str, int | float]:
     if generations <= 0:
         raise ValueError("generations must be positive")
@@ -123,13 +174,17 @@ async def evaluate_generation(
         min(candidate_target, GENERATION_ATTEMPT_BUDGET),
     )
 
-    corpus = load_synthetic_corpus()
+    corpus = load_synthetic_corpus(
+        normalize_lower=normalize_lower,
+        include_prefix_fixture=fuzzy_context_prefix,
+    )
     rng = random.Random(seed)
     outputs: list[list[str]] = []
     context_overlaps: list[float] = []
     context_prefix_copies: list[bool] = []
     candidates_scored: list[int] = []
     latencies_ms: list[float] = []
+    leading_punctuation_replies = 0
     log_masking.init_masking("synthetic-generation-evaluation")
 
     with tempfile.TemporaryDirectory(prefix="pepe_generation_eval_") as temp_dir:
@@ -137,14 +192,14 @@ async def evaluate_generation(
         await db.init()
         try:
             for message in corpus:
-                tokens = tokenize(message, normalize_lower=True)
+                tokens = tokenize(message, normalize_lower=normalize_lower)
                 await db.save_message_and_update_model(
                     chat_id=SYNTHETIC_CHAT_ID,
                     raw_text=message,
                     tokens=tokens,
                 )
 
-            generator = MarkovGenerator(db)
+            generator = _InstrumentedMarkovGenerator(db)
             runtime_state = SimpleNamespace(
                 randomness_strength=2.0,
                 max_reply_chars=280,
@@ -155,7 +210,9 @@ async def evaluate_generation(
                 markov_order=3,
                 enable_backoff=True,
                 backoff_min_order=1,
-                normalize_lower=True,
+                normalize_lower=normalize_lower,
+                fuzzy_context_casefold=fuzzy_context_casefold,
+                fuzzy_context_prefix=fuzzy_context_prefix,
                 auto_capitalize_replies=False,
                 recent_short_replies={},
             )
@@ -167,8 +224,32 @@ async def evaluate_generation(
             for index in range(generations):
                 context_tokens = tokenize(
                     corpus[index % len(corpus)],
-                    normalize_lower=True,
+                    normalize_lower=normalize_lower,
                 )
+                if (
+                    fuzzy_context_casefold
+                    and not normalize_lower
+                    and index % 10 == 0
+                ):
+                    context_tokens = [
+                        token.swapcase() if token not in PUNCT_SET else token
+                        for token in context_tokens
+                    ]
+                if (
+                    fuzzy_context_prefix
+                    and not normalize_lower
+                    and any(
+                        any("а" <= char.casefold() <= "я" for char in token)
+                        for token in context_tokens
+                    )
+                ):
+                    for token_index, token in enumerate(context_tokens):
+                        if (
+                            len(token) >= 6
+                            and token.isalpha()
+                            and any("а" <= char.casefold() <= "я" for char in token)
+                        ):
+                            context_tokens[token_index] = token + "а"
                 started_at = time.perf_counter()
                 selection = await response_generator.generate_with_result(
                     GenerationRequest(
@@ -182,8 +263,14 @@ async def evaluate_generation(
                 )
                 latencies_ms.append((time.perf_counter() - started_at) * 1000)
                 output = content_tokens(
-                    tokenize(selection.text or "", normalize_lower=True)
+                    tokenize(
+                        selection.text or "",
+                        normalize_lower=normalize_lower,
+                    )
                 )
+                emitted_tokens = tokenize(selection.text or "")
+                if emitted_tokens and emitted_tokens[0] in PUNCT_SET:
+                    leading_punctuation_replies += 1
                 outputs.append(output)
                 context_overlaps.append(
                     context_token_overlap(output, context_tokens)
@@ -197,11 +284,20 @@ async def evaluate_generation(
 
     lengths = [len(output) for output in outputs]
     empty_count = sum(1 for output in outputs if not output)
+    context_resolution_attempts = (
+        generator.context_exact_matches
+        + generator.context_casefold_matches
+        + generator.context_prefix_matches
+        + generator.hidden_context_fallbacks
+    )
     return {
         "baseline_phase": 4.1,
         "seed": seed,
         "generations": generations,
         "corpus_messages": len(corpus),
+        "normalize_lower": normalize_lower,
+        "fuzzy_context_casefold": fuzzy_context_casefold,
+        "fuzzy_context_prefix": fuzzy_context_prefix,
         "candidate_target": effective_candidate_target,
         "empty_result_rate": empty_count / generations,
         "distinct_1": distinct_ratio(outputs, 1),
@@ -213,6 +309,34 @@ async def evaluate_generation(
         "context_token_overlap": mean(context_overlaps),
         "context_prefix_copy_rate": (
             sum(context_prefix_copies) / generations if generations else 0.0
+        ),
+        "leading_punctuation_rate": leading_punctuation_replies / generations,
+        "leading_punctuation_stripped": generator.leading_punctuation_stripped,
+        "context_exact_match_rate": (
+            generator.context_exact_matches / context_resolution_attempts
+            if context_resolution_attempts
+            else 0.0
+        ),
+        "context_casefold_match_rate": (
+            generator.context_casefold_matches / context_resolution_attempts
+            if context_resolution_attempts
+            else 0.0
+        ),
+        "context_prefix_match_rate": (
+            generator.context_prefix_matches / context_resolution_attempts
+            if context_resolution_attempts
+            else 0.0
+        ),
+        "context_prefix_singleton_rate": (
+            generator.context_prefix_singleton_matches
+            / generator.context_prefix_matches
+            if generator.context_prefix_matches
+            else 0.0
+        ),
+        "hidden_context_fallback_to_global_rate": (
+            generator.hidden_context_fallbacks / context_resolution_attempts
+            if context_resolution_attempts
+            else 0.0
         ),
         "avg_candidates_scored": mean(candidates_scored),
         "avg_generation_latency_ms": mean(latencies_ms),
@@ -227,6 +351,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--generations", type=int, default=DEFAULT_GENERATIONS)
     parser.add_argument("--candidate-target", type=int, default=CANDIDATE_TARGET)
+    parser.add_argument(
+        "--profile",
+        choices=("normalize-lower", "case-preserved"),
+        default="normalize-lower",
+    )
+    parser.add_argument("--fuzzy-context-casefold", action="store_true")
+    parser.add_argument("--fuzzy-context-prefix", action="store_true")
     return parser.parse_args()
 
 
@@ -237,6 +368,9 @@ def main() -> None:
             seed=args.seed,
             generations=args.generations,
             candidate_target=args.candidate_target,
+            normalize_lower=args.profile == "normalize-lower",
+            fuzzy_context_casefold=args.fuzzy_context_casefold,
+            fuzzy_context_prefix=args.fuzzy_context_prefix,
         )
     )
     print(json.dumps(report, indent=2, sort_keys=True))

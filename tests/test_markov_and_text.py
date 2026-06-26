@@ -22,6 +22,7 @@ from app.core.markov import (
     is_low_diversity_reply,
     is_short_generated_reply,
     remember_bounded,
+    strip_leading_punctuation,
     tokenize,
     trim_repetitive_tail,
     weighted_next_choice,
@@ -103,6 +104,18 @@ class TestContextStartProbability(unittest.TestCase):
                 for lower, upper in zip(probabilities, probabilities[1:])
             )
         )
+
+
+class TestStripLeadingPunctuation(unittest.TestCase):
+    def test_strips_all_supported_leading_punctuation(self) -> None:
+        tokens = [".", ",", "!", "?", ";", ":", "hello", "!"]
+
+        self.assertEqual(strip_leading_punctuation(tokens), ["hello", "!"])
+        self.assertEqual(tokens, [".", ",", "!", "?", ";", ":", "hello", "!"])
+
+    def test_preserves_content_and_empty_tokens(self) -> None:
+        self.assertEqual(strip_leading_punctuation(["hello", "."]), ["hello", "."])
+        self.assertEqual(strip_leading_punctuation([]), [])
 
 
 class TestFinalizeReplyEnding(unittest.TestCase):
@@ -214,6 +227,15 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await self.db.close()
         self.db_path.unlink(missing_ok=True)
+
+    def test_invalidate_chat_cache_invalidates_context_matcher(self) -> None:
+        with patch.object(
+            self.generator._context_state_matcher,
+            "invalidate_chat_cache",
+        ) as invalidate:
+            self.generator.invalidate_chat_cache(123)
+
+        invalidate.assert_called_once_with(123)
 
     def test_sanitize_and_tokenize(self) -> None:
         clean = sanitize_text(
@@ -596,6 +618,79 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(text.startswith("продолжается вполне безопасно"))
         self.assertEqual(trace.start_source, "hidden_context")
         self.assertEqual(trace.markov_order_used, 3)
+        self.assertEqual(trace.context_exact_matches, 1)
+        self.assertEqual(trace.context_casefold_matches, 0)
+
+    async def test_context_trigram_uses_casefold_fallback_when_enabled(self) -> None:
+        await self.db.save_message_and_update_model(
+            chat_id=5554,
+            raw_text="global lead Alpha Beta Gamma continues safely",
+            tokens=[
+                "global",
+                "lead",
+                "Alpha",
+                "Beta",
+                "Gamma",
+                "continues",
+                "safely",
+            ],
+        )
+
+        text, trace = await self.generator.generate_text_with_trace(
+            chat_id=5554,
+            max_chars=100,
+            context_tokens=["alpha", "beta", "gamma"],
+            context_start_bias=4.0,
+            randomness_strength=0.0,
+            fuzzy_context_casefold=True,
+            rng=random.Random(11),
+        )
+
+        self.assertTrue(text.startswith("continues safely"))
+        self.assertEqual(trace.start_source, "hidden_context")
+        self.assertEqual(trace.context_exact_matches, 0)
+        self.assertEqual(trace.context_casefold_matches, 1)
+
+    async def test_context_prefix_prefers_frequent_coherent_state(self) -> None:
+        chat_id = 5553
+        for _ in range(10):
+            await self.db.save_message_and_update_model(
+                chat_id=chat_id,
+                raw_text="хоссейн джаббар продолжает точно сейчас",
+                tokens=[
+                    "хоссейн",
+                    "джаббар",
+                    "продолжает",
+                    "точно",
+                    "сейчас",
+                ],
+            )
+        await self.db.save_message_and_update_model(
+            chat_id=chat_id,
+            raw_text="хоссейно джаббаров ошибается редко сейчас",
+            tokens=[
+                "хоссейно",
+                "джаббаров",
+                "ошибается",
+                "редко",
+                "сейчас",
+            ],
+        )
+
+        text, trace = await self.generator.generate_text_with_trace(
+            chat_id=chat_id,
+            max_chars=100,
+            context_tokens=["хоссейном", "джаббаровичем"],
+            context_start_bias=4.0,
+            randomness_strength=0.0,
+            fuzzy_context_prefix=True,
+            rng=random.Random(11),
+        )
+
+        self.assertTrue(text.startswith("точно сейчас"))
+        self.assertEqual(trace.start_source, "hidden_context")
+        self.assertEqual(trace.context_prefix_matches, 1)
+        self.assertEqual(trace.context_prefix_singleton_matches, 0)
 
     async def test_context_start_bias_gates_contextual_start_path(self) -> None:
         chat_id = 5556
@@ -704,6 +799,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(text.startswith("совсем другой"))
         self.assertIn(text.split()[0], {"кошка", "солнце"})
         self.assertEqual(trace.start_source, "global")
+        self.assertEqual(trace.hidden_context_fallbacks, 1)
 
     async def test_generate_text_without_context_matches_legacy_path(self) -> None:
         await self.db.save_message_and_update_model(
@@ -784,10 +880,31 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(trace.rejection_reason)
         self.assertEqual(trace.token_count, len(tokenize(text)))
         self.assertEqual(trace.start_source, "global")
+        self.assertEqual(trace.leading_punctuation_stripped, 0)
         self.assertNotIn(text, repr(trace))
         joined_logs = " ".join(captured_logs.output)
         self.assertIn("attempts=1", joined_logs)
+        self.assertIn("leading_punctuation_stripped=0", joined_logs)
         self.assertNotIn(text, joined_logs)
+
+    async def test_generation_strips_leading_punctuation_and_traces_count(
+        self,
+    ) -> None:
+        await self.db.save_message_and_update_model(
+            chat_id=7771,
+            raw_text="., alpha beta gamma delta epsilon",
+            tokens=[".", ",", "alpha", "beta", "gamma", "delta", "epsilon"],
+        )
+
+        text, trace = await self.generator.generate_text_with_trace(
+            chat_id=7771,
+            max_chars=100,
+            randomness_strength=0.0,
+            rng=random.Random(6),
+        )
+
+        self.assertEqual(text, "alpha beta gamma delta epsilon.")
+        self.assertEqual(trace.leading_punctuation_stripped, 2)
 
     async def test_generation_trace_reports_final_rejection(self) -> None:
         text, trace = await self.generator.generate_text_with_trace(

@@ -11,8 +11,11 @@
   "distinct_2": 0.16220238095238096,
   "empty_result_rate": 0.0,
   "generations": 100,
+  "leading_punctuation_rate": 0.0,
+  "leading_punctuation_stripped": 0,
   "median_generation_latency_ms": 0.8773000008659437,
   "median_length_tokens": 8.0,
+  "normalize_lower": true,
   "repeated_bigram_ratio": 0.0,
   "repeated_trigram_ratio": 0.0,
   "seed": 20260620

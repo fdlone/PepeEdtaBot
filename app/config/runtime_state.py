@@ -24,6 +24,8 @@ class RuntimeState:
     enable_backoff: bool
     backoff_min_order: int
     use_reply_context: bool
+    fuzzy_context_casefold: bool
+    fuzzy_context_prefix: bool
     reply_context_max_tokens: int
     reply_context_last_tokens: int
     reply_context_bias: float
