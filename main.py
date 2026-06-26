@@ -73,7 +73,12 @@ async def run_bot() -> None:
     logger = logging.getLogger("chat_markov")
     logging.getLogger("aiogram").setLevel(logging.WARNING)
 
-    db = Database(settings.db_path)
+    db = Database(
+        settings.db_path,
+        messages_retention_per_chat=settings.messages_retention_per_chat,
+        busy_timeout_ms=settings.sqlite_busy_timeout_ms,
+        wal_autocheckpoint_pages=settings.sqlite_wal_autocheckpoint_pages,
+    )
     await db.init()
     generator = MarkovGenerator(db=db)
     pivo_security = PivoSecurity(

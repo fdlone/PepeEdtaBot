@@ -30,6 +30,9 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(settings.throttle_state_ttl_sec, 21600)
         self.assertEqual(settings.throttle_state_max_keys, 4096)
         self.assertEqual(settings.text_cache_max_messages, 500)
+        self.assertEqual(settings.messages_retention_per_chat, 1000)
+        self.assertEqual(settings.sqlite_busy_timeout_ms, 5000)
+        self.assertEqual(settings.sqlite_wal_autocheckpoint_pages, 1000)
 
     def test_load_settings_rejects_missing_bot_token(self) -> None:
         env = minimal_env()
@@ -125,6 +128,16 @@ class TestSettings(unittest.TestCase):
         env["TEXT_CACHE_MAX_MESSAGES"] = "0"
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaisesRegex(ValueError, "TEXT_CACHE_MAX_MESSAGES"):
+                load_settings(load_env=False)
+
+    def test_load_settings_rejects_retention_below_text_cache_window(self) -> None:
+        env = minimal_env()
+        env["MESSAGES_RETENTION_PER_CHAT"] = "499"
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(
+                ValueError,
+                "MESSAGES_RETENTION_PER_CHAT.*TEXT_CACHE_MAX_MESSAGES",
+            ):
                 load_settings(load_env=False)
 
     def test_load_settings_default_bot_text_aliases(self) -> None:

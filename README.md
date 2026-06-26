@@ -68,6 +68,11 @@ docker compose down            # остановка
   контекст генерации (настраивается группой ключей `REPLY_CONTEXT_*`).
 - `AUTO_CAPITALIZE_REPLIES` — капитализация начала предложений в ответе
   (output-side постобработка, по умолчанию выключено).
+- `MESSAGES_RETENTION_PER_CHAT` — число последних нормализованных сообщений,
+  хранимых отдельно для каждого чата; должно быть не меньше
+  `TEXT_CACHE_MAX_MESSAGES`.
+- `SQLITE_BUSY_TIMEOUT_MS` / `SQLITE_WAL_AUTOCHECKPOINT_PAGES` — ожидание при
+  конкурирующей записи и порог автоматического WAL checkpoint.
 
 Многие из этих ключей доступны через `/set` и меняются на лету (см. ниже).
 

@@ -5,6 +5,11 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+from app.config.defaults import (
+    MESSAGES_RETENTION_PER_CHAT,
+    SQLITE_BUSY_TIMEOUT_MS,
+    SQLITE_WAL_AUTOCHECKPOINT_PAGES,
+)
 from app.config.registry import RUNTIME_FIELDS, validate_cross_fields
 from app.core.reply_policy import DEFAULT_BOT_TEXT_ALIASES
 
@@ -21,6 +26,9 @@ class Settings:
     normalize_lower: bool
     auto_capitalize_replies: bool
     db_path: str
+    messages_retention_per_chat: int
+    sqlite_busy_timeout_ms: int
+    sqlite_wal_autocheckpoint_pages: int
     typing_min_ms: int
     typing_max_ms: int
     randomness_strength: float
@@ -64,6 +72,18 @@ def _load_runtime_fields() -> dict[str, object]:
     return values
 
 
+def _load_int(env_var: str, default: int, *, minimum: int) -> int:
+    raw = os.getenv(env_var, str(default)).strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{env_var} must be an integer") from exc
+    if value < minimum:
+        qualifier = "non-negative" if minimum == 0 else f"at least {minimum}"
+        raise ValueError(f"{env_var} must be {qualifier}")
+    return value
+
+
 def load_settings(load_env: bool = True) -> Settings:
     if load_env:
         load_dotenv()
@@ -84,6 +104,22 @@ def load_settings(load_env: bool = True) -> Settings:
     db_dir = os.path.dirname(db_path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
+
+    messages_retention_per_chat = _load_int(
+        "MESSAGES_RETENTION_PER_CHAT",
+        MESSAGES_RETENTION_PER_CHAT,
+        minimum=1,
+    )
+    sqlite_busy_timeout_ms = _load_int(
+        "SQLITE_BUSY_TIMEOUT_MS",
+        SQLITE_BUSY_TIMEOUT_MS,
+        minimum=0,
+    )
+    sqlite_wal_autocheckpoint_pages = _load_int(
+        "SQLITE_WAL_AUTOCHECKPOINT_PAGES",
+        SQLITE_WAL_AUTOCHECKPOINT_PAGES,
+        minimum=0,
+    )
 
     pivo_hmac_secret = os.getenv("PIVO_HMAC_SECRET", "").strip()
     if len(pivo_hmac_secret) < 16:
@@ -149,6 +185,11 @@ def load_settings(load_env: bool = True) -> Settings:
         raise ValueError("TEXT_CACHE_MAX_MESSAGES must be an integer") from exc
     if text_cache_max_messages < 1:
         raise ValueError("TEXT_CACHE_MAX_MESSAGES must be at least 1")
+    if messages_retention_per_chat < text_cache_max_messages:
+        raise ValueError(
+            "MESSAGES_RETENTION_PER_CHAT must be greater than or equal to "
+            "TEXT_CACHE_MAX_MESSAGES"
+        )
 
     log_level = os.getenv("LOG_LEVEL", "INFO").strip().upper()
     if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
@@ -176,6 +217,9 @@ def load_settings(load_env: bool = True) -> Settings:
         bot_token=bot_token,
         owner_id=owner_id,
         db_path=db_path,
+        messages_retention_per_chat=messages_retention_per_chat,
+        sqlite_busy_timeout_ms=sqlite_busy_timeout_ms,
+        sqlite_wal_autocheckpoint_pages=sqlite_wal_autocheckpoint_pages,
         pivo_hmac_secret=pivo_hmac_secret,
         pivo_encryption_secret=pivo_encryption_secret,
         pivo_explicit_mentions_limit=pivo_explicit_mentions_limit,

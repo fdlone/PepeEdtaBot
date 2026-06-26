@@ -350,3 +350,57 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
             users = [row[0] for row in await cursor.fetchall()]
 
         self.assertEqual(users, ["cutoff-user", "recent-user"])
+
+
+class TestDatabaseMessageRetention(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.db_path = Path(f"test_retention_{uuid.uuid4().hex}.sqlite")
+        self.db = Database(
+            str(self.db_path),
+            messages_retention_per_chat=3,
+            busy_timeout_ms=4321,
+            wal_autocheckpoint_pages=321,
+        )
+        await self.db.init()
+
+    async def asyncTearDown(self) -> None:
+        await self.db.close()
+        self.db_path.unlink(missing_ok=True)
+
+    async def _record(self, chat_id: int, text: str) -> None:
+        await self.db.save_message_and_update_model(
+            chat_id=chat_id,
+            raw_text=text,
+            tokens=[],
+        )
+
+    async def test_retention_keeps_exactly_most_recent_rows(self) -> None:
+        for text in ("first", "second", "third", "fourth"):
+            await self._record(1, text)
+
+        self.assertEqual(
+            await self.db.get_recent_normalized_messages(1, 10),
+            ["second", "third", "fourth"],
+        )
+        self.assertFalse(await self.db.message_exists(1, "first"))
+        self.assertEqual((await self.db.get_stats(1))["messages"], 3)
+
+    async def test_retention_is_scoped_to_chat(self) -> None:
+        await self._record(2, "other chat message")
+        for text in ("a1", "a2", "a3", "a4"):
+            await self._record(1, text)
+
+        self.assertEqual(
+            await self.db.get_recent_normalized_messages(2, 10),
+            ["other chat message"],
+        )
+
+    async def test_configured_pragmas_are_applied(self) -> None:
+        conn = await self.db._get_conn()
+        busy_timeout = await (await conn.execute("PRAGMA busy_timeout;")).fetchone()
+        wal_autocheckpoint = await (
+            await conn.execute("PRAGMA wal_autocheckpoint;")
+        ).fetchone()
+
+        self.assertEqual(busy_timeout, (4321,))
+        self.assertEqual(wal_autocheckpoint, (321,))
