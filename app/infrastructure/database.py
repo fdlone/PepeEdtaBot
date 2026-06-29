@@ -202,22 +202,34 @@ class Database:
                     ],
                 )
 
-            cursor3 = await db.execute(
-                "SELECT COALESCE(SUM(cnt), 0) FROM transitions3 WHERE chat_id = ?",
+            # Maintain the per-chat model volume incrementally instead of
+            # re-summing the whole transitions tables on every message (audit
+            # D2). The delta is exactly the number of transition occurrences
+            # this message contributed (sum of the per-message counters).
+            volume2_delta = sum(trans2_counter.values())
+            volume3_delta = sum(trans3_counter.values())
+            await db.execute(
+                """
+                INSERT INTO chat_model_volume (chat_id, volume2, volume3)
+                VALUES (?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    volume2 = volume2 + excluded.volume2,
+                    volume3 = volume3 + excluded.volume3
+                """,
+                (chat_id, volume2_delta, volume3_delta),
+            )
+            cursor = await db.execute(
+                "SELECT volume2, volume3 FROM chat_model_volume WHERE chat_id = ?",
                 (chat_id,),
             )
-            row3 = await cursor3.fetchone()
-            if row3 is None:
-                raise RuntimeError("COALESCE query returned None in save_message_and_update_model")
-            volume3 = int(row3[0] or 0)
-            cursor2 = await db.execute(
-                "SELECT COALESCE(SUM(cnt), 0) FROM transitions WHERE chat_id = ?",
-                (chat_id,),
-            )
-            row2 = await cursor2.fetchone()
-            if row2 is None:
-                raise RuntimeError("COALESCE query returned None in save_message_and_update_model")
-            volume2 = int(row2[0] or 0)
+            row = await cursor.fetchone()
+            if row is None:
+                raise RuntimeError(
+                    "chat_model_volume row missing after upsert in "
+                    "save_message_and_update_model"
+                )
+            volume2 = int(row[0] or 0)
+            volume3 = int(row[1] or 0)
 
             await db.commit()
             return volume3 if volume3 > 0 else volume2
@@ -425,4 +437,5 @@ class Database:
             await db.execute("DELETE FROM transitions WHERE chat_id = ?", (chat_id,))
             await db.execute("DELETE FROM transitions3 WHERE chat_id = ?", (chat_id,))
             await db.execute("DELETE FROM transitions1 WHERE chat_id = ?", (chat_id,))
+            await db.execute("DELETE FROM chat_model_volume WHERE chat_id = ?", (chat_id,))
             await db.commit()
