@@ -57,6 +57,28 @@ class TestSettings(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "PIVO_ENCRYPTION_SECRET"):
                 load_settings(load_env=False)
 
+    def test_load_settings_rejects_placeholder_pivo_hmac_secret(self) -> None:
+        env = minimal_env()
+        env["PIVO_HMAC_SECRET"] = "change_me_to_a_long_random_hmac_secret"
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "PIVO_HMAC_SECRET.*placeholder"):
+                load_settings(load_env=False)
+
+    def test_load_settings_rejects_placeholder_pivo_encryption_secret(self) -> None:
+        env = minimal_env()
+        env["PIVO_ENCRYPTION_SECRET"] = "change_me_to_a_long_random_encryption_secret"
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "PIVO_ENCRYPTION_SECRET.*placeholder"):
+                load_settings(load_env=False)
+
+    def test_load_settings_rejects_identical_pivo_secrets(self) -> None:
+        env = minimal_env()
+        env["PIVO_HMAC_SECRET"] = "shared-secret-value-123"
+        env["PIVO_ENCRYPTION_SECRET"] = "shared-secret-value-123"
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "must be different"):
+                load_settings(load_env=False)
+
     def test_load_settings_rejects_invalid_bool(self) -> None:
         env = minimal_env()
         env["ENABLE_BACKOFF"] = "maybe"

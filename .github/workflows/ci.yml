@@ -39,8 +39,8 @@ jobs:
       - name: Security scan (bandit)
         run: python -m bandit -r app tools main.py -x tests --severity-level medium --confidence-level medium
 
-      - name: Dependency scan (safety)
-        run: safety check -r requirements.lock
+      - name: Dependency scan (pip-audit)
+        run: python -m pip_audit -r requirements.lock
 
   docker-build:
     runs-on: ubuntu-latest

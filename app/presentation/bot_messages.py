@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.config.runtime_state import RuntimeState
+
 TELEGRAM_COMMANDS: tuple[tuple[str, str], ...] = (
     ("help", "Список команд"),
     ("ping", "Проверить, что бот онлайн"),
@@ -53,7 +58,7 @@ def format_stats_message(stats: dict[str, int], min_tokens_for_model: int) -> st
     )
 
 
-def format_config_message(state: object, full: bool = False) -> str:
+def format_config_message(state: RuntimeState, full: bool = False) -> str:
     lines = [
         "Настройки:",
         f"шанс ответа: {state.reply_probability}",
