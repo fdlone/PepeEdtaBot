@@ -1271,6 +1271,180 @@ class MarkovGenerator:
             hidden_context_fallbacks,
         )
 
+    async def _run_generation_loop(
+        self,
+        chat_id: int,
+        start3: tuple[str, str, str],
+        *,
+        emit_start: bool,
+        order: int,
+        order_used: int,
+        max_tokens: int,
+        max_chars: int,
+        enable_backoff: bool,
+        backoff_min_order: int,
+        starts3: list[tuple[str, str, str, int]],
+        context_tokens: list[str],
+        context_token_set: set[str],
+        context_pairs: set[tuple[str, ...]],
+        context_triplets: set[tuple[str, ...]],
+        start_explore: float,
+        start_power: float,
+        context_start_bias: float,
+        next_explore: float,
+        next_power: float,
+        context_bias: float,
+        repetition_penalty_strength: float,
+        jump_probability: float,
+        rng: random.Random,
+    ) -> tuple[list[str], int, int]:
+        """Walk the Markov chain from ``start3`` until a stop condition.
+
+        Returns ``(generated, order_used, jump_count)``. Per-step transitions
+        fall back from order 3 to 2 to 1 when ``enable_backoff`` allows and
+        ``backoff_min_order`` permits; dedup state suppresses immediate triplet
+        repeats. Only local state is mutated.
+        """
+        token_limit = max(1, max_tokens)
+        w1, w2, w3 = start3
+        start_tokens = [w1, w2, w3]
+        generated: list[str] = start_tokens[:token_limit] if emit_start else []
+        dedup_seed = generated if emit_start else start_tokens
+        visited_triplets: OrderedDict[tuple[str, str, str], None] = (
+            OrderedDict.fromkeys([(w1, w2, w3)])
+        )
+        seen_pairs: OrderedDict[tuple[str, ...], None] = OrderedDict.fromkeys(
+            build_windows(dedup_seed, 2)
+        )
+        seen_triplets: OrderedDict[tuple[str, ...], None] = OrderedDict.fromkeys(
+            build_windows(dedup_seed, 3)
+        )
+        jump_count = 0
+
+        for step_index in range(self.max_steps):
+            if len(generated) >= token_limit:
+                break
+            if (
+                len(generated) > 8
+                and rng.random() < jump_probability
+                and starts3
+                and order >= 3
+            ):
+                contextual_jump = None
+                if context_tokens:
+                    contextual_jump = await self._select_contextual_start3(
+                        chat_id,
+                        context_tokens,
+                        start_explore,
+                        start_power,
+                        context_start_bias,
+                        rng,
+                    )
+                if contextual_jump is None:
+                    contextual_jump = weighted_start3_choice(
+                        starts3,
+                        start_explore,
+                        start_power,
+                        rng,
+                    )
+                w1, w2, w3 = contextual_jump
+                jump_count += 1
+                continue
+
+            recent_window = generated[-10:]
+            pool3 = await self._get3(chat_id, w1, w2, w3) if order >= 3 else []
+            if pool3 and order >= 3:
+                candidates = [
+                    (cand, cnt)
+                    for cand, cnt in pool3
+                    if (w2, w3, cand) not in visited_triplets
+                ]
+                pool = candidates or pool3
+                w4 = weighted_next_choice(
+                    pool,
+                    next_explore,
+                    next_power,
+                    rng,
+                    context_token_set=context_token_set,
+                    context_pairs=context_pairs,
+                    context_triplets=context_triplets,
+                    current_state=(w2, w3),
+                    context_bias=context_bias,
+                    step_index=step_index,
+                    recent_tokens=recent_window,
+                    seen_pairs=seen_pairs,
+                    seen_triplets=seen_triplets,
+                    repetition_penalty_strength=repetition_penalty_strength,
+                )
+            else:
+                if not enable_backoff and order >= 3:
+                    break
+
+                pool2 = await self._get2(chat_id, w2, w3)
+                if pool2:
+                    w4 = weighted_next_choice(
+                        pool2,
+                        next_explore,
+                        next_power,
+                        rng,
+                        context_token_set=context_token_set,
+                        context_pairs=context_pairs,
+                        context_triplets=context_triplets,
+                        current_state=(w2, w3),
+                        context_bias=context_bias,
+                        step_index=step_index,
+                        recent_tokens=recent_window,
+                        seen_pairs=seen_pairs,
+                        seen_triplets=seen_triplets,
+                        repetition_penalty_strength=repetition_penalty_strength,
+                    )
+                    order_used = min(order_used, 2)
+                else:
+                    if not enable_backoff or backoff_min_order > 1:
+                        break
+                    pool1 = await self._get1(chat_id, w3)
+                    if not pool1:
+                        break
+                    w4 = weighted_next_choice(
+                        pool1,
+                        next_explore,
+                        next_power,
+                        rng,
+                        context_token_set=context_token_set,
+                        context_pairs=context_pairs,
+                        current_state=(w3,),
+                        context_bias=context_bias,
+                        step_index=step_index,
+                        recent_tokens=recent_window,
+                        seen_pairs=seen_pairs,
+                        repetition_penalty_strength=repetition_penalty_strength,
+                    )
+                    order_used = 1
+
+            generated.append(w4)
+            if has_degraded_recent_window(generated):
+                break
+            maybe_text = detokenize(generated, max_chars=max_chars)
+            if len(generated) >= token_limit or len(maybe_text) >= max_chars:
+                break
+
+            w1, w2, w3 = w2, w3, w4
+            remember_bounded(visited_triplets, (w1, w2, w3), 40)
+            if len(generated) >= 2:
+                remember_bounded(
+                    seen_pairs,
+                    (generated[-2], generated[-1]),
+                    80,
+                )
+            if len(generated) >= 3:
+                remember_bounded(
+                    seen_triplets,
+                    (generated[-3], generated[-2], generated[-1]),
+                    80,
+                )
+
+        return generated, order_used, jump_count
+
     async def _generate_text_once(
         self,
         chat_id: int,
@@ -1404,143 +1578,31 @@ class MarkovGenerator:
                 )
             start3, order_used = global_start
 
-        token_limit = max(1, max_tokens)
-        w1, w2, w3 = start3
-        start_tokens = [w1, w2, w3]
-        generated: list[str] = start_tokens[:token_limit] if emit_start else []
-        dedup_seed = generated if emit_start else start_tokens
-        visited_triplets: OrderedDict[tuple[str, str, str], None] = (
-            OrderedDict.fromkeys([(w1, w2, w3)])
+        generated, order_used, jump_count = await self._run_generation_loop(
+            chat_id,
+            start3,
+            emit_start=emit_start,
+            order=order,
+            order_used=order_used,
+            max_tokens=max_tokens,
+            max_chars=max_chars,
+            enable_backoff=enable_backoff,
+            backoff_min_order=backoff_min_order,
+            starts3=starts3,
+            context_tokens=context_tokens,
+            context_token_set=context_token_set,
+            context_pairs=context_pairs,
+            context_triplets=context_triplets,
+            start_explore=start_explore,
+            start_power=start_power,
+            context_start_bias=context_start_bias,
+            next_explore=next_explore,
+            next_power=next_power,
+            context_bias=context_bias,
+            repetition_penalty_strength=repetition_penalty_strength,
+            jump_probability=jump_probability,
+            rng=generation_rng,
         )
-        seen_pairs: OrderedDict[tuple[str, ...], None] = OrderedDict.fromkeys(
-            build_windows(dedup_seed, 2)
-        )
-        seen_triplets: OrderedDict[tuple[str, ...], None] = OrderedDict.fromkeys(
-            build_windows(dedup_seed, 3)
-        )
-        jump_count = 0
-
-        for step_index in range(self.max_steps):
-            if len(generated) >= token_limit:
-                break
-            if (
-                len(generated) > 8
-                and generation_rng.random() < jump_probability
-                and starts3
-                and order >= 3
-            ):
-                contextual_jump = None
-                if context_tokens:
-                    contextual_jump = await self._select_contextual_start3(
-                        chat_id,
-                        context_tokens,
-                        start_explore,
-                        start_power,
-                        context_start_bias,
-                        generation_rng,
-                    )
-                if contextual_jump is None:
-                    contextual_jump = weighted_start3_choice(
-                        starts3,
-                        start_explore,
-                        start_power,
-                        generation_rng,
-                    )
-                w1, w2, w3 = contextual_jump
-                jump_count += 1
-                continue
-
-            recent_window = generated[-10:]
-            pool3 = await self._get3(chat_id, w1, w2, w3) if order >= 3 else []
-            if pool3 and order >= 3:
-                candidates = [
-                    (cand, cnt)
-                    for cand, cnt in pool3
-                    if (w2, w3, cand) not in visited_triplets
-                ]
-                pool = candidates or pool3
-                w4 = weighted_next_choice(
-                    pool,
-                    next_explore,
-                    next_power,
-                    generation_rng,
-                    context_token_set=context_token_set,
-                    context_pairs=context_pairs,
-                    context_triplets=context_triplets,
-                    current_state=(w2, w3),
-                    context_bias=context_bias,
-                    step_index=step_index,
-                    recent_tokens=recent_window,
-                    seen_pairs=seen_pairs,
-                    seen_triplets=seen_triplets,
-                    repetition_penalty_strength=repetition_penalty_strength,
-                )
-            else:
-                if not enable_backoff and order >= 3:
-                    break
-
-                pool2 = await self._get2(chat_id, w2, w3)
-                if pool2:
-                    w4 = weighted_next_choice(
-                        pool2,
-                        next_explore,
-                        next_power,
-                        generation_rng,
-                        context_token_set=context_token_set,
-                        context_pairs=context_pairs,
-                        context_triplets=context_triplets,
-                        current_state=(w2, w3),
-                        context_bias=context_bias,
-                        step_index=step_index,
-                        recent_tokens=recent_window,
-                        seen_pairs=seen_pairs,
-                        seen_triplets=seen_triplets,
-                        repetition_penalty_strength=repetition_penalty_strength,
-                    )
-                    order_used = min(order_used, 2)
-                else:
-                    if not enable_backoff or backoff_min_order > 1:
-                        break
-                    pool1 = await self._get1(chat_id, w3)
-                    if not pool1:
-                        break
-                    w4 = weighted_next_choice(
-                        pool1,
-                        next_explore,
-                        next_power,
-                        generation_rng,
-                        context_token_set=context_token_set,
-                        context_pairs=context_pairs,
-                        current_state=(w3,),
-                        context_bias=context_bias,
-                        step_index=step_index,
-                        recent_tokens=recent_window,
-                        seen_pairs=seen_pairs,
-                        repetition_penalty_strength=repetition_penalty_strength,
-                    )
-                    order_used = 1
-
-            generated.append(w4)
-            if has_degraded_recent_window(generated):
-                break
-            maybe_text = detokenize(generated, max_chars=max_chars)
-            if len(generated) >= token_limit or len(maybe_text) >= max_chars:
-                break
-
-            w1, w2, w3 = w2, w3, w4
-            remember_bounded(visited_triplets, (w1, w2, w3), 40)
-            if len(generated) >= 2:
-                remember_bounded(
-                    seen_pairs,
-                    (generated[-2], generated[-1]),
-                    80,
-                )
-            if len(generated) >= 3:
-                remember_bounded(
-                    seen_triplets,
-                    (generated[-3], generated[-2], generated[-1]),
-                    80,
-                )
 
         return self._finalize_attempt(
             generated,
