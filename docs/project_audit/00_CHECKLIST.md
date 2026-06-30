@@ -121,6 +121,17 @@
 ## AUDIT COMPLETE — all milestones M1-M6 done (2026-06-29). 21 docs (00_CHECKLIST + 01-20). No production code modified.
 Top actionable (P1, ~1.5d): S1 fix CI safety→pip-audit; S2 reject placeholder secrets; Q5 re-enable strict typing. Then D1 (drop redundant indexes), D2 (incremental volume). Verdict: strong, low-debt, 0 Critical/High.
 
+## REMEDIATION (PR #49, branch chore/close-audit-findings)
+- [x] **P1** (commit ee5c649): S1 CI pip-audit, S2 reject placeholder secrets, Q5 re-enable full strict typing.
+- [x] **P2** (commit 46b6c19): D1 drop 8 redundant indexes (migration 008), D2 incremental per-chat model volume (migration 009).
+- [x] **P3 batch 1** (commit 89e0774): Q6 `Database._require()` guard helper; S4/P5 admin-id TTL cache; Q7 `parse_bool` reuses `_parse_bool`; Q1/S6/L5 debug-log instead of silent except; L2 errors.py logger name.
+- [x] **P3 batch 2** (commit 7564543): C3 confirmed (validate_cross_fields already enforces all 3 invariants at boot + /set) + T1 direct registry unit tests; T2 (throttling pruning) already covered.
+- [x] **Q9** (commit 6e64886): inject RNG into pivo_message_builder + reply_humanized.
+- [x] **T3** (commit 738873c): coverage measurement + ratchet (fail_under=87) in CI.
+- [~] **S3** — DEFERRED by user (2026-06-30): HKDF for Fernet key would break decryption of existing /pivo PII; Low/Info, README documents the sha256 derivation. Keep as-is.
+- [ ] **R8** — markov complexity refactor (_generate_text_once C901=36, _select_contextual_state=29) under characterization tests. Biggest/last; not yet started.
+- [ ] Deferred (only if scaling): L3 metrics, P1 single-lock, A4 multi-instance.
+
 ## Open questions / blockers
 - (none yet)
 
