@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.config.registry import runtime_field_names, try_apply
+from app.config.registry import _parse_bool, runtime_field_names, try_apply
 
 ALLOWED_RUNTIME_KEYS: tuple[str, ...] = runtime_field_names()
 
@@ -18,12 +18,11 @@ class InvalidRuntimeSettingValueError(ValueError):
 
 
 def parse_bool(value: str) -> bool | None:
-    val = value.strip().lower()
-    if val in {"1", "true", "yes", "on"}:
-        return True
-    if val in {"0", "false", "no", "off"}:
-        return False
-    return None
+    """Lenient variant of the registry boolean parser: None instead of raising."""
+    try:
+        return _parse_bool(value)
+    except ValueError:
+        return None
 
 
 def apply_runtime_setting(state: object, key: str, value: str) -> None:

@@ -223,6 +223,13 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
 # ---------------------------------------------------------------------------
 
 class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        from app.filters import admin_or_owner
+
+        # The admin-id cache is process-global; reset it so the shared chat_id
+        # across these tests does not leak admin sets between cases.
+        admin_or_owner._admin_cache.clear()
+
     def test_pivo_router_handlers_are_group_only(self) -> None:
         from app.filters import GroupOnly
         from app.handlers.pivo import router

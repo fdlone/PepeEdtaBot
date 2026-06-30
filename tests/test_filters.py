@@ -52,7 +52,9 @@ class TestGroupOnly(unittest.IsolatedAsyncioTestCase):
 
 class TestAdminOrOwner(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        from app.filters import AdminOrOwner
+        from app.filters import AdminOrOwner, admin_or_owner
+
+        admin_or_owner._admin_cache.clear()
         self.f = AdminOrOwner()
 
     async def test_owner_allowed(self) -> None:
@@ -96,6 +98,15 @@ class TestAdminOrOwner(unittest.IsolatedAsyncioTestCase):
         bot.get_chat_administrators = AsyncMock(side_effect=Exception("should not be called"))
         settings = _make_settings(owner_id=1)
         self.assertTrue(await self.f(msg, bot, settings))
+
+    async def test_admin_lookup_is_cached_within_ttl(self) -> None:
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(return_value=[_make_admin_member(7)])
+        settings = _make_settings(owner_id=None)
+        # Two different users in the same chat: only the first triggers an API call.
+        self.assertTrue(await self.f(_make_message(ChatType.GROUP, user_id=7), bot, settings))
+        self.assertFalse(await self.f(_make_message(ChatType.GROUP, user_id=99), bot, settings))
+        bot.get_chat_administrators.assert_awaited_once()
 
 
 class TestThrottlingMiddleware(unittest.IsolatedAsyncioTestCase):

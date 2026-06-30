@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 
 from aiogram.enums import ChatAction, ChatType
 from aiogram.types import Message
+
+logger = logging.getLogger("chat_markov")
 
 
 def is_group_message(message: Message) -> bool:
@@ -22,7 +25,7 @@ async def reply_humanized(
             )
         delay_ms = random.randint(typing_min_ms, typing_max_ms)
         await asyncio.sleep(delay_ms / 1000)
-    except Exception:
+    except Exception as exc:
         # Ошибка chat action не должна блокировать отправку обычного ответа.
-        pass
+        logger.debug("send_chat_action/typing delay failed: %s", exc)
     await message.reply(text)
