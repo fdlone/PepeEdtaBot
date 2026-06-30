@@ -18,6 +18,7 @@ import random
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from app.core.markov import (
     MarkovGenerator,
@@ -291,6 +292,56 @@ class TestContextualMatchCounts(unittest.TestCase):
 
     def test_prefix_singleton(self) -> None:
         self.assertEqual(self._counts("prefix", transition_count=1), (0, 0, 1, 1))
+
+
+class TestFinalizeAttempt(unittest.TestCase):
+    """Direct tests for the finalize/quality-gate tail (audit R8).
+
+    _finalize_attempt is RNG-free and DB-free, so it is exercised directly to
+    pin both the too-short reject and the success path, and to prove that the
+    accumulated trace metadata is propagated unchanged onto the result.
+    """
+
+    def _finalize(self, tokens: list[str], context_tokens: list[str] | None = None):
+        generator = MarkovGenerator(MagicMock())
+        return generator._finalize_attempt(
+            list(tokens),
+            max_chars=200,
+            context_tokens=context_tokens or [],
+            order_used=2,
+            jump_count=1,
+            start_source="seed",
+            context_exact_matches=3,
+            context_casefold_matches=4,
+            context_prefix_matches=5,
+            context_prefix_singleton_matches=6,
+            hidden_context_fallbacks=7,
+        )
+
+    def test_too_short_rejects_and_propagates_trace(self) -> None:
+        attempt = self._finalize(["я"])
+        self.assertEqual(attempt.text, "")
+        self.assertEqual(attempt.rejection_reason, "result_too_short")
+        self.assertEqual(attempt.token_count, 0)
+        # All accumulated trace metadata flows through the reject unchanged.
+        self.assertEqual(attempt.markov_order_used, 2)
+        self.assertEqual(attempt.jump_count, 1)
+        self.assertEqual(attempt.start_source, "seed")
+        self.assertEqual(attempt.context_exact_matches, 3)
+        self.assertEqual(attempt.context_casefold_matches, 4)
+        self.assertEqual(attempt.context_prefix_matches, 5)
+        self.assertEqual(attempt.context_prefix_singleton_matches, 6)
+        self.assertEqual(attempt.hidden_context_fallbacks, 7)
+
+    def test_success_returns_text_and_token_count(self) -> None:
+        attempt = self._finalize(
+            ["мама", "мыла", "раму", "очень", "чисто", "и", "аккуратно"]
+        )
+        self.assertEqual(attempt.text, "мама мыла раму очень чисто и аккуратно.")
+        self.assertIsNone(attempt.rejection_reason)
+        self.assertEqual(attempt.token_count, 8)
+        self.assertEqual(attempt.start_source, "seed")
+        self.assertEqual(attempt.markov_order_used, 2)
 
 
 if __name__ == "__main__":

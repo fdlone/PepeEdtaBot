@@ -1199,6 +1199,78 @@ class MarkovGenerator:
             return 0, 1, 0, 0
         return 0, 0, 1, (1 if selection.transition_count == 1 else 0)
 
+    def _finalize_attempt(
+        self,
+        generated: list[str],
+        *,
+        max_chars: int,
+        context_tokens: list[str],
+        order_used: int,
+        jump_count: int,
+        start_source: str,
+        context_exact_matches: int,
+        context_casefold_matches: int,
+        context_prefix_matches: int,
+        context_prefix_singleton_matches: int,
+        hidden_context_fallbacks: int,
+    ) -> _GenerationAttempt:
+        """Trim, strip and quality-gate generated tokens into an attempt.
+
+        Applies the tail pipeline (repetitive-tail/sentence-boundary/ending
+        trims, leading-punctuation strip) then rejects results that are too
+        short, low-diversity, a short context copy, or context-heavy. All
+        outcomes carry the same trace metadata accumulated by the caller.
+        """
+        generated = trim_repetitive_tail(generated)
+        generated = trim_to_sentence_boundary(generated)
+        generated = finalize_reply_ending(generated)
+        finalized_token_count = len(generated)
+        generated = strip_leading_punctuation(generated)
+        leading_punctuation_stripped = finalized_token_count - len(generated)
+        result = detokenize(generated, max_chars=max_chars)
+
+        def reject(reason: str) -> _GenerationAttempt:
+            return _GenerationAttempt(
+                "",
+                order_used,
+                jump_count,
+                reason,
+                0,
+                start_source,
+                leading_punctuation_stripped,
+                context_exact_matches,
+                context_casefold_matches,
+                context_prefix_matches,
+                context_prefix_singleton_matches,
+                hidden_context_fallbacks,
+            )
+
+        if len(result) < 5:
+            return reject(REJECTION_RESULT_TOO_SHORT)
+        result_tokens = tokenize(result)
+        is_short_reply = is_short_generated_reply(result_tokens)
+        if not is_short_reply and is_low_diversity_reply(result_tokens):
+            return reject(REJECTION_LOW_DIVERSITY)
+        if is_short_reply:
+            if is_short_context_copy(result_tokens, context_tokens):
+                return reject(REJECTION_SHORT_CONTEXT_COPY)
+        elif is_context_heavy_reply(result_tokens, context_tokens):
+            return reject(REJECTION_CONTEXT_HEAVY)
+        return _GenerationAttempt(
+            result,
+            order_used,
+            jump_count,
+            None,
+            len(result_tokens),
+            start_source,
+            leading_punctuation_stripped,
+            context_exact_matches,
+            context_casefold_matches,
+            context_prefix_matches,
+            context_prefix_singleton_matches,
+            hidden_context_fallbacks,
+        )
+
     async def _generate_text_once(
         self,
         chat_id: int,
@@ -1470,87 +1542,16 @@ class MarkovGenerator:
                     80,
                 )
 
-        generated = trim_repetitive_tail(generated)
-        generated = trim_to_sentence_boundary(generated)
-        generated = finalize_reply_ending(generated)
-        finalized_token_count = len(generated)
-        generated = strip_leading_punctuation(generated)
-        leading_punctuation_stripped = finalized_token_count - len(generated)
-        result = detokenize(generated, max_chars=max_chars)
-        if len(result) < 5:
-            return _GenerationAttempt(
-                "",
-                order_used,
-                jump_count,
-                REJECTION_RESULT_TOO_SHORT,
-                0,
-                start_source,
-                leading_punctuation_stripped,
-                context_exact_matches,
-                context_casefold_matches,
-                context_prefix_matches,
-                context_prefix_singleton_matches,
-                hidden_context_fallbacks,
-            )
-        result_tokens = tokenize(result)
-        is_short_reply = is_short_generated_reply(result_tokens)
-        if not is_short_reply and is_low_diversity_reply(result_tokens):
-            return _GenerationAttempt(
-                "",
-                order_used,
-                jump_count,
-                REJECTION_LOW_DIVERSITY,
-                0,
-                start_source,
-                leading_punctuation_stripped,
-                context_exact_matches,
-                context_casefold_matches,
-                context_prefix_matches,
-                context_prefix_singleton_matches,
-                hidden_context_fallbacks,
-            )
-        if is_short_reply:
-            if is_short_context_copy(result_tokens, context_tokens):
-                return _GenerationAttempt(
-                    "",
-                    order_used,
-                    jump_count,
-                    REJECTION_SHORT_CONTEXT_COPY,
-                    0,
-                    start_source,
-                    leading_punctuation_stripped,
-                    context_exact_matches,
-                    context_casefold_matches,
-                    context_prefix_matches,
-                    context_prefix_singleton_matches,
-                    hidden_context_fallbacks,
-                )
-        elif is_context_heavy_reply(result_tokens, context_tokens):
-            return _GenerationAttempt(
-                "",
-                order_used,
-                jump_count,
-                REJECTION_CONTEXT_HEAVY,
-                0,
-                start_source,
-                leading_punctuation_stripped,
-                context_exact_matches,
-                context_casefold_matches,
-                context_prefix_matches,
-                context_prefix_singleton_matches,
-                hidden_context_fallbacks,
-            )
-        return _GenerationAttempt(
-            result,
-            order_used,
-            jump_count,
-            None,
-            len(result_tokens),
-            start_source,
-            leading_punctuation_stripped,
-            context_exact_matches,
-            context_casefold_matches,
-            context_prefix_matches,
-            context_prefix_singleton_matches,
-            hidden_context_fallbacks,
+        return self._finalize_attempt(
+            generated,
+            max_chars=max_chars,
+            context_tokens=context_tokens,
+            order_used=order_used,
+            jump_count=jump_count,
+            start_source=start_source,
+            context_exact_matches=context_exact_matches,
+            context_casefold_matches=context_casefold_matches,
+            context_prefix_matches=context_prefix_matches,
+            context_prefix_singleton_matches=context_prefix_singleton_matches,
+            hidden_context_fallbacks=hidden_context_fallbacks,
         )
