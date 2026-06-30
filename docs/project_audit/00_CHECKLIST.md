@@ -129,10 +129,11 @@ Top actionable (P1, ~1.5d): S1 fix CI safety→pip-audit; S2 reject placeholder 
 - [x] **Q9** (commit 6e64886): inject RNG into pivo_message_builder + reply_humanized.
 - [x] **T3** (commit 738873c): coverage measurement + ratchet (fail_under=87) in CI.
 - [~] **S3** — DEFERRED by user (2026-06-30): HKDF for Fernet key would break decryption of existing /pivo PII; Low/Info, README documents the sha256 derivation. Keep as-is.
-- [~] **R8** — markov complexity refactor under characterization tests (in progress, 2026-06-30):
-  - [x] Characterization safety net: `tests/test_markov_generation_characterization.py` (21 tests) pins `_generate_text_once`/`generate_text_with_trace` output across all branches + pure-helper unit tests.
+- [x] **R8** — markov complexity refactor under characterization tests (DONE, 2026-06-30):
+  - [x] Characterization safety net: `tests/test_markov_generation_characterization.py` (25 tests) pins `_generate_text_once`/`generate_text_with_trace` output across all branches + pure-helper & mocked-matcher unit tests.
   - [x] `_generate_text_once`: **C901 36 → ≤10**. Extracted `_pick_seed_start`, `_pick_global_start`, `_pick_contextual_start` + `_contextual_match_counts`, `_finalize_attempt`, `_run_generation_loop` (commits cbb0712, 32c20b1, c07b7bc, 0a19148, f6f78f5). Removed a now-unreachable defensive guard.
-  - [ ] `_select_contextual_state` (C901=29) — remaining R8 target. Also `weighted_next_choice`=16, `_run_generation_loop`=15 (inherent backoff branching).
+  - [x] `_select_contextual_state`: **C901 29 → ≤10** (commit c57a744). Extracted `weighted_population_choice`, `_build_exact3/2_candidates`, unified `_build_fuzzy3/2_candidates` (casefold+prefix); prefix path locked with mocked-matcher unit tests.
+  - Note: remaining `weighted_next_choice`=16 and `_run_generation_loop`=15 are inherent algorithmic branching, NOT in audit scope — left as-is.
 - [ ] Deferred (only if scaling): L3 metrics, P1 single-lock, A4 multi-instance.
 
 ## Open questions / blockers
