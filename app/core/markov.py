@@ -392,6 +392,24 @@ def exploration_weighted_choice[T](
     return population[index]
 
 
+def weighted_population_choice[T](
+    population: list[T],
+    weights: list[float],
+    *,
+    exploring: bool,
+    rng: random.Random,
+) -> T:
+    """Pick one item from a weighted population.
+
+    Exploring mode spreads probability via ``exploration_weighted_choice``;
+    otherwise samples proportionally with ``rng.choices``. Centralises the
+    ``if exploring`` branch repeated across contextual-state selection.
+    """
+    if exploring:
+        return exploration_weighted_choice(population, weights, rng)
+    return rng.choices(population=population, weights=weights, k=1)[0]
+
+
 def weighted_next_choice(
     items: list[tuple[str, int]],
     explore_probability: float,
@@ -635,6 +653,127 @@ class MarkovGenerator:
             return exploration_weighted_choice(population, weights, rng)
         return rng.choices(population=population, weights=weights, k=1)[0]
 
+    async def _build_exact3_candidates(
+        self,
+        chat_id: int,
+        windows3: list[tuple[str, ...]],
+        total3: int,
+        frequency_power: float,
+    ) -> list[tuple[tuple[str, str, str], float]]:
+        """Exact 3-gram context windows that have stored transitions, weighted
+        by transition count and recency."""
+        candidates3: list[tuple[tuple[str, str, str], float]] = []
+        for index, window in enumerate(windows3):
+            transitions = await self._get3(chat_id, window[0], window[1], window[2])
+            if transitions:
+                transition_count = sum(count for _, count in transitions)
+                recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
+                weight = max(transition_count, 1) ** frequency_power * recency_bonus
+                candidates3.append(((window[0], window[1], window[2]), weight))
+        return candidates3
+
+    async def _build_exact2_candidates(
+        self,
+        chat_id: int,
+        windows2: list[tuple[str, ...]],
+        total2: int,
+        frequency_power: float,
+    ) -> list[tuple[tuple[str, str], list[tuple[str, int]], float]]:
+        """Exact 2-gram context windows that have stored transitions, carrying
+        their transitions for the follow-up step, weighted by count and
+        recency."""
+        candidates2: list[tuple[tuple[str, str], list[tuple[str, int]], float]] = []
+        for index, window in enumerate(windows2):
+            transitions = await self._get2(chat_id, window[0], window[1])
+            if transitions:
+                transition_count = sum(count for _, count in transitions)
+                recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
+                weight = max(transition_count, 1) ** frequency_power * recency_bonus
+                candidates2.append(((window[0], window[1]), transitions, weight))
+        return candidates2
+
+    async def _build_fuzzy3_candidates(
+        self,
+        chat_id: int,
+        windows3: list[tuple[str, ...]],
+        total3: int,
+        frequency_power: float,
+        *,
+        match_kind: str,
+        include_prefix: bool,
+    ) -> list[tuple[tuple[str, str, str], float, int]]:
+        """Fuzzy 3-gram start candidates of one ``match_kind`` (casefold or
+        prefix) via the context-state matcher, weighted by count, recency and —
+        for prefix matches — similarity. Each entry keeps its transition count.
+        """
+        candidates: list[tuple[tuple[str, str, str], float, int]] = []
+        for index, window in enumerate(windows3):
+            matches = await self._context_state_matcher.match(
+                chat_id,
+                window,
+                3,
+                include_prefix=include_prefix,
+            )
+            recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
+            for match in matches:
+                if match.match_kind != match_kind:
+                    continue
+                state3 = (match.state[0], match.state[1], match.state[2])
+                similarity = match.similarity if include_prefix else 1.0
+                weight = (
+                    max(match.transition_count, 1) ** frequency_power
+                    * similarity
+                    * recency_bonus
+                )
+                candidates.append((state3, weight, match.transition_count))
+        return candidates
+
+    async def _build_fuzzy2_candidates(
+        self,
+        chat_id: int,
+        windows2: list[tuple[str, ...]],
+        total2: int,
+        frequency_power: float,
+        *,
+        match_kind: str,
+        include_prefix: bool,
+    ) -> tuple[
+        list[tuple[tuple[str, str], list[tuple[str, int]], float]],
+        dict[tuple[str, str], int],
+    ]:
+        """Fuzzy 2-gram start candidates of one ``match_kind`` that still have
+        stored transitions. Returns the weighted candidates plus, per state,
+        the best transition count (used to flag prefix singletons)."""
+        additions: list[tuple[tuple[str, str], list[tuple[str, int]], float]] = []
+        transition_counts: dict[tuple[str, str], int] = {}
+        for index, window in enumerate(windows2):
+            matches = await self._context_state_matcher.match(
+                chat_id,
+                window,
+                2,
+                include_prefix=include_prefix,
+            )
+            recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
+            for match in matches:
+                if match.match_kind != match_kind:
+                    continue
+                state2 = (match.state[0], match.state[1])
+                transitions = await self._get2(chat_id, state2[0], state2[1])
+                if not transitions:
+                    continue
+                similarity = match.similarity if include_prefix else 1.0
+                weight = (
+                    max(match.transition_count, 1) ** frequency_power
+                    * similarity
+                    * recency_bonus
+                )
+                additions.append((state2, transitions, weight))
+                transition_counts[state2] = max(
+                    transition_counts.get(state2, 0),
+                    match.transition_count,
+                )
+        return additions, transition_counts
+
     async def _select_contextual_state(
         self,
         chat_id: int,
@@ -658,141 +797,62 @@ class MarkovGenerator:
             sampled_exploration(start_explore, exploring, rng),
         )
         windows3 = build_windows(context_tokens, 3)
-        candidates3: list[tuple[tuple[str, str, str], float]] = []
         total3 = len(windows3)
-        for index, window in enumerate(windows3):
-            transitions = await self._get3(chat_id, window[0], window[1], window[2])
-            if transitions:
-                transition_count = sum(count for _, count in transitions)
-                recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
-                weight = max(transition_count, 1) ** frequency_power * recency_bonus
-                candidates3.append(((window[0], window[1], window[2]), weight))
+        candidates3 = await self._build_exact3_candidates(
+            chat_id, windows3, total3, frequency_power
+        )
 
         if candidates3:
             population3 = [state for state, _ in candidates3]
             weights3 = [weight for _, weight in candidates3]
-            if exploring:
-                state3 = exploration_weighted_choice(population3, weights3, rng)
-            else:
-                state3 = rng.choices(population=population3, weights=weights3, k=1)[0]
+            state3 = weighted_population_choice(
+                population3, weights3, exploring=exploring, rng=rng
+            )
             return _ContextualStateSelection(state3, 3, "exact")
 
         windows2 = build_windows(context_tokens, 2)
-        candidates2: list[tuple[tuple[str, str], list[tuple[str, int]], float]] = []
         total2 = len(windows2)
-        for index, window in enumerate(windows2):
-            transitions = await self._get2(chat_id, window[0], window[1])
-            if transitions:
-                transition_count = sum(count for _, count in transitions)
-                recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
-                weight = max(transition_count, 1) ** frequency_power * recency_bonus
-                candidates2.append(((window[0], window[1]), transitions, weight))
+        candidates2 = await self._build_exact2_candidates(
+            chat_id, windows2, total2, frequency_power
+        )
 
         match_kind = "exact"
         prefix_transition_counts: dict[tuple[str, str], int] = {}
         if not candidates2 and fuzzy_context_casefold:
-            casefold_candidates3: list[
-                tuple[tuple[str, str, str], float]
-            ] = []
-            for index, window in enumerate(windows3):
-                matches = await self._context_state_matcher.match(
-                    chat_id,
-                    window,
-                    3,
-                )
-                recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
-                for match in matches:
-                    if match.match_kind != "casefold":
-                        continue
-                    state3 = (match.state[0], match.state[1], match.state[2])
-                    weight = (
-                        max(match.transition_count, 1) ** frequency_power
-                        * recency_bonus
-                    )
-                    casefold_candidates3.append((state3, weight))
-
+            casefold_candidates3 = await self._build_fuzzy3_candidates(
+                chat_id, windows3, total3, frequency_power,
+                match_kind="casefold", include_prefix=False,
+            )
             if casefold_candidates3:
-                population3 = [state for state, _ in casefold_candidates3]
-                weights3 = [weight for _, weight in casefold_candidates3]
-                if exploring:
-                    selected_state3 = exploration_weighted_choice(
-                        population3,
-                        weights3,
-                        rng,
-                    )
-                else:
-                    selected_state3 = rng.choices(
-                        population=population3,
-                        weights=weights3,
-                        k=1,
-                    )[0]
+                population3 = [state for state, _, _ in casefold_candidates3]
+                weights3 = [weight for _, weight, _ in casefold_candidates3]
+                selected_state3 = weighted_population_choice(
+                    population3, weights3, exploring=exploring, rng=rng
+                )
                 return _ContextualStateSelection(
                     selected_state3,
                     3,
                     "casefold",
                 )
 
-            for index, window in enumerate(windows2):
-                matches = await self._context_state_matcher.match(
-                    chat_id,
-                    window,
-                    2,
-                )
-                recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
-                for match in matches:
-                    if match.match_kind != "casefold":
-                        continue
-                    state2 = (match.state[0], match.state[1])
-                    transitions = await self._get2(chat_id, state2[0], state2[1])
-                    if not transitions:
-                        continue
-                    weight = (
-                        max(match.transition_count, 1) ** frequency_power
-                        * recency_bonus
-                    )
-                    candidates2.append((state2, transitions, weight))
+            additions, _ = await self._build_fuzzy2_candidates(
+                chat_id, windows2, total2, frequency_power,
+                match_kind="casefold", include_prefix=False,
+            )
+            candidates2.extend(additions)
             match_kind = "casefold"
 
         if not candidates2 and fuzzy_context_prefix:
-            prefix_candidates3: list[
-                tuple[tuple[str, str, str], float, int]
-            ] = []
-            for index, window in enumerate(windows3):
-                matches = await self._context_state_matcher.match(
-                    chat_id,
-                    window,
-                    3,
-                    include_prefix=True,
-                )
-                recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
-                for match in matches:
-                    if match.match_kind != "prefix":
-                        continue
-                    state3 = (match.state[0], match.state[1], match.state[2])
-                    weight = (
-                        max(match.transition_count, 1) ** frequency_power
-                        * match.similarity
-                        * recency_bonus
-                    )
-                    prefix_candidates3.append(
-                        (state3, weight, match.transition_count)
-                    )
-
+            prefix_candidates3 = await self._build_fuzzy3_candidates(
+                chat_id, windows3, total3, frequency_power,
+                match_kind="prefix", include_prefix=True,
+            )
             if prefix_candidates3:
                 population3 = [state for state, _, _ in prefix_candidates3]
                 weights3 = [weight for _, weight, _ in prefix_candidates3]
-                if exploring:
-                    selected_state3 = exploration_weighted_choice(
-                        population3,
-                        weights3,
-                        rng,
-                    )
-                else:
-                    selected_state3 = rng.choices(
-                        population=population3,
-                        weights=weights3,
-                        k=1,
-                    )[0]
+                selected_state3 = weighted_population_choice(
+                    population3, weights3, exploring=exploring, rng=rng
+                )
                 selected_count = max(
                     transition_count
                     for state, _, transition_count in prefix_candidates3
@@ -805,45 +865,20 @@ class MarkovGenerator:
                     selected_count,
                 )
 
-            for index, window in enumerate(windows2):
-                matches = await self._context_state_matcher.match(
-                    chat_id,
-                    window,
-                    2,
-                    include_prefix=True,
-                )
-                recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
-                for match in matches:
-                    if match.match_kind != "prefix":
-                        continue
-                    state2 = (match.state[0], match.state[1])
-                    transitions = await self._get2(chat_id, state2[0], state2[1])
-                    if not transitions:
-                        continue
-                    weight = (
-                        max(match.transition_count, 1) ** frequency_power
-                        * match.similarity
-                        * recency_bonus
-                    )
-                    candidates2.append((state2, transitions, weight))
-                    prefix_transition_counts[state2] = max(
-                        prefix_transition_counts.get(state2, 0),
-                        match.transition_count,
-                    )
+            additions, prefix_transition_counts = await self._build_fuzzy2_candidates(
+                chat_id, windows2, total2, frequency_power,
+                match_kind="prefix", include_prefix=True,
+            )
+            candidates2.extend(additions)
             match_kind = "prefix"
 
         if not candidates2:
             return None
         population2 = [index for index in range(len(candidates2))]
         weights2 = [weight for _, _, weight in candidates2]
-        if exploring:
-            selected_index = exploration_weighted_choice(population2, weights2, rng)
-        else:
-            selected_index = rng.choices(
-                population=population2,
-                weights=weights2,
-                k=1,
-            )[0]
+        selected_index = weighted_population_choice(
+            population2, weights2, exploring=exploring, rng=rng
+        )
         (w1, w2), variants, _ = candidates2[selected_index]
         w3 = weighted_next_choice(
             variants,

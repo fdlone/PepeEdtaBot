@@ -18,8 +18,9 @@ import random
 import unittest
 import uuid
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from app.core.context_state_matcher import ContextStateMatch
 from app.core.markov import (
     MarkovGenerator,
     _ContextualStateSelection,
@@ -342,6 +343,76 @@ class TestFinalizeAttempt(unittest.TestCase):
         self.assertEqual(attempt.token_count, 8)
         self.assertEqual(attempt.start_source, "seed")
         self.assertEqual(attempt.markov_order_used, 2)
+
+
+class TestFuzzyCandidateBuilders(unittest.IsolatedAsyncioTestCase):
+    """Mocked-matcher tests for the fuzzy candidate builders (audit R8).
+
+    The prefix match path is unreachable through the DB matcher with simple
+    fixtures, so the matcher is mocked here to lock the prefix vs casefold
+    weighting (similarity is applied only for prefix) and the singleton count.
+    """
+
+    def _generator(self, matches: list[ContextStateMatch]) -> MarkovGenerator:
+        generator = MarkovGenerator(MagicMock())
+        generator._context_state_matcher = MagicMock()
+        generator._context_state_matcher.match = AsyncMock(return_value=matches)
+        return generator
+
+    async def test_fuzzy3_prefix_applies_similarity_and_keeps_count(self) -> None:
+        matches = [
+            ContextStateMatch(("a", "b", "c"), "prefix", similarity=0.5, transition_count=4),
+            ContextStateMatch(("d", "e", "f"), "casefold", similarity=1.0, transition_count=9),
+        ]
+        generator = self._generator(matches)
+        out = await generator._build_fuzzy3_candidates(
+            1, [("x", "y", "z")], 1, 1.0, match_kind="prefix", include_prefix=True,
+        )
+        # Only the prefix match is kept; weight = 4 * 0.5 * (1 + 1*0.35).
+        self.assertEqual(len(out), 1)
+        state, weight, count = out[0]
+        self.assertEqual(state, ("a", "b", "c"))
+        self.assertEqual(count, 4)
+        self.assertAlmostEqual(weight, 4 * 0.5 * 1.35)
+        generator._context_state_matcher.match.assert_awaited_with(
+            1, ("x", "y", "z"), 3, include_prefix=True
+        )
+
+    async def test_fuzzy3_casefold_ignores_similarity(self) -> None:
+        matches = [
+            ContextStateMatch(("a", "b", "c"), "casefold", similarity=0.5, transition_count=4),
+        ]
+        generator = self._generator(matches)
+        out = await generator._build_fuzzy3_candidates(
+            1, [("x", "y", "z")], 1, 1.0, match_kind="casefold", include_prefix=False,
+        )
+        # similarity (0.5) is ignored for casefold: weight = 4 * 1.0 * 1.35.
+        self.assertAlmostEqual(out[0][1], 4 * 1.0 * 1.35)
+
+    async def test_fuzzy2_prefix_tracks_best_transition_count(self) -> None:
+        matches = [
+            ContextStateMatch(("a", "b"), "prefix", similarity=1.0, transition_count=1),
+        ]
+        generator = self._generator(matches)
+        with patch.object(MarkovGenerator, "_get2", AsyncMock(return_value=[("c", 2)])):
+            additions, counts = await generator._build_fuzzy2_candidates(
+                1, [("x", "y")], 1, 1.0, match_kind="prefix", include_prefix=True,
+            )
+        self.assertEqual(len(additions), 1)
+        self.assertEqual(additions[0][0], ("a", "b"))
+        self.assertEqual(counts, {("a", "b"): 1})
+
+    async def test_fuzzy2_skips_states_without_transitions(self) -> None:
+        matches = [
+            ContextStateMatch(("a", "b"), "prefix", similarity=1.0, transition_count=3),
+        ]
+        generator = self._generator(matches)
+        with patch.object(MarkovGenerator, "_get2", AsyncMock(return_value=[])):
+            additions, counts = await generator._build_fuzzy2_candidates(
+                1, [("x", "y")], 1, 1.0, match_kind="prefix", include_prefix=True,
+            )
+        self.assertEqual(additions, [])
+        self.assertEqual(counts, {})
 
 
 if __name__ == "__main__":
