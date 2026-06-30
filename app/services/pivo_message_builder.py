@@ -50,14 +50,16 @@ def build_pivo_message(
     planned_time: str | None = None,
     target: str | None = None,
     has_explicit_mentions: bool = False,
+    rng: random.Random | None = None,
 ) -> str:
     context = build_pivo_message_context(
         mentions,
         planned_time=planned_time,
         target=target,
         has_explicit_mentions=has_explicit_mentions,
+        rng=rng,
     )
-    return PivoMessageGenerator().build(context)
+    return PivoMessageGenerator().build(context, rng=rng)
 
 
 def build_pivo_message_context(
@@ -66,6 +68,7 @@ def build_pivo_message_context(
     planned_time: str | None,
     target: str | None,
     has_explicit_mentions: bool,
+    rng: random.Random | None = None,
 ) -> PivoMessageContext:
     raw_target = target.strip() if target is not None else ""
     has_explicit_target = bool(raw_target)
@@ -73,16 +76,19 @@ def build_pivo_message_context(
     target_bullet = _build_target_bullet(
         target_phrase=target_phrase,
         has_explicit_target=has_explicit_target,
+        rng=rng,
     )
 
     return PivoMessageContext(
         mentions_inline=_build_mentions_inline(
             mentions,
             has_explicit_mentions=has_explicit_mentions,
+            rng=rng,
         ),
         notification_line=_build_notification_line(
             mentions,
             has_explicit_mentions=has_explicit_mentions,
+            rng=rng,
         ),
         time_phrase=_format_time_phrase(planned_time),
         time_phrase_soft=_format_time_phrase_soft(planned_time),
@@ -95,8 +101,19 @@ def build_pivo_message_context(
     )
 
 
+def _choice(pool: tuple[str, ...], rng: random.Random | None) -> str:
+    """Pick from ``pool`` using the injected RNG, or the module RNG if None.
+
+    Falling back to ``random.choice`` (not a fresh ``Random``) keeps the
+    function patchable in tests and preserves the historical default.
+    """
+    return random.choice(pool) if rng is None else rng.choice(pool)
+
+
 class PivoMessageGenerator:
-    def build(self, context: PivoMessageContext) -> str:
+    def build(
+        self, context: PivoMessageContext, *, rng: random.Random | None = None
+    ) -> str:
         values = context.template_values()
         if context.has_explicit_target:
             top_pool = PIVO_TARGET_TOP_PARTS
@@ -108,9 +125,9 @@ class PivoMessageGenerator:
             bottom_pool = PIVO_DEFAULT_BOTTOM_PARTS
 
         parts = [
-            random.choice(top_pool),
-            random.choice(body_pool),
-            random.choice(bottom_pool),
+            _choice(top_pool, rng),
+            _choice(body_pool, rng),
+            _choice(bottom_pool, rng),
         ]
         if context.notification_line:
             parts.append("{notification_line}")
@@ -118,23 +135,29 @@ class PivoMessageGenerator:
         return template.format(**values).strip()
 
 
-def _build_target_bullet(*, target_phrase: str, has_explicit_target: bool) -> str:
+def _build_target_bullet(
+    *, target_phrase: str, has_explicit_target: bool, rng: random.Random | None = None
+) -> str:
     if has_explicit_target:
-        return random.choice(PIVO_TARGET_INTROS).format(target_phrase=target_phrase)
-    return random.choice(PIVO_DEFAULT_TARGET_INTROS)
+        return _choice(PIVO_TARGET_INTROS, rng).format(target_phrase=target_phrase)
+    return _choice(PIVO_DEFAULT_TARGET_INTROS, rng)
 
 
-def _build_mentions_inline(mentions: str, *, has_explicit_mentions: bool) -> str:
+def _build_mentions_inline(
+    mentions: str, *, has_explicit_mentions: bool, rng: random.Random | None = None
+) -> str:
     if has_explicit_mentions:
         return mentions.strip()
-    return random.choice(MENTIONS_INLINE_FALLBACKS)
+    return _choice(MENTIONS_INLINE_FALLBACKS, rng)
 
 
-def _build_notification_line(mentions: str, *, has_explicit_mentions: bool) -> str:
+def _build_notification_line(
+    mentions: str, *, has_explicit_mentions: bool, rng: random.Random | None = None
+) -> str:
     value = mentions.strip()
     if has_explicit_mentions or not value or value == PIVO_FALLBACK_MENTIONS_TEXT:
         return ""
-    template = random.choice(PIVO_NOTIFICATION_LINES)
+    template = _choice(PIVO_NOTIFICATION_LINES, rng)
     return template.format(mentions=value)
 
 

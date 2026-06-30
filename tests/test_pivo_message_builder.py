@@ -253,6 +253,24 @@ class TestPivoMessageBuilder(unittest.TestCase):
         self.assertNotIn("СИГейм", text_without_target)
         self.assertNotIn("рисовалка", text_without_target)
 
+    def test_injected_rng_is_used_and_deterministic(self) -> None:
+        import random
+
+        # An injected, seeded RNG must drive selection (not the module random)
+        # and produce reproducible output across calls (audit Q9).
+        first = build_pivo_message("@friend", rng=random.Random(1234))
+        second = build_pivo_message("@friend", rng=random.Random(1234))
+        self.assertEqual(first, second)
+
+    def test_injected_rng_bypasses_module_random(self) -> None:
+        import random
+
+        # If the injected RNG is honored, patching the module-level
+        # random.choice must have no effect on the output.
+        with patch(RANDOM_CHOICE_PATH, side_effect=AssertionError("module random used")):
+            text = build_pivo_message("@friend", rng=random.Random(7))
+        self.assertTrue(text)
+
 
 if __name__ == "__main__":
     unittest.main()
