@@ -1,0 +1,137 @@
+"""Direct unit tests for the runtime config registry (audit T1).
+
+The registry is the single source of truth for runtime-mutable fields: its
+parsers, cross-field invariants and ``try_apply`` transactional semantics were
+previously only exercised indirectly through settings/handlers. These tests
+pin them down directly.
+"""
+from __future__ import annotations
+
+import unittest
+from types import SimpleNamespace
+
+from app.config import registry
+from app.config.registry import (
+    RUNTIME_FIELDS,
+    get_spec,
+    runtime_field_names,
+    try_apply,
+    validate_cross_fields,
+)
+
+
+def _make_state(**overrides: object) -> SimpleNamespace:
+    """A state object carrying every field touched by validate_cross_fields."""
+    base = {
+        "typing_min_ms": 350,
+        "typing_max_ms": 1100,
+        "backoff_min_order": 1,
+        "markov_order": 3,
+        "reply_context_last_tokens": 3,
+        "reply_context_max_tokens": 12,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+class TestParsers(unittest.TestCase):
+    def test_parse_bool_truthy_and_falsy(self) -> None:
+        for v in ("1", "true", "TRUE", "yes", "on"):
+            self.assertTrue(registry._parse_bool(v))
+        for v in ("0", "false", "No", "off"):
+            self.assertFalse(registry._parse_bool(v))
+
+    def test_parse_bool_rejects_garbage(self) -> None:
+        with self.assertRaises(ValueError):
+            registry._parse_bool("maybe")
+
+    def test_int_in_range_bounds(self) -> None:
+        parse = registry._int_in_range(1, 10)
+        self.assertEqual(parse("1"), 1)
+        self.assertEqual(parse("10"), 10)
+        with self.assertRaises(ValueError):
+            parse("0")
+        with self.assertRaises(ValueError):
+            parse("11")
+
+    def test_int_min(self) -> None:
+        parse = registry._int_min(2)
+        self.assertEqual(parse("2"), 2)
+        with self.assertRaises(ValueError):
+            parse("1")
+
+    def test_int_in_set(self) -> None:
+        parse = registry._int_in_set({2, 3})
+        self.assertEqual(parse("2"), 2)
+        with self.assertRaises(ValueError):
+            parse("4")
+
+    def test_float_in_range(self) -> None:
+        parse = registry._float_in_range(0.0, 1.0)
+        self.assertEqual(parse("0.5"), 0.5)
+        with self.assertRaises(ValueError):
+            parse("1.5")
+
+
+class TestSpecLookup(unittest.TestCase):
+    def test_get_spec_known_and_unknown(self) -> None:
+        self.assertIsNotNone(get_spec("markov_order"))
+        self.assertIsNone(get_spec("does_not_exist"))
+
+    def test_runtime_field_names_matches_specs(self) -> None:
+        self.assertEqual(
+            runtime_field_names(), tuple(s.name for s in RUNTIME_FIELDS)
+        )
+
+    def test_field_names_are_unique(self) -> None:
+        names = [s.name for s in RUNTIME_FIELDS]
+        self.assertEqual(len(names), len(set(names)))
+
+
+class TestValidateCrossFields(unittest.TestCase):
+    def test_valid_state_passes(self) -> None:
+        validate_cross_fields(_make_state())  # no raise
+
+    def test_typing_min_must_not_exceed_max(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_cross_fields(_make_state(typing_min_ms=2000))
+
+    def test_backoff_min_order_must_be_below_markov_order(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_cross_fields(_make_state(backoff_min_order=3, markov_order=3))
+
+    def test_reply_context_last_must_not_exceed_max(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_cross_fields(
+                _make_state(reply_context_last_tokens=3, reply_context_max_tokens=2)
+            )
+
+
+class TestTryApply(unittest.TestCase):
+    def test_unknown_key_raises_keyerror(self) -> None:
+        with self.assertRaises(KeyError):
+            try_apply(_make_state(), "nope", "1")
+
+    def test_invalid_value_raises_valueerror_and_leaves_state(self) -> None:
+        state = _make_state(markov_order=3)
+        with self.assertRaises(ValueError):
+            try_apply(state, "markov_order", "5")  # not in {2, 3}
+        self.assertEqual(state.markov_order, 3)
+
+    def test_cross_field_violation_does_not_mutate_state(self) -> None:
+        # markov_order=2 with backoff_min_order=1 is valid, but lowering
+        # markov_order to 2 while backoff_min_order stays >= 2 must be rejected
+        # without touching the real state.
+        state = _make_state(markov_order=3, backoff_min_order=2)
+        with self.assertRaises(ValueError):
+            try_apply(state, "markov_order", "2")
+        self.assertEqual(state.markov_order, 3)
+
+    def test_valid_apply_mutates_state(self) -> None:
+        state = _make_state(markov_order=3, backoff_min_order=1)
+        try_apply(state, "markov_order", "2")
+        self.assertEqual(state.markov_order, 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

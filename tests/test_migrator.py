@@ -20,6 +20,8 @@ EXPECTED_MIGRATIONS = [
     "005_drop_messages_text",
     "006_pivo_daily_usage",
     "007_unify_chat_members",
+    "008_drop_redundant_indexes",
+    "009_chat_model_volume",
 ]
 
 EXPECTED_TABLES = {
@@ -31,7 +33,22 @@ EXPECTED_TABLES = {
     "transitions1",
     "chat_members",
     "pivo_daily_usage",
+    "chat_model_volume",
     "schema_migrations",
+}
+
+# Indexes intentionally removed by migration 008 (audit D1): each duplicated a
+# leftmost prefix of the table's PRIMARY KEY index, so the planner never needed
+# them and they only cost write amplification.
+DROPPED_REDUNDANT_INDEXES = {
+    "idx_starts_lookup",
+    "idx_starts_chat_id",
+    "idx_starts3_chat_id",
+    "idx_transitions_lookup",
+    "idx_transitions3_lookup",
+    "idx_transitions1_lookup",
+    "idx_chat_members_chat_hash",
+    "idx_messages_chat_id",
 }
 
 
@@ -69,6 +86,31 @@ class TestMigratorFreshDb(unittest.IsolatedAsyncioTestCase):
         cursor = await self.conn.execute("SELECT COUNT(*) FROM schema_migrations")
         count = (await cursor.fetchone())[0]
         self.assertEqual(count, len(EXPECTED_MIGRATIONS))
+
+    async def test_redundant_indexes_dropped_keeps_useful_ones(self) -> None:
+        """Migration 008 (D1): redundant indexes gone, query-serving ones kept."""
+        await migrator.run(self.conn)
+        cursor = await self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"
+        )
+        explicit = {row[0] for row in await cursor.fetchall()}
+        self.assertEqual(explicit & DROPPED_REDUNDANT_INDEXES, set())
+        # The two indexes that are NOT prefixes of a PK must remain.
+        self.assertIn("idx_messages_normalized_lookup", explicit)
+        self.assertIn("idx_pivo_daily_usage_day", explicit)
+
+    async def test_markov_lookups_still_use_an_index(self) -> None:
+        """After dropping redundant indexes, hot lookups must still hit an index."""
+        await migrator.run(self.conn)
+        plan_queries = [
+            ("SELECT w3,cnt FROM transitions WHERE chat_id=? AND w1=? AND w2=?", (1, "a", "b")),
+            ("SELECT w1,w2,cnt FROM starts WHERE chat_id=?", (1,)),
+            ("SELECT user_hash FROM chat_members WHERE chat_hash=?", ("h",)),
+        ]
+        for sql, params in plan_queries:
+            cursor = await self.conn.execute("EXPLAIN QUERY PLAN " + sql, params)
+            plan = " | ".join(str(row[3]) for row in await cursor.fetchall())
+            self.assertIn("USING", plan, f"query fell back to a full scan: {sql}\n{plan}")
 
     async def test_partial_migration_resumes(self) -> None:
         """If only 001 is recorded, subsequent run applies only 002 and 003."""
@@ -514,13 +556,13 @@ class TestMigratorRealSchemaFixture(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(await cur.fetchone())
 
-    async def test_legacy_index_preserved(self) -> None:
-        """idx_starts_chat_id existed in old DB and must survive migration."""
+    async def test_redundant_legacy_index_dropped(self) -> None:
+        """idx_starts_chat_id existed in old DB; migration 008 removes it as redundant."""
         await migrator.run(self.conn)
         cur = await self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_starts_chat_id'"
         )
-        self.assertIsNotNone(await cur.fetchone())
+        self.assertIsNone(await cur.fetchone())
 
     async def test_multi_chat_isolation(self) -> None:
         """Data from two different chat_ids must remain separate after migration."""

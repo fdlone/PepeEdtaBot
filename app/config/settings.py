@@ -126,9 +126,23 @@ def load_settings(load_env: bool = True) -> Settings:
     pivo_hmac_secret = os.getenv("PIVO_HMAC_SECRET", "").strip()
     if len(pivo_hmac_secret) < 16:
         raise ValueError("PIVO_HMAC_SECRET must be at least 16 characters")
+    if pivo_hmac_secret.lower().startswith("change_me"):
+        raise ValueError(
+            "PIVO_HMAC_SECRET still holds the .env.example placeholder; "
+            "set a real random secret (see .env.example)"
+        )
     pivo_encryption_secret = os.getenv("PIVO_ENCRYPTION_SECRET", "").strip()
     if len(pivo_encryption_secret) < 16:
         raise ValueError("PIVO_ENCRYPTION_SECRET must be at least 16 characters")
+    if pivo_encryption_secret.lower().startswith("change_me"):
+        raise ValueError(
+            "PIVO_ENCRYPTION_SECRET still holds the .env.example placeholder; "
+            "set a real random secret (see .env.example)"
+        )
+    if pivo_hmac_secret == pivo_encryption_secret:
+        raise ValueError(
+            "PIVO_HMAC_SECRET and PIVO_ENCRYPTION_SECRET must be different values"
+        )
     pivo_explicit_mentions_limit_raw = os.getenv(
         "PIVO_EXPLICIT_MENTIONS_LIMIT",
         "10",

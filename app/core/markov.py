@@ -392,6 +392,24 @@ def exploration_weighted_choice[T](
     return population[index]
 
 
+def weighted_population_choice[T](
+    population: list[T],
+    weights: list[float],
+    *,
+    exploring: bool,
+    rng: random.Random,
+) -> T:
+    """Pick one item from a weighted population.
+
+    Exploring mode spreads probability via ``exploration_weighted_choice``;
+    otherwise samples proportionally with ``rng.choices``. Centralises the
+    ``if exploring`` branch repeated across contextual-state selection.
+    """
+    if exploring:
+        return exploration_weighted_choice(population, weights, rng)
+    return rng.choices(population=population, weights=weights, k=1)[0]
+
+
 def weighted_next_choice(
     items: list[tuple[str, int]],
     explore_probability: float,
@@ -635,6 +653,127 @@ class MarkovGenerator:
             return exploration_weighted_choice(population, weights, rng)
         return rng.choices(population=population, weights=weights, k=1)[0]
 
+    async def _build_exact3_candidates(
+        self,
+        chat_id: int,
+        windows3: list[tuple[str, ...]],
+        total3: int,
+        frequency_power: float,
+    ) -> list[tuple[tuple[str, str, str], float]]:
+        """Exact 3-gram context windows that have stored transitions, weighted
+        by transition count and recency."""
+        candidates3: list[tuple[tuple[str, str, str], float]] = []
+        for index, window in enumerate(windows3):
+            transitions = await self._get3(chat_id, window[0], window[1], window[2])
+            if transitions:
+                transition_count = sum(count for _, count in transitions)
+                recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
+                weight = max(transition_count, 1) ** frequency_power * recency_bonus
+                candidates3.append(((window[0], window[1], window[2]), weight))
+        return candidates3
+
+    async def _build_exact2_candidates(
+        self,
+        chat_id: int,
+        windows2: list[tuple[str, ...]],
+        total2: int,
+        frequency_power: float,
+    ) -> list[tuple[tuple[str, str], list[tuple[str, int]], float]]:
+        """Exact 2-gram context windows that have stored transitions, carrying
+        their transitions for the follow-up step, weighted by count and
+        recency."""
+        candidates2: list[tuple[tuple[str, str], list[tuple[str, int]], float]] = []
+        for index, window in enumerate(windows2):
+            transitions = await self._get2(chat_id, window[0], window[1])
+            if transitions:
+                transition_count = sum(count for _, count in transitions)
+                recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
+                weight = max(transition_count, 1) ** frequency_power * recency_bonus
+                candidates2.append(((window[0], window[1]), transitions, weight))
+        return candidates2
+
+    async def _build_fuzzy3_candidates(
+        self,
+        chat_id: int,
+        windows3: list[tuple[str, ...]],
+        total3: int,
+        frequency_power: float,
+        *,
+        match_kind: str,
+        include_prefix: bool,
+    ) -> list[tuple[tuple[str, str, str], float, int]]:
+        """Fuzzy 3-gram start candidates of one ``match_kind`` (casefold or
+        prefix) via the context-state matcher, weighted by count, recency and —
+        for prefix matches — similarity. Each entry keeps its transition count.
+        """
+        candidates: list[tuple[tuple[str, str, str], float, int]] = []
+        for index, window in enumerate(windows3):
+            matches = await self._context_state_matcher.match(
+                chat_id,
+                window,
+                3,
+                include_prefix=include_prefix,
+            )
+            recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
+            for match in matches:
+                if match.match_kind != match_kind:
+                    continue
+                state3 = (match.state[0], match.state[1], match.state[2])
+                similarity = match.similarity if include_prefix else 1.0
+                weight = (
+                    max(match.transition_count, 1) ** frequency_power
+                    * similarity
+                    * recency_bonus
+                )
+                candidates.append((state3, weight, match.transition_count))
+        return candidates
+
+    async def _build_fuzzy2_candidates(
+        self,
+        chat_id: int,
+        windows2: list[tuple[str, ...]],
+        total2: int,
+        frequency_power: float,
+        *,
+        match_kind: str,
+        include_prefix: bool,
+    ) -> tuple[
+        list[tuple[tuple[str, str], list[tuple[str, int]], float]],
+        dict[tuple[str, str], int],
+    ]:
+        """Fuzzy 2-gram start candidates of one ``match_kind`` that still have
+        stored transitions. Returns the weighted candidates plus, per state,
+        the best transition count (used to flag prefix singletons)."""
+        additions: list[tuple[tuple[str, str], list[tuple[str, int]], float]] = []
+        transition_counts: dict[tuple[str, str], int] = {}
+        for index, window in enumerate(windows2):
+            matches = await self._context_state_matcher.match(
+                chat_id,
+                window,
+                2,
+                include_prefix=include_prefix,
+            )
+            recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
+            for match in matches:
+                if match.match_kind != match_kind:
+                    continue
+                state2 = (match.state[0], match.state[1])
+                transitions = await self._get2(chat_id, state2[0], state2[1])
+                if not transitions:
+                    continue
+                similarity = match.similarity if include_prefix else 1.0
+                weight = (
+                    max(match.transition_count, 1) ** frequency_power
+                    * similarity
+                    * recency_bonus
+                )
+                additions.append((state2, transitions, weight))
+                transition_counts[state2] = max(
+                    transition_counts.get(state2, 0),
+                    match.transition_count,
+                )
+        return additions, transition_counts
+
     async def _select_contextual_state(
         self,
         chat_id: int,
@@ -658,141 +797,62 @@ class MarkovGenerator:
             sampled_exploration(start_explore, exploring, rng),
         )
         windows3 = build_windows(context_tokens, 3)
-        candidates3: list[tuple[tuple[str, str, str], float]] = []
         total3 = len(windows3)
-        for index, window in enumerate(windows3):
-            transitions = await self._get3(chat_id, window[0], window[1], window[2])
-            if transitions:
-                transition_count = sum(count for _, count in transitions)
-                recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
-                weight = max(transition_count, 1) ** frequency_power * recency_bonus
-                candidates3.append(((window[0], window[1], window[2]), weight))
+        candidates3 = await self._build_exact3_candidates(
+            chat_id, windows3, total3, frequency_power
+        )
 
         if candidates3:
             population3 = [state for state, _ in candidates3]
             weights3 = [weight for _, weight in candidates3]
-            if exploring:
-                state3 = exploration_weighted_choice(population3, weights3, rng)
-            else:
-                state3 = rng.choices(population=population3, weights=weights3, k=1)[0]
+            state3 = weighted_population_choice(
+                population3, weights3, exploring=exploring, rng=rng
+            )
             return _ContextualStateSelection(state3, 3, "exact")
 
         windows2 = build_windows(context_tokens, 2)
-        candidates2: list[tuple[tuple[str, str], list[tuple[str, int]], float]] = []
         total2 = len(windows2)
-        for index, window in enumerate(windows2):
-            transitions = await self._get2(chat_id, window[0], window[1])
-            if transitions:
-                transition_count = sum(count for _, count in transitions)
-                recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
-                weight = max(transition_count, 1) ** frequency_power * recency_bonus
-                candidates2.append(((window[0], window[1]), transitions, weight))
+        candidates2 = await self._build_exact2_candidates(
+            chat_id, windows2, total2, frequency_power
+        )
 
         match_kind = "exact"
         prefix_transition_counts: dict[tuple[str, str], int] = {}
         if not candidates2 and fuzzy_context_casefold:
-            casefold_candidates3: list[
-                tuple[tuple[str, str, str], float]
-            ] = []
-            for index, window in enumerate(windows3):
-                matches = await self._context_state_matcher.match(
-                    chat_id,
-                    window,
-                    3,
-                )
-                recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
-                for match in matches:
-                    if match.match_kind != "casefold":
-                        continue
-                    state3 = (match.state[0], match.state[1], match.state[2])
-                    weight = (
-                        max(match.transition_count, 1) ** frequency_power
-                        * recency_bonus
-                    )
-                    casefold_candidates3.append((state3, weight))
-
+            casefold_candidates3 = await self._build_fuzzy3_candidates(
+                chat_id, windows3, total3, frequency_power,
+                match_kind="casefold", include_prefix=False,
+            )
             if casefold_candidates3:
-                population3 = [state for state, _ in casefold_candidates3]
-                weights3 = [weight for _, weight in casefold_candidates3]
-                if exploring:
-                    selected_state3 = exploration_weighted_choice(
-                        population3,
-                        weights3,
-                        rng,
-                    )
-                else:
-                    selected_state3 = rng.choices(
-                        population=population3,
-                        weights=weights3,
-                        k=1,
-                    )[0]
+                population3 = [state for state, _, _ in casefold_candidates3]
+                weights3 = [weight for _, weight, _ in casefold_candidates3]
+                selected_state3 = weighted_population_choice(
+                    population3, weights3, exploring=exploring, rng=rng
+                )
                 return _ContextualStateSelection(
                     selected_state3,
                     3,
                     "casefold",
                 )
 
-            for index, window in enumerate(windows2):
-                matches = await self._context_state_matcher.match(
-                    chat_id,
-                    window,
-                    2,
-                )
-                recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
-                for match in matches:
-                    if match.match_kind != "casefold":
-                        continue
-                    state2 = (match.state[0], match.state[1])
-                    transitions = await self._get2(chat_id, state2[0], state2[1])
-                    if not transitions:
-                        continue
-                    weight = (
-                        max(match.transition_count, 1) ** frequency_power
-                        * recency_bonus
-                    )
-                    candidates2.append((state2, transitions, weight))
+            additions, _ = await self._build_fuzzy2_candidates(
+                chat_id, windows2, total2, frequency_power,
+                match_kind="casefold", include_prefix=False,
+            )
+            candidates2.extend(additions)
             match_kind = "casefold"
 
         if not candidates2 and fuzzy_context_prefix:
-            prefix_candidates3: list[
-                tuple[tuple[str, str, str], float, int]
-            ] = []
-            for index, window in enumerate(windows3):
-                matches = await self._context_state_matcher.match(
-                    chat_id,
-                    window,
-                    3,
-                    include_prefix=True,
-                )
-                recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
-                for match in matches:
-                    if match.match_kind != "prefix":
-                        continue
-                    state3 = (match.state[0], match.state[1], match.state[2])
-                    weight = (
-                        max(match.transition_count, 1) ** frequency_power
-                        * match.similarity
-                        * recency_bonus
-                    )
-                    prefix_candidates3.append(
-                        (state3, weight, match.transition_count)
-                    )
-
+            prefix_candidates3 = await self._build_fuzzy3_candidates(
+                chat_id, windows3, total3, frequency_power,
+                match_kind="prefix", include_prefix=True,
+            )
             if prefix_candidates3:
                 population3 = [state for state, _, _ in prefix_candidates3]
                 weights3 = [weight for _, weight, _ in prefix_candidates3]
-                if exploring:
-                    selected_state3 = exploration_weighted_choice(
-                        population3,
-                        weights3,
-                        rng,
-                    )
-                else:
-                    selected_state3 = rng.choices(
-                        population=population3,
-                        weights=weights3,
-                        k=1,
-                    )[0]
+                selected_state3 = weighted_population_choice(
+                    population3, weights3, exploring=exploring, rng=rng
+                )
                 selected_count = max(
                     transition_count
                     for state, _, transition_count in prefix_candidates3
@@ -805,45 +865,20 @@ class MarkovGenerator:
                     selected_count,
                 )
 
-            for index, window in enumerate(windows2):
-                matches = await self._context_state_matcher.match(
-                    chat_id,
-                    window,
-                    2,
-                    include_prefix=True,
-                )
-                recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
-                for match in matches:
-                    if match.match_kind != "prefix":
-                        continue
-                    state2 = (match.state[0], match.state[1])
-                    transitions = await self._get2(chat_id, state2[0], state2[1])
-                    if not transitions:
-                        continue
-                    weight = (
-                        max(match.transition_count, 1) ** frequency_power
-                        * match.similarity
-                        * recency_bonus
-                    )
-                    candidates2.append((state2, transitions, weight))
-                    prefix_transition_counts[state2] = max(
-                        prefix_transition_counts.get(state2, 0),
-                        match.transition_count,
-                    )
+            additions, prefix_transition_counts = await self._build_fuzzy2_candidates(
+                chat_id, windows2, total2, frequency_power,
+                match_kind="prefix", include_prefix=True,
+            )
+            candidates2.extend(additions)
             match_kind = "prefix"
 
         if not candidates2:
             return None
         population2 = [index for index in range(len(candidates2))]
         weights2 = [weight for _, _, weight in candidates2]
-        if exploring:
-            selected_index = exploration_weighted_choice(population2, weights2, rng)
-        else:
-            selected_index = rng.choices(
-                population=population2,
-                weights=weights2,
-                k=1,
-            )[0]
+        selected_index = weighted_population_choice(
+            population2, weights2, exploring=exploring, rng=rng
+        )
         (w1, w2), variants, _ = candidates2[selected_index]
         w3 = weighted_next_choice(
             variants,
@@ -1036,6 +1071,415 @@ class MarkovGenerator:
             trace.hidden_context_fallbacks,
         )
 
+    async def _pick_seed_start(
+        self,
+        chat_id: int,
+        seed_tokens: list[str] | None,
+        *,
+        default_order: int,
+        next_explore: float,
+        next_power: float,
+        context_token_set: set[str],
+        context_pairs: set[tuple[str, ...]],
+        context_triplets: set[tuple[str, ...]],
+        context_bias: float,
+        repetition_penalty_strength: float,
+        rng: random.Random,
+    ) -> tuple[tuple[str, str, str], int] | None:
+        """Resolve a start triplet from explicit ``seed_tokens``.
+
+        Returns ``(start3, order_used)`` when the seed anchors a start (a stored
+        3-gram start, or a stored 2-gram start extended by one weighted step),
+        or ``None`` when the seed yields nothing. Callers treat a non-``None``
+        result as ``start_source = "seed"``.
+        """
+        if seed_tokens and len(seed_tokens) >= 3:
+            seeded3 = await self.db.get_start3_if_exists(
+                chat_id, seed_tokens[0], seed_tokens[1], seed_tokens[2]
+            )
+            if seeded3:
+                return (seeded3[0], seeded3[1], seeded3[2]), default_order
+        if seed_tokens and len(seed_tokens) >= 2:
+            seeded2 = await self.db.get_start_if_exists(
+                chat_id, seed_tokens[0], seed_tokens[1]
+            )
+            if seeded2:
+                w1, w2 = seeded2[0], seeded2[1]
+                variants = await self._get2(chat_id, w1, w2)
+                if variants:
+                    w3 = weighted_next_choice(
+                        variants,
+                        next_explore,
+                        next_power,
+                        rng,
+                        context_token_set=context_token_set,
+                        context_pairs=context_pairs,
+                        context_triplets=context_triplets,
+                        current_state=(w1, w2),
+                        context_bias=context_bias,
+                        step_index=0,
+                        repetition_penalty_strength=repetition_penalty_strength,
+                    )
+                    return (w1, w2, w3), 2
+        return None
+
+    async def _pick_global_start(
+        self,
+        chat_id: int,
+        starts3: list[tuple[str, str, str, int]],
+        starts2: list[tuple[str, str, int]],
+        *,
+        default_order: int,
+        start_explore: float,
+        start_power: float,
+        next_explore: float,
+        next_power: float,
+        context_token_set: set[str],
+        context_pairs: set[tuple[str, ...]],
+        context_triplets: set[tuple[str, ...]],
+        context_bias: float,
+        repetition_penalty_strength: float,
+        rng: random.Random,
+    ) -> tuple[tuple[str, str, str], int] | None:
+        """Resolve a start triplet from the global start tables.
+
+        Prefers a stored 3-gram start; otherwise picks a 2-gram start and
+        extends it by one weighted step. Returns ``(start3, order_used)``, or
+        ``None`` when a chosen 2-gram start has no continuation — the caller
+        rejects that with ``no_start_transition``. Callers invoke this only
+        when at least one of ``starts3``/``starts2`` is non-empty.
+        """
+        if starts3:
+            return (
+                weighted_start3_choice(starts3, start_explore, start_power, rng),
+                default_order,
+            )
+        if starts2:
+            w1, w2 = weighted_start2_choice(starts2, start_explore, start_power, rng)
+            variants = await self._get2(chat_id, w1, w2)
+            if not variants:
+                return None
+            w3 = weighted_next_choice(
+                variants,
+                next_explore,
+                next_power,
+                rng,
+                context_token_set=context_token_set,
+                context_pairs=context_pairs,
+                context_triplets=context_triplets,
+                current_state=(w1, w2),
+                context_bias=context_bias,
+                step_index=0,
+                repetition_penalty_strength=repetition_penalty_strength,
+            )
+            return (w1, w2, w3), 2
+        return None
+
+    async def _pick_contextual_start(
+        self,
+        chat_id: int,
+        context_tokens: list[str],
+        use_contextual_start: bool,
+        *,
+        start_explore: float,
+        start_power: float,
+        next_explore: float,
+        next_power: float,
+        context_token_set: set[str],
+        context_pairs: set[tuple[str, ...]],
+        context_triplets: set[tuple[str, ...]],
+        context_bias: float,
+        repetition_penalty_strength: float,
+        fuzzy_context_casefold: bool,
+        fuzzy_context_prefix: bool,
+        rng: random.Random,
+    ) -> _ContextualStateSelection | None:
+        """Select a hidden start state anchored on the reply context.
+
+        Returns ``None`` when no contextual start is attempted (no context or
+        the probabilistic roll declined) or when no context state matched —
+        the caller distinguishes the two to count ``hidden_context_fallbacks``.
+        """
+        if not (context_tokens and use_contextual_start):
+            return None
+        return await self._select_contextual_state(
+            chat_id=chat_id,
+            context_tokens=context_tokens,
+            start_explore=start_explore,
+            start_power=start_power,
+            next_explore=next_explore,
+            next_power=next_power,
+            context_token_set=context_token_set,
+            context_pairs=context_pairs,
+            context_triplets=context_triplets,
+            context_bias=context_bias,
+            repetition_penalty_strength=repetition_penalty_strength,
+            fuzzy_context_casefold=fuzzy_context_casefold,
+            fuzzy_context_prefix=fuzzy_context_prefix,
+            rng=rng,
+        )
+
+    @staticmethod
+    def _contextual_match_counts(
+        selection: _ContextualStateSelection,
+    ) -> tuple[int, int, int, int]:
+        """Map a contextual match kind to its trace counters.
+
+        Returns ``(exact, casefold, prefix, prefix_singleton)``; a prefix match
+        is also a "singleton" when it rests on a single observed transition.
+        """
+        if selection.match_kind == "exact":
+            return 1, 0, 0, 0
+        if selection.match_kind == "casefold":
+            return 0, 1, 0, 0
+        return 0, 0, 1, (1 if selection.transition_count == 1 else 0)
+
+    def _finalize_attempt(
+        self,
+        generated: list[str],
+        *,
+        max_chars: int,
+        context_tokens: list[str],
+        order_used: int,
+        jump_count: int,
+        start_source: str,
+        context_exact_matches: int,
+        context_casefold_matches: int,
+        context_prefix_matches: int,
+        context_prefix_singleton_matches: int,
+        hidden_context_fallbacks: int,
+    ) -> _GenerationAttempt:
+        """Trim, strip and quality-gate generated tokens into an attempt.
+
+        Applies the tail pipeline (repetitive-tail/sentence-boundary/ending
+        trims, leading-punctuation strip) then rejects results that are too
+        short, low-diversity, a short context copy, or context-heavy. All
+        outcomes carry the same trace metadata accumulated by the caller.
+        """
+        generated = trim_repetitive_tail(generated)
+        generated = trim_to_sentence_boundary(generated)
+        generated = finalize_reply_ending(generated)
+        finalized_token_count = len(generated)
+        generated = strip_leading_punctuation(generated)
+        leading_punctuation_stripped = finalized_token_count - len(generated)
+        result = detokenize(generated, max_chars=max_chars)
+
+        def reject(reason: str) -> _GenerationAttempt:
+            return _GenerationAttempt(
+                "",
+                order_used,
+                jump_count,
+                reason,
+                0,
+                start_source,
+                leading_punctuation_stripped,
+                context_exact_matches,
+                context_casefold_matches,
+                context_prefix_matches,
+                context_prefix_singleton_matches,
+                hidden_context_fallbacks,
+            )
+
+        if len(result) < 5:
+            return reject(REJECTION_RESULT_TOO_SHORT)
+        result_tokens = tokenize(result)
+        is_short_reply = is_short_generated_reply(result_tokens)
+        if not is_short_reply and is_low_diversity_reply(result_tokens):
+            return reject(REJECTION_LOW_DIVERSITY)
+        if is_short_reply:
+            if is_short_context_copy(result_tokens, context_tokens):
+                return reject(REJECTION_SHORT_CONTEXT_COPY)
+        elif is_context_heavy_reply(result_tokens, context_tokens):
+            return reject(REJECTION_CONTEXT_HEAVY)
+        return _GenerationAttempt(
+            result,
+            order_used,
+            jump_count,
+            None,
+            len(result_tokens),
+            start_source,
+            leading_punctuation_stripped,
+            context_exact_matches,
+            context_casefold_matches,
+            context_prefix_matches,
+            context_prefix_singleton_matches,
+            hidden_context_fallbacks,
+        )
+
+    async def _run_generation_loop(
+        self,
+        chat_id: int,
+        start3: tuple[str, str, str],
+        *,
+        emit_start: bool,
+        order: int,
+        order_used: int,
+        max_tokens: int,
+        max_chars: int,
+        enable_backoff: bool,
+        backoff_min_order: int,
+        starts3: list[tuple[str, str, str, int]],
+        context_tokens: list[str],
+        context_token_set: set[str],
+        context_pairs: set[tuple[str, ...]],
+        context_triplets: set[tuple[str, ...]],
+        start_explore: float,
+        start_power: float,
+        context_start_bias: float,
+        next_explore: float,
+        next_power: float,
+        context_bias: float,
+        repetition_penalty_strength: float,
+        jump_probability: float,
+        rng: random.Random,
+    ) -> tuple[list[str], int, int]:
+        """Walk the Markov chain from ``start3`` until a stop condition.
+
+        Returns ``(generated, order_used, jump_count)``. Per-step transitions
+        fall back from order 3 to 2 to 1 when ``enable_backoff`` allows and
+        ``backoff_min_order`` permits; dedup state suppresses immediate triplet
+        repeats. Only local state is mutated.
+        """
+        token_limit = max(1, max_tokens)
+        w1, w2, w3 = start3
+        start_tokens = [w1, w2, w3]
+        generated: list[str] = start_tokens[:token_limit] if emit_start else []
+        dedup_seed = generated if emit_start else start_tokens
+        visited_triplets: OrderedDict[tuple[str, str, str], None] = (
+            OrderedDict.fromkeys([(w1, w2, w3)])
+        )
+        seen_pairs: OrderedDict[tuple[str, ...], None] = OrderedDict.fromkeys(
+            build_windows(dedup_seed, 2)
+        )
+        seen_triplets: OrderedDict[tuple[str, ...], None] = OrderedDict.fromkeys(
+            build_windows(dedup_seed, 3)
+        )
+        jump_count = 0
+
+        for step_index in range(self.max_steps):
+            if len(generated) >= token_limit:
+                break
+            if (
+                len(generated) > 8
+                and rng.random() < jump_probability
+                and starts3
+                and order >= 3
+            ):
+                contextual_jump = None
+                if context_tokens:
+                    contextual_jump = await self._select_contextual_start3(
+                        chat_id,
+                        context_tokens,
+                        start_explore,
+                        start_power,
+                        context_start_bias,
+                        rng,
+                    )
+                if contextual_jump is None:
+                    contextual_jump = weighted_start3_choice(
+                        starts3,
+                        start_explore,
+                        start_power,
+                        rng,
+                    )
+                w1, w2, w3 = contextual_jump
+                jump_count += 1
+                continue
+
+            recent_window = generated[-10:]
+            pool3 = await self._get3(chat_id, w1, w2, w3) if order >= 3 else []
+            if pool3 and order >= 3:
+                candidates = [
+                    (cand, cnt)
+                    for cand, cnt in pool3
+                    if (w2, w3, cand) not in visited_triplets
+                ]
+                pool = candidates or pool3
+                w4 = weighted_next_choice(
+                    pool,
+                    next_explore,
+                    next_power,
+                    rng,
+                    context_token_set=context_token_set,
+                    context_pairs=context_pairs,
+                    context_triplets=context_triplets,
+                    current_state=(w2, w3),
+                    context_bias=context_bias,
+                    step_index=step_index,
+                    recent_tokens=recent_window,
+                    seen_pairs=seen_pairs,
+                    seen_triplets=seen_triplets,
+                    repetition_penalty_strength=repetition_penalty_strength,
+                )
+            else:
+                if not enable_backoff and order >= 3:
+                    break
+
+                pool2 = await self._get2(chat_id, w2, w3)
+                if pool2:
+                    w4 = weighted_next_choice(
+                        pool2,
+                        next_explore,
+                        next_power,
+                        rng,
+                        context_token_set=context_token_set,
+                        context_pairs=context_pairs,
+                        context_triplets=context_triplets,
+                        current_state=(w2, w3),
+                        context_bias=context_bias,
+                        step_index=step_index,
+                        recent_tokens=recent_window,
+                        seen_pairs=seen_pairs,
+                        seen_triplets=seen_triplets,
+                        repetition_penalty_strength=repetition_penalty_strength,
+                    )
+                    order_used = min(order_used, 2)
+                else:
+                    if not enable_backoff or backoff_min_order > 1:
+                        break
+                    pool1 = await self._get1(chat_id, w3)
+                    if not pool1:
+                        break
+                    w4 = weighted_next_choice(
+                        pool1,
+                        next_explore,
+                        next_power,
+                        rng,
+                        context_token_set=context_token_set,
+                        context_pairs=context_pairs,
+                        current_state=(w3,),
+                        context_bias=context_bias,
+                        step_index=step_index,
+                        recent_tokens=recent_window,
+                        seen_pairs=seen_pairs,
+                        repetition_penalty_strength=repetition_penalty_strength,
+                    )
+                    order_used = 1
+
+            generated.append(w4)
+            if has_degraded_recent_window(generated):
+                break
+            maybe_text = detokenize(generated, max_chars=max_chars)
+            if len(generated) >= token_limit or len(maybe_text) >= max_chars:
+                break
+
+            w1, w2, w3 = w2, w3, w4
+            remember_bounded(visited_triplets, (w1, w2, w3), 40)
+            if len(generated) >= 2:
+                remember_bounded(
+                    seen_pairs,
+                    (generated[-2], generated[-1]),
+                    80,
+                )
+            if len(generated) >= 3:
+                remember_bounded(
+                    seen_triplets,
+                    (generated[-3], generated[-2], generated[-1]),
+                    80,
+                )
+
+        return generated, order_used, jump_count
+
     async def _generate_text_once(
         self,
         chat_id: int,
@@ -1083,45 +1527,31 @@ class MarkovGenerator:
         context_prefix_matches = 0
         context_prefix_singleton_matches = 0
         hidden_context_fallbacks = 0
-        if seed_tokens and len(seed_tokens) >= 3:
-            seeded3 = await self.db.get_start3_if_exists(
-                chat_id, seed_tokens[0], seed_tokens[1], seed_tokens[2]
-            )
-            if seeded3:
-                start3 = (seeded3[0], seeded3[1], seeded3[2])
-                start_source = "seed"
-        if start3 is None and seed_tokens and len(seed_tokens) >= 2:
-            seeded2 = await self.db.get_start_if_exists(
-                chat_id, seed_tokens[0], seed_tokens[1]
-            )
-            if seeded2:
-                w1, w2 = seeded2[0], seeded2[1]
-                variants = await self._get2(chat_id, w1, w2)
-                if variants:
-                    w3 = weighted_next_choice(
-                        variants,
-                        next_explore,
-                        next_power,
-                        generation_rng,
-                        context_token_set=context_token_set,
-                        context_pairs=context_pairs,
-                        context_triplets=context_triplets,
-                        current_state=(w1, w2),
-                        context_bias=context_bias,
-                        step_index=0,
-                        repetition_penalty_strength=repetition_penalty_strength,
-                    )
-                    start3 = (w1, w2, w3)
-                    order_used = 2
-                    start_source = "seed"
+        seed_start = await self._pick_seed_start(
+            chat_id,
+            seed_tokens,
+            default_order=order_used,
+            next_explore=next_explore,
+            next_power=next_power,
+            context_token_set=context_token_set,
+            context_pairs=context_pairs,
+            context_triplets=context_triplets,
+            context_bias=context_bias,
+            repetition_penalty_strength=repetition_penalty_strength,
+            rng=generation_rng,
+        )
+        if seed_start is not None:
+            start3, order_used = seed_start
+            start_source = "seed"
 
         use_contextual_start = generation_rng.random() < context_start_probability(
             context_start_bias
         )
-        if start3 is None and context_tokens and use_contextual_start:
-            contextual_state = await self._select_contextual_state(
-                chat_id=chat_id,
-                context_tokens=context_tokens,
+        if start3 is None:
+            contextual_state = await self._pick_contextual_start(
+                chat_id,
+                context_tokens,
+                use_contextual_start,
                 start_explore=start_explore,
                 start_power=start_power,
                 next_explore=next_explore,
@@ -1140,299 +1570,85 @@ class MarkovGenerator:
                 order_used = contextual_state.order
                 emit_start = False
                 start_source = "hidden_context"
-                if contextual_state.match_kind == "exact":
-                    context_exact_matches = 1
-                elif contextual_state.match_kind == "casefold":
-                    context_casefold_matches = 1
-                else:
-                    context_prefix_matches = 1
-                    if contextual_state.transition_count == 1:
-                        context_prefix_singleton_matches = 1
-            else:
+                (
+                    context_exact_matches,
+                    context_casefold_matches,
+                    context_prefix_matches,
+                    context_prefix_singleton_matches,
+                ) = self._contextual_match_counts(contextual_state)
+            elif context_tokens and use_contextual_start:
                 hidden_context_fallbacks = 1
 
         if start3 is None:
-            if starts3:
-                start3 = weighted_start3_choice(
-                    starts3,
-                    start_explore,
-                    start_power,
-                    generation_rng,
-                )
-            elif starts2:
-                w1, w2 = weighted_start2_choice(
-                    starts2,
-                    start_explore,
-                    start_power,
-                    generation_rng,
-                )
-                variants = await self._get2(chat_id, w1, w2)
-                if not variants:
-                    return _GenerationAttempt(
-                        "",
-                        2,
-                        0,
-                        REJECTION_NO_START_TRANSITION,
-                        0,
-                        start_source,
-                        0,
-                        context_exact_matches,
-                        context_casefold_matches,
-                        context_prefix_matches,
-                        context_prefix_singleton_matches,
-                        hidden_context_fallbacks,
-                    )
-                w3 = weighted_next_choice(
-                    variants,
-                    next_explore,
-                    next_power,
-                    generation_rng,
-                    context_token_set=context_token_set,
-                    context_pairs=context_pairs,
-                    context_triplets=context_triplets,
-                    current_state=(w1, w2),
-                    context_bias=context_bias,
-                    step_index=0,
-                    repetition_penalty_strength=repetition_penalty_strength,
-                )
-                start3 = (w1, w2, w3)
-                order_used = 2
-
-        if start3 is None:
-            return _GenerationAttempt(
-                "",
-                order_used,
-                0,
-                REJECTION_NO_START_TRANSITION,
-                0,
-                start_source,
-                0,
-                context_exact_matches,
-                context_casefold_matches,
-                context_prefix_matches,
-                context_prefix_singleton_matches,
-                hidden_context_fallbacks,
+            global_start = await self._pick_global_start(
+                chat_id,
+                starts3,
+                starts2,
+                default_order=order_used,
+                start_explore=start_explore,
+                start_power=start_power,
+                next_explore=next_explore,
+                next_power=next_power,
+                context_token_set=context_token_set,
+                context_pairs=context_pairs,
+                context_triplets=context_triplets,
+                context_bias=context_bias,
+                repetition_penalty_strength=repetition_penalty_strength,
+                rng=generation_rng,
             )
-
-        token_limit = max(1, max_tokens)
-        w1, w2, w3 = start3
-        start_tokens = [w1, w2, w3]
-        generated: list[str] = start_tokens[:token_limit] if emit_start else []
-        dedup_seed = generated if emit_start else start_tokens
-        visited_triplets: OrderedDict[tuple[str, str, str], None] = (
-            OrderedDict.fromkeys([(w1, w2, w3)])
-        )
-        seen_pairs: OrderedDict[tuple[str, ...], None] = OrderedDict.fromkeys(
-            build_windows(dedup_seed, 2)
-        )
-        seen_triplets: OrderedDict[tuple[str, ...], None] = OrderedDict.fromkeys(
-            build_windows(dedup_seed, 3)
-        )
-        jump_count = 0
-
-        for step_index in range(self.max_steps):
-            if len(generated) >= token_limit:
-                break
-            if (
-                len(generated) > 8
-                and generation_rng.random() < jump_probability
-                and starts3
-                and order >= 3
-            ):
-                contextual_jump = None
-                if context_tokens:
-                    contextual_jump = await self._select_contextual_start3(
-                        chat_id,
-                        context_tokens,
-                        start_explore,
-                        start_power,
-                        context_start_bias,
-                        generation_rng,
-                    )
-                if contextual_jump is None:
-                    contextual_jump = weighted_start3_choice(
-                        starts3,
-                        start_explore,
-                        start_power,
-                        generation_rng,
-                    )
-                w1, w2, w3 = contextual_jump
-                jump_count += 1
-                continue
-
-            recent_window = generated[-10:]
-            pool3 = await self._get3(chat_id, w1, w2, w3) if order >= 3 else []
-            if pool3 and order >= 3:
-                candidates = [
-                    (cand, cnt)
-                    for cand, cnt in pool3
-                    if (w2, w3, cand) not in visited_triplets
-                ]
-                pool = candidates or pool3
-                w4 = weighted_next_choice(
-                    pool,
-                    next_explore,
-                    next_power,
-                    generation_rng,
-                    context_token_set=context_token_set,
-                    context_pairs=context_pairs,
-                    context_triplets=context_triplets,
-                    current_state=(w2, w3),
-                    context_bias=context_bias,
-                    step_index=step_index,
-                    recent_tokens=recent_window,
-                    seen_pairs=seen_pairs,
-                    seen_triplets=seen_triplets,
-                    repetition_penalty_strength=repetition_penalty_strength,
-                )
-            else:
-                if not enable_backoff and order >= 3:
-                    break
-
-                pool2 = await self._get2(chat_id, w2, w3)
-                if pool2:
-                    w4 = weighted_next_choice(
-                        pool2,
-                        next_explore,
-                        next_power,
-                        generation_rng,
-                        context_token_set=context_token_set,
-                        context_pairs=context_pairs,
-                        context_triplets=context_triplets,
-                        current_state=(w2, w3),
-                        context_bias=context_bias,
-                        step_index=step_index,
-                        recent_tokens=recent_window,
-                        seen_pairs=seen_pairs,
-                        seen_triplets=seen_triplets,
-                        repetition_penalty_strength=repetition_penalty_strength,
-                    )
-                    order_used = min(order_used, 2)
-                else:
-                    if not enable_backoff or backoff_min_order > 1:
-                        break
-                    pool1 = await self._get1(chat_id, w3)
-                    if not pool1:
-                        break
-                    w4 = weighted_next_choice(
-                        pool1,
-                        next_explore,
-                        next_power,
-                        generation_rng,
-                        context_token_set=context_token_set,
-                        context_pairs=context_pairs,
-                        current_state=(w3,),
-                        context_bias=context_bias,
-                        step_index=step_index,
-                        recent_tokens=recent_window,
-                        seen_pairs=seen_pairs,
-                        repetition_penalty_strength=repetition_penalty_strength,
-                    )
-                    order_used = 1
-
-            generated.append(w4)
-            if has_degraded_recent_window(generated):
-                break
-            maybe_text = detokenize(generated, max_chars=max_chars)
-            if len(generated) >= token_limit or len(maybe_text) >= max_chars:
-                break
-
-            w1, w2, w3 = w2, w3, w4
-            remember_bounded(visited_triplets, (w1, w2, w3), 40)
-            if len(generated) >= 2:
-                remember_bounded(
-                    seen_pairs,
-                    (generated[-2], generated[-1]),
-                    80,
-                )
-            if len(generated) >= 3:
-                remember_bounded(
-                    seen_triplets,
-                    (generated[-3], generated[-2], generated[-1]),
-                    80,
-                )
-
-        generated = trim_repetitive_tail(generated)
-        generated = trim_to_sentence_boundary(generated)
-        generated = finalize_reply_ending(generated)
-        finalized_token_count = len(generated)
-        generated = strip_leading_punctuation(generated)
-        leading_punctuation_stripped = finalized_token_count - len(generated)
-        result = detokenize(generated, max_chars=max_chars)
-        if len(result) < 5:
-            return _GenerationAttempt(
-                "",
-                order_used,
-                jump_count,
-                REJECTION_RESULT_TOO_SHORT,
-                0,
-                start_source,
-                leading_punctuation_stripped,
-                context_exact_matches,
-                context_casefold_matches,
-                context_prefix_matches,
-                context_prefix_singleton_matches,
-                hidden_context_fallbacks,
-            )
-        result_tokens = tokenize(result)
-        is_short_reply = is_short_generated_reply(result_tokens)
-        if not is_short_reply and is_low_diversity_reply(result_tokens):
-            return _GenerationAttempt(
-                "",
-                order_used,
-                jump_count,
-                REJECTION_LOW_DIVERSITY,
-                0,
-                start_source,
-                leading_punctuation_stripped,
-                context_exact_matches,
-                context_casefold_matches,
-                context_prefix_matches,
-                context_prefix_singleton_matches,
-                hidden_context_fallbacks,
-            )
-        if is_short_reply:
-            if is_short_context_copy(result_tokens, context_tokens):
+            if global_start is None:
                 return _GenerationAttempt(
                     "",
-                    order_used,
-                    jump_count,
-                    REJECTION_SHORT_CONTEXT_COPY,
+                    2,
+                    0,
+                    REJECTION_NO_START_TRANSITION,
                     0,
                     start_source,
-                    leading_punctuation_stripped,
+                    0,
                     context_exact_matches,
                     context_casefold_matches,
                     context_prefix_matches,
                     context_prefix_singleton_matches,
                     hidden_context_fallbacks,
                 )
-        elif is_context_heavy_reply(result_tokens, context_tokens):
-            return _GenerationAttempt(
-                "",
-                order_used,
-                jump_count,
-                REJECTION_CONTEXT_HEAVY,
-                0,
-                start_source,
-                leading_punctuation_stripped,
-                context_exact_matches,
-                context_casefold_matches,
-                context_prefix_matches,
-                context_prefix_singleton_matches,
-                hidden_context_fallbacks,
-            )
-        return _GenerationAttempt(
-            result,
-            order_used,
-            jump_count,
-            None,
-            len(result_tokens),
-            start_source,
-            leading_punctuation_stripped,
-            context_exact_matches,
-            context_casefold_matches,
-            context_prefix_matches,
-            context_prefix_singleton_matches,
-            hidden_context_fallbacks,
+            start3, order_used = global_start
+
+        generated, order_used, jump_count = await self._run_generation_loop(
+            chat_id,
+            start3,
+            emit_start=emit_start,
+            order=order,
+            order_used=order_used,
+            max_tokens=max_tokens,
+            max_chars=max_chars,
+            enable_backoff=enable_backoff,
+            backoff_min_order=backoff_min_order,
+            starts3=starts3,
+            context_tokens=context_tokens,
+            context_token_set=context_token_set,
+            context_pairs=context_pairs,
+            context_triplets=context_triplets,
+            start_explore=start_explore,
+            start_power=start_power,
+            context_start_bias=context_start_bias,
+            next_explore=next_explore,
+            next_power=next_power,
+            context_bias=context_bias,
+            repetition_penalty_strength=repetition_penalty_strength,
+            jump_probability=jump_probability,
+            rng=generation_rng,
+        )
+
+        return self._finalize_attempt(
+            generated,
+            max_chars=max_chars,
+            context_tokens=context_tokens,
+            order_used=order_used,
+            jump_count=jump_count,
+            start_source=start_source,
+            context_exact_matches=context_exact_matches,
+            context_casefold_matches=context_casefold_matches,
+            context_prefix_matches=context_prefix_matches,
+            context_prefix_singleton_matches=context_prefix_singleton_matches,
+            hidden_context_fallbacks=hidden_context_fallbacks,
         )

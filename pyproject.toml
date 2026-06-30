@@ -19,18 +19,12 @@ ignore_missing_imports = true
 module = "app.*"
 strict = true
 
-# Модули, помеченные «НЕ ТРОГАТЬ» или содержащие legacy-код без аннотаций
-[[tool.mypy.overrides]]
-module = [
-    "app.config.registry",
-    "app.config.runtime_config",
-    "app.config.runtime_state",
-    "app.config.settings",
-    "app.core.reply_policy",
-    "app.core.text",
-    "app.domain.pivo",
-    "app.domain.pivo_templates",
-    "app.infrastructure.database",
-    "app.presentation.bot_messages",
-]
-ignore_errors = true
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+# Ratchet: keep coverage from regressing (current ~89% branch). Raise as it grows.
+fail_under = 87
+show_missing = true
+skip_covered = true

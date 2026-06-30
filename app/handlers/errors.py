@@ -7,7 +7,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.types import ErrorEvent
 
 router = Router(name="errors")
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("chat_markov")
 
 
 @router.error()

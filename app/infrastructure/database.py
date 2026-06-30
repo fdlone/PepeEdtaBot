@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 from datetime import UTC, date, datetime, timedelta
-from typing import Optional
+from typing import Optional, TypeVar
 
 import aiosqlite
 
@@ -17,6 +17,8 @@ from app.infrastructure import migrator
 from app.repositories import ChatMembersRepo, MarkovRepo, MessagesRepo, PivoUsageRepo
 
 PIVO_DAILY_USAGE_RETENTION_DAYS = 7
+
+_RepoT = TypeVar("_RepoT")
 
 
 class Database:
@@ -51,6 +53,15 @@ class Database:
         if self._conn is None:
             raise RuntimeError("Database is not initialized. Call init() first.")
         return self._conn
+
+    @staticmethod
+    def _require(repo: Optional[_RepoT]) -> _RepoT:
+        """Возвращает репозиторий или бросает, если init() ещё не вызван."""
+        if repo is None:
+            raise RuntimeError(
+                "Database not initialized: call await Database.init() first"
+            )
+        return repo
 
     async def init(self) -> None:
         if self._conn is not None:
@@ -202,22 +213,34 @@ class Database:
                     ],
                 )
 
-            cursor3 = await db.execute(
-                "SELECT COALESCE(SUM(cnt), 0) FROM transitions3 WHERE chat_id = ?",
+            # Maintain the per-chat model volume incrementally instead of
+            # re-summing the whole transitions tables on every message (audit
+            # D2). The delta is exactly the number of transition occurrences
+            # this message contributed (sum of the per-message counters).
+            volume2_delta = sum(trans2_counter.values())
+            volume3_delta = sum(trans3_counter.values())
+            await db.execute(
+                """
+                INSERT INTO chat_model_volume (chat_id, volume2, volume3)
+                VALUES (?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    volume2 = volume2 + excluded.volume2,
+                    volume3 = volume3 + excluded.volume3
+                """,
+                (chat_id, volume2_delta, volume3_delta),
+            )
+            cursor = await db.execute(
+                "SELECT volume2, volume3 FROM chat_model_volume WHERE chat_id = ?",
                 (chat_id,),
             )
-            row3 = await cursor3.fetchone()
-            if row3 is None:
-                raise RuntimeError("COALESCE query returned None in save_message_and_update_model")
-            volume3 = int(row3[0] or 0)
-            cursor2 = await db.execute(
-                "SELECT COALESCE(SUM(cnt), 0) FROM transitions WHERE chat_id = ?",
-                (chat_id,),
-            )
-            row2 = await cursor2.fetchone()
-            if row2 is None:
-                raise RuntimeError("COALESCE query returned None in save_message_and_update_model")
-            volume2 = int(row2[0] or 0)
+            row = await cursor.fetchone()
+            if row is None:
+                raise RuntimeError(
+                    "chat_model_volume row missing after upsert in "
+                    "save_message_and_update_model"
+                )
+            volume2 = int(row[0] or 0)
+            volume3 = int(row[1] or 0)
 
             await db.commit()
             return volume3 if volume3 > 0 else volume2
@@ -225,75 +248,55 @@ class Database:
     # --- Делегаты к MarkovRepo (сохраняем публичный API) ---
 
     async def get_starts(self, chat_id: int) -> list[tuple[str, str, int]]:
-        if self.markov is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        return await self.markov.get_starts(chat_id)
+        return await self._require(self.markov).get_starts(chat_id)
 
     async def get_starts3(self, chat_id: int) -> list[tuple[str, str, str, int]]:
-        if self.markov is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        return await self.markov.get_starts3(chat_id)
+        return await self._require(self.markov).get_starts3(chat_id)
 
     async def get_start_if_exists(
         self, chat_id: int, w1: str, w2: str
     ) -> Optional[tuple[str, str, int]]:
-        if self.markov is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        return await self.markov.get_start_if_exists(chat_id, w1, w2)
+        return await self._require(self.markov).get_start_if_exists(chat_id, w1, w2)
 
     async def get_start3_if_exists(
         self, chat_id: int, w1: str, w2: str, w3: str
     ) -> Optional[tuple[str, str, str, int]]:
-        if self.markov is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        return await self.markov.get_start3_if_exists(chat_id, w1, w2, w3)
+        return await self._require(self.markov).get_start3_if_exists(
+            chat_id, w1, w2, w3
+        )
 
     async def get_transitions(
         self, chat_id: int, w1: str, w2: str
     ) -> list[tuple[str, int]]:
-        if self.markov is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        return await self.markov.get_transitions(chat_id, w1, w2)
+        return await self._require(self.markov).get_transitions(chat_id, w1, w2)
 
     async def get_transitions3(
         self, chat_id: int, w1: str, w2: str, w3: str
     ) -> list[tuple[str, int]]:
-        if self.markov is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        return await self.markov.get_transitions3(chat_id, w1, w2, w3)
+        return await self._require(self.markov).get_transitions3(chat_id, w1, w2, w3)
 
     async def get_transitions1(self, chat_id: int, w1: str) -> list[tuple[str, int]]:
-        if self.markov is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        return await self.markov.get_transitions1(chat_id, w1)
+        return await self._require(self.markov).get_transitions1(chat_id, w1)
 
     async def get_markov_states(
         self,
         chat_id: int,
         order: int,
     ) -> list[tuple[tuple[str, ...], int]]:
-        if self.markov is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        return await self.markov.get_states(chat_id, order)
+        return await self._require(self.markov).get_states(chat_id, order)
 
     async def get_chat_token_volume(self, chat_id: int) -> int:
-        if self.markov is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        return await self.markov.get_chat_token_volume(chat_id)
+        return await self._require(self.markov).get_chat_token_volume(chat_id)
 
     # --- Делегаты к MessagesRepo ---
 
     async def message_exists(self, chat_id: int, text: str) -> bool:
-        if self.messages is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        return await self.messages.exists(chat_id, text)
+        return await self._require(self.messages).exists(chat_id, text)
 
     async def get_recent_normalized_messages(
         self, chat_id: int, limit: int
     ) -> list[str]:
-        if self.messages is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        return await self.messages.get_recent_normalized(chat_id, limit)
+        return await self._require(self.messages).get_recent_normalized(chat_id, limit)
 
     # --- Делегаты к ChatMembersRepo ---
 
@@ -306,9 +309,7 @@ class Database:
         encrypted_username: str,
         encrypted_display_name: str,
     ) -> None:
-        if self.chat_members is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        await self.chat_members.upsert(
+        await self._require(self.chat_members).upsert(
             chat_hash=chat_hash,
             user_hash=user_hash,
             encrypted_user_id=encrypted_user_id,
@@ -317,14 +318,10 @@ class Database:
         )
 
     async def remove_chat_member(self, chat_hash: str, user_hash: str) -> None:
-        if self.chat_members is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        await self.chat_members.remove(chat_hash, user_hash)
+        await self._require(self.chat_members).remove(chat_hash, user_hash)
 
     async def get_chat_members(self, chat_hash: str) -> list[dict[str, object]]:
-        if self.chat_members is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        return await self.chat_members.list_members(chat_hash)
+        return await self._require(self.chat_members).list_members(chat_hash)
 
     async def consume_pivo_daily_call(
         self,
@@ -334,9 +331,7 @@ class Database:
         usage_day: str,
         limit: int,
     ) -> tuple[bool, int]:
-        if self.pivo_usage is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        return await self.pivo_usage.consume_daily_call(
+        return await self._require(self.pivo_usage).consume_daily_call(
             chat_hash=chat_hash,
             user_hash=user_hash,
             usage_day=usage_day,
@@ -350,9 +345,7 @@ class Database:
         user_hash: str,
         usage_day: str,
     ) -> None:
-        if self.pivo_usage is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
-        await self.pivo_usage.refund_daily_call(
+        await self._require(self.pivo_usage).refund_daily_call(
             chat_hash=chat_hash,
             user_hash=user_hash,
             usage_day=usage_day,
@@ -367,11 +360,10 @@ class Database:
         """Deletes /pivo daily quota rows older than retention_days."""
         if retention_days < 0:
             raise ValueError("retention_days must be non-negative")
-        if self.pivo_usage is None:
-            raise RuntimeError("Database not initialized: call await Database.init() first")
+        pivo_usage = self._require(self.pivo_usage)
         current_day = today or datetime.now(UTC).date()
         cutoff_day = (current_day - timedelta(days=retention_days)).isoformat()
-        return await self.pivo_usage.delete_usage_before(cutoff_day)
+        return await pivo_usage.delete_usage_before(cutoff_day)
 
     # --- Кросс-доменные операции ---
 
@@ -425,4 +417,5 @@ class Database:
             await db.execute("DELETE FROM transitions WHERE chat_id = ?", (chat_id,))
             await db.execute("DELETE FROM transitions3 WHERE chat_id = ?", (chat_id,))
             await db.execute("DELETE FROM transitions1 WHERE chat_id = ?", (chat_id,))
+            await db.execute("DELETE FROM chat_model_volume WHERE chat_id = ?", (chat_id,))
             await db.commit()

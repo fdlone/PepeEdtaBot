@@ -1,6 +1,6 @@
 -r requirements.lock
 bandit>=1.8.0
+coverage>=7.6.0
 mypy>=2.0.0
 pip-audit>=2.9.0
 ruff>=0.15.0
-safety>=3.6.0

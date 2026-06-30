@@ -40,6 +40,62 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["transitions1"], 0)
         self.assertEqual(stats["volume"], 0)
 
+    async def _sum_volume(self, table: str, chat_id: int) -> int:
+        async with self.db._lock:
+            conn = await self.db._get_conn()
+            cur = await conn.execute(
+                f"SELECT COALESCE(SUM(cnt), 0) FROM {table} WHERE chat_id = ?",
+                (chat_id,),
+            )
+            return int((await cur.fetchone())[0] or 0)
+
+    async def test_model_volume_matches_sum_after_many_saves(self) -> None:
+        """D2: the incremental chat_model_volume stays exactly equal to SUM(cnt)."""
+        chat_id = 4242
+        messages = [
+            ["привет", "как", "дела", "сегодня"],
+            ["как", "дела", "у", "тебя"],
+            ["привет", "друг"],
+            ["сегодня", "хорошая", "погода", "правда"],
+        ]
+        last_volume = 0
+        for tokens in messages:
+            last_volume = await self.db.save_message_and_update_model(
+                chat_id=chat_id, raw_text=" ".join(tokens), tokens=tokens
+            )
+
+        sum2 = await self._sum_volume("transitions", chat_id)
+        sum3 = await self._sum_volume("transitions3", chat_id)
+        stats = await self.db.get_stats(chat_id)
+        self.assertEqual(stats["volume2"], sum2)
+        self.assertEqual(stats["volume3"], sum3)
+        # Returned volume mirrors get_stats' "volume" (prefers order-3).
+        self.assertEqual(last_volume, sum3 if sum3 > 0 else sum2)
+
+    async def test_clear_chat_resets_model_volume(self) -> None:
+        """D2: clear_chat drops the chat_model_volume row so volume restarts at 0."""
+        chat_id = 4343
+        tokens = ["a", "b", "c", "d", "e"]
+        await self.db.save_message_and_update_model(
+            chat_id=chat_id, raw_text=" ".join(tokens), tokens=tokens
+        )
+        self.assertGreater((await self.db.get_stats(chat_id))["volume"], 0)
+
+        await self.db.clear_chat(chat_id)
+
+        async with self.db._lock:
+            conn = await self.db._get_conn()
+            cur = await conn.execute(
+                "SELECT COUNT(*) FROM chat_model_volume WHERE chat_id = ?", (chat_id,)
+            )
+            self.assertEqual((await cur.fetchone())[0], 0)
+
+        # A fresh message after clear starts the running total over.
+        new_volume = await self.db.save_message_and_update_model(
+            chat_id=chat_id, raw_text="x y z w", tokens=["x", "y", "z", "w"]
+        )
+        self.assertEqual(new_volume, await self._sum_volume("transitions3", chat_id))
+
     async def test_save_message_does_not_store_real_author_id(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=1002,
@@ -261,6 +317,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
             tables,
             [
                 "chat_members",
+                "chat_model_volume",
                 "messages",
                 "pivo_daily_usage",
                 "schema_migrations",
