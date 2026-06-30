@@ -1036,6 +1036,58 @@ class MarkovGenerator:
             trace.hidden_context_fallbacks,
         )
 
+    async def _pick_seed_start(
+        self,
+        chat_id: int,
+        seed_tokens: list[str] | None,
+        *,
+        default_order: int,
+        next_explore: float,
+        next_power: float,
+        context_token_set: set[str],
+        context_pairs: set[tuple[str, ...]],
+        context_triplets: set[tuple[str, ...]],
+        context_bias: float,
+        repetition_penalty_strength: float,
+        rng: random.Random,
+    ) -> tuple[tuple[str, str, str], int] | None:
+        """Resolve a start triplet from explicit ``seed_tokens``.
+
+        Returns ``(start3, order_used)`` when the seed anchors a start (a stored
+        3-gram start, or a stored 2-gram start extended by one weighted step),
+        or ``None`` when the seed yields nothing. Callers treat a non-``None``
+        result as ``start_source = "seed"``.
+        """
+        if seed_tokens and len(seed_tokens) >= 3:
+            seeded3 = await self.db.get_start3_if_exists(
+                chat_id, seed_tokens[0], seed_tokens[1], seed_tokens[2]
+            )
+            if seeded3:
+                return (seeded3[0], seeded3[1], seeded3[2]), default_order
+        if seed_tokens and len(seed_tokens) >= 2:
+            seeded2 = await self.db.get_start_if_exists(
+                chat_id, seed_tokens[0], seed_tokens[1]
+            )
+            if seeded2:
+                w1, w2 = seeded2[0], seeded2[1]
+                variants = await self._get2(chat_id, w1, w2)
+                if variants:
+                    w3 = weighted_next_choice(
+                        variants,
+                        next_explore,
+                        next_power,
+                        rng,
+                        context_token_set=context_token_set,
+                        context_pairs=context_pairs,
+                        context_triplets=context_triplets,
+                        current_state=(w1, w2),
+                        context_bias=context_bias,
+                        step_index=0,
+                        repetition_penalty_strength=repetition_penalty_strength,
+                    )
+                    return (w1, w2, w3), 2
+        return None
+
     async def _generate_text_once(
         self,
         chat_id: int,
@@ -1083,37 +1135,22 @@ class MarkovGenerator:
         context_prefix_matches = 0
         context_prefix_singleton_matches = 0
         hidden_context_fallbacks = 0
-        if seed_tokens and len(seed_tokens) >= 3:
-            seeded3 = await self.db.get_start3_if_exists(
-                chat_id, seed_tokens[0], seed_tokens[1], seed_tokens[2]
-            )
-            if seeded3:
-                start3 = (seeded3[0], seeded3[1], seeded3[2])
-                start_source = "seed"
-        if start3 is None and seed_tokens and len(seed_tokens) >= 2:
-            seeded2 = await self.db.get_start_if_exists(
-                chat_id, seed_tokens[0], seed_tokens[1]
-            )
-            if seeded2:
-                w1, w2 = seeded2[0], seeded2[1]
-                variants = await self._get2(chat_id, w1, w2)
-                if variants:
-                    w3 = weighted_next_choice(
-                        variants,
-                        next_explore,
-                        next_power,
-                        generation_rng,
-                        context_token_set=context_token_set,
-                        context_pairs=context_pairs,
-                        context_triplets=context_triplets,
-                        current_state=(w1, w2),
-                        context_bias=context_bias,
-                        step_index=0,
-                        repetition_penalty_strength=repetition_penalty_strength,
-                    )
-                    start3 = (w1, w2, w3)
-                    order_used = 2
-                    start_source = "seed"
+        seed_start = await self._pick_seed_start(
+            chat_id,
+            seed_tokens,
+            default_order=order_used,
+            next_explore=next_explore,
+            next_power=next_power,
+            context_token_set=context_token_set,
+            context_pairs=context_pairs,
+            context_triplets=context_triplets,
+            context_bias=context_bias,
+            repetition_penalty_strength=repetition_penalty_strength,
+            rng=generation_rng,
+        )
+        if seed_start is not None:
+            start3, order_used = seed_start
+            start_source = "seed"
 
         use_contextual_start = generation_rng.random() < context_start_probability(
             context_start_bias
