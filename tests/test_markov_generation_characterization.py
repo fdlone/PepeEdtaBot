@@ -70,6 +70,31 @@ class TestGenerateTextOnceCharacterization(_GenerationCharacterizationBase):
         self.assertEqual(attempt.rejection_reason, "no_starts")
         self.assertEqual(attempt.start_source, "global")
 
+    async def test_two_word_corpus_rejects_with_no_start_transition(self) -> None:
+        # Only 2-token messages: a 2-gram start exists but has no stored
+        # transition to extend it, so the global-start path rejects.
+        ns_path = Path(f"test_markov_ns_{uuid.uuid4().hex}.sqlite")
+        ns_db = Database(str(ns_path))
+        await ns_db.init()
+        try:
+            gen = MarkovGenerator(ns_db)
+            for line in ("альфа бета", "гамма дельта", "эхо фокс"):
+                await ns_db.save_message_and_update_model(
+                    chat_id=1, raw_text=line, tokens=line.split()
+                )
+            attempt = await gen._generate_text_once(
+                chat_id=1, max_chars=200, max_tokens=12,
+                randomness_strength=0.0, rng=random.Random(7), emit_start=True,
+            )
+        finally:
+            await ns_db.close()
+            ns_path.unlink(missing_ok=True)
+        self.assertEqual(attempt.text, "")
+        self.assertEqual(attempt.rejection_reason, "no_start_transition")
+        self.assertEqual(attempt.markov_order_used, 2)
+        self.assertEqual(attempt.start_source, "global")
+        self.assertEqual(attempt.token_count, 0)
+
     async def test_global_start_order3_seed1(self) -> None:
         attempt = await self.generator._generate_text_once(
             chat_id=CHAT_ID, max_chars=200, max_tokens=12,
