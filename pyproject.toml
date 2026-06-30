@@ -18,3 +18,13 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "app.*"
 strict = true
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+# Ratchet: keep coverage from regressing (current ~89% branch). Raise as it grows.
+fail_under = 87
+show_missing = true
+skip_covered = true
