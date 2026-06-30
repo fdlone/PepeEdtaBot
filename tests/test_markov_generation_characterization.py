@@ -19,7 +19,10 @@ import unittest
 import uuid
 from pathlib import Path
 
-from app.core.markov import MarkovGenerator
+from app.core.markov import (
+    MarkovGenerator,
+    _ContextualStateSelection,
+)
 from app.infrastructure.database import Database
 
 # Fixed corpus. Insertion order matters — start/transition weights depend on it.
@@ -259,6 +262,35 @@ class TestGenerateTextWithTraceCharacterization(_GenerationCharacterizationBase)
         self.assertIsNone(trace.rejection_reason)
         self.assertEqual(trace.start_source, "global")
         self.assertEqual(trace.jump_count, 0)
+
+
+class TestContextualMatchCounts(unittest.TestCase):
+    """Pure mapping of contextual match kind to trace counters (audit R8).
+
+    Locks all three match kinds — including the prefix/prefix-singleton branch
+    that is not reachable through the DB matcher with simple fixtures.
+    """
+
+    def _counts(self, match_kind: str, transition_count: int = 0) -> tuple[int, ...]:
+        selection = _ContextualStateSelection(
+            state=("a", "b", "c"),
+            order=3,
+            match_kind=match_kind,
+            transition_count=transition_count,
+        )
+        return MarkovGenerator._contextual_match_counts(selection)
+
+    def test_exact(self) -> None:
+        self.assertEqual(self._counts("exact"), (1, 0, 0, 0))
+
+    def test_casefold(self) -> None:
+        self.assertEqual(self._counts("casefold"), (0, 1, 0, 0))
+
+    def test_prefix_multi_transition(self) -> None:
+        self.assertEqual(self._counts("prefix", transition_count=5), (0, 0, 1, 0))
+
+    def test_prefix_singleton(self) -> None:
+        self.assertEqual(self._counts("prefix", transition_count=1), (0, 0, 1, 1))
 
 
 if __name__ == "__main__":

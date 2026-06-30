@@ -1140,6 +1140,65 @@ class MarkovGenerator:
             return (w1, w2, w3), 2
         return None
 
+    async def _pick_contextual_start(
+        self,
+        chat_id: int,
+        context_tokens: list[str],
+        use_contextual_start: bool,
+        *,
+        start_explore: float,
+        start_power: float,
+        next_explore: float,
+        next_power: float,
+        context_token_set: set[str],
+        context_pairs: set[tuple[str, ...]],
+        context_triplets: set[tuple[str, ...]],
+        context_bias: float,
+        repetition_penalty_strength: float,
+        fuzzy_context_casefold: bool,
+        fuzzy_context_prefix: bool,
+        rng: random.Random,
+    ) -> _ContextualStateSelection | None:
+        """Select a hidden start state anchored on the reply context.
+
+        Returns ``None`` when no contextual start is attempted (no context or
+        the probabilistic roll declined) or when no context state matched —
+        the caller distinguishes the two to count ``hidden_context_fallbacks``.
+        """
+        if not (context_tokens and use_contextual_start):
+            return None
+        return await self._select_contextual_state(
+            chat_id=chat_id,
+            context_tokens=context_tokens,
+            start_explore=start_explore,
+            start_power=start_power,
+            next_explore=next_explore,
+            next_power=next_power,
+            context_token_set=context_token_set,
+            context_pairs=context_pairs,
+            context_triplets=context_triplets,
+            context_bias=context_bias,
+            repetition_penalty_strength=repetition_penalty_strength,
+            fuzzy_context_casefold=fuzzy_context_casefold,
+            fuzzy_context_prefix=fuzzy_context_prefix,
+            rng=rng,
+        )
+
+    @staticmethod
+    def _contextual_match_counts(
+        selection: _ContextualStateSelection,
+    ) -> tuple[int, int, int, int]:
+        """Map a contextual match kind to its trace counters.
+
+        Returns ``(exact, casefold, prefix, prefix_singleton)``; a prefix match
+        is also a "singleton" when it rests on a single observed transition.
+        """
+        if selection.match_kind == "exact":
+            return 1, 0, 0, 0
+        if selection.match_kind == "casefold":
+            return 0, 1, 0, 0
+        return 0, 0, 1, (1 if selection.transition_count == 1 else 0)
+
     async def _generate_text_once(
         self,
         chat_id: int,
@@ -1207,10 +1266,11 @@ class MarkovGenerator:
         use_contextual_start = generation_rng.random() < context_start_probability(
             context_start_bias
         )
-        if start3 is None and context_tokens and use_contextual_start:
-            contextual_state = await self._select_contextual_state(
-                chat_id=chat_id,
-                context_tokens=context_tokens,
+        if start3 is None:
+            contextual_state = await self._pick_contextual_start(
+                chat_id,
+                context_tokens,
+                use_contextual_start,
                 start_explore=start_explore,
                 start_power=start_power,
                 next_explore=next_explore,
@@ -1229,15 +1289,13 @@ class MarkovGenerator:
                 order_used = contextual_state.order
                 emit_start = False
                 start_source = "hidden_context"
-                if contextual_state.match_kind == "exact":
-                    context_exact_matches = 1
-                elif contextual_state.match_kind == "casefold":
-                    context_casefold_matches = 1
-                else:
-                    context_prefix_matches = 1
-                    if contextual_state.transition_count == 1:
-                        context_prefix_singleton_matches = 1
-            else:
+                (
+                    context_exact_matches,
+                    context_casefold_matches,
+                    context_prefix_matches,
+                    context_prefix_singleton_matches,
+                ) = self._contextual_match_counts(contextual_state)
+            elif context_tokens and use_contextual_start:
                 hidden_context_fallbacks = 1
 
         if start3 is None:
