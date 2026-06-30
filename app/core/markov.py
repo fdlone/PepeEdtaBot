@@ -1088,6 +1088,58 @@ class MarkovGenerator:
                     return (w1, w2, w3), 2
         return None
 
+    async def _pick_global_start(
+        self,
+        chat_id: int,
+        starts3: list[tuple[str, str, str, int]],
+        starts2: list[tuple[str, str, int]],
+        *,
+        default_order: int,
+        start_explore: float,
+        start_power: float,
+        next_explore: float,
+        next_power: float,
+        context_token_set: set[str],
+        context_pairs: set[tuple[str, ...]],
+        context_triplets: set[tuple[str, ...]],
+        context_bias: float,
+        repetition_penalty_strength: float,
+        rng: random.Random,
+    ) -> tuple[tuple[str, str, str], int] | None:
+        """Resolve a start triplet from the global start tables.
+
+        Prefers a stored 3-gram start; otherwise picks a 2-gram start and
+        extends it by one weighted step. Returns ``(start3, order_used)``, or
+        ``None`` when a chosen 2-gram start has no continuation — the caller
+        rejects that with ``no_start_transition``. Callers invoke this only
+        when at least one of ``starts3``/``starts2`` is non-empty.
+        """
+        if starts3:
+            return (
+                weighted_start3_choice(starts3, start_explore, start_power, rng),
+                default_order,
+            )
+        if starts2:
+            w1, w2 = weighted_start2_choice(starts2, start_explore, start_power, rng)
+            variants = await self._get2(chat_id, w1, w2)
+            if not variants:
+                return None
+            w3 = weighted_next_choice(
+                variants,
+                next_explore,
+                next_power,
+                rng,
+                context_token_set=context_token_set,
+                context_pairs=context_pairs,
+                context_triplets=context_triplets,
+                current_state=(w1, w2),
+                context_bias=context_bias,
+                step_index=0,
+                repetition_penalty_strength=repetition_penalty_strength,
+            )
+            return (w1, w2, w3), 2
+        return None
+
     async def _generate_text_once(
         self,
         chat_id: int,
@@ -1189,67 +1241,38 @@ class MarkovGenerator:
                 hidden_context_fallbacks = 1
 
         if start3 is None:
-            if starts3:
-                start3 = weighted_start3_choice(
-                    starts3,
-                    start_explore,
-                    start_power,
-                    generation_rng,
-                )
-            elif starts2:
-                w1, w2 = weighted_start2_choice(
-                    starts2,
-                    start_explore,
-                    start_power,
-                    generation_rng,
-                )
-                variants = await self._get2(chat_id, w1, w2)
-                if not variants:
-                    return _GenerationAttempt(
-                        "",
-                        2,
-                        0,
-                        REJECTION_NO_START_TRANSITION,
-                        0,
-                        start_source,
-                        0,
-                        context_exact_matches,
-                        context_casefold_matches,
-                        context_prefix_matches,
-                        context_prefix_singleton_matches,
-                        hidden_context_fallbacks,
-                    )
-                w3 = weighted_next_choice(
-                    variants,
-                    next_explore,
-                    next_power,
-                    generation_rng,
-                    context_token_set=context_token_set,
-                    context_pairs=context_pairs,
-                    context_triplets=context_triplets,
-                    current_state=(w1, w2),
-                    context_bias=context_bias,
-                    step_index=0,
-                    repetition_penalty_strength=repetition_penalty_strength,
-                )
-                start3 = (w1, w2, w3)
-                order_used = 2
-
-        if start3 is None:
-            return _GenerationAttempt(
-                "",
-                order_used,
-                0,
-                REJECTION_NO_START_TRANSITION,
-                0,
-                start_source,
-                0,
-                context_exact_matches,
-                context_casefold_matches,
-                context_prefix_matches,
-                context_prefix_singleton_matches,
-                hidden_context_fallbacks,
+            global_start = await self._pick_global_start(
+                chat_id,
+                starts3,
+                starts2,
+                default_order=order_used,
+                start_explore=start_explore,
+                start_power=start_power,
+                next_explore=next_explore,
+                next_power=next_power,
+                context_token_set=context_token_set,
+                context_pairs=context_pairs,
+                context_triplets=context_triplets,
+                context_bias=context_bias,
+                repetition_penalty_strength=repetition_penalty_strength,
+                rng=generation_rng,
             )
+            if global_start is None:
+                return _GenerationAttempt(
+                    "",
+                    2,
+                    0,
+                    REJECTION_NO_START_TRANSITION,
+                    0,
+                    start_source,
+                    0,
+                    context_exact_matches,
+                    context_casefold_matches,
+                    context_prefix_matches,
+                    context_prefix_singleton_matches,
+                    hidden_context_fallbacks,
+                )
+            start3, order_used = global_start
 
         token_limit = max(1, max_tokens)
         w1, w2, w3 = start3
