@@ -14,7 +14,8 @@ This document turns the audit findings into concrete, ordered work items.
 | QW5 reply flavor post-processor | **done** (2026-07-02) | same branch; ending-punctuation transforms only |
 | Baselines regenerated | **done** (2026-07-02) | own commit, diff explained in commit message |
 | S1 full-reply anti-repeat | **done** (2026-07-02) | branch `feat/dialogue-gen-stage2-s1`; exact matches hard-rejected (window 20, trailing punctuation stripped to survive flavor), trigram overlap penalized via `recent_penalty` in `CandidateScore`; `RECENT_REPLY_PENALTY_STRENGTH=0.5` after eval sweep (1.0 collapsed case-preserved context overlap 0.21→0.09; 0.5 keeps 0.14) |
-| S2–S4, M1–M4, L1–L3 | not started | next: S3 (same PR as S1 per sequencing) |
+| S3 dynamic target reply length | **done** (2026-07-02) | same branch; modes short(1–4)/medium(5–14)/long(15–24), `LENGTH_MODE_WEIGHTS=0.25,0.55,0.2`; short-режим ограничивает генерацию 8 raw-токенами (кап 6 давал 11% пустых на синтетике); на синтетическом корпусе длины почти не расходятся (предложения однородны ~8 токенов) — реальный эффект смотреть в живом чате |
+| S2, S4, M1–M4, L1–L3 | not started | next: S2 + S4 (PR 4, template-side) |
 
 Branch `feat/dialogue-gen-quick-wins` is not merged yet — Stage 1 is complete and
 verified (444 tests, ruff, mypy green), pending review/merge and a few days of
