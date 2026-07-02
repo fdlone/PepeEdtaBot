@@ -1,7 +1,23 @@
 # Dialogue Generation — Action Plan
 
 Companion to [DIALOGUE_GENERATION_AUDIT.md](DIALOGUE_GENERATION_AUDIT.md) (2026-07-02).
-This document turns the audit findings into concrete, ordered work items. Each item
+This document turns the audit findings into concrete, ordered work items.
+
+## Progress
+
+| Item | Status | Where |
+|---|---|---|
+| QW1 softmax candidate selection | **done** (2026-07-02) | branch `feat/dialogue-gen-quick-wins`, `SELECTION_SCORE_MARGIN=0.5` chosen after eval (margin 1.0 collapsed context overlap 0.38→0.13; 0.5 gives 0.22) |
+| QW2 fallback phrase pools | **done** (2026-07-02) | same branch; 12 phrases per pool, per-chat anti-repeat window of 3 |
+| QW3 length-proportional typing | **done** (2026-07-02) | same branch; `TYPING_PER_CHAR_MS=12`, hard cap 4 s |
+| QW4 fuzzy casefold default | **done** (2026-07-02) | same branch; `normalize_lower=true` migration question still open |
+| QW5 reply flavor post-processor | **done** (2026-07-02) | same branch; ending-punctuation transforms only |
+| Baselines regenerated | **done** (2026-07-02) | own commit, diff explained in commit message |
+| S1–S4, M1–M4, L1–L3 | not started | next session starts at Stage 2 (S1) |
+
+Branch `feat/dialogue-gen-quick-wins` is not merged yet — Stage 1 is complete and
+verified (444 tests, ruff, mypy green), pending review/merge and a few days of
+live-chat observation before Stage 2. Each item
 lists what to do, where, how to verify, and what can go wrong. No LLMs anywhere —
 everything stays algorithmic and lightweight.
 
