@@ -13,7 +13,8 @@ This document turns the audit findings into concrete, ordered work items.
 | QW4 fuzzy casefold default | **done** (2026-07-02) | same branch; `normalize_lower=true` migration question still open |
 | QW5 reply flavor post-processor | **done** (2026-07-02) | same branch; ending-punctuation transforms only |
 | Baselines regenerated | **done** (2026-07-02) | own commit, diff explained in commit message |
-| S1–S4, M1–M4, L1–L3 | not started | next session starts at Stage 2 (S1) |
+| S1 full-reply anti-repeat | **done** (2026-07-02) | branch `feat/dialogue-gen-stage2-s1`; exact matches hard-rejected (window 20, trailing punctuation stripped to survive flavor), trigram overlap penalized via `recent_penalty` in `CandidateScore`; `RECENT_REPLY_PENALTY_STRENGTH=0.5` after eval sweep (1.0 collapsed case-preserved context overlap 0.21→0.09; 0.5 keeps 0.14) |
+| S2–S4, M1–M4, L1–L3 | not started | next: S3 (same PR as S1 per sequencing) |
 
 Branch `feat/dialogue-gen-quick-wins` is not merged yet — Stage 1 is complete and
 verified (444 tests, ruff, mypy green), pending review/merge and a few days of
