@@ -95,7 +95,7 @@
 | `app/config/settings.py` | `Settings` dataclass + `load_settings(env)`. |
 | `app/config/runtime_state.py` | `RuntimeState` dataclass + `runtime_state_from_settings`. |
 | `app/config/runtime_config.py` | Тонкая обёртка вокруг `app.config.registry.try_apply` для `/set`. |
-| `app/config/registry.py` | **Единый реестр** runtime-mutable полей (`FieldSpec` × 20 + `validate_cross_fields`). |
+| `app/config/registry.py` | **Единый реестр** runtime-mutable полей (`FieldSpec` на каждый параметр + `validate_cross_fields`). |
 | `app/core/text.py` | `sanitize_text` — убирает `@mention`, схлопывает пробелы. |
 
 ## DI
