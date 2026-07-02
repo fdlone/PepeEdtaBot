@@ -72,6 +72,20 @@ class TestParsers(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse("1.5")
 
+    def test_parse_length_mode_weights_valid(self) -> None:
+        self.assertEqual(
+            registry._parse_length_mode_weights("0.25, 0.55, 0.2"),
+            (0.25, 0.55, 0.2),
+        )
+        self.assertEqual(
+            registry._parse_length_mode_weights("1,0,0"), (1.0, 0.0, 0.0)
+        )
+
+    def test_parse_length_mode_weights_rejects_garbage(self) -> None:
+        for value in ("0.5,0.5", "1,2,3,4", "a,b,c", "-1,1,1", "0,0,0"):
+            with self.assertRaises(ValueError):
+                registry._parse_length_mode_weights(value)
+
 
 class TestSpecLookup(unittest.TestCase):
     def test_get_spec_known_and_unknown(self) -> None:

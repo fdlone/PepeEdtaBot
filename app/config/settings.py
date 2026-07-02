@@ -37,6 +37,7 @@ class Settings:
     reply_flavor_strength: float
     repetition_penalty_strength: float
     recent_reply_penalty_strength: float
+    length_mode_weights: tuple[float, float, float]
     markov_order: int
     enable_backoff: bool
     backoff_min_order: int

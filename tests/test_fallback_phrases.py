@@ -28,6 +28,7 @@ def _make_runtime_state() -> RuntimeState:
         reply_flavor_strength=1.0,
         repetition_penalty_strength=1.0,
         recent_reply_penalty_strength=1.0,
+        length_mode_weights=(0.25, 0.55, 0.2),
         markov_order=3,
         enable_backoff=True,
         backoff_min_order=1,

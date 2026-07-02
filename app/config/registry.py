@@ -63,6 +63,23 @@ def _float_in_range(min_v: float, max_v: float) -> Callable[[str], float]:
     return parse
 
 
+def _parse_length_mode_weights(value: str) -> tuple[float, float, float]:
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != 3:
+        raise ValueError(
+            "value must be three comma-separated weights: short,medium,long"
+        )
+    try:
+        short, medium, long = (float(part) for part in parts)
+    except ValueError as exc:
+        raise ValueError(f"invalid weight in {value!r}") from exc
+    if min(short, medium, long) < 0.0:
+        raise ValueError("weights must be non-negative")
+    if short + medium + long <= 0.0:
+        raise ValueError("at least one weight must be positive")
+    return short, medium, long
+
+
 @dataclass(frozen=True, slots=True)
 class FieldSpec:
     """Metadata for a single runtime-mutable configuration field."""
@@ -106,6 +123,8 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # 0.14 with the same distinct-1/2 gain and ~1% empty-result rate.
     FieldSpec("recent_reply_penalty_strength", "RECENT_REPLY_PENALTY_STRENGTH",
               "0.5", _float_in_range(0.0, 3.0)),
+    FieldSpec("length_mode_weights", "LENGTH_MODE_WEIGHTS", "0.25,0.55,0.2",
+              _parse_length_mode_weights),
     FieldSpec("markov_order", "MARKOV_ORDER", "3", _int_in_set({2, 3})),
     FieldSpec("enable_backoff", "ENABLE_BACKOFF", "true", _parse_bool),
     FieldSpec("backoff_min_order", "BACKOFF_MIN_ORDER", "1", _int_in_set({1, 2})),

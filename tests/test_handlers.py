@@ -45,6 +45,7 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.recent_fallbacks = {}
     s.recent_replies = {}
     s.recent_reply_penalty_strength = 1.0
+    s.length_mode_weights = (0.25, 0.55, 0.2)
     # Deterministic selection and untouched reply text so handler tests can
     # assert generated candidates verbatim.
     s.candidate_selection_temperature = 0.0
@@ -655,6 +656,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             "randomness_strength": 0.0,
             "repetition_penalty_strength": 1.0,
             "recent_reply_penalty_strength": 1.0,
+            "length_mode_weights": (0.25, 0.55, 0.2),
             "markov_order": 3,
             "enable_backoff": True,
             "backoff_min_order": 1,
@@ -889,6 +891,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             repetition_penalty_strength=1.0,
             recent_reply_penalty_strength=1.0,
+            length_mode_weights=(0.25, 0.55, 0.2),
             markov_order=3,
             enable_backoff=True,
             backoff_min_order=1,
@@ -937,6 +940,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             repetition_penalty_strength=1.0,
             recent_reply_penalty_strength=1.0,
+            length_mode_weights=(0.25, 0.55, 0.2),
             markov_order=3,
             enable_backoff=True,
             backoff_min_order=1,
@@ -988,6 +992,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             repetition_penalty_strength=1.0,
             recent_reply_penalty_strength=1.0,
+            length_mode_weights=(0.25, 0.55, 0.2),
             markov_order=3,
             enable_backoff=True,
             backoff_min_order=1,
@@ -1116,6 +1121,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.5,
             repetition_penalty_strength=1.0,
             recent_reply_penalty_strength=1.0,
+            length_mode_weights=(0.25, 0.55, 0.2),
             markov_order=3,
             enable_backoff=True,
             backoff_min_order=1,

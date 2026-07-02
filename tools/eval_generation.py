@@ -11,7 +11,7 @@ import tempfile
 import time
 from collections import Counter
 from pathlib import Path
-from statistics import mean, median
+from statistics import mean, median, pstdev
 from types import SimpleNamespace
 from typing import Any
 
@@ -168,6 +168,7 @@ async def evaluate_generation(
     fuzzy_context_casefold: bool = False,
     fuzzy_context_prefix: bool = False,
     recent_reply_penalty_strength: float = 0.5,
+    length_mode_weights: tuple[float, float, float] = (0.25, 0.55, 0.2),
 ) -> dict[str, int | float]:
     if generations <= 0:
         raise ValueError("generations must be positive")
@@ -212,6 +213,7 @@ async def evaluate_generation(
                 reply_context_start_bias=2.2,
                 repetition_penalty_strength=1.0,
                 recent_reply_penalty_strength=recent_reply_penalty_strength,
+                length_mode_weights=length_mode_weights,
                 markov_order=3,
                 enable_backoff=True,
                 backoff_min_order=1,
@@ -320,6 +322,7 @@ async def evaluate_generation(
         "repeated_trigram_ratio": repeated_ngram_ratio(outputs, 3),
         "avg_length_tokens": mean(lengths),
         "median_length_tokens": median(lengths),
+        "stddev_length_tokens": pstdev(lengths),
         "context_token_overlap": mean(context_overlaps),
         "context_prefix_copy_rate": (
             sum(context_prefix_copies) / generations if generations else 0.0
