@@ -24,6 +24,7 @@ from app.core.reply_policy import (
 from app.core.response_generator import (
     GenerationRequest,
     ResponseGenerator,
+    remember_recent_reply,
 )
 from app.core.text import sanitize_text
 from app.handlers._helpers import is_group_message, reply_humanized
@@ -299,6 +300,7 @@ async def on_text_message(
             tokenize(reply_text, normalize_lower=runtime_state.normalize_lower)
         ):
             remember_short_reply(runtime_state, message.chat.id, reply_text)
+        remember_recent_reply(runtime_state, message.chat.id, reply_text)
     finally:
         if learnable:
             learned_token_volume = await learning_service.record_message(

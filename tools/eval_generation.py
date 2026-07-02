@@ -32,6 +32,7 @@ from app.core.response_generator import (  # noqa: E402
     GENERATION_ATTEMPT_BUDGET,
     GenerationRequest,
     ResponseGenerator,
+    remember_recent_reply,
 )
 from app.infrastructure.database import Database  # noqa: E402
 
@@ -166,6 +167,7 @@ async def evaluate_generation(
     normalize_lower: bool = True,
     fuzzy_context_casefold: bool = False,
     fuzzy_context_prefix: bool = False,
+    recent_reply_penalty_strength: float = 0.5,
 ) -> dict[str, int | float]:
     if generations <= 0:
         raise ValueError("generations must be positive")
@@ -209,6 +211,7 @@ async def evaluate_generation(
                 reply_context_bias=1.8,
                 reply_context_start_bias=2.2,
                 repetition_penalty_strength=1.0,
+                recent_reply_penalty_strength=recent_reply_penalty_strength,
                 markov_order=3,
                 enable_backoff=True,
                 backoff_min_order=1,
@@ -217,6 +220,7 @@ async def evaluate_generation(
                 fuzzy_context_prefix=fuzzy_context_prefix,
                 auto_capitalize_replies=False,
                 recent_short_replies={},
+                recent_replies={},
             )
             response_generator = ResponseGenerator(
                 generator=generator,
@@ -264,6 +268,14 @@ async def evaluate_generation(
                     candidate_target=effective_candidate_target,
                 )
                 latencies_ms.append((time.perf_counter() - started_at) * 1000)
+                if selection.text:
+                    # Mirror the handler: every sent reply feeds the full-reply
+                    # anti-repeat, so the eval exercises the same rolling window.
+                    remember_recent_reply(
+                        runtime_state,  # type: ignore[arg-type]
+                        SYNTHETIC_CHAT_ID,
+                        selection.text,
+                    )
                 output = content_tokens(
                     tokenize(
                         selection.text or "",
@@ -360,6 +372,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--fuzzy-context-casefold", action="store_true")
     parser.add_argument("--fuzzy-context-prefix", action="store_true")
+    parser.add_argument(
+        "--recent-reply-penalty-strength", type=float, default=0.5
+    )
     return parser.parse_args()
 
 
@@ -373,6 +388,7 @@ def main() -> None:
             normalize_lower=args.profile == "normalize-lower",
             fuzzy_context_casefold=args.fuzzy_context_casefold,
             fuzzy_context_prefix=args.fuzzy_context_prefix,
+            recent_reply_penalty_strength=args.recent_reply_penalty_strength,
         )
     )
     print(json.dumps(report, indent=2, sort_keys=True))

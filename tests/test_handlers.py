@@ -43,6 +43,8 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.typing_max_ms = 0
     s.typing_per_char_ms = 0
     s.recent_fallbacks = {}
+    s.recent_replies = {}
+    s.recent_reply_penalty_strength = 1.0
     # Deterministic selection and untouched reply text so handler tests can
     # assert generated candidates verbatim.
     s.candidate_selection_temperature = 0.0
@@ -652,6 +654,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             "max_reply_tokens": 45,
             "randomness_strength": 0.0,
             "repetition_penalty_strength": 1.0,
+            "recent_reply_penalty_strength": 1.0,
             "markov_order": 3,
             "enable_backoff": True,
             "backoff_min_order": 1,
@@ -885,6 +888,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             max_reply_tokens=45,
             randomness_strength=0.0,
             repetition_penalty_strength=1.0,
+            recent_reply_penalty_strength=1.0,
             markov_order=3,
             enable_backoff=True,
             backoff_min_order=1,
@@ -932,6 +936,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             max_reply_tokens=45,
             randomness_strength=0.0,
             repetition_penalty_strength=1.0,
+            recent_reply_penalty_strength=1.0,
             markov_order=3,
             enable_backoff=True,
             backoff_min_order=1,
@@ -982,6 +987,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             max_reply_tokens=45,
             randomness_strength=0.0,
             repetition_penalty_strength=1.0,
+            recent_reply_penalty_strength=1.0,
             markov_order=3,
             enable_backoff=True,
             backoff_min_order=1,
@@ -1004,6 +1010,74 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             list(state.recent_short_replies[msg.chat.id]),
             ["привет", "нормально"],
         )
+
+    async def test_sent_reply_is_recorded_for_full_anti_repeat(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="pepe ответь развёрнуто")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=100)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(
+            return_value="новый развёрнутый ответ бота."
+        )
+        state = self._reply_state(recent_replies={})
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+        msg.reply.assert_awaited_once_with("новый развёрнутый ответ бота.")
+        self.assertEqual(
+            list(state.recent_replies[msg.chat.id]),
+            ["новый развёрнутый ответ бота"],
+        )
+
+    async def test_recent_full_reply_is_retried_instead_of_sent(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="pepe ответь развёрнуто")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=100)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(
+            side_effect=[
+                "недавно отправленный полный ответ.",
+                "совсем свежий полный ответ",
+            ]
+            + [""] * 8
+        )
+        state = self._reply_state(
+            recent_replies={
+                msg.chat.id: deque(
+                    ["недавно отправленный полный ответ"], maxlen=20
+                )
+            },
+        )
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+        msg.reply.assert_awaited_once_with("совсем свежий полный ответ")
 
     async def test_handler_increases_randomness_on_generation_retries(self) -> None:
         from app.handlers.learning import on_text_message
@@ -1041,6 +1115,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             max_reply_tokens=45,
             randomness_strength=0.5,
             repetition_penalty_strength=1.0,
+            recent_reply_penalty_strength=1.0,
             markov_order=3,
             enable_backoff=True,
             backoff_min_order=1,

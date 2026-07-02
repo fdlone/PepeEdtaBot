@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
-from app.core.markov import content_tokens
+from app.core.markov import content_tokens, tokenize
 
 SHORT_REPLY_MAX_TOKENS = 3
 NATURAL_LENGTH_MIN = 5
@@ -34,6 +35,7 @@ class CandidateScore:
     natural_length: float
     context_relevance: float
     repetition_penalty: float
+    recent_penalty: float = 0.0
 
     @property
     def total(self) -> float:
@@ -43,6 +45,7 @@ class CandidateScore:
             + self.natural_length
             + self.context_relevance
             - self.repetition_penalty
+            - self.recent_penalty
         )
 
 
@@ -160,6 +163,37 @@ def repetition_penalty(tokens: list[str]) -> float:
         + _repeated_ngram_ratio(content, 2) * REPEATED_BIGRAM_WEIGHT
         + _repeated_ngram_ratio(content, 3) * REPEATED_TRIGRAM_WEIGHT
     )
+
+
+def build_recent_reply_trigrams(
+    recent_texts: Iterable[str],
+) -> set[tuple[str, str, str]]:
+    """Collect content trigrams of recently sent replies for overlap penalties."""
+    trigrams: set[tuple[str, str, str]] = set()
+    for text in recent_texts:
+        content = _normalized_content(tokenize(text))
+        trigrams.update(
+            (content[index], content[index + 1], content[index + 2])
+            for index in range(len(content) - 2)
+        )
+    return trigrams
+
+
+def recent_reply_overlap(
+    tokens: list[str],
+    recent_trigrams: set[tuple[str, str, str]],
+) -> float:
+    """Share of the candidate's content trigrams already seen in recent replies."""
+    if not recent_trigrams:
+        return 0.0
+    content = _normalized_content(tokens)
+    if len(content) < 3:
+        return 0.0
+    candidate_trigrams = {
+        (content[index], content[index + 1], content[index + 2])
+        for index in range(len(content) - 2)
+    }
+    return len(candidate_trigrams & recent_trigrams) / len(candidate_trigrams)
 
 
 def score_candidate(

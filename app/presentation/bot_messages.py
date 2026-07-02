@@ -69,6 +69,7 @@ def format_config_message(state: RuntimeState, full: bool = False) -> str:
         f"температура отбора: {state.candidate_selection_temperature}",
         f"вариатор формы: {state.reply_flavor_strength}",
         f"штраф повторов: {state.repetition_penalty_strength}",
+        f"штраф недавних ответов: {state.recent_reply_penalty_strength}",
         f"reply-контекст: {state.use_reply_context}",
     ]
     if full:

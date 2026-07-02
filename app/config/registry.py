@@ -101,6 +101,11 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _float_in_range(0.0, 2.0)),
     FieldSpec("repetition_penalty_strength", "REPETITION_PENALTY_STRENGTH", "1.0",
               _float_in_range(0.0, 3.0)),
+    # 0.5 chosen by eval sweep (2026-07-02): in the case-preserved profile
+    # strength 1.0 collapsed context_token_overlap 0.21->0.09; 0.5 keeps it at
+    # 0.14 with the same distinct-1/2 gain and ~1% empty-result rate.
+    FieldSpec("recent_reply_penalty_strength", "RECENT_REPLY_PENALTY_STRENGTH",
+              "0.5", _float_in_range(0.0, 3.0)),
     FieldSpec("markov_order", "MARKOV_ORDER", "3", _int_in_set({2, 3})),
     FieldSpec("enable_backoff", "ENABLE_BACKOFF", "true", _parse_bool),
     FieldSpec("backoff_min_order", "BACKOFF_MIN_ORDER", "1", _int_in_set({1, 2})),

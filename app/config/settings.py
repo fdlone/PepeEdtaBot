@@ -36,6 +36,7 @@ class Settings:
     candidate_selection_temperature: float
     reply_flavor_strength: float
     repetition_penalty_strength: float
+    recent_reply_penalty_strength: float
     markov_order: int
     enable_backoff: bool
     backoff_min_order: int

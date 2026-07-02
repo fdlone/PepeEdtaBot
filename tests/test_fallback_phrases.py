@@ -27,6 +27,7 @@ def _make_runtime_state() -> RuntimeState:
         candidate_selection_temperature=0.7,
         reply_flavor_strength=1.0,
         repetition_penalty_strength=1.0,
+        recent_reply_penalty_strength=1.0,
         markov_order=3,
         enable_backoff=True,
         backoff_min_order=1,

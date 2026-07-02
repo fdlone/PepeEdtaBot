@@ -22,6 +22,7 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
         "candidate_selection_temperature": 0.7,
         "reply_flavor_strength": 1.0,
         "repetition_penalty_strength": 1.0,
+        "recent_reply_penalty_strength": 1.0,
         "markov_order": 3,
         "enable_backoff": True,
         "backoff_min_order": 1,
@@ -47,6 +48,7 @@ class TestRuntimeState(unittest.TestCase):
         state.last_reply_ts[100] = 1.0
         state.learned_messages[100] = 4
         state.recent_short_replies[100] = deque(["hi"], maxlen=5)
+        state.recent_replies[100] = deque(["длинный недавний ответ"], maxlen=20)
         state.note_chat_activity(100, now=10.0)
 
         state.prune_inactive(now=21.0)
@@ -54,6 +56,7 @@ class TestRuntimeState(unittest.TestCase):
         self.assertNotIn(100, state.last_reply_ts)
         self.assertNotIn(100, state.learned_messages)
         self.assertNotIn(100, state.recent_short_replies)
+        self.assertNotIn(100, state.recent_replies)
 
     def test_prune_inactive_keeps_recent_chat_entries(self) -> None:
         state = make_runtime_state()
@@ -86,6 +89,7 @@ class TestRuntimeState(unittest.TestCase):
         state.last_reply_ts[100] = 1.0
         state.learned_messages[100] = 4
         state.recent_short_replies[100] = deque(["hi"], maxlen=5)
+        state.recent_replies[100] = deque(["длинный недавний ответ"], maxlen=20)
         state.note_chat_activity(100, now=10.0)
 
         state.forget_chat(100)
@@ -93,6 +97,7 @@ class TestRuntimeState(unittest.TestCase):
         self.assertEqual(state.last_reply_ts, {})
         self.assertEqual(state.learned_messages, {})
         self.assertEqual(state.recent_short_replies, {})
+        self.assertEqual(state.recent_replies, {})
 
 
 if __name__ == "__main__":
