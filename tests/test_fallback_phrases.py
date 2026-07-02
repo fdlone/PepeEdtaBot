@@ -1,0 +1,106 @@
+from __future__ import annotations
+
+import random
+import unittest
+
+from app.config.runtime_state import RuntimeState
+from app.presentation.fallback_phrases import (
+    GENERATION_FAILED_PHRASES,
+    NOT_ENOUGH_DATA_PHRASES,
+    pick_fallback_phrase,
+)
+
+
+def _make_runtime_state() -> RuntimeState:
+    return RuntimeState(
+        reply_probability=0.08,
+        min_cooldown_sec=45,
+        min_tokens_for_model=200,
+        max_reply_chars=280,
+        max_reply_tokens=45,
+        normalize_lower=False,
+        auto_capitalize_replies=False,
+        typing_min_ms=350,
+        typing_max_ms=1100,
+        typing_per_char_ms=12,
+        randomness_strength=2.0,
+        repetition_penalty_strength=1.0,
+        markov_order=3,
+        enable_backoff=True,
+        backoff_min_order=1,
+        use_reply_context=True,
+        fuzzy_context_casefold=True,
+        fuzzy_context_prefix=False,
+        reply_context_max_tokens=12,
+        reply_context_last_tokens=3,
+        reply_context_bias=1.8,
+        reply_context_start_bias=2.2,
+        reply_context_only_for_replies=True,
+        reply_context_include_current_message=True,
+        runtime_state_ttl_sec=10,
+        runtime_state_max_chats=8,
+    )
+
+
+class TestFallbackPools(unittest.TestCase):
+    def test_pools_are_non_trivial_and_unique(self) -> None:
+        for pool in (NOT_ENOUGH_DATA_PHRASES, GENERATION_FAILED_PHRASES):
+            self.assertGreaterEqual(len(pool), 10)
+            self.assertEqual(len(pool), len(set(pool)))
+            self.assertTrue(all(phrase.strip() for phrase in pool))
+
+
+class TestPickFallbackPhrase(unittest.TestCase):
+    def test_picks_from_pool(self) -> None:
+        phrase = pick_fallback_phrase(
+            NOT_ENOUGH_DATA_PHRASES, rng=random.Random(1)
+        )
+        self.assertIn(phrase, NOT_ENOUGH_DATA_PHRASES)
+
+    def test_avoids_recent_phrases(self) -> None:
+        pool = ("a", "b", "c")
+        rng = random.Random(7)
+        for _ in range(50):
+            self.assertEqual(pick_fallback_phrase(pool, ["a", "c"], rng=rng), "b")
+
+    def test_falls_back_to_full_pool_when_all_recent(self) -> None:
+        pool = ("a", "b")
+        phrase = pick_fallback_phrase(pool, ["a", "b"], rng=random.Random(3))
+        self.assertIn(phrase, pool)
+
+    def test_deterministic_with_seeded_rng(self) -> None:
+        first = pick_fallback_phrase(GENERATION_FAILED_PHRASES, rng=random.Random(42))
+        second = pick_fallback_phrase(GENERATION_FAILED_PHRASES, rng=random.Random(42))
+        self.assertEqual(first, second)
+
+
+class TestNextFallbackPhrase(unittest.TestCase):
+    def test_remembers_recent_per_chat_and_avoids_repeats(self) -> None:
+        from app.handlers.learning import RECENT_FALLBACK_LIMIT, next_fallback_phrase
+
+        state = _make_runtime_state()
+        rng = random.Random(5)
+        picked = [
+            next_fallback_phrase(state, 100, NOT_ENOUGH_DATA_PHRASES, rng=rng)
+            for _ in range(RECENT_FALLBACK_LIMIT + 1)
+        ]
+        # Consecutive picks within the memory window never repeat.
+        for index in range(1, len(picked)):
+            window = picked[max(0, index - RECENT_FALLBACK_LIMIT) : index]
+            self.assertNotIn(picked[index], window)
+        recent = state.recent_fallbacks[100]
+        self.assertEqual(recent.maxlen, RECENT_FALLBACK_LIMIT)
+        self.assertEqual(list(recent), picked[-RECENT_FALLBACK_LIMIT:])
+
+    def test_forget_chat_drops_fallback_memory(self) -> None:
+        from app.handlers.learning import next_fallback_phrase
+
+        state = _make_runtime_state()
+        next_fallback_phrase(state, 100, GENERATION_FAILED_PHRASES, rng=random.Random(1))
+        self.assertIn(100, state.recent_fallbacks)
+        state.forget_chat(100)
+        self.assertNotIn(100, state.recent_fallbacks)
+
+
+if __name__ == "__main__":
+    unittest.main()

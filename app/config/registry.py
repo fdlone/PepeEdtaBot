@@ -91,6 +91,8 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec("typing_min_ms", "TYPING_MIN_MS", "350", _int_min(0)),
     FieldSpec("typing_max_ms", "TYPING_MAX_MS", "1100", _int_min(0)),
+    FieldSpec("typing_per_char_ms", "TYPING_PER_CHAR_MS", "12",
+              _int_in_range(0, 200)),
     FieldSpec("randomness_strength", "RANDOMNESS_STRENGTH", "2.0",
               _float_in_range(0.0, 3.0)),
     FieldSpec("repetition_penalty_strength", "REPETITION_PENALTY_STRENGTH", "1.0",
@@ -102,7 +104,7 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec(
         "fuzzy_context_casefold",
         "FUZZY_CONTEXT_CASEFOLD",
-        "false",
+        "true",
         _parse_bool,
     ),
     FieldSpec(

@@ -23,6 +23,7 @@ def make_state() -> SimpleNamespace:
         normalize_lower=False,
         typing_min_ms=350,
         typing_max_ms=1100,
+        typing_per_char_ms=12,
         randomness_strength=2.0,
         repetition_penalty_strength=1.0,
         markov_order=3,

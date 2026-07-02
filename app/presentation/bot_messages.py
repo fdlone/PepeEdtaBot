@@ -78,6 +78,7 @@ def format_config_message(state: RuntimeState, full: bool = False) -> str:
                 f"normalize_lower={state.normalize_lower}",
                 f"typing_min_ms={state.typing_min_ms}",
                 f"typing_max_ms={state.typing_max_ms}",
+                f"typing_per_char_ms={state.typing_per_char_ms}",
                 f"markov_order={state.markov_order}",
                 f"enable_backoff={state.enable_backoff}",
                 f"backoff_min_order={state.backoff_min_order}",
