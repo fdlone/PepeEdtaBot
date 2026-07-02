@@ -19,6 +19,8 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
         "typing_max_ms": 1100,
         "typing_per_char_ms": 12,
         "randomness_strength": 2.0,
+        "candidate_selection_temperature": 0.7,
+        "reply_flavor_strength": 1.0,
         "repetition_penalty_strength": 1.0,
         "markov_order": 3,
         "enable_backoff": True,

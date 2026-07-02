@@ -33,6 +33,8 @@ class Settings:
     typing_max_ms: int
     typing_per_char_ms: int
     randomness_strength: float
+    candidate_selection_temperature: float
+    reply_flavor_strength: float
     repetition_penalty_strength: float
     markov_order: int
     enable_backoff: bool

@@ -43,6 +43,10 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.typing_max_ms = 0
     s.typing_per_char_ms = 0
     s.recent_fallbacks = {}
+    # Deterministic selection and untouched reply text so handler tests can
+    # assert generated candidates verbatim.
+    s.candidate_selection_temperature = 0.0
+    s.reply_flavor_strength = 0.0
     # Off by default so generated reply text is asserted verbatim; a bare
     # MagicMock attribute would be truthy and trigger reply capitalization.
     s.auto_capitalize_replies = False

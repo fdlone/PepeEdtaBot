@@ -66,6 +66,8 @@ def format_config_message(state: RuntimeState, full: bool = False) -> str:
         f"минимум модели: {state.min_tokens_for_model}",
         f"длина ответа: {state.max_reply_tokens} токенов",
         f"вариативность: {state.randomness_strength}",
+        f"температура отбора: {state.candidate_selection_temperature}",
+        f"вариатор формы: {state.reply_flavor_strength}",
         f"штраф повторов: {state.repetition_penalty_strength}",
         f"reply-контекст: {state.use_reply_context}",
     ]
