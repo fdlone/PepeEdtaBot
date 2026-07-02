@@ -1,15 +1,37 @@
 from __future__ import annotations
 
+import random
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
-from app.core.markov import content_tokens
+from app.core.markov import content_tokens, tokenize
 
 SHORT_REPLY_MAX_TOKENS = 3
 NATURAL_LENGTH_MIN = 5
 NATURAL_LENGTH_MAX = 14
 LONG_REPLY_SOFT_LIMIT = 24
+
+# Per-reply target length modes: the scorer's natural_length peak moves to the
+# sampled mode's band, so replies stop clustering in the 5-14 token range.
+LENGTH_MODES: tuple[str, ...] = ("short", "medium", "long")
+LENGTH_MODE_BANDS: dict[str, tuple[int, int]] = {
+    "short": (1, 4),
+    "medium": (NATURAL_LENGTH_MIN, NATURAL_LENGTH_MAX),
+    "long": (15, LONG_REPLY_SOFT_LIMIT),
+}
+# Tokens past the band's upper bound over which the score decays to 0.5
+# (matches the historical medium-band decay: 14 -> 24).
+NATURAL_LENGTH_DECAY_SPAN = LONG_REPLY_SOFT_LIMIT - NATURAL_LENGTH_MAX
+
+
+def sample_length_mode(
+    weights: tuple[float, float, float],
+    rng: random.Random,
+) -> str:
+    """Pick a target length mode using short/medium/long weights."""
+    return rng.choices(population=LENGTH_MODES, weights=weights, k=1)[0]
 
 CLEAN_END_BONUS = 0.35
 BALANCED_DELIMITERS_BONUS = 0.25
@@ -34,6 +56,7 @@ class CandidateScore:
     natural_length: float
     context_relevance: float
     repetition_penalty: float
+    recent_penalty: float = 0.0
 
     @property
     def total(self) -> float:
@@ -43,6 +66,7 @@ class CandidateScore:
             + self.natural_length
             + self.context_relevance
             - self.repetition_penalty
+            - self.recent_penalty
         )
 
 
@@ -112,18 +136,20 @@ def lexical_diversity(tokens: list[str]) -> float:
     return diversity * LEXICAL_DIVERSITY_WEIGHT
 
 
-def natural_length(tokens: list[str]) -> float:
+def natural_length(tokens: list[str], mode: str = "medium") -> float:
+    lower, upper = LENGTH_MODE_BANDS[mode]
     length = len(_normalized_content(tokens))
     if length <= 0:
         return 0.0
-    if length < NATURAL_LENGTH_MIN:
-        return NATURAL_LENGTH_WEIGHT * (0.40 + 0.12 * length)
-    if length <= NATURAL_LENGTH_MAX:
+    if length < lower:
+        return NATURAL_LENGTH_WEIGHT * (0.40 + 0.50 * length / lower)
+    if length <= upper:
         return NATURAL_LENGTH_WEIGHT
-    if length <= LONG_REPLY_SOFT_LIMIT:
-        excess = length - NATURAL_LENGTH_MAX
-        span = LONG_REPLY_SOFT_LIMIT - NATURAL_LENGTH_MAX
-        return NATURAL_LENGTH_WEIGHT * (1.0 - 0.5 * excess / span)
+    excess = length - upper
+    if excess <= NATURAL_LENGTH_DECAY_SPAN:
+        return NATURAL_LENGTH_WEIGHT * (
+            1.0 - 0.5 * excess / NATURAL_LENGTH_DECAY_SPAN
+        )
     return NATURAL_LENGTH_WEIGHT * 0.5
 
 
@@ -162,15 +188,47 @@ def repetition_penalty(tokens: list[str]) -> float:
     )
 
 
+def build_recent_reply_trigrams(
+    recent_texts: Iterable[str],
+) -> set[tuple[str, str, str]]:
+    """Collect content trigrams of recently sent replies for overlap penalties."""
+    trigrams: set[tuple[str, str, str]] = set()
+    for text in recent_texts:
+        content = _normalized_content(tokenize(text))
+        trigrams.update(
+            (content[index], content[index + 1], content[index + 2])
+            for index in range(len(content) - 2)
+        )
+    return trigrams
+
+
+def recent_reply_overlap(
+    tokens: list[str],
+    recent_trigrams: set[tuple[str, str, str]],
+) -> float:
+    """Share of the candidate's content trigrams already seen in recent replies."""
+    if not recent_trigrams:
+        return 0.0
+    content = _normalized_content(tokens)
+    if len(content) < 3:
+        return 0.0
+    candidate_trigrams = {
+        (content[index], content[index + 1], content[index + 2])
+        for index in range(len(content) - 2)
+    }
+    return len(candidate_trigrams & recent_trigrams) / len(candidate_trigrams)
+
+
 def score_candidate(
     text: str,
     tokens: list[str],
     context_tokens: list[str],
+    length_mode: str = "medium",
 ) -> CandidateScore:
     return CandidateScore(
         completion_quality=completion_quality(text, tokens),
         lexical_diversity=lexical_diversity(tokens),
-        natural_length=natural_length(tokens),
+        natural_length=natural_length(tokens, length_mode),
         context_relevance=context_relevance(tokens, context_tokens),
         repetition_penalty=repetition_penalty(tokens),
     )

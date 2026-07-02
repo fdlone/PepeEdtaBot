@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import random
 import unittest
 
 from app.core.candidate_scorer import (
     CONTEXT_RELEVANCE_CAP,
+    LENGTH_MODES,
+    build_recent_reply_trigrams,
     completion_quality,
     context_relevance,
     lexical_diversity,
     natural_length,
+    recent_reply_overlap,
     repetition_penalty,
+    sample_length_mode,
     score_candidate,
 )
 from app.core.markov import tokenize
@@ -59,6 +64,39 @@ class TestCandidateScorer(unittest.TestCase):
         self.assertGreater(natural, short)
         self.assertGreater(natural, long)
 
+    def test_natural_length_peak_follows_mode(self) -> None:
+        short_text = tokenize("один два")
+        medium_text = tokenize("один два три четыре пять шесть семь")
+        long_text = tokenize(" ".join(f"слово{i}" for i in range(18)))
+
+        self.assertEqual(natural_length(short_text, "short"), 1.0)
+        self.assertLess(natural_length(medium_text, "short"), 1.0)
+        self.assertEqual(natural_length(medium_text, "medium"), 1.0)
+        self.assertLess(natural_length(short_text, "long"), 1.0)
+        self.assertEqual(natural_length(long_text, "long"), 1.0)
+        self.assertLess(natural_length(long_text, "medium"), 1.0)
+
+    def test_natural_length_default_mode_is_medium(self) -> None:
+        tokens = tokenize("один два три четыре пять шесть")
+
+        self.assertEqual(natural_length(tokens), natural_length(tokens, "medium"))
+
+    def test_sample_length_mode_respects_degenerate_weights(self) -> None:
+        rng = random.Random(7)
+        for index, mode in enumerate(LENGTH_MODES):
+            weights = tuple(
+                1.0 if position == index else 0.0 for position in range(3)
+            )
+            picked = {sample_length_mode(weights, rng) for _ in range(20)}
+            self.assertEqual(picked, {mode})
+
+    def test_sample_length_mode_covers_all_modes(self) -> None:
+        rng = random.Random(11)
+        picked = {
+            sample_length_mode((0.25, 0.55, 0.2), rng) for _ in range(300)
+        }
+        self.assertEqual(picked, set(LENGTH_MODES))
+
     def test_repetition_penalty_counts_tokens_bigrams_and_trigrams(self) -> None:
         clean = repetition_penalty(tokenize("один два три четыре пять"))
         repeated = repetition_penalty(tokenize("эхо эхо эхо эхо эхо"))
@@ -80,5 +118,38 @@ class TestCandidateScorer(unittest.TestCase):
             + first.lexical_diversity
             + first.natural_length
             + first.context_relevance
-            - first.repetition_penalty,
+            - first.repetition_penalty
+            - first.recent_penalty,
         )
+        self.assertEqual(first.recent_penalty, 0.0)
+
+    def test_recent_reply_overlap_measures_shared_trigrams(self) -> None:
+        recent = build_recent_reply_trigrams(["один два три четыре пять"])
+
+        full = recent_reply_overlap(
+            tokenize("один два три четыре пять"), recent
+        )
+        partial = recent_reply_overlap(
+            tokenize("один два три совсем другое"), recent
+        )
+        fresh = recent_reply_overlap(
+            tokenize("совсем новый текст ответа"), recent
+        )
+
+        self.assertEqual(full, 1.0)
+        self.assertGreater(partial, 0.0)
+        self.assertLess(partial, 1.0)
+        self.assertEqual(fresh, 0.0)
+
+    def test_recent_reply_overlap_is_case_and_punctuation_insensitive(self) -> None:
+        recent = build_recent_reply_trigrams(["Один Два Три!"])
+
+        self.assertEqual(
+            recent_reply_overlap(tokenize("один два три"), recent), 1.0
+        )
+
+    def test_recent_reply_overlap_ignores_short_candidates(self) -> None:
+        recent = build_recent_reply_trigrams(["один два три четыре"])
+
+        self.assertEqual(recent_reply_overlap(tokenize("один два"), recent), 0.0)
+        self.assertEqual(recent_reply_overlap(tokenize("один два три"), set()), 0.0)

@@ -31,6 +31,9 @@ def _runtime_state() -> MagicMock:
     state.fuzzy_context_prefix = False
     state.auto_capitalize_replies = False
     state.recent_short_replies = {}
+    state.recent_replies = {}
+    state.recent_reply_penalty_strength = 1.0
+    state.length_mode_weights = (0.25, 0.55, 0.2)
     # Argmax selection and no ending transforms: existing tests assert the
     # best-scored candidate text verbatim.
     state.candidate_selection_temperature = 0.0
@@ -171,7 +174,9 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             "best candidate": _score(3.0),
             "third candidate": _score(2.0),
         }
-        scorer = MagicMock(side_effect=lambda text, tokens, context: scores[text])
+        scorer = MagicMock(
+            side_effect=lambda text, tokens, context, length_mode: scores[text]
+        )
         response_generator = ResponseGenerator(
             generator=generator,
             learning_service=learning_service,
@@ -274,6 +279,184 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 select_scored_candidate(candidates, 0.0, rng).text, "best"
             )
+
+    async def test_recent_full_reply_is_rejected_and_retried(self) -> None:
+        state = _runtime_state()
+        state.recent_replies = {
+            123: deque(["дубль полного ответа"], maxlen=20)
+        }
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(
+            side_effect=["Дубль полного ответа.", "свежий ответ на этот раз"]
+        )
+        learning_service = AsyncMock()
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        scorer = MagicMock(return_value=_score(1.0))
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=scorer,
+        )
+
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            result = await response_generator.generate(
+                _request(),
+                rng=random.Random(41),
+                candidate_target=1,
+            )
+
+        self.assertEqual(result, "свежий ответ на этот раз")
+        scorer.assert_called_once()
+
+    async def test_recent_trigram_overlap_penalizes_candidate(self) -> None:
+        state = _runtime_state()
+        state.recent_replies = {
+            123: deque(["один два три четыре пять"], maxlen=20)
+        }
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(
+            side_effect=[
+                "один два три четыре шесть",
+                "совсем другой свежий ответ",
+            ]
+        )
+        learning_service = AsyncMock()
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        scorer = MagicMock(return_value=_score(1.0))
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=scorer,
+        )
+
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            result = await response_generator.generate(
+                _request(),
+                rng=random.Random(43),
+                candidate_target=2,
+            )
+
+        # Equal base scores: the trigram-overlap penalty must flip argmax
+        # away from the first-seen (overlapping) candidate.
+        self.assertEqual(result, "совсем другой свежий ответ")
+
+    async def test_zero_recent_penalty_strength_disables_soft_penalty(self) -> None:
+        state = _runtime_state()
+        state.recent_reply_penalty_strength = 0.0
+        state.recent_replies = {
+            123: deque(["один два три четыре пять"], maxlen=20)
+        }
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(
+            side_effect=[
+                "один два три четыре шесть",
+                "совсем другой свежий ответ",
+            ]
+        )
+        learning_service = AsyncMock()
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(1.0)),
+        )
+
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            result = await response_generator.generate(
+                _request(),
+                rng=random.Random(47),
+                candidate_target=2,
+            )
+
+        # Penalty off: ties resolve to the first-seen candidate again.
+        self.assertEqual(result, "один два три четыре шесть")
+
+    async def test_short_length_mode_caps_generator_max_tokens(self) -> None:
+        from app.core.response_generator import SHORT_MODE_MAX_TOKENS
+
+        state = _runtime_state()
+        state.length_mode_weights = (1.0, 0.0, 0.0)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="короткий ответ")
+        scorer = MagicMock(return_value=_score(1.0))
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=AsyncMock(),
+            runtime_state=state,
+            scorer=scorer,
+        )
+
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            await response_generator.generate(
+                _request(),
+                rng=random.Random(53),
+                candidate_target=1,
+            )
+
+        self.assertEqual(
+            generator.generate_text.await_args.kwargs["max_tokens"],
+            SHORT_MODE_MAX_TOKENS,
+        )
+        self.assertEqual(scorer.call_args.args[3], "short")
+
+    async def test_long_length_mode_keeps_max_tokens_and_reaches_scorer(
+        self,
+    ) -> None:
+        state = _runtime_state()
+        state.length_mode_weights = (0.0, 0.0, 1.0)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="длинный ответ важен")
+        scorer = MagicMock(return_value=_score(1.0))
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=AsyncMock(),
+            runtime_state=state,
+            scorer=scorer,
+        )
+
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            await response_generator.generate(
+                _request(),
+                rng=random.Random(59),
+                candidate_target=1,
+            )
+
+        self.assertEqual(
+            generator.generate_text.await_args.kwargs["max_tokens"],
+            state.max_reply_tokens,
+        )
+        self.assertEqual(scorer.call_args.args[3], "long")
+
+    async def test_normalize_reply_for_repeat_strips_flavor_ending(self) -> None:
+        from app.core.response_generator import normalize_reply_for_repeat
+
+        self.assertEqual(
+            normalize_reply_for_repeat("Привет как дела..."),
+            normalize_reply_for_repeat("привет как дела!"),
+        )
+        self.assertEqual(
+            normalize_reply_for_repeat("Привет как дела."),
+            "привет как дела",
+        )
+
+    async def test_remember_recent_reply_keeps_rolling_window(self) -> None:
+        from app.core.response_generator import (
+            RECENT_REPLY_LIMIT,
+            remember_recent_reply,
+        )
+
+        state = _runtime_state()
+        state.recent_replies = {}
+        for index in range(RECENT_REPLY_LIMIT + 5):
+            remember_recent_reply(state, 123, f"ответ номер {index}")
+
+        recent = state.recent_replies[123]
+        self.assertEqual(len(recent), RECENT_REPLY_LIMIT)
+        self.assertNotIn("ответ номер 0", recent)
+        self.assertIn(f"ответ номер {RECENT_REPLY_LIMIT + 4}", recent)
 
     async def test_flavor_strength_applies_to_selected_text(self) -> None:
         state = _runtime_state()

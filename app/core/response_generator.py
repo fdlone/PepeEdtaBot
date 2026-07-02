@@ -3,12 +3,19 @@ from __future__ import annotations
 import logging
 import math
 import random
+from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from app.config.runtime_state import RuntimeState
-from app.core.candidate_scorer import CandidateScore, score_candidate
+from app.core.candidate_scorer import (
+    CandidateScore,
+    build_recent_reply_trigrams,
+    recent_reply_overlap,
+    sample_length_mode,
+    score_candidate,
+)
 from app.core.markov import (
     MarkovGenerator,
     escalated_randomness_strength,
@@ -30,8 +37,17 @@ CANDIDATE_TARGET = 5
 # still letting near-best candidates win: with margin 1.0 the synthetic eval's
 # context_token_overlap collapsed from 0.38 to 0.13.
 SELECTION_SCORE_MARGIN = 0.5
+# How many recently sent replies are remembered per chat for the full-reply
+# anti-repeat: exact re-sends are rejected, partial (trigram) overlap is
+# penalized before softmax selection.
+RECENT_REPLY_LIMIT = 20
+# In "short" length mode the Markov walk itself is capped so candidates
+# actually come out short instead of only being re-ranked by the scorer.
+# 8 raw tokens chosen by eval sweep: cap 6 starved generation on the
+# synthetic corpus (11% empty results), 8 shifts lengths with ~1% empties.
+SHORT_MODE_MAX_TOKENS = 8
 
-CandidateScorer = Callable[[str, list[str], list[str]], CandidateScore]
+CandidateScorer = Callable[[str, list[str], list[str], str], CandidateScore]
 
 
 class VerbatimCopyChecker(Protocol):
@@ -97,6 +113,42 @@ def was_recent_short_reply(
     return sanitize_text(candidate).lower() in recent
 
 
+def normalize_reply_for_repeat(text: str) -> str:
+    """Normalize a reply for full-text anti-repeat comparison.
+
+    The trailing punctuation cluster is stripped so a pre-flavor candidate
+    matches its post-flavor sent form (the flavor pass only rewrites the
+    ending punctuation).
+    """
+    return sanitize_text(text).lower().rstrip(" .!?…")
+
+
+def remember_recent_reply(
+    runtime_state: RuntimeState,
+    chat_id: int,
+    reply_text: str,
+) -> None:
+    normalized = normalize_reply_for_repeat(reply_text)
+    if not normalized:
+        return
+    recent = runtime_state.recent_replies.get(chat_id)
+    if recent is None:
+        recent = deque(maxlen=RECENT_REPLY_LIMIT)
+        runtime_state.recent_replies[chat_id] = recent
+    recent.append(normalized)
+
+
+def was_recent_reply(
+    runtime_state: RuntimeState,
+    chat_id: int,
+    candidate: str,
+) -> bool:
+    recent = runtime_state.recent_replies.get(chat_id)
+    if not recent:
+        return False
+    return normalize_reply_for_repeat(candidate) in recent
+
+
 @dataclass(slots=True)
 class ResponseGenerator:
     generator: MarkovGenerator
@@ -128,6 +180,21 @@ class ResponseGenerator:
         target = max(1, min(candidate_target, GENERATION_ATTEMPT_BUDGET))
         candidates: list[_ScoredCandidate] = []
         seen_candidates: set[str] = set()
+        recent_penalty_strength = self.runtime_state.recent_reply_penalty_strength
+        recent_trigrams = (
+            build_recent_reply_trigrams(
+                self.runtime_state.recent_replies.get(request.chat_id) or ()
+            )
+            if recent_penalty_strength > 0.0
+            else set()
+        )
+        length_mode = sample_length_mode(
+            self.runtime_state.length_mode_weights,
+            generation_rng,
+        )
+        max_tokens = self.runtime_state.max_reply_tokens
+        if length_mode == "short":
+            max_tokens = min(max_tokens, SHORT_MODE_MAX_TOKENS)
 
         for attempt in range(GENERATION_ATTEMPT_BUDGET):
             attempt_context_tokens = (
@@ -143,7 +210,7 @@ class ResponseGenerator:
             candidate = await self.generator.generate_text(
                 chat_id=request.chat_id,
                 max_chars=self.runtime_state.max_reply_chars,
-                max_tokens=self.runtime_state.max_reply_tokens,
+                max_tokens=max_tokens,
                 seed_tokens=seed,
                 context_tokens=attempt_context_tokens,
                 context_bias=self.runtime_state.reply_context_bias,
@@ -191,6 +258,17 @@ class ResponseGenerator:
                         mask_chat_id(request.chat_id),
                         attempt + 1,
                     )
+                elif was_recent_reply(
+                    self.runtime_state,
+                    request.chat_id,
+                    candidate,
+                ):
+                    logger.debug(
+                        "Generated reply repeats a recently sent one, retrying: "
+                        "chat=%s attempt=%s",
+                        mask_chat_id(request.chat_id),
+                        attempt + 1,
+                    )
                 elif (
                     not is_short_candidate
                     and await self.learning_service.is_verbatim_copy(
@@ -214,15 +292,22 @@ class ResponseGenerator:
                     )
                     if candidate not in seen_candidates:
                         seen_candidates.add(candidate)
-                        candidates.append(
-                            _ScoredCandidate(
-                                text=candidate,
-                                score=self.scorer(
-                                    candidate,
-                                    candidate_tokens,
-                                    request.context_tokens,
+                        score = self.scorer(
+                            candidate,
+                            candidate_tokens,
+                            request.context_tokens,
+                            length_mode,
+                        )
+                        if recent_trigrams:
+                            score = replace(
+                                score,
+                                recent_penalty=recent_penalty_strength
+                                * recent_reply_overlap(
+                                    candidate_tokens, recent_trigrams
                                 ),
                             )
+                        candidates.append(
+                            _ScoredCandidate(text=candidate, score=score)
                         )
                         if len(candidates) >= target:
                             break
