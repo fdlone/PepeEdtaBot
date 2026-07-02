@@ -31,6 +31,10 @@ def _runtime_state() -> MagicMock:
     state.fuzzy_context_prefix = False
     state.auto_capitalize_replies = False
     state.recent_short_replies = {}
+    # Argmax selection and no ending transforms: existing tests assert the
+    # best-scored candidate text verbatim.
+    state.candidate_selection_temperature = 0.0
+    state.reply_flavor_strength = 0.0
     return state
 
 
@@ -234,6 +238,67 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "first choice")
         self.assertLessEqual(CANDIDATE_TARGET, GENERATION_ATTEMPT_BUDGET)
+
+    async def test_softmax_selection_stays_within_score_margin(self) -> None:
+        from app.core.response_generator import (
+            SELECTION_SCORE_MARGIN,
+            _ScoredCandidate,
+            select_scored_candidate,
+        )
+
+        candidates = [
+            _ScoredCandidate(text="best", score=_score(3.0)),
+            _ScoredCandidate(text="close", score=_score(3.0 - SELECTION_SCORE_MARGIN / 2)),
+            _ScoredCandidate(text="weak", score=_score(0.0)),
+        ]
+        rng = random.Random(31)
+        picked = {
+            select_scored_candidate(candidates, 0.7, rng).text for _ in range(500)
+        }
+        self.assertIn("best", picked)
+        self.assertIn("close", picked)
+        self.assertNotIn("weak", picked)
+
+    async def test_zero_temperature_is_argmax(self) -> None:
+        from app.core.response_generator import (
+            _ScoredCandidate,
+            select_scored_candidate,
+        )
+
+        candidates = [
+            _ScoredCandidate(text="best", score=_score(3.0)),
+            _ScoredCandidate(text="close", score=_score(2.9)),
+        ]
+        rng = random.Random(37)
+        for _ in range(50):
+            self.assertEqual(
+                select_scored_candidate(candidates, 0.0, rng).text, "best"
+            )
+
+    async def test_flavor_strength_applies_to_selected_text(self) -> None:
+        state = _runtime_state()
+        state.reply_flavor_strength = 2.0
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="стабильный ответ.")
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=AsyncMock(),
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(1.0)),
+        )
+
+        endings: set[str] = set()
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            for seed in range(40):
+                result = await response_generator.generate(
+                    _request(),
+                    rng=random.Random(seed),
+                    candidate_target=1,
+                )
+                assert result is not None
+                self.assertTrue(result.startswith("стабильный ответ"))
+                endings.add(result.removeprefix("стабильный ответ"))
+        self.assertGreater(len(endings), 1)
 
     async def test_auto_capitalization_only_changes_final_selected_text(self) -> None:
         candidate = "привет. hello!"

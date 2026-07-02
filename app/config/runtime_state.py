@@ -18,7 +18,10 @@ class RuntimeState:
     auto_capitalize_replies: bool
     typing_min_ms: int
     typing_max_ms: int
+    typing_per_char_ms: int
     randomness_strength: float
+    candidate_selection_temperature: float
+    reply_flavor_strength: float
     repetition_penalty_strength: float
     markov_order: int
     enable_backoff: bool
@@ -37,6 +40,7 @@ class RuntimeState:
     last_reply_ts: dict[int, float] = field(default_factory=dict)
     learned_messages: dict[int, int] = field(default_factory=dict)
     recent_short_replies: dict[int, deque[str]] = field(default_factory=dict)
+    recent_fallbacks: dict[int, deque[str]] = field(default_factory=dict)
     _last_chat_activity: dict[int, float] = field(default_factory=dict)
     _cleanup_tick: int = 0
 
@@ -53,6 +57,7 @@ class RuntimeState:
         self.last_reply_ts.pop(chat_id, None)
         self.learned_messages.pop(chat_id, None)
         self.recent_short_replies.pop(chat_id, None)
+        self.recent_fallbacks.pop(chat_id, None)
         self._last_chat_activity.pop(chat_id, None)
 
     def prune_inactive(self, now: float) -> None:

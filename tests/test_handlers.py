@@ -6,6 +6,7 @@ the right service methods and reply to the message.
 """
 from __future__ import annotations
 
+import random
 import unittest
 from collections import deque
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -40,6 +41,12 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s = MagicMock()
     s.typing_min_ms = 0
     s.typing_max_ms = 0
+    s.typing_per_char_ms = 0
+    s.recent_fallbacks = {}
+    # Deterministic selection and untouched reply text so handler tests can
+    # assert generated candidates verbatim.
+    s.candidate_selection_temperature = 0.0
+    s.reply_flavor_strength = 0.0
     # Off by default so generated reply text is asserted verbatim; a bare
     # MagicMock attribute would be truthy and trigger reply capitalization.
     s.auto_capitalize_replies = False
@@ -512,6 +519,41 @@ class TestReplyHumanizedResilience(unittest.IsolatedAsyncioTestCase):
         msg.bot.send_chat_action.assert_awaited_once()
         msg.reply.assert_awaited_once_with("ответ")
 
+class TestComputeTypingDelay(unittest.TestCase):
+    def test_zero_per_char_keeps_base_range(self) -> None:
+        from app.handlers._helpers import compute_typing_delay_ms
+
+        rng = random.Random(1)
+        for _ in range(20):
+            delay = compute_typing_delay_ms(500, 350, 1100, 0, rng=rng)
+            self.assertGreaterEqual(delay, 350)
+            self.assertLessEqual(delay, 1100)
+
+    def test_longer_text_waits_longer(self) -> None:
+        from app.handlers._helpers import compute_typing_delay_ms
+
+        short = compute_typing_delay_ms(10, 350, 350, 12, rng=random.Random(1))
+        long = compute_typing_delay_ms(200, 350, 350, 12, rng=random.Random(1))
+        self.assertEqual(short, 350 + 10 * 12)
+        self.assertEqual(long, 350 + 200 * 12)
+
+    def test_delay_is_capped(self) -> None:
+        from app.handlers._helpers import (
+            TYPING_HARD_CAP_MS,
+            compute_typing_delay_ms,
+        )
+
+        delay = compute_typing_delay_ms(4000, 350, 1100, 200, rng=random.Random(1))
+        self.assertEqual(delay, TYPING_HARD_CAP_MS)
+
+    def test_cap_never_cuts_below_configured_max(self) -> None:
+        from app.handlers._helpers import compute_typing_delay_ms
+
+        delay = compute_typing_delay_ms(0, 5000, 5000, 0, rng=random.Random(1))
+        self.assertEqual(delay, 5000)
+
+
+class TestPivoChatActionResilience(unittest.IsolatedAsyncioTestCase):
     async def test_pivo_on_still_subscribes_even_when_chat_action_fails(self) -> None:
         from app.handlers.pivo import cmd_pivo_on
 
@@ -699,7 +741,10 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume.assert_awaited_once_with(msg.chat.id)
         learning_service.record_message.assert_awaited_once()
         generator.generate_text.assert_not_awaited()
-        msg.reply.assert_awaited_once_with("Пока мало материала, поболтайте ещё 🙂")
+        from app.presentation.fallback_phrases import NOT_ENOUGH_DATA_PHRASES
+
+        msg.reply.assert_awaited_once()
+        self.assertIn(msg.reply.await_args.args[0], NOT_ENOUGH_DATA_PHRASES)
 
     async def test_current_incoming_message_copy_is_rejected(self) -> None:
         from app.handlers.learning import on_text_message
@@ -797,9 +842,10 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             call.kwargs["rng"] for call in generator.generate_text.await_args_list
         ]
         self.assertTrue(all(rng is generation_rngs[0] for rng in generation_rngs))
-        msg.reply.assert_awaited_once_with(
-            "Собираю мысли... Напишите ещё пару сообщений 🙂"
-        )
+        from app.presentation.fallback_phrases import GENERATION_FAILED_PHRASES
+
+        msg.reply.assert_awaited_once()
+        self.assertIn(msg.reply.await_args.args[0], GENERATION_FAILED_PHRASES)
 
     async def test_prefix_rejection_gets_extra_retry_budget(self) -> None:
         from app.handlers.learning import on_text_message

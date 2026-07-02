@@ -202,6 +202,8 @@ async def evaluate_generation(
             generator = _InstrumentedMarkovGenerator(db)
             runtime_state = SimpleNamespace(
                 randomness_strength=2.0,
+                candidate_selection_temperature=0.7,
+                reply_flavor_strength=1.0,
                 max_reply_chars=280,
                 max_reply_tokens=45,
                 reply_context_bias=1.8,

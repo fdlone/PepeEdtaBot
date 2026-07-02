@@ -66,6 +66,8 @@ def format_config_message(state: RuntimeState, full: bool = False) -> str:
         f"минимум модели: {state.min_tokens_for_model}",
         f"длина ответа: {state.max_reply_tokens} токенов",
         f"вариативность: {state.randomness_strength}",
+        f"температура отбора: {state.candidate_selection_temperature}",
+        f"вариатор формы: {state.reply_flavor_strength}",
         f"штраф повторов: {state.repetition_penalty_strength}",
         f"reply-контекст: {state.use_reply_context}",
     ]
@@ -78,6 +80,7 @@ def format_config_message(state: RuntimeState, full: bool = False) -> str:
                 f"normalize_lower={state.normalize_lower}",
                 f"typing_min_ms={state.typing_min_ms}",
                 f"typing_max_ms={state.typing_max_ms}",
+                f"typing_per_char_ms={state.typing_per_char_ms}",
                 f"markov_order={state.markov_order}",
                 f"enable_backoff={state.enable_backoff}",
                 f"backoff_min_order={state.backoff_min_order}",

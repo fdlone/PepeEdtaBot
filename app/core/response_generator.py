@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import random
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from app.core.markov import (
     is_short_generated_reply,
     tokenize,
 )
+from app.core.reply_flavor import apply_reply_flavor
 from app.core.text import capitalize_reply_sentences, sanitize_text
 from app.log_masking import mask_chat_id
 
@@ -22,6 +24,12 @@ logger = logging.getLogger("chat_markov")
 GENERATION_ATTEMPT_BUDGET = 10
 GENERATION_ATTEMPTS_WITH_CONTEXT = 5
 CANDIDATE_TARGET = 5
+# Softmax candidate selection only considers candidates whose score is within
+# this margin of the best one; clearly weaker candidates never win the roll.
+# 0.5 keeps context relevance influential (its score weight caps at 0.8) while
+# still letting near-best candidates win: with margin 1.0 the synthetic eval's
+# context_token_overlap collapsed from 0.38 to 0.13.
+SELECTION_SCORE_MARGIN = 0.5
 
 CandidateScorer = Callable[[str, list[str], list[str]], CandidateScore]
 
@@ -48,6 +56,34 @@ class ResponseGenerationResult:
 class _ScoredCandidate:
     text: str
     score: CandidateScore
+
+
+def select_scored_candidate(
+    candidates: list[_ScoredCandidate],
+    temperature: float,
+    rng: random.Random,
+) -> _ScoredCandidate:
+    """Pick a candidate via softmax over scores; temperature 0 means argmax.
+
+    Sampling within SELECTION_SCORE_MARGIN of the best score keeps the
+    long-tail (odd but valid) candidates reachable instead of always
+    collapsing onto the single "safest" reply.
+    """
+    best = max(candidates, key=lambda candidate: candidate.score.total)
+    if temperature <= 0.0 or len(candidates) == 1:
+        return best
+    eligible = [
+        candidate
+        for candidate in candidates
+        if candidate.score.total >= best.score.total - SELECTION_SCORE_MARGIN
+    ]
+    if len(eligible) == 1:
+        return eligible[0]
+    weights = [
+        math.exp((candidate.score.total - best.score.total) / temperature)
+        for candidate in eligible
+    ]
+    return rng.choices(population=eligible, weights=weights, k=1)[0]
 
 
 def was_recent_short_reply(
@@ -195,11 +231,20 @@ class ResponseGenerator:
 
         if not candidates:
             return ResponseGenerationResult(text=None, candidates_scored=0)
-        selected = max(candidates, key=lambda candidate: candidate.score.total)
+        selected = select_scored_candidate(
+            candidates,
+            self.runtime_state.candidate_selection_temperature,
+            generation_rng,
+        )
         text = (
             capitalize_reply_sentences(selected.text)
             if self.runtime_state.auto_capitalize_replies
             else selected.text
+        )
+        text = apply_reply_flavor(
+            text,
+            generation_rng,
+            self.runtime_state.reply_flavor_strength,
         )
         return ResponseGenerationResult(
             text=text,

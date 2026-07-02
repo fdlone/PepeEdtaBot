@@ -28,6 +28,11 @@ from app.core.response_generator import (
 from app.core.text import sanitize_text
 from app.handlers._helpers import is_group_message, reply_humanized
 from app.log_masking import mask_chat_id
+from app.presentation.fallback_phrases import (
+    GENERATION_FAILED_PHRASES,
+    NOT_ENOUGH_DATA_PHRASES,
+    pick_fallback_phrase,
+)
 from app.services import LearningService
 
 router = Router(name="learning")
@@ -37,6 +42,7 @@ MIN_LEARN_MESSAGE_CHARS = 3
 MAX_LEARN_MESSAGE_CHARS = 500
 MIN_LEARN_MESSAGE_TOKENS = 2
 RECENT_SHORT_REPLY_LIMIT = 5
+RECENT_FALLBACK_LIMIT = 3
 
 # Leading direct-address to the bot: "<alias><separator> ...". Only a leading
 # bot alias followed by a vocative separator is stripped, so the corpus does not
@@ -77,6 +83,22 @@ def remember_short_reply(
         recent = deque(maxlen=RECENT_SHORT_REPLY_LIMIT)
         runtime_state.recent_short_replies[chat_id] = recent
     recent.append(normalize_short_reply_text(reply_text))
+
+
+def next_fallback_phrase(
+    runtime_state: RuntimeState,
+    chat_id: int,
+    pool: tuple[str, ...],
+    rng: random.Random | None = None,
+) -> str:
+    """Pick a fallback phrase avoiding the ones used recently in this chat."""
+    recent = runtime_state.recent_fallbacks.get(chat_id)
+    if recent is None:
+        recent = deque(maxlen=RECENT_FALLBACK_LIMIT)
+        runtime_state.recent_fallbacks[chat_id] = recent
+    phrase = pick_fallback_phrase(pool, recent, rng=rng)
+    recent.append(phrase)
+    return phrase
 
 
 def extract_context_tokens(
@@ -166,9 +188,12 @@ async def on_text_message(
         if mentioned and not enough_data:
             await reply_humanized(
                 message,
-                "Пока мало материала, поболтайте ещё 🙂",
+                next_fallback_phrase(
+                    runtime_state, message.chat.id, NOT_ENOUGH_DATA_PHRASES
+                ),
                 runtime_state.typing_min_ms,
                 runtime_state.typing_max_ms,
+                typing_per_char_ms=runtime_state.typing_per_char_ms,
             )
             return
 
@@ -247,9 +272,12 @@ async def on_text_message(
             if mentioned:
                 await reply_humanized(
                     message,
-                    "Собираю мысли... Напишите ещё пару сообщений 🙂",
+                    next_fallback_phrase(
+                        runtime_state, message.chat.id, GENERATION_FAILED_PHRASES
+                    ),
                     runtime_state.typing_min_ms,
                     runtime_state.typing_max_ms,
+                    typing_per_char_ms=runtime_state.typing_per_char_ms,
                 )
                 runtime_state.last_reply_ts[message.chat.id] = now
             logger.debug(
@@ -265,6 +293,7 @@ async def on_text_message(
             reply_text,
             runtime_state.typing_min_ms,
             runtime_state.typing_max_ms,
+            typing_per_char_ms=runtime_state.typing_per_char_ms,
         )
         if is_short_generated_reply(
             tokenize(reply_text, normalize_lower=runtime_state.normalize_lower)
