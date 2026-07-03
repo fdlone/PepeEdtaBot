@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from typing import Optional, TypeVar
 
@@ -14,7 +15,13 @@ from app.config.defaults import (
 )
 from app.core.text import sanitize_text
 from app.infrastructure import migrator
-from app.repositories import ChatMembersRepo, MarkovRepo, MessagesRepo, PivoUsageRepo
+from app.repositories import (
+    ChatMembersRepo,
+    MarkovRepo,
+    MessagesRepo,
+    PivoPoolUsageRepo,
+    PivoUsageRepo,
+)
 
 PIVO_DAILY_USAGE_RETENTION_DAYS = 7
 
@@ -48,6 +55,7 @@ class Database:
         self.messages: Optional[MessagesRepo] = None
         self.chat_members: Optional[ChatMembersRepo] = None
         self.pivo_usage: Optional[PivoUsageRepo] = None
+        self.pivo_pool_usage: Optional[PivoPoolUsageRepo] = None
 
     async def _get_conn(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -83,6 +91,7 @@ class Database:
         self.messages = MessagesRepo(self._get_conn, self._lock)
         self.chat_members = ChatMembersRepo(self._get_conn, self._lock)
         self.pivo_usage = PivoUsageRepo(self._get_conn, self._lock)
+        self.pivo_pool_usage = PivoPoolUsageRepo(self._get_conn, self._lock)
         await self.cleanup_pivo_daily_usage()
 
     async def close(self) -> None:
@@ -93,6 +102,7 @@ class Database:
         self.messages = None
         self.chat_members = None
         self.pivo_usage = None
+        self.pivo_pool_usage = None
 
     async def save_message_and_update_model(
         self, chat_id: int, raw_text: str, tokens: list[str]
@@ -350,6 +360,18 @@ class Database:
             user_hash=user_hash,
             usage_day=usage_day,
         )
+
+    async def get_pivo_pool_usage(self, chat_hash: str) -> dict[str, tuple[int, ...]]:
+        return await self._require(self.pivo_pool_usage).get_recent(chat_hash)
+
+    async def record_pivo_pool_usage(
+        self,
+        chat_hash: str,
+        picks: Mapping[str, int],
+        *,
+        keep: int,
+    ) -> None:
+        await self._require(self.pivo_pool_usage).record(chat_hash, picks, keep=keep)
 
     async def cleanup_pivo_daily_usage(
         self,

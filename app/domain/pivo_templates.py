@@ -385,6 +385,35 @@ PIVO_TARGET_BOTTOM_PARTS: tuple[str, ...] = (
     "Сделаем или нет - история умолчит. Пиво - нет.",
 )
 
+# S4 temporal modifiers: time-aware closing lines that replace the neutral
+# bottom part when the corresponding time bucket applies (see
+# pivo_message_builder._temporal_bottoms). They stay generic enough to work for
+# both the default and target message variants. The neutral bottom pools above
+# remain the fallback, so no time bucket is ever required to have a match.
+PIVO_LATE_NIGHT_BOTTOM_PARTS: tuple[str, ...] = (
+    "Время позднее, совесть спит — самое то для Discord.",
+    "Нормальные люди уже легли. Значит, собираемся мы.",
+    "Утром будет стыдно, но это утренние проблемы. Пиво в руку.",
+    "Глубокая ночь — идеальный момент принять пару сомнительных решений.",
+    "Кто в такое время не спит, тот сегодня в основном составе.",
+)
+
+PIVO_FRIDAY_BOTTOM_PARTS: tuple[str, ...] = (
+    "Пятница же. Отказ от участия приравнивается к предательству.",
+    "Рабочая неделя всё стерпела, теперь её очередь страдать. Discord ждёт.",
+    "В пятницу пиво не обсуждается — оно подразумевается.",
+    "Пятничный созыв: явка обязательна, трезвость — по желанию.",
+    "Пятница — это когда планы на вечер наконец совпадают с реальностью.",
+)
+
+PIVO_MONDAY_BOTTOM_PARTS: tuple[str, ...] = (
+    "Понедельник, а мы уже сдаёмся. Заходите разделить поражение.",
+    "Неделя только началась, а повод уже есть. Discord, пиво, страдания.",
+    "В понедельник грех не начать неделю с сомнительных решений.",
+    "Понедельник тяжёлый, значит лечим его проверенным способом.",
+    "Начнём неделю правильно — то есть совсем не по плану.",
+)
+
 PIVO_NOTIFICATION_LINES: tuple[str, ...] = (
     "Пинги для тех, кто сам подписался на этот цирк: {mentions}.",
     "По списку добровольного морального падения: {mentions}.",

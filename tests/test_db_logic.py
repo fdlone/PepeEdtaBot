@@ -320,6 +320,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
                 "chat_model_volume",
                 "messages",
                 "pivo_daily_usage",
+                "pivo_pool_usage",
                 "schema_migrations",
                 "starts",
                 "starts3",

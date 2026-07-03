@@ -37,6 +37,8 @@ class RuntimeState:
     reply_context_start_bias: float
     reply_context_only_for_replies: bool
     reply_context_include_current_message: bool
+    pivo_recent_pool_window: int
+    pivo_temporal_flavor_chance: float
     runtime_state_ttl_sec: int
     runtime_state_max_chats: int
     last_reply_ts: dict[int, float] = field(default_factory=dict)

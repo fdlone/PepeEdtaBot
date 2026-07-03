@@ -9,7 +9,7 @@ from __future__ import annotations
 import random
 import unittest
 from collections import deque
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -50,6 +50,8 @@ def _fake_state(**kwargs: object) -> MagicMock:
     # assert generated candidates verbatim.
     s.candidate_selection_temperature = 0.0
     s.reply_flavor_strength = 0.0
+    s.pivo_recent_pool_window = 5
+    s.pivo_temporal_flavor_chance = 0.5
     # Off by default so generated reply text is asserted verbatim; a bare
     # MagicMock attribute would be truthy and trigger reply capitalization.
     s.auto_capitalize_replies = False
@@ -285,6 +287,9 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
             planned_time=None,
             target=None,
             explicit_mentions=(),
+            recent_pool_window=5,
+            temporal_flavor_chance=0.5,
+            now=ANY,
         )
         pivo_service.consume_daily_call_quota.assert_awaited_once_with(
             chat_id=msg.chat.id,
@@ -314,6 +319,9 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
             planned_time="20:00",
             target="watch movie",
             explicit_mentions=("@friend",),
+            recent_pool_window=5,
+            temporal_flavor_chance=0.5,
+            now=ANY,
         )
         msg.reply.assert_awaited_once()
 
@@ -746,10 +754,19 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume.assert_awaited_once_with(msg.chat.id)
         learning_service.record_message.assert_awaited_once()
         generator.generate_text.assert_not_awaited()
-        from app.presentation.fallback_phrases import NOT_ENOUGH_DATA_PHRASES
+        from app.presentation.fallback_phrases import (
+            LATE_NIGHT_FALLBACK_PHRASES,
+            NOT_ENOUGH_DATA_PHRASES,
+        )
 
         msg.reply.assert_awaited_once()
-        self.assertIn(msg.reply.await_args.args[0], NOT_ENOUGH_DATA_PHRASES)
+        # The handler injects the wall clock, so in the small hours the late-night
+        # pool is a valid extension (S4). Accept either so the assertion does not
+        # depend on the time the CI run happens to execute.
+        self.assertIn(
+            msg.reply.await_args.args[0],
+            set(NOT_ENOUGH_DATA_PHRASES) | set(LATE_NIGHT_FALLBACK_PHRASES),
+        )
 
     async def test_current_incoming_message_copy_is_rejected(self) -> None:
         from app.handlers.learning import on_text_message
@@ -847,10 +864,18 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             call.kwargs["rng"] for call in generator.generate_text.await_args_list
         ]
         self.assertTrue(all(rng is generation_rngs[0] for rng in generation_rngs))
-        from app.presentation.fallback_phrases import GENERATION_FAILED_PHRASES
+        from app.presentation.fallback_phrases import (
+            GENERATION_FAILED_PHRASES,
+            LATE_NIGHT_FALLBACK_PHRASES,
+        )
 
         msg.reply.assert_awaited_once()
-        self.assertIn(msg.reply.await_args.args[0], GENERATION_FAILED_PHRASES)
+        # See note above: the wall clock makes the late-night pool a valid
+        # extension in the small hours, so accept either pool time-independently.
+        self.assertIn(
+            msg.reply.await_args.args[0],
+            set(GENERATION_FAILED_PHRASES) | set(LATE_NIGHT_FALLBACK_PHRASES),
+        )
 
     async def test_prefix_rejection_gets_extra_retry_budget(self) -> None:
         from app.handlers.learning import on_text_message

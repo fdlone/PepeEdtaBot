@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Iterable
+from datetime import datetime
 
 # Fallback replies the bot sends when it cannot generate from the model.
 # Pools are intentionally in the same ironic register as the pivo templates so
@@ -37,6 +38,29 @@ GENERATION_FAILED_PHRASES: tuple[str, ...] = (
     "Пока думал, забыл, что хотел сказать.",
     "Красивого ответа не вышло, а некрасивый я вам не покажу.",
 )
+
+
+# S4 temporal modifier: extra fallbacks that fit the small-hours mood. They are
+# merged into the base pool only late at night (see late_night_pool) so the
+# neutral pools stay the default and no bucket is ever empty.
+LATE_NIGHT_FALLBACK_PHRASES: tuple[str, ...] = (
+    "Ночь на дворе, а вы всё пишете. Я, конечно, тоже не сплю.",
+    "В такое время связных мыслей нет ни у меня, ни у вас.",
+    "Поздно уже. Давайте я сделаю вид, что глубокомысленно молчу.",
+    "Ночью даже мой генератор works в режиме энергосбережения.",
+)
+
+
+def is_late_night(now: datetime) -> bool:
+    """True for the small hours (00:00–05:59) where late-night flavor applies."""
+    return 0 <= now.hour < 6
+
+
+def late_night_pool(base: tuple[str, ...], now: datetime | None) -> tuple[str, ...]:
+    """Return ``base`` extended with late-night phrases when ``now`` is late night."""
+    if now is not None and is_late_night(now):
+        return base + LATE_NIGHT_FALLBACK_PHRASES
+    return base
 
 
 def pick_fallback_phrase(

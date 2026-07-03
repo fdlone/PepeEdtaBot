@@ -507,6 +507,46 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mentions_count, 0)
         self.assertNotIn(PIVO_FALLBACK_MENTIONS, text)
 
+    async def test_pool_usage_is_persisted_when_window_positive(self) -> None:
+        # S2: with a positive window, each call records the picked indices so a
+        # later call can avoid them.
+        await self.service.build_call_message(
+            chat_id=700,
+            caller_user_id=1,
+            explicit_mentions=("@a",),
+            recent_pool_window=5,
+        )
+        chat_hash = self.security.hmac_value(700)
+        recent = await self.db.get_pivo_pool_usage(chat_hash)
+        self.assertEqual(set(recent), {"default_top", "default_body", "default_bottom"})
+        self.assertTrue(all(len(v) == 1 for v in recent.values()))
+
+    async def test_zero_window_records_nothing(self) -> None:
+        await self.service.build_call_message(
+            chat_id=701,
+            caller_user_id=1,
+            explicit_mentions=("@a",),
+            recent_pool_window=0,
+        )
+        chat_hash = self.security.hmac_value(701)
+        self.assertEqual(await self.db.get_pivo_pool_usage(chat_hash), {})
+
+    async def test_repeated_calls_rotate_top_index(self) -> None:
+        # Over several calls with a window, the recorded top-index history should
+        # accumulate distinct values rather than repeating a single one.
+        chat_hash = self.security.hmac_value(702)
+        for _ in range(4):
+            await self.service.build_call_message(
+                chat_id=702,
+                caller_user_id=1,
+                explicit_mentions=("@a",),
+                recent_pool_window=3,
+            )
+        recent = await self.db.get_pivo_pool_usage(chat_hash)
+        top_history = recent["default_top"]
+        self.assertLessEqual(len(top_history), 3)
+        self.assertEqual(len(top_history), len(set(top_history)))
+
 
 if __name__ == "__main__":
     unittest.main()

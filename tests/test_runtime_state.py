@@ -36,6 +36,8 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
         "reply_context_start_bias": 2.2,
         "reply_context_only_for_replies": True,
         "reply_context_include_current_message": True,
+        "pivo_recent_pool_window": 5,
+        "pivo_temporal_flavor_chance": 0.5,
         "runtime_state_ttl_sec": 10,
         "runtime_state_max_chats": 2,
     }

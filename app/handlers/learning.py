@@ -5,6 +5,7 @@ import random
 import re
 import time
 from collections import deque
+from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.types import Message
@@ -32,6 +33,7 @@ from app.log_masking import mask_chat_id
 from app.presentation.fallback_phrases import (
     GENERATION_FAILED_PHRASES,
     NOT_ENOUGH_DATA_PHRASES,
+    late_night_pool,
     pick_fallback_phrase,
 )
 from app.services import LearningService
@@ -91,13 +93,17 @@ def next_fallback_phrase(
     chat_id: int,
     pool: tuple[str, ...],
     rng: random.Random | None = None,
+    now: datetime | None = None,
 ) -> str:
-    """Pick a fallback phrase avoiding the ones used recently in this chat."""
+    """Pick a fallback phrase avoiding the ones used recently in this chat.
+
+    Late at night the pool is extended with late-night-flavored phrases (S4).
+    """
     recent = runtime_state.recent_fallbacks.get(chat_id)
     if recent is None:
         recent = deque(maxlen=RECENT_FALLBACK_LIMIT)
         runtime_state.recent_fallbacks[chat_id] = recent
-    phrase = pick_fallback_phrase(pool, recent, rng=rng)
+    phrase = pick_fallback_phrase(late_night_pool(pool, now), recent, rng=rng)
     recent.append(phrase)
     return phrase
 
@@ -190,7 +196,10 @@ async def on_text_message(
             await reply_humanized(
                 message,
                 next_fallback_phrase(
-                    runtime_state, message.chat.id, NOT_ENOUGH_DATA_PHRASES
+                    runtime_state,
+                    message.chat.id,
+                    NOT_ENOUGH_DATA_PHRASES,
+                    now=datetime.now(),
                 ),
                 runtime_state.typing_min_ms,
                 runtime_state.typing_max_ms,
@@ -274,7 +283,10 @@ async def on_text_message(
                 await reply_humanized(
                     message,
                     next_fallback_phrase(
-                        runtime_state, message.chat.id, GENERATION_FAILED_PHRASES
+                        runtime_state,
+                        message.chat.id,
+                        GENERATION_FAILED_PHRASES,
+                        now=datetime.now(),
                     ),
                     runtime_state.typing_min_ms,
                     runtime_state.typing_max_ms,

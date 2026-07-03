@@ -22,6 +22,7 @@ EXPECTED_MIGRATIONS = [
     "007_unify_chat_members",
     "008_drop_redundant_indexes",
     "009_chat_model_volume",
+    "010_pivo_pool_usage",
 ]
 
 EXPECTED_TABLES = {
@@ -33,6 +34,7 @@ EXPECTED_TABLES = {
     "transitions1",
     "chat_members",
     "pivo_daily_usage",
+    "pivo_pool_usage",
     "chat_model_volume",
     "schema_migrations",
 }

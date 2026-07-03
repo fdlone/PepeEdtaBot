@@ -14,7 +14,10 @@ from app.domain.pivo import (
     display_name_from_user,
 )
 from app.infrastructure.database import Database
-from app.services.pivo_message_builder import build_pivo_message
+from app.services.pivo_message_builder import (
+    PivoMessageGenerator,
+    build_pivo_message_context,
+)
 
 PIVO_DAILY_LIMIT_USER = 3
 PIVO_DAILY_LIMIT_ADMIN = 5
@@ -115,8 +118,12 @@ class PivoService:
         planned_time: str | None = None,
         target: str | None = None,
         explicit_mentions: Sequence[str] = (),
+        recent_pool_window: int = 0,
+        temporal_flavor_chance: float = 0.0,
+        now: datetime | None = None,
     ) -> tuple[str, int]:
         """Возвращает готовое сообщение для /pivo и число упомянутых участников."""
+        chat_hash = self._security.hmac_value(chat_id)
         if explicit_mentions:
             mention_items = list(explicit_mentions)
             if len(mention_items) > self._explicit_mentions_limit:
@@ -125,7 +132,6 @@ class PivoService:
                     f"{self._explicit_mentions_limit} явных упоминаний за раз."
                 )
         else:
-            chat_hash = self._security.hmac_value(chat_id)
             rows = await self._db.get_chat_members(chat_hash)
             members = [
                 PivoMember(
@@ -146,10 +152,25 @@ class PivoService:
                     f"{len(mention_items)} из {self._subscriber_fanout_limit}."
                 )
         mentions = " ".join(mention_items) if mention_items else PIVO_FALLBACK_MENTIONS
-        text = build_pivo_message(
+        context = build_pivo_message_context(
             mentions,
             planned_time=planned_time,
             target=target,
             has_explicit_mentions=bool(explicit_mentions),
         )
-        return text, len(mention_items)
+        recent_indices = (
+            await self._db.get_pivo_pool_usage(chat_hash)
+            if recent_pool_window > 0
+            else {}
+        )
+        result = PivoMessageGenerator().build(
+            context,
+            recent_indices=recent_indices,
+            now=now,
+            temporal_flavor_chance=temporal_flavor_chance,
+        )
+        if recent_pool_window > 0 and result.picks:
+            await self._db.record_pivo_pool_usage(
+                chat_hash, result.picks, keep=recent_pool_window
+            )
+        return result.text, len(mention_items)

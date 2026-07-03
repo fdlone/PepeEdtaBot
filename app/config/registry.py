@@ -153,6 +153,14 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               "true", _parse_bool),
     FieldSpec("reply_context_include_current_message",
               "REPLY_CONTEXT_INCLUDE_CURRENT_MESSAGE", "true", _parse_bool),
+    # S2: how many recently used /pivo template indices to remember per pool per
+    # chat and exclude from the next pick. 0 disables anti-repeat.
+    FieldSpec("pivo_recent_pool_window", "PIVO_RECENT_POOL_WINDOW", "5",
+              _int_in_range(0, 50)),
+    # S4: probability of swapping the /pivo closing line for a time-aware variant
+    # (late-night / Friday / Monday) when one applies. 0 disables temporal flavor.
+    FieldSpec("pivo_temporal_flavor_chance", "PIVO_TEMPORAL_FLAVOR_CHANCE", "0.5",
+              _float_in_range(0.0, 1.0)),
 )
 
 
