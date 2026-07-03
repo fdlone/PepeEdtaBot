@@ -52,6 +52,9 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.reply_flavor_strength = 0.0
     s.pivo_recent_pool_window = 5
     s.pivo_temporal_flavor_chance = 0.5
+    # Mood off by default so the existing behavioural assertions see the
+    # unmodulated path; dedicated mood tests enable it explicitly.
+    s.mood_enabled = False
     # Off by default so generated reply text is asserted verbatim; a bare
     # MagicMock attribute would be truthy and trigger reply capitalization.
     s.auto_capitalize_replies = False
@@ -1070,6 +1073,55 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             list(state.recent_replies[msg.chat.id]),
             ["новый развёрнутый ответ бота"],
+        )
+
+    async def test_mood_enabled_tracks_state_and_passes_modifiers(self) -> None:
+        from app.core.mood import MoodConfig, modifiers_for_mood
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="pepe ответь развёрнуто")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=100)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        generator = AsyncMock()
+        state = self._reply_state(recent_replies={})
+        state.mood_enabled = True
+        state.chat_mood = {}
+        state.mood_modulation_strength = 1.0
+        state.mood_config = MagicMock(
+            return_value=MoodConfig(
+                ewma_alpha=0.3,
+                lively_rate_per_min=12.0,
+                sleepy_rate_per_min=2.0,
+                heated_intensity=0.4,
+                max_rate_per_min=120.0,
+            )
+        )
+
+        with (
+            patch("app.handlers.learning.ResponseGenerator") as response_gen_cls,
+            patch("app.handlers.learning.mask_chat_id", return_value="chat"),
+        ):
+            response_gen_cls.return_value.generate = AsyncMock(return_value="ответ")
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+        # Mood was tracked for the chat...
+        self.assertIn(msg.chat.id, state.chat_mood)
+        tracked = state.chat_mood[msg.chat.id]
+        self.assertIn(tracked.mood, ("sleepy", "calm", "lively", "heated"))
+        # ...and the matching modifiers were handed to the generator.
+        _, kwargs = response_gen_cls.call_args
+        self.assertEqual(
+            kwargs["mood_modifiers"], modifiers_for_mood(tracked.mood, 1.0)
         )
 
     async def test_recent_full_reply_is_retried_instead_of_sent(self) -> None:

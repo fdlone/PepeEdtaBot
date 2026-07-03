@@ -6,6 +6,7 @@ from collections import deque
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from app.core.candidate_scorer import CandidateScore
+from app.core.mood import MoodModifiers
 from app.core.response_generator import (
     CANDIDATE_TARGET,
     GENERATION_ATTEMPT_BUDGET,
@@ -511,3 +512,89 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             [call.args[0] for call in scorer.call_args_list],
             [candidate, candidate],
         )
+
+
+class TestResponseGeneratorMoodModulation(unittest.IsolatedAsyncioTestCase):
+    """M1: mood modifiers adjust randomness, length weights and flavor strength."""
+
+    def setUp(self) -> None:
+        patcher = patch(
+            "app.core.response_generator.mask_chat_id", return_value="chat"
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _generator(self) -> AsyncMock:
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="fresh reply has four tokens")
+        return generator
+
+    def _learning(self) -> AsyncMock:
+        learning_service = AsyncMock()
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        return learning_service
+
+    async def _first_randomness(self, modifiers: MoodModifiers | None) -> float:
+        generator = self._generator()
+        rg = ResponseGenerator(
+            generator=generator,
+            learning_service=self._learning(),
+            runtime_state=_runtime_state(),
+            mood_modifiers=modifiers,
+        )
+        await rg.generate(_request(), rng=random.Random(0))
+        return generator.generate_text.await_args_list[0].kwargs["randomness_strength"]
+
+    async def test_randomness_delta_raises_first_attempt_strength(self) -> None:
+        neutral = await self._first_randomness(None)
+        heated = await self._first_randomness(
+            MoodModifiers(1.0, 0.5, (1.0, 1.0, 1.0), 1.0)
+        )
+        self.assertGreater(heated, neutral)
+
+    async def test_negative_delta_clamped_at_zero(self) -> None:
+        # base randomness 0.5, delta -0.9 -> clamped to 0.0, never negative.
+        strength = await self._first_randomness(
+            MoodModifiers(1.0, -0.9, (1.0, 1.0, 1.0), 1.0)
+        )
+        self.assertGreaterEqual(strength, 0.0)
+
+    async def test_length_weights_are_scaled_by_modifiers(self) -> None:
+        captured: list[tuple[float, float, float]] = []
+
+        def fake_sample(weights: tuple[float, float, float], rng: object) -> str:
+            captured.append(weights)
+            return "medium"
+
+        rg = ResponseGenerator(
+            generator=self._generator(),
+            learning_service=self._learning(),
+            runtime_state=_runtime_state(),  # base weights (0.25, 0.55, 0.2)
+            mood_modifiers=MoodModifiers(1.0, 0.0, (2.0, 1.0, 0.5), 1.0),
+        )
+        with patch(
+            "app.core.response_generator.sample_length_mode", side_effect=fake_sample
+        ):
+            await rg.generate(_request(), rng=random.Random(0))
+        self.assertEqual(captured[0], (0.25 * 2.0, 0.55 * 1.0, 0.2 * 0.5))
+
+    async def test_flavor_strength_is_scaled_by_modifiers(self) -> None:
+        captured: list[float] = []
+
+        def fake_flavor(text: str, rng: object, strength: float) -> str:
+            captured.append(strength)
+            return text
+
+        state = _runtime_state()
+        state.reply_flavor_strength = 1.0
+        rg = ResponseGenerator(
+            generator=self._generator(),
+            learning_service=self._learning(),
+            runtime_state=state,
+            mood_modifiers=MoodModifiers(1.0, 0.0, (1.0, 1.0, 1.0), 1.5),
+        )
+        with patch(
+            "app.core.response_generator.apply_reply_flavor", side_effect=fake_flavor
+        ):
+            await rg.generate(_request(), rng=random.Random(0))
+        self.assertAlmostEqual(captured[0], 1.5)

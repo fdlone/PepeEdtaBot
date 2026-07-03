@@ -44,6 +44,13 @@ def make_state() -> SimpleNamespace:
         reply_context_include_current_message=True,
         pivo_recent_pool_window=5,
         pivo_temporal_flavor_chance=0.5,
+        mood_enabled=True,
+        mood_modulation_strength=1.0,
+        mood_ewma_alpha=0.3,
+        mood_lively_rate_per_min=12.0,
+        mood_sleepy_rate_per_min=2.0,
+        mood_heated_intensity=0.4,
+        mood_max_rate_per_min=120.0,
     )
 
 

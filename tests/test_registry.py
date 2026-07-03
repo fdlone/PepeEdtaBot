@@ -29,6 +29,8 @@ def _make_state(**overrides: object) -> SimpleNamespace:
         "markov_order": 3,
         "reply_context_last_tokens": 3,
         "reply_context_max_tokens": 12,
+        "mood_sleepy_rate_per_min": 2.0,
+        "mood_lively_rate_per_min": 12.0,
     }
     base.update(overrides)
     return SimpleNamespace(**base)

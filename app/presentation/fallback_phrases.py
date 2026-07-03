@@ -51,9 +51,27 @@ LATE_NIGHT_FALLBACK_PHRASES: tuple[str, ...] = (
 )
 
 
+# M1 mood modifier: punchier fallbacks for a heated chat. Merged into the base
+# pool only when the mood is ``heated`` (see mood_fallback_pool); every other
+# mood uses the neutral pools, so no pool is ever left empty.
+HEATED_FALLBACK_PHRASES: tuple[str, ...] = (
+    "Так, стоп, я не успеваю за этим цирком.",
+    "Слишком жарко тут у вас, дайте отдышаться.",
+    "Вы там разошлись, а я ещё думаю.",
+    "Не гоните, мне бы мысль поймать в этом бардаке.",
+)
+
+
 def is_late_night(now: datetime) -> bool:
     """True for the small hours (00:00–05:59) where late-night flavor applies."""
     return 0 <= now.hour < 6
+
+
+def mood_fallback_pool(base: tuple[str, ...], mood: str | None) -> tuple[str, ...]:
+    """Return ``base`` extended with heated phrases when the chat mood is heated."""
+    if mood == "heated":
+        return base + HEATED_FALLBACK_PHRASES
+    return base
 
 
 def late_night_pool(base: tuple[str, ...], now: datetime | None) -> tuple[str, ...]:

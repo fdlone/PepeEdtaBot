@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from app.config.registry import RUNTIME_FIELDS
 from app.config.settings import Settings
+from app.core.mood import ChatMoodState, MoodConfig
 
 
 @dataclass(slots=True)
@@ -39,6 +40,13 @@ class RuntimeState:
     reply_context_include_current_message: bool
     pivo_recent_pool_window: int
     pivo_temporal_flavor_chance: float
+    mood_enabled: bool
+    mood_modulation_strength: float
+    mood_ewma_alpha: float
+    mood_lively_rate_per_min: float
+    mood_sleepy_rate_per_min: float
+    mood_heated_intensity: float
+    mood_max_rate_per_min: float
     runtime_state_ttl_sec: int
     runtime_state_max_chats: int
     last_reply_ts: dict[int, float] = field(default_factory=dict)
@@ -46,8 +54,18 @@ class RuntimeState:
     recent_short_replies: dict[int, deque[str]] = field(default_factory=dict)
     recent_replies: dict[int, deque[str]] = field(default_factory=dict)
     recent_fallbacks: dict[int, deque[str]] = field(default_factory=dict)
+    chat_mood: dict[int, ChatMoodState] = field(default_factory=dict)
     _last_chat_activity: dict[int, float] = field(default_factory=dict)
     _cleanup_tick: int = 0
+
+    def mood_config(self) -> MoodConfig:
+        return MoodConfig(
+            ewma_alpha=self.mood_ewma_alpha,
+            lively_rate_per_min=self.mood_lively_rate_per_min,
+            sleepy_rate_per_min=self.mood_sleepy_rate_per_min,
+            heated_intensity=self.mood_heated_intensity,
+            max_rate_per_min=self.mood_max_rate_per_min,
+        )
 
     def note_chat_activity(self, chat_id: int, now: float) -> None:
         self._last_chat_activity[chat_id] = now
@@ -64,6 +82,7 @@ class RuntimeState:
         self.recent_short_replies.pop(chat_id, None)
         self.recent_replies.pop(chat_id, None)
         self.recent_fallbacks.pop(chat_id, None)
+        self.chat_mood.pop(chat_id, None)
         self._last_chat_activity.pop(chat_id, None)
 
     def prune_inactive(self, now: float) -> None:
