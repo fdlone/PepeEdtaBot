@@ -9,7 +9,7 @@ from __future__ import annotations
 import random
 import unittest
 from collections import deque
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -50,6 +50,8 @@ def _fake_state(**kwargs: object) -> MagicMock:
     # assert generated candidates verbatim.
     s.candidate_selection_temperature = 0.0
     s.reply_flavor_strength = 0.0
+    s.pivo_recent_pool_window = 5
+    s.pivo_temporal_flavor_chance = 0.5
     # Off by default so generated reply text is asserted verbatim; a bare
     # MagicMock attribute would be truthy and trigger reply capitalization.
     s.auto_capitalize_replies = False
@@ -285,6 +287,9 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
             planned_time=None,
             target=None,
             explicit_mentions=(),
+            recent_pool_window=5,
+            temporal_flavor_chance=0.5,
+            now=ANY,
         )
         pivo_service.consume_daily_call_quota.assert_awaited_once_with(
             chat_id=msg.chat.id,
@@ -314,6 +319,9 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
             planned_time="20:00",
             target="watch movie",
             explicit_mentions=("@friend",),
+            recent_pool_window=5,
+            temporal_flavor_chance=0.5,
+            now=ANY,
         )
         msg.reply.assert_awaited_once()
 

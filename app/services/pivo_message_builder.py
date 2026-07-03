@@ -3,13 +3,18 @@ from __future__ import annotations
 import html
 import random
 import re
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from datetime import datetime
 
 from app.domain.pivo_templates import (
     PIVO_DEFAULT_BODY_PARTS,
     PIVO_DEFAULT_BOTTOM_PARTS,
     PIVO_DEFAULT_TARGET_INTROS,
     PIVO_DEFAULT_TOP_PARTS,
+    PIVO_FRIDAY_BOTTOM_PARTS,
+    PIVO_LATE_NIGHT_BOTTOM_PARTS,
+    PIVO_MONDAY_BOTTOM_PARTS,
     PIVO_NOTIFICATION_LINES,
     PIVO_TARGET_BODY_PARTS,
     PIVO_TARGET_BOTTOM_PARTS,
@@ -59,7 +64,7 @@ def build_pivo_message(
         has_explicit_mentions=has_explicit_mentions,
         rng=rng,
     )
-    return PivoMessageGenerator().build(context, rng=rng)
+    return PivoMessageGenerator().build(context, rng=rng).text
 
 
 def build_pivo_message_context(
@@ -110,11 +115,60 @@ def _choice(pool: tuple[str, ...], rng: random.Random | None) -> str:
     return random.choice(pool) if rng is None else rng.choice(pool)
 
 
+def _pick(
+    pool: tuple[str, ...],
+    rng: random.Random | None,
+    avoid: frozenset[int],
+) -> tuple[int, str]:
+    """Pick a pool entry, excluding recently used indices when any remain.
+
+    Selection goes through ``_choice`` over the (optionally filtered) pool, so
+    the ``random.choice`` patch point used across the pivo tests keeps working.
+    With an empty ``avoid`` set the filtered pool is the pool itself, so seeded
+    output is byte-for-byte identical to the previous ``_choice(pool)`` call.
+    """
+    filtered = pool
+    if avoid:
+        candidates = tuple(part for i, part in enumerate(pool) if i not in avoid)
+        if candidates:
+            filtered = candidates
+    chosen = _choice(filtered, rng)
+    return pool.index(chosen), chosen
+
+
+def _temporal_bottoms(now: datetime) -> tuple[str, ...]:
+    """Collect the time-aware closing lines that apply at ``now`` (may be empty)."""
+    pools: list[str] = []
+    if 0 <= now.hour < 6:
+        pools.extend(PIVO_LATE_NIGHT_BOTTOM_PARTS)
+    weekday = now.weekday()
+    if weekday == 4:
+        pools.extend(PIVO_FRIDAY_BOTTOM_PARTS)
+    elif weekday == 0:
+        pools.extend(PIVO_MONDAY_BOTTOM_PARTS)
+    return tuple(pools)
+
+
+@dataclass(frozen=True, slots=True)
+class PivoBuildResult:
+    text: str
+    # Indices actually drawn from the anti-repeat-tracked base pools, keyed by
+    # "<variant>_<slot>". Omits the bottom slot when a temporal line was used.
+    picks: dict[str, int]
+
+
 class PivoMessageGenerator:
     def build(
-        self, context: PivoMessageContext, *, rng: random.Random | None = None
-    ) -> str:
+        self,
+        context: PivoMessageContext,
+        *,
+        rng: random.Random | None = None,
+        recent_indices: Mapping[str, tuple[int, ...]] | None = None,
+        now: datetime | None = None,
+        temporal_flavor_chance: float = 0.0,
+    ) -> PivoBuildResult:
         values = context.template_values()
+        variant = "target" if context.has_explicit_target else "default"
         if context.has_explicit_target:
             top_pool = PIVO_TARGET_TOP_PARTS
             body_pool = PIVO_TARGET_BODY_PARTS
@@ -124,15 +178,62 @@ class PivoMessageGenerator:
             body_pool = PIVO_DEFAULT_BODY_PARTS
             bottom_pool = PIVO_DEFAULT_BOTTOM_PARTS
 
-        parts = [
-            _choice(top_pool, rng),
-            _choice(body_pool, rng),
-            _choice(bottom_pool, rng),
-        ]
+        recent = recent_indices or {}
+        picks: dict[str, int] = {}
+
+        top_idx, top_text = _pick(
+            top_pool, rng, frozenset(recent.get(f"{variant}_top", ()))
+        )
+        picks[f"{variant}_top"] = top_idx
+        body_idx, body_text = _pick(
+            body_pool, rng, frozenset(recent.get(f"{variant}_body", ()))
+        )
+        picks[f"{variant}_body"] = body_idx
+
+        bottom_text = self._pick_bottom(
+            variant=variant,
+            bottom_pool=bottom_pool,
+            recent=recent,
+            picks=picks,
+            rng=rng,
+            now=now,
+            temporal_flavor_chance=temporal_flavor_chance,
+        )
+
+        parts = [top_text, body_text, bottom_text]
         if context.notification_line:
             parts.append("{notification_line}")
         template = "\n\n".join(part.strip() for part in parts if part.strip())
-        return template.format(**values).strip()
+        return PivoBuildResult(text=template.format(**values).strip(), picks=picks)
+
+    def _pick_bottom(
+        self,
+        *,
+        variant: str,
+        bottom_pool: tuple[str, ...],
+        recent: Mapping[str, tuple[int, ...]],
+        picks: dict[str, int],
+        rng: random.Random | None,
+        now: datetime | None,
+        temporal_flavor_chance: float,
+    ) -> str:
+        """Pick the closing line, optionally swapping in a time-aware variant.
+
+        A temporal line replaces the neutral bottom part only when a time bucket
+        applies and the flavor roll passes; in that case no base-pool index is
+        recorded (temporal pools are small and time-gated, so they are left out
+        of anti-repeat). The neutral pool is always the fallback.
+        """
+        temporal = _temporal_bottoms(now) if now is not None else ()
+        if temporal and temporal_flavor_chance > 0.0:
+            roll = random.random() if rng is None else rng.random()
+            if roll < temporal_flavor_chance:
+                return _choice(temporal, rng)
+        bottom_idx, bottom_text = _pick(
+            bottom_pool, rng, frozenset(recent.get(f"{variant}_bottom", ()))
+        )
+        picks[f"{variant}_bottom"] = bottom_idx
+        return bottom_text
 
 
 def _build_target_bullet(

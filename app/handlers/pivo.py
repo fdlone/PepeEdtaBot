@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from aiogram import Bot, Router
 from aiogram.enums import ParseMode
@@ -43,6 +44,9 @@ async def cmd_pivo(
             planned_time=command_args.planned_time,
             target=command_args.target,
             explicit_mentions=command_args.explicit_mentions,
+            recent_pool_window=runtime_state.pivo_recent_pool_window,
+            temporal_flavor_chance=runtime_state.pivo_temporal_flavor_chance,
+            now=datetime.now(),
         )
     except PivoCallLimitError as exc:
         await reply_humanized(

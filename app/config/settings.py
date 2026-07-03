@@ -50,6 +50,8 @@ class Settings:
     reply_context_start_bias: float
     reply_context_only_for_replies: bool
     reply_context_include_current_message: bool
+    pivo_recent_pool_window: int
+    pivo_temporal_flavor_chance: float
     pivo_hmac_secret: str
     pivo_encryption_secret: str
     pivo_explicit_mentions_limit: int

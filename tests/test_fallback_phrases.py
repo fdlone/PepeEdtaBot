@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import random
 import unittest
+from datetime import datetime
 
 from app.config.runtime_state import RuntimeState
 from app.presentation.fallback_phrases import (
     GENERATION_FAILED_PHRASES,
+    LATE_NIGHT_FALLBACK_PHRASES,
     NOT_ENOUGH_DATA_PHRASES,
+    is_late_night,
+    late_night_pool,
     pick_fallback_phrase,
 )
 
@@ -41,6 +45,8 @@ def _make_runtime_state() -> RuntimeState:
         reply_context_start_bias=2.2,
         reply_context_only_for_replies=True,
         reply_context_include_current_message=True,
+        pivo_recent_pool_window=5,
+        pivo_temporal_flavor_chance=0.5,
         runtime_state_ttl_sec=10,
         runtime_state_max_chats=8,
     )
@@ -104,6 +110,43 @@ class TestNextFallbackPhrase(unittest.TestCase):
         self.assertIn(100, state.recent_fallbacks)
         state.forget_chat(100)
         self.assertNotIn(100, state.recent_fallbacks)
+
+
+class TestLateNightFallback(unittest.TestCase):
+    """S4: late-night phrases join the pool only in the small hours."""
+
+    def test_is_late_night_bucket(self) -> None:
+        self.assertTrue(is_late_night(datetime(2026, 7, 1, 0, 0)))
+        self.assertTrue(is_late_night(datetime(2026, 7, 1, 5, 59)))
+        self.assertFalse(is_late_night(datetime(2026, 7, 1, 6, 0)))
+        self.assertFalse(is_late_night(datetime(2026, 7, 1, 15, 0)))
+
+    def test_pool_extended_only_late_at_night(self) -> None:
+        base = NOT_ENOUGH_DATA_PHRASES
+        day = late_night_pool(base, datetime(2026, 7, 1, 15, 0))
+        night = late_night_pool(base, datetime(2026, 7, 1, 2, 0))
+        self.assertEqual(day, base)
+        self.assertEqual(night, base + LATE_NIGHT_FALLBACK_PHRASES)
+
+    def test_none_now_keeps_base_pool(self) -> None:
+        self.assertEqual(
+            late_night_pool(NOT_ENOUGH_DATA_PHRASES, None), NOT_ENOUGH_DATA_PHRASES
+        )
+
+    def test_next_fallback_can_return_late_night_phrase(self) -> None:
+        from app.handlers.learning import next_fallback_phrase
+
+        state = _make_runtime_state()
+        night = datetime(2026, 7, 1, 2, 0)
+        seen = set()
+        for seed in range(60):
+            state.recent_fallbacks.pop(200, None)
+            seen.add(
+                next_fallback_phrase(
+                    state, 200, NOT_ENOUGH_DATA_PHRASES, rng=random.Random(seed), now=night
+                )
+            )
+        self.assertTrue(seen & set(LATE_NIGHT_FALLBACK_PHRASES))
 
 
 if __name__ == "__main__":

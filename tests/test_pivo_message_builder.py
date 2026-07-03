@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from collections.abc import Iterable
+from datetime import datetime
 from unittest.mock import patch
 
 from app.domain.pivo_templates import (
@@ -14,7 +15,12 @@ from app.domain.pivo_templates import (
     PIVO_TARGET_INTROS,
     PIVO_TARGET_TOP_PARTS,
 )
-from app.services.pivo_message_builder import build_pivo_message
+from app.services.pivo_message_builder import (
+    PivoMessageContext,
+    PivoMessageGenerator,
+    build_pivo_message,
+    build_pivo_message_context,
+)
 
 RANDOM_CHOICE_PATH = "app.services.pivo_message_builder.random.choice"
 
@@ -270,6 +276,152 @@ class TestPivoMessageBuilder(unittest.TestCase):
         with patch(RANDOM_CHOICE_PATH, side_effect=AssertionError("module random used")):
             text = build_pivo_message("@friend", rng=random.Random(7))
         self.assertTrue(text)
+
+
+class TestPivoAntiRepeat(unittest.TestCase):
+    """S2: recently used pool indices are excluded from the next pick."""
+
+    def _context(self) -> PivoMessageContext:
+        return build_pivo_message_context(
+            "@friend",
+            planned_time=None,
+            target=None,
+            has_explicit_mentions=True,
+        )
+
+    def test_build_returns_picked_indices(self) -> None:
+        import random
+
+        result = PivoMessageGenerator().build(self._context(), rng=random.Random(1))
+        self.assertEqual(
+            set(result.picks), {"default_top", "default_body", "default_bottom"}
+        )
+        top_idx = result.picks["default_top"]
+        # The literal prefix of the chosen top template (before any placeholder)
+        # must appear in the rendered message.
+        literal_prefix = PIVO_DEFAULT_TOP_PARTS[top_idx].split("{")[0].strip()
+        self.assertIn(literal_prefix, result.text)
+
+    def test_avoided_indices_are_never_picked(self) -> None:
+        import random
+
+        avoid_top = tuple(i for i in range(len(PIVO_DEFAULT_TOP_PARTS)) if i != 5)
+        recent = {"default_top": avoid_top}
+        # Only index 5 remains available for the top pool across many draws.
+        for seed in range(30):
+            result = PivoMessageGenerator().build(
+                self._context(), rng=random.Random(seed), recent_indices=recent
+            )
+            self.assertEqual(result.picks["default_top"], 5)
+
+    def test_all_excluded_falls_back_to_full_pool(self) -> None:
+        import random
+
+        all_top = tuple(range(len(PIVO_DEFAULT_TOP_PARTS)))
+        result = PivoMessageGenerator().build(
+            self._context(),
+            rng=random.Random(3),
+            recent_indices={"default_top": all_top},
+        )
+        # No candidate survives exclusion -> the full pool is used, no crash.
+        self.assertIn(result.picks["default_top"], set(all_top))
+
+    def test_empty_recent_matches_legacy_seeded_output(self) -> None:
+        import random
+
+        # Replicate build_pivo_message internals (one rng shared across context
+        # building and generation); adding an empty recent_indices must not
+        # change the byte-for-byte seeded output.
+        rng = random.Random(99)
+        context = build_pivo_message_context(
+            "@friend",
+            planned_time=None,
+            target=None,
+            has_explicit_mentions=False,
+            rng=rng,
+        )
+        result = PivoMessageGenerator().build(context, rng=rng, recent_indices={})
+        legacy = build_pivo_message("@friend", rng=random.Random(99))
+        self.assertEqual(result.text, legacy)
+
+
+class TestPivoTemporalModifiers(unittest.TestCase):
+    """S4: time-aware closing lines replace the neutral bottom when applicable."""
+
+    def _context(self) -> PivoMessageContext:
+        return build_pivo_message_context(
+            "@friend",
+            planned_time=None,
+            target=None,
+            has_explicit_mentions=True,
+        )
+
+    def test_friday_line_used_when_roll_passes(self) -> None:
+        import random
+
+        from app.domain.pivo_templates import PIVO_FRIDAY_BOTTOM_PARTS
+
+        friday = datetime(2026, 7, 3, 18, 0)  # a Friday evening
+        result = PivoMessageGenerator().build(
+            self._context(),
+            rng=random.Random(0),
+            now=friday,
+            temporal_flavor_chance=1.0,
+        )
+        self.assertTrue(
+            any(line.strip() in result.text for line in PIVO_FRIDAY_BOTTOM_PARTS)
+        )
+        # Temporal bottom is not tracked by anti-repeat.
+        self.assertNotIn("default_bottom", result.picks)
+
+    def test_late_night_and_monday_lines_available(self) -> None:
+        import random
+
+        from app.domain.pivo_templates import (
+            PIVO_LATE_NIGHT_BOTTOM_PARTS,
+            PIVO_MONDAY_BOTTOM_PARTS,
+        )
+
+        # Monday at 02:00 -> both late-night and Monday buckets apply.
+        monday_night = datetime(2026, 7, 6, 2, 0)
+        combined = set(PIVO_LATE_NIGHT_BOTTOM_PARTS) | set(PIVO_MONDAY_BOTTOM_PARTS)
+        seen = set()
+        for seed in range(40):
+            result = PivoMessageGenerator().build(
+                self._context(),
+                rng=random.Random(seed),
+                now=monday_night,
+                temporal_flavor_chance=1.0,
+            )
+            for line in combined:
+                if line.strip() in result.text:
+                    seen.add(line)
+        self.assertTrue(seen)
+
+    def test_zero_chance_keeps_neutral_bottom(self) -> None:
+        import random
+
+        friday = datetime(2026, 7, 3, 18, 0)
+        result = PivoMessageGenerator().build(
+            self._context(),
+            rng=random.Random(0),
+            now=friday,
+            temporal_flavor_chance=0.0,
+        )
+        self.assertIn("default_bottom", result.picks)
+
+    def test_no_temporal_bucket_keeps_neutral_bottom(self) -> None:
+        import random
+
+        # Wednesday afternoon: no late-night / Friday / Monday bucket applies.
+        wednesday = datetime(2026, 7, 1, 15, 0)
+        result = PivoMessageGenerator().build(
+            self._context(),
+            rng=random.Random(0),
+            now=wednesday,
+            temporal_flavor_chance=1.0,
+        )
+        self.assertIn("default_bottom", result.picks)
 
 
 if __name__ == "__main__":
