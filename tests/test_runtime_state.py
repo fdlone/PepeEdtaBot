@@ -45,6 +45,14 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
         "mood_sleepy_rate_per_min": 2.0,
         "mood_heated_intensity": 0.4,
         "mood_max_rate_per_min": 120.0,
+        "reply_director_enabled": True,
+        "reply_probability_min": 0.02,
+        "reply_probability_max": 0.30,
+        "reply_burst_boost_sec": 180,
+        "reply_burst_boost_mult": 2.0,
+        "reply_burst_suppress_sec": 600,
+        "reply_burst_suppress_mult": 0.5,
+        "reply_max_per_hour": 20,
         "runtime_state_ttl_sec": 10,
         "runtime_state_max_chats": 2,
     }
@@ -100,6 +108,7 @@ class TestRuntimeState(unittest.TestCase):
         state.learned_messages[100] = 4
         state.recent_short_replies[100] = deque(["hi"], maxlen=5)
         state.recent_replies[100] = deque(["длинный недавний ответ"], maxlen=20)
+        state.recent_reply_times[100] = deque([1.0])
         state.note_chat_activity(100, now=10.0)
 
         state.forget_chat(100)
@@ -108,6 +117,23 @@ class TestRuntimeState(unittest.TestCase):
         self.assertEqual(state.learned_messages, {})
         self.assertEqual(state.recent_short_replies, {})
         self.assertEqual(state.recent_replies, {})
+        self.assertEqual(state.recent_reply_times, {})
+
+    def test_note_reply_sent_updates_last_ts_and_history(self) -> None:
+        state = make_runtime_state()
+        state.note_reply_sent(100, now=1000.0)
+        state.note_reply_sent(100, now=1050.0)
+
+        self.assertEqual(state.last_reply_ts[100], 1050.0)
+        self.assertEqual(list(state.recent_reply_times[100]), [1000.0, 1050.0])
+
+    def test_note_reply_sent_trims_history_older_than_one_hour(self) -> None:
+        state = make_runtime_state()
+        state.note_reply_sent(100, now=1000.0)
+        # Advance more than an hour: the first timestamp falls out of the window.
+        state.note_reply_sent(100, now=1000.0 + 3600.0 + 1.0)
+
+        self.assertEqual(list(state.recent_reply_times[100]), [4601.0])
 
 
 if __name__ == "__main__":

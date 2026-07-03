@@ -59,6 +59,14 @@ class Settings:
     mood_sleepy_rate_per_min: float
     mood_heated_intensity: float
     mood_max_rate_per_min: float
+    reply_director_enabled: bool
+    reply_probability_min: float
+    reply_probability_max: float
+    reply_burst_boost_sec: int
+    reply_burst_boost_mult: float
+    reply_burst_suppress_sec: int
+    reply_burst_suppress_mult: float
+    reply_max_per_hour: int
     pivo_hmac_secret: str
     pivo_encryption_secret: str
     pivo_explicit_mentions_limit: int

@@ -47,6 +47,14 @@ class RuntimeState:
     mood_sleepy_rate_per_min: float
     mood_heated_intensity: float
     mood_max_rate_per_min: float
+    reply_director_enabled: bool
+    reply_probability_min: float
+    reply_probability_max: float
+    reply_burst_boost_sec: int
+    reply_burst_boost_mult: float
+    reply_burst_suppress_sec: int
+    reply_burst_suppress_mult: float
+    reply_max_per_hour: int
     runtime_state_ttl_sec: int
     runtime_state_max_chats: int
     last_reply_ts: dict[int, float] = field(default_factory=dict)
@@ -55,6 +63,9 @@ class RuntimeState:
     recent_replies: dict[int, deque[str]] = field(default_factory=dict)
     recent_fallbacks: dict[int, deque[str]] = field(default_factory=dict)
     chat_mood: dict[int, ChatMoodState] = field(default_factory=dict)
+    # M2: timestamps (monotonic seconds) of recent bot replies per chat, used for
+    # the per-hour reply cap. Trimmed to a one-hour window on each append.
+    recent_reply_times: dict[int, deque[float]] = field(default_factory=dict)
     _last_chat_activity: dict[int, float] = field(default_factory=dict)
     _cleanup_tick: int = 0
 
@@ -66,6 +77,23 @@ class RuntimeState:
             heated_intensity=self.mood_heated_intensity,
             max_rate_per_min=self.mood_max_rate_per_min,
         )
+
+    def note_reply_sent(self, chat_id: int, now: float) -> None:
+        """Record that the bot replied in ``chat_id`` at ``now`` (monotonic sec).
+
+        Updates ``last_reply_ts`` (cooldown + burst rhythm) and appends to the
+        rolling per-hour history used by the reply cap, dropping entries older
+        than one hour so the deque stays bounded by the cap itself.
+        """
+        self.last_reply_ts[chat_id] = now
+        history = self.recent_reply_times.get(chat_id)
+        if history is None:
+            history = deque()
+            self.recent_reply_times[chat_id] = history
+        history.append(now)
+        cutoff = now - 3600.0
+        while history and history[0] < cutoff:
+            history.popleft()
 
     def note_chat_activity(self, chat_id: int, now: float) -> None:
         self._last_chat_activity[chat_id] = now
@@ -83,6 +111,7 @@ class RuntimeState:
         self.recent_replies.pop(chat_id, None)
         self.recent_fallbacks.pop(chat_id, None)
         self.chat_mood.pop(chat_id, None)
+        self.recent_reply_times.pop(chat_id, None)
         self._last_chat_activity.pop(chat_id, None)
 
     def prune_inactive(self, now: float) -> None:

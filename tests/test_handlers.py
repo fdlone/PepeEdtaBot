@@ -55,6 +55,9 @@ def _fake_state(**kwargs: object) -> MagicMock:
     # Mood off by default so the existing behavioural assertions see the
     # unmodulated path; dedicated mood tests enable it explicitly.
     s.mood_enabled = False
+    # M2 director off by default so the flat reply_probability path is exercised
+    # by the existing tests; dedicated director tests enable it explicitly.
+    s.reply_director_enabled = False
     # Off by default so generated reply text is asserted verbatim; a bare
     # MagicMock attribute would be truthy and trigger reply capitalization.
     s.auto_capitalize_replies = False
@@ -1123,6 +1126,104 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             kwargs["mood_modifiers"], modifiers_for_mood(tracked.mood, 1.0)
         )
+
+    def _director_state(self, **overrides: object) -> MagicMock:
+        from app.core.mood import MoodConfig
+
+        values: dict[str, object] = {
+            "reply_director_enabled": True,
+            "mood_enabled": False,
+            "chat_mood": {},
+            "recent_reply_times": {},
+            "mood_modulation_strength": 1.0,
+            "mood_lively_rate_per_min": 12.0,
+            "reply_probability_min": 0.02,
+            "reply_probability_max": 0.30,
+            "reply_burst_boost_sec": 180,
+            "reply_burst_boost_mult": 2.0,
+            "reply_burst_suppress_sec": 600,
+            "reply_burst_suppress_mult": 0.5,
+            "reply_max_per_hour": 20,
+            "min_cooldown_sec": 0,
+            "recent_replies": {},
+        }
+        values.update(overrides)
+        state = self._reply_state(**values)
+        state.mood_config = lambda: MoodConfig(
+            ewma_alpha=0.3,
+            lively_rate_per_min=12.0,
+            sleepy_rate_per_min=2.0,
+            heated_intensity=0.4,
+            max_rate_per_min=120.0,
+        )
+        return state
+
+    async def test_director_hourly_cap_blocks_unprompted_reply(self) -> None:
+        from collections import deque
+
+        from app.handlers.learning import on_text_message
+
+        # Unprompted message (no alias, no reply-to) in a chat that already hit
+        # its per-hour reply budget: the director must gate the reply, but the
+        # message is still learned.
+        msg = _fake_message(text="просто болтаю тут в чате")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=101)
+        generator = AsyncMock()
+        state = self._director_state(
+            reply_max_per_hour=20,
+            recent_reply_times={msg.chat.id: deque([10000.0] * 20)},
+        )
+
+        with (
+            patch("app.handlers.learning.mask_chat_id", return_value="chat"),
+            patch("app.handlers.learning.time.monotonic", return_value=10000.0),
+            patch("app.handlers.learning.random.random", return_value=0.0),
+        ):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+        generator.generate_text.assert_not_awaited()
+        msg.reply.assert_not_awaited()
+        learning_service.record_message.assert_awaited_once()
+
+    async def test_director_allows_reply_when_momentum_clears_probability(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        # random forced to 0.0 → any positive momentum-derived probability fires.
+        msg = _fake_message(text="просто болтаю тут в чате")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=101)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="ответ бота готов")
+        state = self._director_state(recent_reply_times={})
+
+        with (
+            patch("app.handlers.learning.mask_chat_id", return_value="chat"),
+            patch("app.handlers.learning.time.monotonic", return_value=10000.0),
+            patch("app.handlers.learning.random.random", return_value=0.0),
+        ):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+        msg.reply.assert_awaited_once_with("ответ бота готов")
 
     async def test_recent_full_reply_is_retried_instead_of_sent(self) -> None:
         from app.handlers.learning import on_text_message

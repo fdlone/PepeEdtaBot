@@ -7,23 +7,26 @@ This document turns the audit findings into concrete, ordered work items.
 
 | Item | Status | Where |
 |---|---|---|
-| QW1 softmax candidate selection | **done** (2026-07-02) | branch `feat/dialogue-gen-quick-wins`, `SELECTION_SCORE_MARGIN=0.5` chosen after eval (margin 1.0 collapsed context overlap 0.38→0.13; 0.5 gives 0.22) |
-| QW2 fallback phrase pools | **done** (2026-07-02) | same branch; 12 phrases per pool, per-chat anti-repeat window of 3 |
-| QW3 length-proportional typing | **done** (2026-07-02) | same branch; `TYPING_PER_CHAR_MS=12`, hard cap 4 s |
-| QW4 fuzzy casefold default | **done** (2026-07-02) | same branch; `normalize_lower=true` migration question still open |
-| QW5 reply flavor post-processor | **done** (2026-07-02) | same branch; ending-punctuation transforms only |
+| QW1 softmax candidate selection | **done** (2026-07-02), merged via PR #50 | `SELECTION_SCORE_MARGIN=0.5` chosen after eval (margin 1.0 collapsed context overlap 0.38→0.13; 0.5 gives 0.22) |
+| QW2 fallback phrase pools | **done** (2026-07-02), merged via PR #50 | 12 phrases per pool, per-chat anti-repeat window of 3 |
+| QW3 length-proportional typing | **done** (2026-07-02), merged via PR #50 | `TYPING_PER_CHAR_MS=12`, hard cap 4 s |
+| QW4 fuzzy casefold default | **done** (2026-07-02), merged via PR #50 | `normalize_lower=true` migration question still open |
+| QW5 reply flavor post-processor | **done** (2026-07-02), merged via PR #50 | ending-punctuation transforms only |
 | Baselines regenerated | **done** (2026-07-02) | own commit, diff explained in commit message |
 | S1 full-reply anti-repeat | **done** (2026-07-02), merged via PR #51 | exact matches hard-rejected (window 20, trailing punctuation stripped to survive flavor), trigram overlap penalized via `recent_penalty` in `CandidateScore`; `RECENT_REPLY_PENALTY_STRENGTH=0.5` after eval sweep (1.0 collapsed case-preserved context overlap 0.21→0.09; 0.5 keeps 0.14) |
 | S3 dynamic target reply length | **done** (2026-07-02), merged via PR #51 | modes short(1–4)/medium(5–14)/long(15–24), `LENGTH_MODE_WEIGHTS=0.25,0.55,0.2`; short-режим ограничивает генерацию 8 raw-токенами (кап 6 давал 11% пустых на синтетике); на синтетическом корпусе длины почти не расходятся (предложения однородны ~8 токенов) — реальный эффект смотреть в живом чате |
 | S2 `/pivo` weighted anti-repeat | **done** (2026-07-03), merged via PR #52 | last `PIVO_RECENT_POOL_WINDOW`=5 индексов top/body/bottom на чат хранятся в таблице `pivo_pool_usage` (миграция 010) и исключаются при следующем выборе; выбор идёт через `_pick` (фильтрация пула → `random.choice`), поэтому seeded-вывод и патч-контракт тестов сохранены |
 | S4 temporal modifiers | **done** (2026-07-03), merged via PR #52 | тематические bottom-пулы `/pivo` (ночь 00–06 / пятница / понедельник) подменяют нейтральную строку с вероятностью `PIVO_TEMPORAL_FLAVOR_CHANCE`=0.5; late-night добавляет фразы в learning-fallback; `now` инжектится для тестируемости |
-| M1 chat mood state | **done** (2026-07-03) | branch `feat/dialogue-gen-stage3-m1`; `app/core/mood.py` (pure EWMA signals → sleepy/calm/lively/heated), stored per-chat in `RuntimeState.chat_mood` (pruned via forget_chat); `MoodModifiers` scaled by `MOOD_MODULATION_STRENGTH` modulate reply_probability, randomness_strength, length_mode_weights, reply_flavor_strength (in `ResponseGenerator`) and a heated fallback pool; transitions logged at DEBUG. All thresholds are `MOOD_*` registry knobs; `MOOD_ENABLED` master toggle. Eval unaffected (bypasses the handler) |
-| M2–M4, L1–L3 | not started | next: M2 (reply-probability AI Director, builds on M1 signals) |
+| M1 chat mood state | **done** (2026-07-03), merged via PR #53 | `app/core/mood.py` (pure EWMA signals → sleepy/calm/lively/heated), stored per-chat in `RuntimeState.chat_mood` (pruned via forget_chat); `MoodModifiers` scaled by `MOOD_MODULATION_STRENGTH` modulate reply_probability, randomness_strength, length_mode_weights, reply_flavor_strength (in `ResponseGenerator`) and a heated fallback pool; transitions logged at DEBUG. All thresholds are `MOOD_*` registry knobs; `MOOD_ENABLED` master toggle. Eval unaffected (bypasses the handler) |
+| M2 reply-probability AI Director | **done** (2026-07-03) | `app/core/reply_policy.py` gains pure `conversation_momentum` (rate/mention/reply-thread blend → [0,1]), `burst_factor` (post-reply ×2 for `REPLY_BURST_BOOST_SEC`, then ×0.5 for `REPLY_BURST_SUPPRESS_SEC`), `effective_reply_probability` (momentum → `[REPLY_PROBABILITY_MIN, REPLY_PROBABILITY_MAX]` band × mood × burst), `within_hourly_cap` (`REPLY_MAX_PER_HOUR` safety gate). `should_reply_to_message` takes `hourly_cap_ok`. Handler decouples rhythm tracking from mood so the director's EWMA signals exist even with mood off; `RuntimeState.note_reply_sent` records reply timestamps for cap+burst. Master toggle `REPLY_DIRECTOR_ENABLED` (off → legacy flat `reply_probability`). Mentions always answered, never capped. Also carries the review fixes below |
+| M3–M4, L1–L3 | not started | next: M3 (emoji channel), then M4 (core topic-drift jumps) |
+| Review fixes (2026-07-03) | **done**, folded into the M2 PR | (1) `modifiers_for_mood` clamps every scaled multiplier at 0.0 so `MOOD_MODULATION_STRENGTH` up to 3.0 no longer yields negative weights/probabilities; (2) `_parse_length_mode_weights` no longer shadows the `long` builtin; (3) `_pick` documents its duplicate-free-pool assumption; (4) works-typo + (5) docs/ARCHITECTURE refresh already in the tree |
 
-Branch `feat/dialogue-gen-quick-wins` is not merged yet — Stage 1 is complete and
-verified (444 tests, ruff, mypy green), pending review/merge and a few days of
-live-chat observation before Stage 2. Each item
-lists what to do, where, how to verify, and what can go wrong. No LLMs anywhere —
+Status (2026-07-03): Stage 1 (PR #50), Stage 2 (PRs #51, #52) and Stage 3 M1
+(PR #53) are merged into `main`; the feature branches are deleted. The suite is
+green (513 tests, ruff, `mypy app/`). M1 is being observed in the live chat —
+M2 starts only after that observation is signed off. Each item below lists what
+to do, where, how to verify, and what can go wrong. No LLMs anywhere —
 everything stays algorithmic and lightweight.
 
 ## Ground rules for all items
@@ -241,6 +244,41 @@ assert state transitions; eval harness unaffected (mood off by default in eval).
 **Risk:** medium — behavioral, hard to unit-test perception; test the math, then
 tune live via `/set`.
 
+**Review fixes to fold into the M2 PR** (from the 2026-07-03 review of Stages
+1–3 M1; none are blockers, all ride along with M2):
+
+1. **`MOOD_MODULATION_STRENGTH` > 2.0 produces negative modifiers.** The
+   registry allows up to 3.0, but the linear scaling in
+   `modifiers_for_mood` (`1.0 + strength * (mult - 1.0)`) goes negative for
+   any base multiplier < 1.0 once `strength > 2.0`: sleepy at 3.0 yields
+   `length_weight_mult=(2.8, 1.0, -0.5)` and `reply_probability_mult=-0.5`.
+   A negative weight reaches `random.Random.choices` in
+   `sample_length_mode` (non-monotonic cumulative weights → undefined pick),
+   and the negative probability silently disables unprompted replies.
+   `randomness_delta` is already guarded by `max(0.0, ...)` in
+   `ResponseGenerator`; the multipliers are not.
+   **Fix:** clamp inside `modifiers_for_mood` — wrap each scaled multiplier
+   in `max(0.0, ...)` so any strength degrades gracefully (weights hitting 0
+   just exclude a mode; `sample_length_mode` is safe because registry
+   validation guarantees at least one positive base weight). Keep the
+   registry range at 3.0. Add a unit test in `tests/test_mood.py` asserting
+   all modifier components are ≥ 0 for every mood at strength 3.0.
+2. **`_parse_length_mode_weights` shadows the `long` builtin**
+   (`app/config/registry.py`). Rename the unpacked variables to
+   `short_w, medium_w, long_w`. Cosmetic, no behavior change.
+3. **`_pick` recovers the index via `pool.index(chosen)`**
+   (`app/services/pivo_message_builder.py`): with duplicate strings in a
+   pool it would record the first occurrence's index, slightly skewing
+   anti-repeat. Pools are currently duplicate-free, so either leave a
+   comment stating the uniqueness assumption or switch to filtering
+   `(index, part)` pairs and choosing among them. Low priority.
+4. *(already fixed in the working tree, rides with this PR)* Typo in
+   `LATE_NIGHT_FALLBACK_PHRASES`: "генератор works" → "генератор работает".
+5. *(docs, already done in the working tree, ride with this PR)* Plan/audit
+   status refresh (merged-PR notes, stale "not merged yet" paragraph removed)
+   and `ARCHITECTURE.md` sync (module lists, migrations 001…010,
+   `pivo_pool_usage` table, archive links).
+
 ### M3. Emoji channel
 
 **Goal:** the bot uses *this chat's* emojis without polluting the Markov model.
@@ -341,14 +379,12 @@ reference it at roughly the configured rate.
 
 ## Suggested sequencing & checkpoints
 
-1. **PR 1:** QW2 + QW3 + QW4 (zero-risk visible wins).
-2. **PR 2:** QW1 + QW5 + new baseline (`tools/generation_baseline.json` regenerated,
-   diff explained in the PR).
-3. **PR 3:** S1 + S3 (scorer changes together, one test-update pass).
-4. **PR 4:** S2 + S4 (template-side).
-5. **PR 5:** M1, then **PR 6:** M2 (director builds on mood signals).
-6. **PR 7:** M3; **PR 8:** M4 (core, isolated).
-7. **L1 → L3 → L2** (L2 last: needs the privacy review and benefits from the
+Actual so far: Stage 1 landed as one PR (#50, all QW + baseline), S1 + S3 as
+PR #51, S2 + S4 as PR #52, M1 as PR #53, M2 + the Stage 1–3 review fixes as the
+next PR. Remaining sequencing:
+
+1. **M3**, then **M4** (core, isolated).
+2. **L1 → L3 → L2** (L2 last: needs the privacy review and benefits from the
    flavor/sequence plumbing built earlier).
 
 After each stage: run the full test suite + `tools/eval_generation.py`, and let the

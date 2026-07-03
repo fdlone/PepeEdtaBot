@@ -16,12 +16,21 @@ from app.core.markov import (
     is_short_generated_reply,
     tokenize,
 )
-from app.core.mood import NEUTRAL_MODIFIERS, modifiers_for_mood, update_mood_state
+from app.core.mood import (
+    NEUTRAL_MODIFIERS,
+    ChatMoodState,
+    modifiers_for_mood,
+    update_mood_state,
+)
 from app.core.reply_policy import (
     bot_is_mentioned,
+    burst_factor,
+    conversation_momentum,
     cooldown_allows_reply,
+    effective_reply_probability,
     has_enough_model_data,
     should_reply_to_message,
+    within_hourly_cap,
 )
 from app.core.response_generator import (
     GenerationRequest,
@@ -169,32 +178,38 @@ async def on_text_message(
     # (e.g. "ок", "?") should still trigger a response even if too short to learn.
     mentioned = bot_is_mentioned(message, bot_username, bot_id, bot_text_aliases)
 
-    # M1: fold this message into the chat mood before any early return so even
-    # short/non-learnable messages still count toward the conversation rhythm.
+    # M1/M2: fold this message into the per-chat rhythm state before any early
+    # return so even short/non-learnable messages still count toward the
+    # conversation cadence. The rhythm EWMAs feed both the M1 mood modulation and
+    # the M2 reply director, so they are tracked whenever either is enabled; the
+    # mood *behaviour* (modifiers, fallback flavour, transition log) applies only
+    # when mood itself is enabled.
     mood: str | None = None
     mood_modifiers = NEUTRAL_MODIFIERS
-    if runtime_state.mood_enabled:
+    chat_rhythm: ChatMoodState | None = None
+    if runtime_state.mood_enabled or runtime_state.reply_director_enabled:
         previous_mood = runtime_state.chat_mood.get(message.chat.id)
-        updated_mood = update_mood_state(
+        chat_rhythm = update_mood_state(
             previous_mood,
             now=now,
             text=raw_text,
             mentioned=mentioned,
             config=runtime_state.mood_config(),
         )
-        runtime_state.chat_mood[message.chat.id] = updated_mood
-        mood = updated_mood.mood
-        if previous_mood is None or previous_mood.mood != updated_mood.mood:
-            logger.debug(
-                "Chat mood -> %s: chat=%s rate=%.1f intensity=%.2f",
-                updated_mood.mood,
-                mask_chat_id(message.chat.id),
-                updated_mood.rate_ewma,
-                updated_mood.intensity_ewma,
+        runtime_state.chat_mood[message.chat.id] = chat_rhythm
+        if runtime_state.mood_enabled:
+            mood = chat_rhythm.mood
+            if previous_mood is None or previous_mood.mood != chat_rhythm.mood:
+                logger.debug(
+                    "Chat mood -> %s: chat=%s rate=%.1f intensity=%.2f",
+                    chat_rhythm.mood,
+                    mask_chat_id(message.chat.id),
+                    chat_rhythm.rate_ewma,
+                    chat_rhythm.intensity_ewma,
+                )
+            mood_modifiers = modifiers_for_mood(
+                chat_rhythm.mood, runtime_state.mood_modulation_strength
             )
-        mood_modifiers = modifiers_for_mood(
-            updated_mood.mood, runtime_state.mood_modulation_strength
-        )
 
     # Strip a leading "<bot-alias>, ..." direct address before learning so the
     # corpus does not absorb boilerplate openings. Mention detection above still
@@ -252,23 +267,63 @@ async def on_text_message(
 
         last_ts = runtime_state.last_reply_ts.get(message.chat.id, 0.0)
         cooldown_ok = cooldown_allows_reply(now, last_ts, runtime_state.min_cooldown_sec)
-        mood_reply_probability = min(
-            1.0, runtime_state.reply_probability * mood_modifiers.reply_probability_mult
-        )
+
+        # M2: when the director is on, conversation momentum (rate/mention/thread
+        # signals from the shared rhythm state) maps into the [min, max] band,
+        # then the mood multiplier and the post-reply burst rhythm modulate it and
+        # a per-hour cap guards against runaway chats. When off, the legacy flat
+        # probability × mood multiplier is used unchanged.
+        hourly_cap_ok = True
+        if runtime_state.reply_director_enabled and chat_rhythm is not None:
+            momentum = conversation_momentum(
+                rate_ewma=chat_rhythm.rate_ewma,
+                mention_ewma=chat_rhythm.mention_ewma,
+                is_reply=message.reply_to_message is not None,
+                lively_rate_per_min=runtime_state.mood_lively_rate_per_min,
+            )
+            burst = burst_factor(
+                seconds_since_reply=now - last_ts,
+                boost_window_sec=runtime_state.reply_burst_boost_sec,
+                boost_mult=runtime_state.reply_burst_boost_mult,
+                suppress_window_sec=runtime_state.reply_burst_suppress_sec,
+                suppress_mult=runtime_state.reply_burst_suppress_mult,
+            )
+            reply_prob = effective_reply_probability(
+                base_min=runtime_state.reply_probability_min,
+                base_max=runtime_state.reply_probability_max,
+                momentum=momentum,
+                mood_mult=mood_modifiers.reply_probability_mult,
+                burst_mult=burst,
+            )
+            hourly_cap_ok = within_hourly_cap(
+                runtime_state.recent_reply_times.get(message.chat.id, ()),
+                now,
+                runtime_state.reply_max_per_hour,
+            )
+        else:
+            reply_prob = min(
+                1.0,
+                runtime_state.reply_probability
+                * mood_modifiers.reply_probability_mult,
+            )
+
         should_reply = should_reply_to_message(
             mentioned=mentioned,
             cooldown_ok=cooldown_ok,
-            reply_probability=mood_reply_probability,
+            hourly_cap_ok=hourly_cap_ok,
+            reply_probability=reply_prob,
             random_value=random.random(),
         )
 
         if not should_reply:
             logger.debug(
-                "Skip by trigger/cooldown: chat=%s mentioned=%s cooldown_ok=%s prob=%.2f",
+                "Skip by trigger/cooldown: chat=%s mentioned=%s cooldown_ok=%s "
+                "cap_ok=%s prob=%.2f",
                 mask_chat_id(message.chat.id),
                 mentioned,
                 cooldown_ok,
-                mood_reply_probability,
+                hourly_cap_ok,
+                reply_prob,
             )
             return
 
@@ -331,7 +386,7 @@ async def on_text_message(
                     runtime_state.typing_max_ms,
                     typing_per_char_ms=runtime_state.typing_per_char_ms,
                 )
-                runtime_state.last_reply_ts[message.chat.id] = now
+                runtime_state.note_reply_sent(message.chat.id, now)
             logger.debug(
                 "Generation failed: chat=%s mentioned=%s",
                 mask_chat_id(message.chat.id),
@@ -339,7 +394,7 @@ async def on_text_message(
             )
             return
 
-        runtime_state.last_reply_ts[message.chat.id] = now
+        runtime_state.note_reply_sent(message.chat.id, now)
         await reply_humanized(
             message,
             reply_text,
