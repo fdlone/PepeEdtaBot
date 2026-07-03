@@ -167,6 +167,19 @@ class TestMoodModifiers(unittest.TestCase):
         weights = modifiers_for_mood(SLEEPY, 1.0).length_weight_mult
         self.assertGreater(weights[0], weights[2])  # short favoured over long
 
+    def test_multipliers_never_negative_at_max_strength(self) -> None:
+        # The registry allows MOOD_MODULATION_STRENGTH up to 3.0; linear scaling of
+        # a sub-1.0 base multiplier (e.g. sleepy's 0.5) would go negative there. A
+        # negative weight would corrupt random.choices in sample_length_mode and a
+        # negative reply_probability_mult would silently disable unprompted replies.
+        for mood in (SLEEPY, CALM, LIVELY, HEATED):
+            mods = modifiers_for_mood(mood, 3.0)
+            with self.subTest(mood=mood):
+                self.assertGreaterEqual(mods.reply_probability_mult, 0.0)
+                self.assertGreaterEqual(mods.flavor_strength_mult, 0.0)
+                for weight in mods.length_weight_mult:
+                    self.assertGreaterEqual(weight, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

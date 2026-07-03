@@ -51,6 +51,14 @@ def make_state() -> SimpleNamespace:
         mood_sleepy_rate_per_min=2.0,
         mood_heated_intensity=0.4,
         mood_max_rate_per_min=120.0,
+        reply_director_enabled=True,
+        reply_probability_min=0.02,
+        reply_probability_max=0.30,
+        reply_burst_boost_sec=180,
+        reply_burst_boost_mult=2.0,
+        reply_burst_suppress_sec=600,
+        reply_burst_suppress_mult=0.5,
+        reply_max_per_hour=20,
     )
 
 

@@ -2,7 +2,8 @@
 
 Документ описывает текущую слоистую архитектуру `PepeEdtaBot` (после
 рефакторинга `refactor/structure`, фазы 1–6). Если вы трогаете код впервые —
-читайте этот файл вместе с `PROJECT_AUDIT.md`.
+читайте этот файл вместе с актуальным аудитом в `docs/project_audit/`
+(старые аудиты — в `docs/_pre_audit_archive/`).
 
 ## Слои
 
@@ -57,7 +58,7 @@
 
 \* Исключение — `PivoService.subscribe(chat_id, user)` принимает
 `aiogram.types.User` напрямую: осознанный компромисс, описан в
-`PROJECT_AUDIT.md`, раздел 5.1.
+`docs/_pre_audit_archive/PROJECT_AUDIT.md`, раздел 5.1.
 
 ## Модули
 
@@ -70,17 +71,17 @@
 
 | Подпакет | Содержимое |
 |---|---|
-| `config/` | `registry.py`, `settings.py`, `runtime_config.py`, `runtime_state.py` |
-| `core/` | `markov.py`, `reply_policy.py`, `text.py` |
+| `config/` | `registry.py`, `settings.py`, `runtime_config.py`, `runtime_state.py`, `defaults.py` |
+| `core/` | `markov.py`, `response_generator.py`, `candidate_scorer.py`, `context_state_matcher.py`, `reply_flavor.py`, `mood.py`, `lexicon.py`, `privacy_filter.py`, `reply_policy.py`, `text.py` |
 | `domain/` | `pivo.py`, `pivo_templates.py` |
-| `presentation/` | `bot_messages.py` |
+| `presentation/` | `bot_messages.py`, `fallback_phrases.py` |
 | `handlers/` | `common.py`, `admin.py`, `pivo.py`, `learning.py` — `aiogram.Router` per file. `_helpers.py` — `reply_humanized`. |
-| `services/` | `learning_service.py`, `pivo_service.py` |
-| `repositories/` | `markov_repo.py`, `messages_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py` |
+| `services/` | `learning_service.py`, `pivo_service.py`, `pivo_message_builder.py`, `pivo_parser.py` |
+| `repositories/` | `markov_repo.py`, `messages_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py`, `pivo_pool_usage_repo.py` |
 | `filters/` | `group_only.py` (только `GROUP`/`SUPERGROUP`), `admin_or_owner.py` (`OWNER_ID` или админ чата, fail-closed при ошибке Telegram API) |
 | `middlewares/` | `throttling.py` — per-user-per-command cooldown, `clear`=3600 сек; команды из `notify_on_throttle` получают явный ответ при throttle вместо silent drop |
 | `infrastructure/` | `database.py` — фасад БД; `migrator.py` — пробегает `app/migrations/NNN_*` ровно один раз. `.sql`-файлы оборачиваются в `BEGIN; ... COMMIT;` и проходят через `executescript`; на исключении вызывается `conn.rollback()` и схема не остаётся в полу-применённом состоянии |
-| `migrations/` | `001_initial.sql` … `007_unify_chat_members.sql` |
+| `migrations/` | `001_initial.sql` … `010_pivo_pool_usage.sql` |
 
 ### Внутренние модули пакета
 
@@ -88,6 +89,11 @@
 |---|---|
 | `app/infrastructure/database.py` | Фасад над репозиториями: соединение `aiosqlite`, кросс-доменные транзакции (`save_message_and_update_model`, `clear_chat`, `get_stats`), retention `pivo_daily_usage`. |
 | `app/core/markov.py` | Variable-order генератор (3 → 2 → 1). |
+| `app/core/response_generator.py` | Конвейер best-of-N: генерация кандидатов, фильтры (verbatim, echo, анти-повтор), softmax-отбор по скорингу, reply flavor. |
+| `app/core/candidate_scorer.py` | Скоринг кандидатов (качество завершения, разнообразие, длина по режимам short/medium/long, контекст, штрафы повторов). |
+| `app/core/mood.py` | Пер-чатовое настроение (sleepy/calm/lively/heated) из EWMA-сигналов; модулирует поведение генерации (M1). |
+| `app/core/reply_flavor.py` | Вариации финальной пунктуации ответа (QW5). |
+| `app/presentation/fallback_phrases.py` | Пулы fallback-фраз с анти-повтором, ночными и «heated»-вариантами. |
 | `app/domain/pivo.py` | `PivoSecurity` (HMAC + Fernet), `PivoMember`. |
 | `app/domain/pivo_templates.py` | Контент сообщений `/pivo`. |
 | `app/presentation/bot_messages.py` | Форматирование `/help`, `/stats`, `/config`. |
@@ -168,6 +174,7 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
 | `transitions1` | Униграммный fallback. |
 | `chat_members` | Каноническая таблица участников чата. PK `(chat_hash, user_hash)`, payload зашифрован Fernet. Сейчас единственный потребитель — `/pivo` (присутствие в таблице ≡ подписка); будущие фичи, которым нужно персистентное состояние участника, ходят сюда же. |
 | `pivo_daily_usage` | Суточная квота `/pivo` (`chat_hash`, `user_hash`, `usage_day`, `used_count`). Retention 7 дней. |
+| `pivo_pool_usage` | Анти-повтор шаблонов `/pivo`: последние использованные индексы top/body/bottom per chat per pool (`chat_hash`, `pool_name`, `recent_indices`). Миграция 010. |
 | `schema_migrations` | Учёт применённых миграций. |
 
 ## Миграции

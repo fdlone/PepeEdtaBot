@@ -126,6 +126,11 @@ def _pick(
     the ``random.choice`` patch point used across the pivo tests keeps working.
     With an empty ``avoid`` set the filtered pool is the pool itself, so seeded
     output is byte-for-byte identical to the previous ``_choice(pool)`` call.
+
+    Assumes ``pool`` has no duplicate entries: the drawn index is recovered via
+    ``pool.index(chosen)``, which for a duplicated string would always report the
+    first occurrence and thus slightly skew anti-repeat. All current pivo pools
+    are duplicate-free; keep them so, or switch to indexing ``(i, part)`` pairs.
     """
     filtered = pool
     if avoid:

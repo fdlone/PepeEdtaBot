@@ -100,15 +100,29 @@ def modifiers_for_mood(mood: str, strength: float) -> MoodModifiers:
     base = _MOOD_MODIFIERS.get(mood, NEUTRAL_MODIFIERS)
     if strength == 1.0:
         return base
+
+    # Linear scaling ``1 + strength * (mult - 1)`` drives any multiplier below 1.0
+    # negative once ``strength`` exceeds ``1 / (1 - mult)`` (e.g. sleepy's 0.5 base
+    # at strength 3.0 yields -0.5). A negative multiplier would put a negative
+    # weight into ``random.choices`` (undefined pick) via ``sample_length_mode`` and
+    # silently disable unprompted replies via ``reply_probability_mult``. Clamp each
+    # scaled multiplier at 0.0 so any strength degrades gracefully — a mode whose
+    # weight hits 0 is simply excluded, which is safe because registry validation
+    # guarantees at least one positive base length weight. ``randomness_delta`` is a
+    # signed additive nudge (already floored via ``max(0.0, ...)`` in
+    # ``ResponseGenerator``), so it is left unclamped here.
+    def _scale(mult: float) -> float:
+        return max(0.0, 1.0 + strength * (mult - 1.0))
+
     return MoodModifiers(
-        reply_probability_mult=1.0 + strength * (base.reply_probability_mult - 1.0),
+        reply_probability_mult=_scale(base.reply_probability_mult),
         randomness_delta=strength * base.randomness_delta,
         length_weight_mult=(
-            1.0 + strength * (base.length_weight_mult[0] - 1.0),
-            1.0 + strength * (base.length_weight_mult[1] - 1.0),
-            1.0 + strength * (base.length_weight_mult[2] - 1.0),
+            _scale(base.length_weight_mult[0]),
+            _scale(base.length_weight_mult[1]),
+            _scale(base.length_weight_mult[2]),
         ),
-        flavor_strength_mult=1.0 + strength * (base.flavor_strength_mult - 1.0),
+        flavor_strength_mult=_scale(base.flavor_strength_mult),
     )
 
 

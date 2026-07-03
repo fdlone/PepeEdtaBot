@@ -70,14 +70,14 @@ def _parse_length_mode_weights(value: str) -> tuple[float, float, float]:
             "value must be three comma-separated weights: short,medium,long"
         )
     try:
-        short, medium, long = (float(part) for part in parts)
+        short_w, medium_w, long_w = (float(part) for part in parts)
     except ValueError as exc:
         raise ValueError(f"invalid weight in {value!r}") from exc
-    if min(short, medium, long) < 0.0:
+    if min(short_w, medium_w, long_w) < 0.0:
         raise ValueError("weights must be non-negative")
-    if short + medium + long <= 0.0:
+    if short_w + medium_w + long_w <= 0.0:
         raise ValueError("at least one weight must be positive")
-    return short, medium, long
+    return short_w, medium_w, long_w
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +182,32 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # Clamp for the instantaneous message rate so bursts cannot spike the EWMA.
     FieldSpec("mood_max_rate_per_min", "MOOD_MAX_RATE_PER_MIN", "120.0",
               _float_in_range(1.0, 6000.0)),
+    # M2 reply-probability director: master toggle. When off, the flat
+    # ``reply_probability`` (× mood multiplier) governs unprompted replies exactly
+    # as before; when on, conversation momentum maps into the [min, max] band below.
+    FieldSpec("reply_director_enabled", "REPLY_DIRECTOR_ENABLED", "true",
+              _parse_bool),
+    # Momentum band: a quiet chat sits near the min, a busy/addressed one climbs to
+    # the max. The legacy flat ``reply_probability`` (0.08) is roughly the midpoint.
+    FieldSpec("reply_probability_min", "REPLY_PROBABILITY_MIN", "0.02",
+              _float_in_range(0.0, 1.0)),
+    FieldSpec("reply_probability_max", "REPLY_PROBABILITY_MAX", "0.30",
+              _float_in_range(0.0, 1.0)),
+    # Burst rhythm: right after the bot replies its probability is boosted for
+    # ``boost_sec`` (join the exchange), then suppressed for the following
+    # ``suppress_sec`` (withdraw). ``min_cooldown_sec`` remains the hard floor.
+    FieldSpec("reply_burst_boost_sec", "REPLY_BURST_BOOST_SEC", "180",
+              _int_min(0)),
+    FieldSpec("reply_burst_boost_mult", "REPLY_BURST_BOOST_MULT", "2.0",
+              _float_in_range(0.0, 10.0)),
+    FieldSpec("reply_burst_suppress_sec", "REPLY_BURST_SUPPRESS_SEC", "600",
+              _int_min(0)),
+    FieldSpec("reply_burst_suppress_mult", "REPLY_BURST_SUPPRESS_MULT", "0.5",
+              _float_in_range(0.0, 10.0)),
+    # Safety cap on unprompted replies per rolling hour per chat (mentions always
+    # answered, never counted against the gate). 0 disables the cap.
+    FieldSpec("reply_max_per_hour", "REPLY_MAX_PER_HOUR", "20",
+              _int_in_range(0, 1000)),
 )
 
 
@@ -212,6 +238,10 @@ def validate_cross_fields(obj: Any) -> None:
     if obj.mood_sleepy_rate_per_min >= obj.mood_lively_rate_per_min:
         raise ValueError(
             "MOOD_SLEEPY_RATE_PER_MIN must be lower than MOOD_LIVELY_RATE_PER_MIN"
+        )
+    if obj.reply_probability_min > obj.reply_probability_max:
+        raise ValueError(
+            "REPLY_PROBABILITY_MIN must be <= REPLY_PROBABILITY_MAX"
         )
 
 
