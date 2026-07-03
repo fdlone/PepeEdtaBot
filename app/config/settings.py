@@ -52,6 +52,13 @@ class Settings:
     reply_context_include_current_message: bool
     pivo_recent_pool_window: int
     pivo_temporal_flavor_chance: float
+    mood_enabled: bool
+    mood_modulation_strength: float
+    mood_ewma_alpha: float
+    mood_lively_rate_per_min: float
+    mood_sleepy_rate_per_min: float
+    mood_heated_intensity: float
+    mood_max_rate_per_min: float
     pivo_hmac_secret: str
     pivo_encryption_secret: str
     pivo_explicit_mentions_limit: int

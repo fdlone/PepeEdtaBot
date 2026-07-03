@@ -161,6 +161,27 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # (late-night / Friday / Monday) when one applies. 0 disables temporal flavor.
     FieldSpec("pivo_temporal_flavor_chance", "PIVO_TEMPORAL_FLAVOR_CHANCE", "0.5",
               _float_in_range(0.0, 1.0)),
+    # M1 chat mood: a hidden per-chat state (sleepy/calm/lively/heated) that drifts
+    # the bot's behaviour with conversation rhythm.
+    FieldSpec("mood_enabled", "MOOD_ENABLED", "true", _parse_bool),
+    # Scales every mood-driven knob deviation: 0 tracks mood but changes nothing,
+    # 1 uses the built-in table, higher exaggerates.
+    FieldSpec("mood_modulation_strength", "MOOD_MODULATION_STRENGTH", "1.0",
+              _float_in_range(0.0, 3.0)),
+    # EWMA smoothing for the mood signals (higher = reacts faster).
+    FieldSpec("mood_ewma_alpha", "MOOD_EWMA_ALPHA", "0.3",
+              _float_in_range(0.01, 1.0)),
+    # Message-rate thresholds (msg/min) separating sleepy < calm < lively.
+    FieldSpec("mood_lively_rate_per_min", "MOOD_LIVELY_RATE_PER_MIN", "12.0",
+              _float_in_range(0.0, 600.0)),
+    FieldSpec("mood_sleepy_rate_per_min", "MOOD_SLEEPY_RATE_PER_MIN", "2.0",
+              _float_in_range(0.0, 600.0)),
+    # Smoothed emphatic-intensity (!/?/caps) at/above which a chat reads as heated.
+    FieldSpec("mood_heated_intensity", "MOOD_HEATED_INTENSITY", "0.4",
+              _float_in_range(0.0, 1.0)),
+    # Clamp for the instantaneous message rate so bursts cannot spike the EWMA.
+    FieldSpec("mood_max_rate_per_min", "MOOD_MAX_RATE_PER_MIN", "120.0",
+              _float_in_range(1.0, 6000.0)),
 )
 
 
@@ -187,6 +208,10 @@ def validate_cross_fields(obj: Any) -> None:
     if obj.reply_context_last_tokens > obj.reply_context_max_tokens:
         raise ValueError(
             "REPLY_CONTEXT_LAST_TOKENS must be <= REPLY_CONTEXT_MAX_TOKENS"
+        )
+    if obj.mood_sleepy_rate_per_min >= obj.mood_lively_rate_per_min:
+        raise ValueError(
+            "MOOD_SLEEPY_RATE_PER_MIN must be lower than MOOD_LIVELY_RATE_PER_MIN"
         )
 
 

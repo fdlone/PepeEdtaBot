@@ -22,6 +22,7 @@ from app.core.markov import (
     is_short_generated_reply,
     tokenize,
 )
+from app.core.mood import NEUTRAL_MODIFIERS, MoodModifiers
 from app.core.reply_flavor import apply_reply_flavor
 from app.core.text import capitalize_reply_sentences, sanitize_text
 from app.log_masking import mask_chat_id
@@ -155,6 +156,9 @@ class ResponseGenerator:
     learning_service: VerbatimCopyChecker
     runtime_state: RuntimeState
     scorer: CandidateScorer = score_candidate
+    # Per-chat mood modulation; None (or the neutral instance) leaves the
+    # configured runtime knobs untouched.
+    mood_modifiers: MoodModifiers | None = None
 
     async def generate(
         self,
@@ -176,6 +180,7 @@ class ResponseGenerator:
         candidate_target: int = CANDIDATE_TARGET,
     ) -> ResponseGenerationResult:
         generation_rng = rng or random.Random()
+        modifiers = self.mood_modifiers or NEUTRAL_MODIFIERS
         seed = request.seed
         target = max(1, min(candidate_target, GENERATION_ATTEMPT_BUDGET))
         candidates: list[_ScoredCandidate] = []
@@ -188,9 +193,15 @@ class ResponseGenerator:
             if recent_penalty_strength > 0.0
             else set()
         )
-        length_mode = sample_length_mode(
-            self.runtime_state.length_mode_weights,
-            generation_rng,
+        base_weights = self.runtime_state.length_mode_weights
+        mood_weights = (
+            base_weights[0] * modifiers.length_weight_mult[0],
+            base_weights[1] * modifiers.length_weight_mult[1],
+            base_weights[2] * modifiers.length_weight_mult[2],
+        )
+        length_mode = sample_length_mode(mood_weights, generation_rng)
+        effective_randomness = max(
+            0.0, self.runtime_state.randomness_strength + modifiers.randomness_delta
         )
         max_tokens = self.runtime_state.max_reply_tokens
         if length_mode == "short":
@@ -203,7 +214,7 @@ class ResponseGenerator:
                 else None
             )
             attempt_randomness_strength = escalated_randomness_strength(
-                self.runtime_state.randomness_strength,
+                effective_randomness,
                 attempt,
                 GENERATION_ATTEMPT_BUDGET,
             )
@@ -329,7 +340,7 @@ class ResponseGenerator:
         text = apply_reply_flavor(
             text,
             generation_rng,
-            self.runtime_state.reply_flavor_strength,
+            self.runtime_state.reply_flavor_strength * modifiers.flavor_strength_mult,
         )
         return ResponseGenerationResult(
             text=text,

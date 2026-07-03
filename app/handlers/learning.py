@@ -16,6 +16,7 @@ from app.core.markov import (
     is_short_generated_reply,
     tokenize,
 )
+from app.core.mood import NEUTRAL_MODIFIERS, modifiers_for_mood, update_mood_state
 from app.core.reply_policy import (
     bot_is_mentioned,
     cooldown_allows_reply,
@@ -34,6 +35,7 @@ from app.presentation.fallback_phrases import (
     GENERATION_FAILED_PHRASES,
     NOT_ENOUGH_DATA_PHRASES,
     late_night_pool,
+    mood_fallback_pool,
     pick_fallback_phrase,
 )
 from app.services import LearningService
@@ -94,16 +96,20 @@ def next_fallback_phrase(
     pool: tuple[str, ...],
     rng: random.Random | None = None,
     now: datetime | None = None,
+    mood: str | None = None,
 ) -> str:
     """Pick a fallback phrase avoiding the ones used recently in this chat.
 
-    Late at night the pool is extended with late-night-flavored phrases (S4).
+    Late at night the pool is extended with late-night-flavored phrases (S4);
+    a heated chat mood adds punchier phrases (M1). Both are additive, so the
+    neutral pool always remains available.
     """
     recent = runtime_state.recent_fallbacks.get(chat_id)
     if recent is None:
         recent = deque(maxlen=RECENT_FALLBACK_LIMIT)
         runtime_state.recent_fallbacks[chat_id] = recent
-    phrase = pick_fallback_phrase(late_night_pool(pool, now), recent, rng=rng)
+    effective_pool = mood_fallback_pool(late_night_pool(pool, now), mood)
+    phrase = pick_fallback_phrase(effective_pool, recent, rng=rng)
     recent.append(phrase)
     return phrase
 
@@ -163,6 +169,33 @@ async def on_text_message(
     # (e.g. "ок", "?") should still trigger a response even if too short to learn.
     mentioned = bot_is_mentioned(message, bot_username, bot_id, bot_text_aliases)
 
+    # M1: fold this message into the chat mood before any early return so even
+    # short/non-learnable messages still count toward the conversation rhythm.
+    mood: str | None = None
+    mood_modifiers = NEUTRAL_MODIFIERS
+    if runtime_state.mood_enabled:
+        previous_mood = runtime_state.chat_mood.get(message.chat.id)
+        updated_mood = update_mood_state(
+            previous_mood,
+            now=now,
+            text=raw_text,
+            mentioned=mentioned,
+            config=runtime_state.mood_config(),
+        )
+        runtime_state.chat_mood[message.chat.id] = updated_mood
+        mood = updated_mood.mood
+        if previous_mood is None or previous_mood.mood != updated_mood.mood:
+            logger.debug(
+                "Chat mood -> %s: chat=%s rate=%.1f intensity=%.2f",
+                updated_mood.mood,
+                mask_chat_id(message.chat.id),
+                updated_mood.rate_ewma,
+                updated_mood.intensity_ewma,
+            )
+        mood_modifiers = modifiers_for_mood(
+            updated_mood.mood, runtime_state.mood_modulation_strength
+        )
+
     # Strip a leading "<bot-alias>, ..." direct address before learning so the
     # corpus does not absorb boilerplate openings. Mention detection above still
     # sees the original text. The same stripped text feeds both the model tokens
@@ -200,6 +233,7 @@ async def on_text_message(
                     message.chat.id,
                     NOT_ENOUGH_DATA_PHRASES,
                     now=datetime.now(),
+                    mood=mood,
                 ),
                 runtime_state.typing_min_ms,
                 runtime_state.typing_max_ms,
@@ -218,10 +252,13 @@ async def on_text_message(
 
         last_ts = runtime_state.last_reply_ts.get(message.chat.id, 0.0)
         cooldown_ok = cooldown_allows_reply(now, last_ts, runtime_state.min_cooldown_sec)
+        mood_reply_probability = min(
+            1.0, runtime_state.reply_probability * mood_modifiers.reply_probability_mult
+        )
         should_reply = should_reply_to_message(
             mentioned=mentioned,
             cooldown_ok=cooldown_ok,
-            reply_probability=runtime_state.reply_probability,
+            reply_probability=mood_reply_probability,
             random_value=random.random(),
         )
 
@@ -231,7 +268,7 @@ async def on_text_message(
                 mask_chat_id(message.chat.id),
                 mentioned,
                 cooldown_ok,
-                runtime_state.reply_probability,
+                mood_reply_probability,
             )
             return
 
@@ -267,6 +304,7 @@ async def on_text_message(
             generator=generator,
             learning_service=learning_service,
             runtime_state=runtime_state,
+            mood_modifiers=mood_modifiers,
         )
         reply_text = await response_generator.generate(
             GenerationRequest(
@@ -287,6 +325,7 @@ async def on_text_message(
                         message.chat.id,
                         GENERATION_FAILED_PHRASES,
                         now=datetime.now(),
+                        mood=mood,
                     ),
                     runtime_state.typing_min_ms,
                     runtime_state.typing_max_ms,
