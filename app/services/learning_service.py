@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from app.core.markov import MarkovGenerator
 from app.core.text import sanitize_text
 from app.infrastructure.database import Database
@@ -41,6 +43,14 @@ class LearningService:
         self._generator.invalidate_chat_cache(chat_id)
         self._invalidate_text_cache(chat_id)
         return token_volume
+
+    async def record_emojis(self, chat_id: int, counts: Mapping[str, int]) -> None:
+        """Fold a message's emoji frequencies into the chat's emoji stats (M3)."""
+        await self._db.record_chat_emojis(chat_id, counts)
+
+    async def get_emoji_stats(self, chat_id: int) -> dict[str, int]:
+        """Per-chat emoji frequencies for the emoji-append channel (M3)."""
+        return await self._db.get_chat_emoji_stats(chat_id)
 
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool:
         """True если текст дословно совпадает с одним из последних обучающих сообщений."""

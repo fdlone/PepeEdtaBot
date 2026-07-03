@@ -27,6 +27,24 @@ REJECTION_LOW_DIVERSITY = "low_diversity"
 REJECTION_SHORT_CONTEXT_COPY = "short_context_copy"
 REJECTION_CONTEXT_HEAVY = "context_heavy"
 
+# M4: connective phrases spliced in when a mid-generation jump drifts to a new
+# topic, so the shift reads as a deliberate aside rather than a non-sequitur.
+# Each is a token sequence; the leading comma binds it to the preceding text
+# (detokenize attaches punctuation without a space). The words are common
+# discourse markers, so they neither echo context nor look out of register.
+JUMP_CONNECTIVE_TOKENS: tuple[tuple[str, ...], ...] = (
+    (",", "кстати"),
+    (",", "короче"),
+    (",", "слушай"),
+    (",", "хотя"),
+    (",", "а", "вообще"),
+    (",", "ну", "и"),
+)
+
+
+def pick_jump_connective(rng: random.Random) -> tuple[str, ...]:
+    return rng.choice(JUMP_CONNECTIVE_TOKENS)
+
 @dataclass(frozen=True, slots=True)
 class GenerationTrace:
     attempts_used: int
@@ -916,6 +934,7 @@ class MarkovGenerator:
         backoff_min_order: int = 1,
         fuzzy_context_casefold: bool = False,
         fuzzy_context_prefix: bool = False,
+        jump_probability: float = 0.0,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> str:
@@ -934,6 +953,7 @@ class MarkovGenerator:
             backoff_min_order=backoff_min_order,
             fuzzy_context_casefold=fuzzy_context_casefold,
             fuzzy_context_prefix=fuzzy_context_prefix,
+            jump_probability=jump_probability,
             rng=rng,
             attempt_budget=attempt_budget,
         )
@@ -955,6 +975,7 @@ class MarkovGenerator:
         backoff_min_order: int = 1,
         fuzzy_context_casefold: bool = False,
         fuzzy_context_prefix: bool = False,
+        jump_probability: float = 0.0,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> tuple[str, GenerationTrace]:
@@ -996,6 +1017,7 @@ class MarkovGenerator:
                 backoff_min_order=backoff_min_order,
                 fuzzy_context_casefold=fuzzy_context_casefold,
                 fuzzy_context_prefix=fuzzy_context_prefix,
+                jump_probability=jump_probability,
                 rng=generation_rng,
                 emit_start=True,
             )
@@ -1382,7 +1404,21 @@ class MarkovGenerator:
                         start_power,
                         rng,
                     )
-                w1, w2, w3 = contextual_jump
+                nw1, nw2, nw3 = contextual_jump
+                # Splice a connective and the new sentence-start triplet into the
+                # output so the topic drift is voiced. The new triplet is a real
+                # learned start, so "<text>, кстати <new sentence>" reads as an
+                # aside instead of silently dropping into mid-chain (which is why
+                # the jump was disabled before M4). Overshooting token_limit is
+                # fine — the top-of-loop guard and the finalize trims handle it.
+                generated.extend(pick_jump_connective(rng))
+                generated.extend((nw1, nw2, nw3))
+                w1, w2, w3 = nw1, nw2, nw3
+                remember_bounded(visited_triplets, (w1, w2, w3), 40)
+                remember_bounded(seen_pairs, (generated[-2], generated[-1]), 80)
+                remember_bounded(
+                    seen_triplets, (generated[-3], generated[-2], generated[-1]), 80
+                )
                 jump_count += 1
                 continue
 
@@ -1496,6 +1532,7 @@ class MarkovGenerator:
         backoff_min_order: int = 1,
         fuzzy_context_casefold: bool = False,
         fuzzy_context_prefix: bool = False,
+        jump_probability: float = 0.0,
         rng: random.Random | None = None,
         emit_start: bool = True,
     ) -> _GenerationAttempt:
@@ -1507,8 +1544,6 @@ class MarkovGenerator:
         next_power = max(0.15, 0.72 - 0.16 * strength)
         start_explore = min(0.98, 0.20 + 0.20 * strength)
         start_power = max(0.15, 0.75 - 0.18 * strength)
-        # Disabled until a jump can splice tokens into the returned text safely.
-        jump_probability = 0.0
 
         context_tokens = context_tokens or []
         context_token_set = set(context_tokens)

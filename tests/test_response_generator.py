@@ -39,6 +39,10 @@ def _runtime_state() -> MagicMock:
     # best-scored candidate text verbatim.
     state.candidate_selection_temperature = 0.0
     state.reply_flavor_strength = 0.0
+    # Emoji channel off: these tests assert the selected candidate verbatim and
+    # must not consult the learning service's emoji stats.
+    state.emoji_append_chance = 0.0
+    state.markov_jump_probability = 0.0
     return state
 
 

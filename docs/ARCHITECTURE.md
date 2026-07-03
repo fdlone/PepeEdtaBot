@@ -72,16 +72,16 @@
 | Подпакет | Содержимое |
 |---|---|
 | `config/` | `registry.py`, `settings.py`, `runtime_config.py`, `runtime_state.py`, `defaults.py` |
-| `core/` | `markov.py`, `response_generator.py`, `candidate_scorer.py`, `context_state_matcher.py`, `reply_flavor.py`, `mood.py`, `lexicon.py`, `privacy_filter.py`, `reply_policy.py`, `text.py` |
+| `core/` | `markov.py`, `response_generator.py`, `candidate_scorer.py`, `context_state_matcher.py`, `reply_flavor.py`, `emoji.py`, `mood.py`, `lexicon.py`, `privacy_filter.py`, `reply_policy.py`, `text.py` |
 | `domain/` | `pivo.py`, `pivo_templates.py` |
 | `presentation/` | `bot_messages.py`, `fallback_phrases.py` |
 | `handlers/` | `common.py`, `admin.py`, `pivo.py`, `learning.py` — `aiogram.Router` per file. `_helpers.py` — `reply_humanized`. |
 | `services/` | `learning_service.py`, `pivo_service.py`, `pivo_message_builder.py`, `pivo_parser.py` |
-| `repositories/` | `markov_repo.py`, `messages_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py`, `pivo_pool_usage_repo.py` |
+| `repositories/` | `markov_repo.py`, `messages_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py`, `pivo_pool_usage_repo.py`, `chat_emoji_stats_repo.py` |
 | `filters/` | `group_only.py` (только `GROUP`/`SUPERGROUP`), `admin_or_owner.py` (`OWNER_ID` или админ чата, fail-closed при ошибке Telegram API) |
 | `middlewares/` | `throttling.py` — per-user-per-command cooldown, `clear`=3600 сек; команды из `notify_on_throttle` получают явный ответ при throttle вместо silent drop |
 | `infrastructure/` | `database.py` — фасад БД; `migrator.py` — пробегает `app/migrations/NNN_*` ровно один раз. `.sql`-файлы оборачиваются в `BEGIN; ... COMMIT;` и проходят через `executescript`; на исключении вызывается `conn.rollback()` и схема не остаётся в полу-применённом состоянии |
-| `migrations/` | `001_initial.sql` … `010_pivo_pool_usage.sql` |
+| `migrations/` | `001_initial.sql` … `011_chat_emoji_stats.sql` |
 
 ### Внутренние модули пакета
 
@@ -93,6 +93,7 @@
 | `app/core/candidate_scorer.py` | Скоринг кандидатов (качество завершения, разнообразие, длина по режимам short/medium/long, контекст, штрафы повторов). |
 | `app/core/mood.py` | Пер-чатовое настроение (sleepy/calm/lively/heated) из EWMA-сигналов; модулирует поведение генерации (M1). |
 | `app/core/reply_flavor.py` | Вариации финальной пунктуации ответа (QW5). |
+| `app/core/emoji.py` | Эмодзи-канал (M3): извлечение эмодзи из текста и частотный сэмплинг для добавления в конец ответа. |
 | `app/presentation/fallback_phrases.py` | Пулы fallback-фраз с анти-повтором, ночными и «heated»-вариантами. |
 | `app/domain/pivo.py` | `PivoSecurity` (HMAC + Fernet), `PivoMember`. |
 | `app/domain/pivo_templates.py` | Контент сообщений `/pivo`. |
@@ -175,6 +176,7 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
 | `chat_members` | Каноническая таблица участников чата. PK `(chat_hash, user_hash)`, payload зашифрован Fernet. Сейчас единственный потребитель — `/pivo` (присутствие в таблице ≡ подписка); будущие фичи, которым нужно персистентное состояние участника, ходят сюда же. |
 | `pivo_daily_usage` | Суточная квота `/pivo` (`chat_hash`, `user_hash`, `usage_day`, `used_count`). Retention 7 дней. |
 | `pivo_pool_usage` | Анти-повтор шаблонов `/pivo`: последние использованные индексы top/body/bottom per chat per pool (`chat_hash`, `pool_name`, `recent_indices`). Миграция 010. |
+| `chat_emoji_stats` | Частоты эмодзи per chat для эмодзи-канала (`chat_id`, `emoji`, `cnt`, `updated_at`); ключ — сырой `chat_id`, как у таблиц модели; чистится в `clear_chat`, стареющие строки затухают. Миграция 011 (M3). |
 | `schema_migrations` | Учёт применённых миграций. |
 
 ## Миграции

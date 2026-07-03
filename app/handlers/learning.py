@@ -11,6 +11,7 @@ from aiogram import F, Router
 from aiogram.types import Message
 
 from app.config.runtime_state import RuntimeState
+from app.core.emoji import count_emojis
 from app.core.markov import (
     MarkovGenerator,
     is_short_generated_reply,
@@ -211,6 +212,15 @@ async def on_text_message(
                 chat_rhythm.mood, runtime_state.mood_modulation_strength
             )
 
+    # M3 emoji channel: learn this chat's emoji vocabulary from the raw text
+    # (the word model drops emojis). Recorded before the learnability gates so
+    # emoji-only reactions — which never pass the word-token threshold — still
+    # count toward what the bot can echo later.
+    if runtime_state.emoji_append_chance > 0.0:
+        emoji_counts = count_emojis(raw_text)
+        if emoji_counts:
+            await learning_service.record_emojis(message.chat.id, dict(emoji_counts))
+
     # Strip a leading "<bot-alias>, ..." direct address before learning so the
     # corpus does not absorb boilerplate openings. Mention detection above still
     # sees the original text. The same stripped text feeds both the model tokens
@@ -360,6 +370,7 @@ async def on_text_message(
             learning_service=learning_service,
             runtime_state=runtime_state,
             mood_modifiers=mood_modifiers,
+            mood=mood,
         )
         reply_text = await response_generator.generate(
             GenerationRequest(

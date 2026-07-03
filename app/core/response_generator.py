@@ -4,7 +4,7 @@ import logging
 import math
 import random
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Protocol
 
@@ -16,13 +16,14 @@ from app.core.candidate_scorer import (
     sample_length_mode,
     score_candidate,
 )
+from app.core.emoji import append_emoji_flavor
 from app.core.markov import (
     MarkovGenerator,
     escalated_randomness_strength,
     is_short_generated_reply,
     tokenize,
 )
-from app.core.mood import NEUTRAL_MODIFIERS, MoodModifiers
+from app.core.mood import HEATED, NEUTRAL_MODIFIERS, MoodModifiers
 from app.core.reply_flavor import apply_reply_flavor
 from app.core.text import capitalize_reply_sentences, sanitize_text
 from app.log_masking import mask_chat_id
@@ -53,6 +54,7 @@ CandidateScorer = Callable[[str, list[str], list[str], str], CandidateScore]
 
 class VerbatimCopyChecker(Protocol):
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool: ...
+    async def get_emoji_stats(self, chat_id: int) -> Mapping[str, int]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +161,9 @@ class ResponseGenerator:
     # Per-chat mood modulation; None (or the neutral instance) leaves the
     # configured runtime knobs untouched.
     mood_modifiers: MoodModifiers | None = None
+    # Per-chat mood label (M3): only used to boost the emoji-append chance when
+    # the chat is heated. None leaves the base chance unchanged.
+    mood: str | None = None
 
     async def generate(
         self,
@@ -233,6 +238,7 @@ class ResponseGenerator:
                 backoff_min_order=self.runtime_state.backoff_min_order,
                 fuzzy_context_casefold=self.runtime_state.fuzzy_context_casefold,
                 fuzzy_context_prefix=self.runtime_state.fuzzy_context_prefix,
+                jump_probability=self.runtime_state.markov_jump_probability,
                 rng=generation_rng,
                 attempt_budget=1,
             )
@@ -342,6 +348,20 @@ class ResponseGenerator:
             generation_rng,
             self.runtime_state.reply_flavor_strength * modifiers.flavor_strength_mult,
         )
+        # M3 emoji channel: occasionally end on an emoji this chat actually uses.
+        # The stats read is skipped entirely when the channel is off so the common
+        # path adds no query.
+        emoji_chance = self.runtime_state.emoji_append_chance
+        if emoji_chance > 0.0:
+            emoji_stats = await self.learning_service.get_emoji_stats(request.chat_id)
+            if emoji_stats:
+                text = append_emoji_flavor(
+                    text,
+                    emoji_stats,
+                    generation_rng,
+                    chance=emoji_chance,
+                    heated=self.mood == HEATED,
+                )
         return ResponseGenerationResult(
             text=text,
             candidates_scored=len(candidates),

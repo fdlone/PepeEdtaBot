@@ -50,8 +50,14 @@ def _fake_state(**kwargs: object) -> MagicMock:
     # assert generated candidates verbatim.
     s.candidate_selection_temperature = 0.0
     s.reply_flavor_strength = 0.0
+    # Emoji channel off by default so generation tests assert reply text verbatim
+    # and don't hit the learning service's emoji-stats read.
+    s.emoji_append_chance = 0.0
     s.pivo_recent_pool_window = 5
     s.pivo_temporal_flavor_chance = 0.5
+    # M4 jump off by default so generation tests stay deterministic; the markov
+    # characterization tests drive jump_probability directly.
+    s.markov_jump_probability = 0.0
     # Mood off by default so the existing behavioural assertions see the
     # unmodulated path; dedicated mood tests enable it explicitly.
     s.mood_enabled = False
@@ -1224,6 +1230,53 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             )
 
         msg.reply.assert_awaited_once_with("ответ бота готов")
+
+    async def test_emojis_recorded_from_message(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        # A message carrying emojis feeds the per-chat emoji stats even though the
+        # word model drops them. Recorded regardless of whether a reply fires.
+        msg = _fake_message(text="хаха 😂 огонь 🔥")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=101)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="")
+        state = self._reply_state(emoji_append_chance=0.15)
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg, learning_service, generator, state,
+                "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+            )
+
+        learning_service.record_emojis.assert_awaited_once_with(
+            msg.chat.id, {"😂": 1, "🔥": 1}
+        )
+
+    async def test_reply_appends_chat_emoji(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        # With the channel certain (chance 1.0) and stats present, the reply ends
+        # on a frequency-sampled emoji from this chat.
+        msg = _fake_message(text="pepe ответь развёрнуто")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=100)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        learning_service.get_emoji_stats = AsyncMock(return_value={"🍺": 5})
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="ответ бота готов")
+        state = self._reply_state(recent_replies={}, emoji_append_chance=1.0)
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg, learning_service, generator, state,
+                "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+            )
+
+        msg.reply.assert_awaited_once_with("ответ бота готов 🍺")
 
     async def test_recent_full_reply_is_retried_instead_of_sent(self) -> None:
         from app.handlers.learning import on_text_message

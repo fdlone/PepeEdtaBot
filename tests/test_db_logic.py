@@ -316,6 +316,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             tables,
             [
+                "chat_emoji_stats",
                 "chat_members",
                 "chat_model_volume",
                 "messages",

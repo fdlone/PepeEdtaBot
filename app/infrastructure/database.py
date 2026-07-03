@@ -16,6 +16,7 @@ from app.config.defaults import (
 from app.core.text import sanitize_text
 from app.infrastructure import migrator
 from app.repositories import (
+    ChatEmojiStatsRepo,
     ChatMembersRepo,
     MarkovRepo,
     MessagesRepo,
@@ -24,6 +25,7 @@ from app.repositories import (
 )
 
 PIVO_DAILY_USAGE_RETENTION_DAYS = 7
+CHAT_EMOJI_DECAY_DAYS = 7
 
 _RepoT = TypeVar("_RepoT")
 
@@ -56,6 +58,7 @@ class Database:
         self.chat_members: Optional[ChatMembersRepo] = None
         self.pivo_usage: Optional[PivoUsageRepo] = None
         self.pivo_pool_usage: Optional[PivoPoolUsageRepo] = None
+        self.chat_emoji_stats: Optional[ChatEmojiStatsRepo] = None
 
     async def _get_conn(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -92,7 +95,9 @@ class Database:
         self.chat_members = ChatMembersRepo(self._get_conn, self._lock)
         self.pivo_usage = PivoUsageRepo(self._get_conn, self._lock)
         self.pivo_pool_usage = PivoPoolUsageRepo(self._get_conn, self._lock)
+        self.chat_emoji_stats = ChatEmojiStatsRepo(self._get_conn, self._lock)
         await self.cleanup_pivo_daily_usage()
+        await self.decay_chat_emoji_stats()
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -103,6 +108,7 @@ class Database:
         self.chat_members = None
         self.pivo_usage = None
         self.pivo_pool_usage = None
+        self.chat_emoji_stats = None
 
     async def save_message_and_update_model(
         self, chat_id: int, raw_text: str, tokens: list[str]
@@ -373,6 +379,36 @@ class Database:
     ) -> None:
         await self._require(self.pivo_pool_usage).record(chat_hash, picks, keep=keep)
 
+    # --- Делегаты к ChatEmojiStatsRepo (M3 emoji channel) ---
+
+    async def record_chat_emojis(
+        self, chat_id: int, counts: Mapping[str, int]
+    ) -> None:
+        await self._require(self.chat_emoji_stats).bump(chat_id, counts)
+
+    async def get_chat_emoji_stats(self, chat_id: int) -> dict[str, int]:
+        return await self._require(self.chat_emoji_stats).get_stats(chat_id)
+
+    async def decay_chat_emoji_stats(
+        self,
+        *,
+        decay_days: int = CHAT_EMOJI_DECAY_DAYS,
+        now: datetime | None = None,
+    ) -> int:
+        """Halve emoji counts not bumped within ``decay_days`` so dead memes fade.
+
+        Runs once at init (no scheduler exists), mirroring
+        ``cleanup_pivo_daily_usage``. Stale rows are halved and their clock reset;
+        rows reaching 0 are removed. Returns the number of rows deleted.
+        """
+        if decay_days < 0:
+            raise ValueError("decay_days must be non-negative")
+        current = now or datetime.now(UTC)
+        # Match SQLite's datetime('now') text format ("YYYY-MM-DD HH:MM:SS", UTC)
+        # so the string comparison in decay_stale is well-defined.
+        cutoff = (current - timedelta(days=decay_days)).strftime("%Y-%m-%d %H:%M:%S")
+        return await self._require(self.chat_emoji_stats).decay_stale(cutoff)
+
     async def cleanup_pivo_daily_usage(
         self,
         *,
@@ -440,4 +476,5 @@ class Database:
             await db.execute("DELETE FROM transitions3 WHERE chat_id = ?", (chat_id,))
             await db.execute("DELETE FROM transitions1 WHERE chat_id = ?", (chat_id,))
             await db.execute("DELETE FROM chat_model_volume WHERE chat_id = ?", (chat_id,))
+            await db.execute("DELETE FROM chat_emoji_stats WHERE chat_id = ?", (chat_id,))
             await db.commit()

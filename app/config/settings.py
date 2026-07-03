@@ -35,12 +35,14 @@ class Settings:
     randomness_strength: float
     candidate_selection_temperature: float
     reply_flavor_strength: float
+    emoji_append_chance: float
     repetition_penalty_strength: float
     recent_reply_penalty_strength: float
     length_mode_weights: tuple[float, float, float]
     markov_order: int
     enable_backoff: bool
     backoff_min_order: int
+    markov_jump_probability: float
     use_reply_context: bool
     fuzzy_context_casefold: bool
     fuzzy_context_prefix: bool
