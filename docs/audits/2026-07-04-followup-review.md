@@ -38,8 +38,8 @@ Scope: full re-review of security, performance and code quality after the
 | N3 | Low | `/pivo` recorded `pivo_pool_usage` anti-repeat state inside `build_call_message`, before the daily-quota check — over-quota and failed calls rotated the template pools. | **Fixed** — `build_call_message` is now side-effect free and returns picks; `PivoService.record_pool_usage` is called only after the reply is delivered. |
 | N4 | Low | `/clear confirm` wiped model/messages/emoji but not the chat's /pivo data (subscriptions, daily quotas, pool anti-repeat). | **Fixed** — `PivoService.clear_chat_data(chat_id)` wired into `/clear`; confirmation and README texts updated. |
 | N5 | Info | `.mcp.json` untracked and not ignored. | **Fixed** — added to `.gitignore`. |
-| N6 | Info | Throttle-notify reply is itself unthrottled (1:1 amplification only). Docker HEALTHCHECK runs as root (no `USER`) and `sqlite3.connect` could create a root-owned file in edge cases. | **Open (accepted)** — low impact; revisit if throttling scope grows or healthcheck changes. |
-| N7 | Process | CLAUDE.md/AGENTS.md referenced `PROJECT_AUDIT.md` / `PROJECT_AUDIT_CODEX.md`, archived on 2026-06-29. | **Fixed** — both now point at `docs/audits/` (this structure). |
+| N6 | Info | Throttle-notify reply is itself unthrottled (1:1 amplification only). Docker HEALTHCHECK runs as root (no `USER`) and `sqlite3.connect` could create a root-owned file in edge cases. | **Fixed** (follow-up commit) — notify reply rate-limited per key (`notify_cooldown_sec`, default 30 s); HEALTHCHECK opens the DB read-only via URI (`mode=ro`), so it can no longer create a root-owned file. |
+| N7 | Process | CLAUDE.md/AGENTS.md referenced `PROJECT_AUDIT.md` / `PROJECT_AUDIT_CODEX.md`, archived on 2026-06-29. | **Fixed** — both now point at `docs/audits/` (this structure). Note: both files are gitignored (local agent instructions), so the fix lives outside git. |
 
 ## Changed files (fix commit)
 
@@ -67,7 +67,6 @@ Scope: full re-review of security, performance and code quality after the
 
 ## Remaining / recommended
 
-- N6 items (accepted, low): throttle-notify amplification; root HEALTHCHECK.
 - Deferred from 2026-06-29 audit (only if scaling): L3 metrics, P1 single-lock
   DB ceiling, A4 multi-instance state.
 - S3 stays as-is per user decision.

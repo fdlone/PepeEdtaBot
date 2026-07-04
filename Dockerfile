@@ -30,10 +30,13 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # `--user 1000:1000` to docker run / docker compose.
 
 # Liveness probe: only verifies the Python interpreter still works inside
-# the container. The bot uses long-poll, so there is no HTTP endpoint to
-# hit.
+# the container and the DB file is readable. The bot uses long-poll, so
+# there is no HTTP endpoint to hit. The connection is opened read-only via
+# a URI (audit N6): the healthcheck runs as root (no USER directive — the
+# entrypoint drops privileges only for the bot process), and a plain
+# sqlite3.connect would create a root-owned DB file if it were missing.
 HEALTHCHECK --interval=60s --timeout=10s --start-period=20s --retries=3 \
-    CMD python -c "import sqlite3, os; sqlite3.connect(os.getenv('DB_PATH', 'data/markov.db')).execute('SELECT 1')"
+    CMD python -c "import sqlite3, os; sqlite3.connect('file:' + os.getenv('DB_PATH', 'data/markov.db') + '?mode=ro', uri=True).execute('SELECT 1')"
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["python", "main.py"]
