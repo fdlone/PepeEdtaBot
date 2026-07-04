@@ -146,3 +146,47 @@ Scope: full re-review of security, performance and code quality after the
 - Rebase `feat/dialogue-gen-stage4-l1` onto `main` after #55/#56 merge, open PR.
 - Observe Stage 3 + L1 in the live chat before starting L3 (then L2, which
   needs its own privacy review).
+
+## Session update — 2026-07-04 (L3 rare events & false starts)
+
+### Completed
+- Implemented L3 from `docs/DIALOGUE_GENERATION_ACTION_PLAN.md` on branch
+  `feat/dialogue-gen-stage4-l3` (stacked on `feat/dialogue-gen-stage4-l1`,
+  PR #58 → L1 branch). Plan: `docs/superpowers/plans/2026-07-04-l3-rare-events.md`.
+  Commit+push per task with per-task review checkpoints (user requirement).
+- L1 PR #56-style note: PR #57 for L1 was opened earlier this session (CI green,
+  stacked on #56); user merges the chain manually after #55/#56.
+- Review fix along the way: corrected the sentence-boundary regex comment
+  (abbreviation dots can split — accepted for a ~0.17% cosmetic event).
+
+### Changed files
+- Modified: `app/core/reply_flavor.py` (roll_rare_event/apply_rare_event +
+  verdict/filler pools), `app/handlers/_helpers.py` (`reply_humanized_sequence`,
+  `reply_humanized` delegates), `app/handlers/learning.py` (event roll at the
+  generated-reply send site), `app/config/{registry,settings,runtime_state}.py`
+  (3 knobs + `rare_events_today` daily budget, pruned in `forget_chat`),
+  `.env.example`, `README.md`, `docs/ARCHITECTURE.md`,
+  `docs/DIALOGUE_GENERATION_ACTION_PLAN.md`, tests (`test_reply_flavor`,
+  `test_handlers` incl. `_fake_message.answer` + real cap-method binding,
+  `test_runtime_state`, `test_runtime_config`, `test_bot_messages`,
+  `test_fallback_phrases`).
+
+### Audit findings updated
+- No new security findings. No new data stored; `rare_events_today` is
+  in-memory (chat_id → (day, count)), pruned with the chat state. Events only
+  reshape already-generated reply text; fallback phrases and eval untouched.
+
+### Tests/checks run
+- `unittest discover tests` — 616 tests OK (598 after L1).
+- ruff, `mypy app/` (strict) — clean.
+- `bandit -r app tools main.py` — 0 medium/high (Low B311 baseline).
+
+### Not run / limitations
+- `pip-audit` — no dependency changes; last clean run earlier today.
+- Perceived quality of rare events (frequency feel, filler naturalness) is
+  judgeable only in the live chat.
+
+### Remaining work
+- Merge chain: #55 → #56 → #57 (L1) → #58 (L3), bases collapse automatically.
+- L2 per-user quirks — last Stage 4 item; requires a dedicated privacy review
+  before implementation.
