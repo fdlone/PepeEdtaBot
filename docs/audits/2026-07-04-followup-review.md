@@ -70,3 +70,19 @@ Scope: full re-review of security, performance and code quality after the
 - Deferred from 2026-06-29 audit (only if scaling): L3 metrics, P1 single-lock
   DB ceiling, A4 multi-instance state.
 - S3 stays as-is per user decision.
+
+## Session update — 2026-07-04 (CI trigger fix)
+
+### Completed
+- CI never ran for PR #56 because `ci.yml`'s `pull_request` trigger was filtered
+  to `branches: [main]`, while #56 is stacked on #55 (base
+  `feat/dialogue-gen-stage3-m3-m4`, not `main`). The base-ref filter excluded it.
+- Removed the `branches: [main]` filter from the `pull_request` trigger so CI
+  runs on PRs into any base branch (stacked PRs included). `push` still gated to
+  `main` to avoid duplicate full runs on feature branches.
+
+### Changed files
+- `.github/workflows/ci.yml`
+
+### Tests/checks run
+- None (workflow-only change); CI itself will exercise it on the next PR event.
