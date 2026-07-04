@@ -57,6 +57,7 @@ class RuntimeState:
     reply_burst_suppress_sec: int
     reply_burst_suppress_mult: float
     reply_max_per_hour: int
+    mention_cooldown_sec: int
     runtime_state_ttl_sec: int
     runtime_state_max_chats: int
     last_reply_ts: dict[int, float] = field(default_factory=dict)
@@ -68,6 +69,9 @@ class RuntimeState:
     # M2: timestamps (monotonic seconds) of recent bot replies per chat, used for
     # the per-hour reply cap. Trimmed to a one-hour window on each append.
     recent_reply_times: dict[int, deque[float]] = field(default_factory=dict)
+    # Anti-flood gate for mention-triggered replies: (chat_id, user_id) ->
+    # monotonic timestamp of the last reply this user got by addressing the bot.
+    last_mention_reply_ts: dict[tuple[int, int], float] = field(default_factory=dict)
     _last_chat_activity: dict[int, float] = field(default_factory=dict)
     _cleanup_tick: int = 0
 
@@ -97,6 +101,9 @@ class RuntimeState:
         while history and history[0] < cutoff:
             history.popleft()
 
+    def note_mention_reply(self, chat_id: int, user_id: int, now: float) -> None:
+        self.last_mention_reply_ts[(chat_id, user_id)] = now
+
     def note_chat_activity(self, chat_id: int, now: float) -> None:
         self._last_chat_activity[chat_id] = now
         self._cleanup_tick += 1
@@ -114,6 +121,8 @@ class RuntimeState:
         self.recent_fallbacks.pop(chat_id, None)
         self.chat_mood.pop(chat_id, None)
         self.recent_reply_times.pop(chat_id, None)
+        for key in [k for k in self.last_mention_reply_ts if k[0] == chat_id]:
+            self.last_mention_reply_ts.pop(key, None)
         self._last_chat_activity.pop(chat_id, None)
 
     def prune_inactive(self, now: float) -> None:

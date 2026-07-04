@@ -250,7 +250,7 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
   `configure_dispatcher`, атомарность миграций, фикстуру с реальной
   legacy-схемой (`tests/fixtures/legacy_real_schema.sql`).
 - CI: `.github/workflows/ci.yml` — матрица Python 3.12/3.13/3.14, шаги
-  `ruff check` → `mypy app/` → `unittest discover` → `bandit` →
-  `safety check`; отдельный job выполняет Docker build smoke.
+  `ruff check` → `mypy app/` → `unittest discover` (с coverage) → `bandit` →
+  `pip-audit`; отдельный job выполняет Docker build smoke.
 
 Команды для локального прогона см. в `README.md`.

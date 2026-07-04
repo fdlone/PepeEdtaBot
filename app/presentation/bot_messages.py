@@ -123,6 +123,7 @@ def format_set_help_message() -> str:
 
 def format_clear_confirmation_message() -> str:
     return (
-        "Очистка удалит данные обучения текущего чата.\n"
+        "Очистка удалит данные обучения текущего чата,\n"
+        "а также подписки /pivo и их квоты.\n"
         "Для подтверждения отправьте: /clear confirm"
     )

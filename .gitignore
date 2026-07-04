@@ -50,3 +50,6 @@ CLAUDE.md
 test_*.sqlite
 test_*.sqlite-shm
 test_*.sqlite-wal
+
+# Local MCP server configuration (may contain machine-specific settings)
+.mcp.json

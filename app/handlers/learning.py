@@ -179,6 +179,19 @@ async def on_text_message(
     # (e.g. "ок", "?") should still trigger a response even if too short to learn.
     mentioned = bot_is_mentioned(message, bot_username, bot_id, bot_text_aliases)
 
+    # Anti-flood gate: mentions bypass the chat cooldown and the hourly cap by
+    # design, so one user could force a generation+reply per message. A gated
+    # mention is demoted to the unprompted-reply path (``address_reply=False``);
+    # the raw ``mentioned`` flag still feeds mood/rhythm tracking below.
+    address_reply = mentioned
+    if mentioned and runtime_state.mention_cooldown_sec > 0:
+        last_mention_ts = runtime_state.last_mention_reply_ts.get(
+            (message.chat.id, message.from_user.id), 0.0
+        )
+        address_reply = cooldown_allows_reply(
+            now, last_mention_ts, runtime_state.mention_cooldown_sec
+        )
+
     # M1/M2: fold this message into the per-chat rhythm state before any early
     # return so even short/non-learnable messages still count toward the
     # conversation cadence. The rhythm EWMAs feed both the M1 mood modulation and
@@ -232,7 +245,7 @@ async def on_text_message(
     learnable = is_learnable_message_length(clean) and has_enough_tokens_for_learning(tokens)
 
     if not learnable:
-        if not mentioned:
+        if not address_reply:
             logger.debug(
                 "Skip message by length/tokens: chat=%s len=%s tokens=%s",
                 mask_chat_id(message.chat.id),
@@ -250,7 +263,7 @@ async def on_text_message(
     current_message_normalized = clean.lower()
 
     try:
-        if mentioned and not enough_data:
+        if address_reply and not enough_data:
             await reply_humanized(
                 message,
                 next_fallback_phrase(
@@ -264,6 +277,7 @@ async def on_text_message(
                 runtime_state.typing_max_ms,
                 typing_per_char_ms=runtime_state.typing_per_char_ms,
             )
+            runtime_state.note_mention_reply(message.chat.id, message.from_user.id, now)
             return
 
         if not enough_data:
@@ -318,7 +332,7 @@ async def on_text_message(
             )
 
         should_reply = should_reply_to_message(
-            mentioned=mentioned,
+            mentioned=address_reply,
             cooldown_ok=cooldown_ok,
             hourly_cap_ok=hourly_cap_ok,
             reply_probability=reply_prob,
@@ -343,7 +357,7 @@ async def on_text_message(
             include_current = runtime_state.reply_context_include_current_message
             # When mentioned directly without a reply, override so the current message
             # itself is used as context instead of generating with no context at all.
-            if mentioned and message.reply_to_message is None:
+            if address_reply and message.reply_to_message is None:
                 only_for_replies = False
                 include_current = True
             context_tokens = extract_context_tokens(
@@ -383,7 +397,7 @@ async def on_text_message(
         )
 
         if not reply_text:
-            if mentioned:
+            if address_reply:
                 await reply_humanized(
                     message,
                     next_fallback_phrase(
@@ -398,6 +412,9 @@ async def on_text_message(
                     typing_per_char_ms=runtime_state.typing_per_char_ms,
                 )
                 runtime_state.note_reply_sent(message.chat.id, now)
+                runtime_state.note_mention_reply(
+                    message.chat.id, message.from_user.id, now
+                )
             logger.debug(
                 "Generation failed: chat=%s mentioned=%s",
                 mask_chat_id(message.chat.id),
@@ -406,6 +423,10 @@ async def on_text_message(
             return
 
         runtime_state.note_reply_sent(message.chat.id, now)
+        if address_reply:
+            runtime_state.note_mention_reply(
+                message.chat.id, message.from_user.id, now
+            )
         await reply_humanized(
             message,
             reply_text,
