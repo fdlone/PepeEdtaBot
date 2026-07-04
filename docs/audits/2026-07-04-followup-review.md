@@ -86,3 +86,63 @@ Scope: full re-review of security, performance and code quality after the
 
 ### Tests/checks run
 - None (workflow-only change); CI itself will exercise it on the next PR event.
+
+## Session update — 2026-07-04 (L1 running jokes / hot n-grams)
+
+### Completed
+- Implemented L1 from `docs/DIALOGUE_GENERATION_ACTION_PLAN.md` on branch
+  `feat/dialogue-gen-stage4-l1` (based on `chore/audit-followup-fixes`; must be
+  rebased onto `main` after PRs #55/#56 merge, before opening its PR).
+  Plan: `docs/superpowers/plans/2026-07-04-l1-hot-ngrams.md`. Commits pushed
+  per task; per-task review checkpoints (diff review + bandit) applied.
+- Review findings fixed along the way: casefolded stopword check (the
+  case-preserved profile `normalize_lower=false` would have let capitalized
+  stopword-only n-grams through) and position-major n-gram extraction (the
+  size-major loop starved trigrams on long messages once the 24/message cap hit).
+- Housekeeping (same session, before L1): pruned stale remote-tracking refs of
+  17 already-deleted merged branches (`git fetch --prune`); verified
+  `bot.log`/`markov.db*`/`__pycache__`/`.mcp.json` are all properly ignored.
+
+### Changed files
+- New: `app/core/hot_ngrams.py`, `app/repositories/chat_hot_ngrams_repo.py`,
+  `app/migrations/012_chat_hot_ngrams.sql`, `tests/test_hot_ngrams.py`,
+  `tests/test_chat_hot_ngrams_repo.py`,
+  `docs/superpowers/plans/2026-07-04-l1-hot-ngrams.md`.
+- Modified: `app/infrastructure/database.py` (repo wiring, delegates,
+  `decay_chat_hot_ngrams` at init, `clear_chat` wipe),
+  `app/services/learning_service.py`, `app/handlers/learning.py`
+  (record on learn + unprompted-reply seeding), `app/config/{registry,settings,
+  runtime_state}.py` (3 knobs), `app/repositories/__init__.py`, `.env.example`,
+  `README.md`, `docs/ARCHITECTURE.md`, `docs/DIALOGUE_GENERATION_ACTION_PLAN.md`,
+  tests (`test_handlers`, `test_learning_service`, `test_db_logic`,
+  `test_migrator`, `test_runtime_state`, `test_runtime_config`,
+  `test_bot_messages`, `test_fallback_phrases`).
+
+### Audit findings updated
+- No new security findings. Privacy contour unchanged: `chat_hot_ngrams` is
+  per-chat aggregate (no author), same normalized-token source as the word
+  model, raw `chat_id` key like the model tables, wiped by `/clear`, n-gram
+  text never logged (only its length at DEBUG).
+
+### Tests/checks run
+- `unittest discover tests` — 598 tests OK (was 569 before this branch).
+- `ruff check app/ tests/ tools/ main.py` — clean; `mypy app/` (strict) — clean.
+- `bandit -r app tools main.py` — 0 medium/high, 15× Low B311 baseline
+  unchanged (the new `random.random`/`random.choice` uses are non-crypto by
+  design).
+- `tools/eval_generation.py` vs `tools/generation_baseline.json` — all
+  non-latency metrics byte-identical (the channel is off in eval and no
+  generation code path changed).
+- `EXPLAIN QUERY PLAN` on the hot-ngram query — PK searches only, no
+  `SCAN transitions` (pinned as a test).
+
+### Not run / limitations
+- `pip-audit` — no dependency changes in this branch; last clean run 2026-07-04
+  (see the main section above).
+- Live-chat behaviour of the seeding (perceived "running joke" quality) can
+  only be judged in situ after deployment, per the action plan's checkpoint rule.
+
+### Remaining work
+- Rebase `feat/dialogue-gen-stage4-l1` onto `main` after #55/#56 merge, open PR.
+- Observe Stage 3 + L1 in the live chat before starting L3 (then L2, which
+  needs its own privacy review).

@@ -120,5 +120,65 @@ class TestChatHotNgramsRepo(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("SCAN transitions", plan)
 
 
+class TestPlantedSpikeEndToEnd(unittest.IsolatedAsyncioTestCase):
+    """L1 acceptance check from the action plan: a phrase the chat suddenly
+    picked up becomes hot and the seed API opens a reply with it."""
+
+    async def asyncSetUp(self) -> None:
+        self.db_path = Path(f"test_hot_spike_{uuid.uuid4().hex}.sqlite")
+        self.db = Database(str(self.db_path))
+        await self.db.init()
+
+    async def asyncTearDown(self) -> None:
+        await self.db.close()
+        self.db_path.unlink(missing_ok=True)
+
+    async def test_planted_spike_becomes_hot_and_seeds_generation(self) -> None:
+        from app.core.hot_ngrams import extract_content_ngrams
+        from app.core.markov import MarkovGenerator, tokenize
+
+        filler = [
+            "сегодня отличная погода на улице",
+            "пойдём вечером гулять в парк",
+            "кто смотрел вчера новый фильм",
+            "надо доделать проект до пятницы",
+            "заказали пиццу на всю компанию",
+            "опять понедельник и куча работы",
+        ]
+        planted = "крутой бобёр пришёл в чат"
+        corpus = filler * 5 + [planted] * 6
+
+        # Learn the corpus exactly the way the handler does: model update plus
+        # hot-ngram window per message.
+        for text in corpus:
+            tokens = tokenize(text)
+            await self.db.save_message_and_update_model(
+                chat_id=CHAT, raw_text=text, tokens=tokens
+            )
+            ngrams = extract_content_ngrams(tokens)
+            if ngrams:
+                await self.db.record_chat_hot_ngrams(CHAT, ngrams)
+
+        hot = await self.db.get_hot_chat_ngrams(CHAT, min_count=3, recency_share=0.5)
+        planted_hot = [ng for ng in hot if ng[:2] == ("крутой", "бобёр")]
+        self.assertTrue(
+            planted_hot,
+            f"planted n-gram not detected as hot; hot={hot!r}",
+        )
+
+        generator = MarkovGenerator(self.db)
+        text = await generator.generate_text(
+            chat_id=CHAT,
+            max_chars=280,
+            max_tokens=45,
+            seed_tokens=list(planted_hot[0]),
+        )
+        self.assertTrue(text)
+        self.assertTrue(
+            text.lower().startswith("крутой бобёр"),
+            f"seeded reply does not open with the planted phrase: {text!r}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
