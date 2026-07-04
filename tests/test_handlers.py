@@ -1498,6 +1498,83 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(first_call.kwargs["seed_tokens"])
         msg.reply.assert_awaited_once()
 
+    async def test_rare_event_false_start_sends_filler_then_reply(self) -> None:
+        from app.core.reply_flavor import FALSE_START_FILLERS
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="pepe ответь развёрнуто")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=100)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="настоящий ответ бота")
+        state = self._reply_state(
+            recent_replies={},
+            false_start_chance=1.0,
+            rare_events_today={},
+        )
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg, learning_service, generator, state,
+                "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+            )
+
+        msg.reply.assert_awaited_once()
+        self.assertIn(msg.reply.await_args.args[0], FALSE_START_FILLERS)
+        msg.answer.assert_awaited_once_with("настоящий ответ бота")
+        self.assertEqual(state.rare_events_today[msg.chat.id][1], 1)
+
+    async def test_rare_event_respects_daily_cap(self) -> None:
+        from datetime import date
+
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="pepe ответь развёрнуто")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=100)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="настоящий ответ бота")
+        state = self._reply_state(
+            recent_replies={},
+            false_start_chance=1.0,
+            rare_events_today={msg.chat.id: (date.today().isoformat(), 3)},
+            rare_event_daily_cap=3,
+        )
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg, learning_service, generator, state,
+                "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+            )
+
+        msg.reply.assert_awaited_once_with("настоящий ответ бота")
+        msg.answer.assert_not_awaited()
+
+    async def test_zero_chances_send_plain_reply(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="pepe ответь развёрнуто")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=100)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="настоящий ответ бота")
+        state = self._reply_state(recent_replies={})  # both chances 0.0 default
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg, learning_service, generator, state,
+                "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+            )
+
+        msg.reply.assert_awaited_once_with("настоящий ответ бота")
+        msg.answer.assert_not_awaited()
+
     async def test_recent_full_reply_is_retried_instead_of_sent(self) -> None:
         from app.handlers.learning import on_text_message
 
