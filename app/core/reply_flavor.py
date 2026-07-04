@@ -79,7 +79,8 @@ FALSE_START_FILLERS = (
 )
 
 # A sentence boundary for the "double" split: terminal punctuation followed by
-# whitespace and a non-space character (so "т.е." style dots don't split).
+# whitespace. Abbreviation dots ("т.е. так") can also match — an odd split is
+# acceptable for a ~0.17%-per-reply cosmetic event.
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?…])\s+(?=\S)")
 
 
