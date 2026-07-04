@@ -32,6 +32,9 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
         "hot_ngram_seed_chance": 0.05,
         "hot_ngram_min_count": 3,
         "hot_ngram_recency_share": 0.5,
+        "rare_event_chance": 0.005,
+        "false_start_chance": 0.03,
+        "rare_event_daily_cap": 3,
         "use_reply_context": True,
         "fuzzy_context_casefold": False,
         "fuzzy_context_prefix": False,
@@ -115,6 +118,7 @@ class TestRuntimeState(unittest.TestCase):
         state.recent_short_replies[100] = deque(["hi"], maxlen=5)
         state.recent_replies[100] = deque(["длинный недавний ответ"], maxlen=20)
         state.recent_reply_times[100] = deque([1.0])
+        state.note_rare_event(100, "2026-07-04")
         state.note_chat_activity(100, now=10.0)
 
         state.forget_chat(100)
@@ -124,6 +128,23 @@ class TestRuntimeState(unittest.TestCase):
         self.assertEqual(state.recent_short_replies, {})
         self.assertEqual(state.recent_replies, {})
         self.assertEqual(state.recent_reply_times, {})
+        self.assertEqual(state.rare_events_today, {})
+
+    def test_rare_event_cap_counts_per_day(self) -> None:
+        state = make_runtime_state()
+        self.assertTrue(state.can_fire_rare_event(1, "2026-07-04"))
+        for _ in range(state.rare_event_daily_cap):
+            state.note_rare_event(1, "2026-07-04")
+        self.assertFalse(state.can_fire_rare_event(1, "2026-07-04"))
+        # New day resets the counter.
+        self.assertTrue(state.can_fire_rare_event(1, "2026-07-05"))
+        state.note_rare_event(1, "2026-07-05")
+        self.assertEqual(state.rare_events_today[1], ("2026-07-05", 1))
+
+    def test_rare_event_zero_cap_never_fires(self) -> None:
+        state = make_runtime_state(rare_event_daily_cap=0)
+        self.assertFalse(state.can_fire_rare_event(1, "2026-07-04"))
+        self.assertFalse(state.can_fire_rare_event(1, "2026-07-05"))
 
     def test_note_reply_sent_updates_last_ts_and_history(self) -> None:
         state = make_runtime_state()

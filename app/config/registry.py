@@ -151,6 +151,17 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # half of all recorded occurrences happened inside the decay window.
     FieldSpec("hot_ngram_recency_share", "HOT_NGRAM_RECENCY_SHARE", "0.5",
               _float_in_range(0.0, 1.0)),
+    # L3 rare events: chance that a generated reply becomes a "shape break" —
+    # one-word verdict, ALL-CAPS, or a double message. Uniform among the three.
+    # 0 disables the roll. Capped per chat per day by rare_event_daily_cap.
+    FieldSpec("rare_event_chance", "RARE_EVENT_CHANCE", "0.005",
+              _float_in_range(0.0, 1.0)),
+    # L3 false starts: chance to send a short filler, keep "typing", then the
+    # real reply as a second message. 0 disables. Shares the daily cap.
+    FieldSpec("false_start_chance", "FALSE_START_CHANCE", "0.03",
+              _float_in_range(0.0, 1.0)),
+    # Combined per-chat daily budget for rare events + false starts.
+    FieldSpec("rare_event_daily_cap", "RARE_EVENT_DAILY_CAP", "3", _int_min(0)),
     FieldSpec("use_reply_context", "USE_REPLY_CONTEXT", "true", _parse_bool),
     FieldSpec(
         "fuzzy_context_casefold",

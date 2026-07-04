@@ -64,6 +64,21 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.hot_ngram_seed_chance = 0.0
     s.hot_ngram_min_count = 3
     s.hot_ngram_recency_share = 0.5
+    # L3 rare events off by default so reply tests assert a single message;
+    # dedicated rare-event tests enable the chances explicitly.
+    s.rare_event_chance = 0.0
+    s.false_start_chance = 0.0
+    s.rare_event_daily_cap = 3
+    s.rare_events_today = {}
+    # Bind the real cap methods so handler tests exercise actual budget logic.
+    from app.config.runtime_state import RuntimeState
+
+    s.can_fire_rare_event = (
+        lambda chat_id, today: RuntimeState.can_fire_rare_event(s, chat_id, today)
+    )
+    s.note_rare_event = (
+        lambda chat_id, today: RuntimeState.note_rare_event(s, chat_id, today)
+    )
     # Mood off by default so the existing behavioural assertions see the
     # unmodulated path; dedicated mood tests enable it explicitly.
     s.mood_enabled = False
