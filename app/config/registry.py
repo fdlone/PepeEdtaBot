@@ -139,6 +139,18 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # 0 disables (the pre-M4 behaviour).
     FieldSpec("markov_jump_probability", "MARKOV_JUMP_PROBABILITY", "0.04",
               _float_in_range(0.0, 1.0)),
+    # L1 running jokes: chance to seed an *unprompted* reply from a currently
+    # hot n-gram (a phrase the chat picked up in the last ~7 days). 0 disables
+    # the whole channel (no recording, no reads) — same gate pattern as
+    # emoji_append_chance. Mention replies are never seeded.
+    FieldSpec("hot_ngram_seed_chance", "HOT_NGRAM_SEED_CHANCE", "0.05",
+              _float_in_range(0.0, 1.0)),
+    # Minimum window occurrences before an n-gram can be considered hot.
+    FieldSpec("hot_ngram_min_count", "HOT_NGRAM_MIN_COUNT", "3", _int_min(1)),
+    # Hot = window count / all-time count >= this share; 0.5 means at least
+    # half of all recorded occurrences happened inside the decay window.
+    FieldSpec("hot_ngram_recency_share", "HOT_NGRAM_RECENCY_SHARE", "0.5",
+              _float_in_range(0.0, 1.0)),
     FieldSpec("use_reply_context", "USE_REPLY_CONTEXT", "true", _parse_bool),
     FieldSpec(
         "fuzzy_context_casefold",
