@@ -32,6 +32,17 @@ class ExtractContentNgramsTest(unittest.TestCase):
         self.assertEqual(len(ngrams), len(set(ngrams)))
         self.assertLessEqual(len(ngrams), 5)
 
+    def test_capitalized_stopwords_are_not_content(self) -> None:
+        # case-preserved profile (normalize_lower=false): stopword check
+        # must casefold, otherwise "Что это" counts as a content bigram
+        self.assertEqual(extract_content_ngrams(["Что", "это"]), [])
+
+    def test_cap_keeps_a_mix_of_sizes(self) -> None:
+        tokens = [f"слово{i}" for i in range(30)]
+        ngrams = extract_content_ngrams(tokens, max_per_message=10)
+        sizes = {len(ngram) for ngram in ngrams}
+        self.assertEqual(sizes, {2, 3})
+
     def test_short_input_returns_empty(self) -> None:
         self.assertEqual(extract_content_ngrams(["бобёр"]), [])
         self.assertEqual(extract_content_ngrams([]), [])

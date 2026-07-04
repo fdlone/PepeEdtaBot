@@ -22,9 +22,11 @@ def _is_wordlike(token: str) -> bool:
 
 
 def _is_content_token(token: str) -> bool:
+    # casefold: STOPWORDS are lowercase but tokens keep their case in the
+    # case-preserved profile (normalize_lower=false).
     return (
         len(token) >= MIN_CONTENT_TOKEN_LEN
-        and token not in STOPWORDS
+        and token.casefold() not in STOPWORDS
         and _is_wordlike(token)
     )
 
@@ -41,8 +43,12 @@ def extract_content_ngrams(
     """
     seen: set[tuple[str, ...]] = set()
     result: list[tuple[str, ...]] = []
-    for size in (2, 3):
-        for i in range(len(tokens) - size + 1):
+    # Position-major so a long message hitting the cap still yields a mix of
+    # sizes (size-major would exhaust the cap on bigrams alone).
+    for i in range(len(tokens) - 1):
+        for size in (2, 3):
+            if i + size > len(tokens):
+                continue
             ngram = tuple(tokens[i : i + size])
             if ngram in seen:
                 continue
