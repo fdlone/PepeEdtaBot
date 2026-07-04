@@ -24,6 +24,7 @@ EXPECTED_MIGRATIONS = [
     "009_chat_model_volume",
     "010_pivo_pool_usage",
     "011_chat_emoji_stats",
+    "012_chat_hot_ngrams",
 ]
 
 EXPECTED_TABLES = {
@@ -38,6 +39,7 @@ EXPECTED_TABLES = {
     "pivo_pool_usage",
     "chat_model_volume",
     "chat_emoji_stats",
+    "chat_hot_ngrams",
     "schema_migrations",
 }
 
