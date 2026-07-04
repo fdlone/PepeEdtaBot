@@ -137,6 +137,19 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         result = await self.svc.is_verbatim_copy(999, "пойдём пить кофе утром")
         self.assertFalse(result)
 
+    # --- hot n-gram passthroughs (L1) ---
+
+    async def test_record_and_get_hot_ngrams_roundtrip(self) -> None:
+        ngram = ("крутой", "бобёр")
+        for _ in range(4):
+            await self.svc.record_hot_ngrams(self.chat, [ngram])
+        hot = await self.svc.get_hot_ngrams(self.chat, min_count=3, recency_share=0.5)
+        self.assertEqual(hot, [ngram])
+
+    async def test_get_hot_ngrams_empty_chat(self) -> None:
+        hot = await self.svc.get_hot_ngrams(self.chat, min_count=1, recency_share=0.0)
+        self.assertEqual(hot, [])
+
     async def test_invalidate_clears_cache(self) -> None:
         await self._record("кофе утром бодрит")
         await self.svc.is_verbatim_copy(self.chat, "кофе утром бодрит")
