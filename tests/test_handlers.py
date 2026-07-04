@@ -32,6 +32,7 @@ def _fake_message(
     msg.from_user.is_bot = is_bot
     msg.reply_to_message = reply_to
     msg.reply = AsyncMock()
+    msg.answer = AsyncMock()
     msg.bot = AsyncMock()
     msg.bot.send_chat_action = AsyncMock()
     return msg
@@ -609,6 +610,47 @@ class TestPivoChatActionResilience(unittest.IsolatedAsyncioTestCase):
 
         pivo_service.subscribe.assert_awaited_once()
         msg.reply.assert_awaited_once()
+
+
+class TestReplyHumanizedSequence(unittest.IsolatedAsyncioTestCase):
+    async def test_single_part_replies_once(self) -> None:
+        from app.handlers._helpers import reply_humanized_sequence
+
+        msg = _fake_message(text="x")
+        with patch("app.handlers._helpers.asyncio.sleep", new=AsyncMock()):
+            await reply_humanized_sequence(msg, ["один"], 0, 0)
+        msg.reply.assert_awaited_once_with("один")
+        msg.answer.assert_not_awaited()
+
+    async def test_two_parts_reply_then_answer_with_two_pauses(self) -> None:
+        from app.handlers._helpers import reply_humanized_sequence
+
+        msg = _fake_message(text="x")
+        sleep = AsyncMock()
+        with patch("app.handlers._helpers.asyncio.sleep", new=sleep):
+            await reply_humanized_sequence(msg, ["раз", "два"], 0, 0)
+        msg.reply.assert_awaited_once_with("раз")
+        msg.answer.assert_awaited_once_with("два")
+        self.assertEqual(sleep.await_count, 2)
+
+    async def test_chat_action_failure_does_not_block_parts(self) -> None:
+        from app.handlers._helpers import reply_humanized_sequence
+
+        msg = _fake_message(text="x")
+        msg.bot.send_chat_action = AsyncMock(side_effect=RuntimeError("boom"))
+        with patch("app.handlers._helpers.asyncio.sleep", new=AsyncMock()):
+            await reply_humanized_sequence(msg, ["раз", "два"], 0, 0)
+        msg.reply.assert_awaited_once_with("раз")
+        msg.answer.assert_awaited_once_with("два")
+
+    async def test_empty_parts_are_skipped(self) -> None:
+        from app.handlers._helpers import reply_humanized_sequence
+
+        msg = _fake_message(text="x")
+        with patch("app.handlers._helpers.asyncio.sleep", new=AsyncMock()):
+            await reply_humanized_sequence(msg, ["", "два"], 0, 0)
+        msg.reply.assert_awaited_once_with("два")
+        msg.answer.assert_not_awaited()
 
 
 class TestLearningMessageLength(unittest.TestCase):
