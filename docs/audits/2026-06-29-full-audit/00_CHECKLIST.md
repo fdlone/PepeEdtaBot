@@ -1,6 +1,6 @@
 # PepeEdtaBot — Audit Progress Checklist
 
-> Source of truth for the deep project audit driven by `docs/Project Audit.md`.
+> Source of truth for the deep project audit driven by `TZ.md` (formerly `docs/Project Audit.md`).
 > Status legend: `[ ]` open · `[~]` in progress · `[x]` done · `[!]` blocked / needs input.
 > Updated by Claude across sessions. Last update: 2026-06-29.
 
@@ -138,6 +138,11 @@ Top actionable (P1, ~1.5d): S1 fix CI safety→pip-audit; S2 reject placeholder 
 
 ## Open questions / blockers
 - (none yet)
+
+## Follow-up
+- 2026-07-04: follow-up review re-verified all remediations above and found
+  7 new low/medium items (N1-N7); findings, fixes and statuses live in
+  `../2026-07-04-followup-review.md`.
 
 ## Notes / running log
 - 2026-06-29: Scaffold created. Repo snapshot: `app/` layered (config, core, domain, filters, handlers, infrastructure, middlewares, migrations, presentation, repositories, services), `main.py` entrypoint, `markov.db` (sqlite, committed), `tools/`, `tests/`. ~79 Python files (excl. venv). Telegram bot (aiogram-style) + Markov text generation; `db_prod_copy/` and `markov.db` present in repo.

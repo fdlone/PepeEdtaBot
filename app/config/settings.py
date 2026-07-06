@@ -69,6 +69,7 @@ class Settings:
     reply_burst_suppress_sec: int
     reply_burst_suppress_mult: float
     reply_max_per_hour: int
+    mention_cooldown_sec: int
     pivo_hmac_secret: str
     pivo_encryption_secret: str
     pivo_explicit_mentions_limit: int

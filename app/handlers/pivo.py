@@ -38,7 +38,7 @@ async def cmd_pivo(
     quota = None
 
     try:
-        text, mentions_count = await pivo_service.build_call_message(
+        text, mentions_count, pool_picks = await pivo_service.build_call_message(
             chat_id=message.chat.id,
             caller_user_id=message.from_user.id,
             planned_time=command_args.planned_time,
@@ -94,6 +94,14 @@ async def cmd_pivo(
         else:
             logger.exception("pivo command failed")
         raise
+
+    # Anti-repeat state is recorded only after the reply is actually delivered,
+    # so quota-rejected or failed calls do not rotate the template pools.
+    await pivo_service.record_pool_usage(
+        message.chat.id,
+        pool_picks,
+        recent_pool_window=runtime_state.pivo_recent_pool_window,
+    )
 
     logger.info("pivo command executed")
     logger.info("mentions count: %s", mentions_count)

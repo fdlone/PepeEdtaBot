@@ -171,7 +171,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         db.get_chat_members = AsyncMock()
         service = self._make_service(db, security)
 
-        text, mentions_count = await service.build_call_message(
+        text, mentions_count, _picks = await service.build_call_message(
             chat_id=100,
             caller_user_id=200,
             explicit_mentions=("@friend",),
@@ -187,7 +187,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         db.get_chat_members = AsyncMock()
         service = self._make_service(db, security)
 
-        text, mentions_count = await service.build_call_message(
+        text, mentions_count, _picks = await service.build_call_message(
             chat_id=100,
             caller_user_id=200,
             explicit_mentions=("@one", "@two"),
@@ -296,7 +296,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
             ]
         )
         with patch(RANDOM_CHOICE_PATH, side_effect=lambda _: next(choices)):
-            text, mentions_count = await service.build_call_message(
+            text, mentions_count, _picks = await service.build_call_message(
                 chat_id=100,
                 caller_user_id=200,
                 planned_time="20:00",
@@ -321,7 +321,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         )
         service = self._make_service(db, security)
 
-        text, mentions_count = await service.build_call_message(
+        text, mentions_count, _picks = await service.build_call_message(
             chat_id=100,
             caller_user_id=200,
         )
@@ -342,7 +342,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         )
         service = self._make_service(db, security)
 
-        text, mentions_count = await service.build_call_message(
+        text, mentions_count, _picks = await service.build_call_message(
             chat_id=100,
             caller_user_id=200,
         )
@@ -392,7 +392,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
             ]
         )
         with patch(RANDOM_CHOICE_PATH, side_effect=lambda _: next(choices)):
-            text, mentions_count = await service.build_call_message(
+            text, mentions_count, _picks = await service.build_call_message(
                 chat_id=100,
                 caller_user_id=200,
                 planned_time="<20:00>",
@@ -413,7 +413,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         )
         service = self._make_service(db, security)
 
-        text, mentions_count = await service.build_call_message(
+        text, mentions_count, _picks = await service.build_call_message(
             chat_id=100,
             caller_user_id=200,
         )
@@ -454,7 +454,7 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
         await self.service.subscribe(chat_id=500, user=caller)
         await self.service.subscribe(chat_id=500, user=friend)
 
-        text, mentions_count = await self.service.build_call_message(
+        text, mentions_count, _picks = await self.service.build_call_message(
             chat_id=500,
             caller_user_id=caller.id,
         )
@@ -500,7 +500,7 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(quota.used_count, 3)
 
         await self.service.unsubscribe(chat_id=500, user_id=friend.id)
-        text, mentions_count = await self.service.build_call_message(
+        text, mentions_count, _picks = await self.service.build_call_message(
             chat_id=500,
             caller_user_id=caller.id,
         )
@@ -508,26 +508,32 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(PIVO_FALLBACK_MENTIONS, text)
 
     async def test_pool_usage_is_persisted_when_window_positive(self) -> None:
-        # S2: with a positive window, each call records the picked indices so a
-        # later call can avoid them.
-        await self.service.build_call_message(
+        # S2: with a positive window, record_pool_usage stores the picked
+        # indices so a later call can avoid them. build_call_message itself
+        # must stay side-effect free (N3): quota-rejected or undelivered calls
+        # must not rotate the pools.
+        _text, _count, picks = await self.service.build_call_message(
             chat_id=700,
             caller_user_id=1,
             explicit_mentions=("@a",),
             recent_pool_window=5,
         )
         chat_hash = self.security.hmac_value(700)
+        self.assertEqual(await self.db.get_pivo_pool_usage(chat_hash), {})
+
+        await self.service.record_pool_usage(700, picks, recent_pool_window=5)
         recent = await self.db.get_pivo_pool_usage(chat_hash)
         self.assertEqual(set(recent), {"default_top", "default_body", "default_bottom"})
         self.assertTrue(all(len(v) == 1 for v in recent.values()))
 
     async def test_zero_window_records_nothing(self) -> None:
-        await self.service.build_call_message(
+        _text, _count, picks = await self.service.build_call_message(
             chat_id=701,
             caller_user_id=1,
             explicit_mentions=("@a",),
             recent_pool_window=0,
         )
+        await self.service.record_pool_usage(701, picks, recent_pool_window=0)
         chat_hash = self.security.hmac_value(701)
         self.assertEqual(await self.db.get_pivo_pool_usage(chat_hash), {})
 
@@ -536,16 +542,43 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
         # accumulate distinct values rather than repeating a single one.
         chat_hash = self.security.hmac_value(702)
         for _ in range(4):
-            await self.service.build_call_message(
+            _text, _count, picks = await self.service.build_call_message(
                 chat_id=702,
                 caller_user_id=1,
                 explicit_mentions=("@a",),
                 recent_pool_window=3,
             )
+            await self.service.record_pool_usage(702, picks, recent_pool_window=3)
         recent = await self.db.get_pivo_pool_usage(chat_hash)
         top_history = recent["default_top"]
         self.assertLessEqual(len(top_history), 3)
         self.assertEqual(len(top_history), len(set(top_history)))
+
+    async def test_clear_chat_data_removes_subscriptions_quotas_and_pools(self) -> None:
+        # N4: /clear must wipe /pivo state for the chat, not only the model.
+        user = SimpleNamespace(
+            id=300, username="member", full_name="Member User", is_bot=False
+        )
+        await self.service.subscribe(chat_id=800, user=user)
+        await self.service.consume_daily_call_quota(
+            chat_id=800, user_id=300, is_admin_or_owner=False, today=date(2026, 5, 9)
+        )
+        _text, _count, picks = await self.service.build_call_message(
+            chat_id=800, caller_user_id=1, explicit_mentions=("@a",), recent_pool_window=5
+        )
+        await self.service.record_pool_usage(800, picks, recent_pool_window=5)
+        chat_hash = self.security.hmac_value(800)
+        self.assertTrue(await self.db.get_chat_members(chat_hash))
+        self.assertTrue(await self.db.get_pivo_pool_usage(chat_hash))
+
+        await self.service.clear_chat_data(800)
+
+        self.assertEqual(await self.db.get_chat_members(chat_hash), [])
+        self.assertEqual(await self.db.get_pivo_pool_usage(chat_hash), {})
+        quota = await self.service.consume_daily_call_quota(
+            chat_id=800, user_id=300, is_admin_or_owner=False, today=date(2026, 5, 9)
+        )
+        self.assertEqual(quota.used_count, 1)
 
 
 if __name__ == "__main__":

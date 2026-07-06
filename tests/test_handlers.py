@@ -67,6 +67,10 @@ def _fake_state(**kwargs: object) -> MagicMock:
     # Off by default so generated reply text is asserted verbatim; a bare
     # MagicMock attribute would be truthy and trigger reply capitalization.
     s.auto_capitalize_replies = False
+    # Mention anti-flood gate off by default so existing mention-driven tests
+    # keep their guaranteed-reply behaviour; dedicated tests enable it.
+    s.mention_cooldown_sec = 0
+    s.last_mention_reply_ts = {}
     for k, v in kwargs.items():
         setattr(s, k, v)
     return s
@@ -164,9 +168,11 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         state = _fake_state()
         generator = MagicMock()
         settings = MagicMock()
+        pivo_service = AsyncMock()
         with patch("app.handlers.admin.format_clear_confirmation_message", return_value="confirm?"):
-            await cmd_clear(msg, db, state, generator, settings)
+            await cmd_clear(msg, db, state, generator, settings, pivo_service)
         db.clear_chat.assert_not_called()
+        pivo_service.clear_chat_data.assert_not_called()
         msg.reply.assert_awaited_once()
 
     async def test_clear_with_confirm_clears_chat(self) -> None:
@@ -176,8 +182,10 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         state = _fake_state()
         generator = MagicMock()
         settings = MagicMock()
-        await cmd_clear(msg, db, state, generator, settings)
+        pivo_service = AsyncMock()
+        await cmd_clear(msg, db, state, generator, settings, pivo_service)
         db.clear_chat.assert_awaited_once_with(msg.chat.id)
+        pivo_service.clear_chat_data.assert_awaited_once_with(msg.chat.id)
         msg.reply.assert_awaited_once()
 
     # --- fallback handlers для unauthorized админ-команд ---
@@ -285,7 +293,7 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         pivo_service = AsyncMock()
         quota = MagicMock(allowed=True, usage_day="2026-05-12")
         pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
-        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2))
+        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2, {}))
         state = _fake_state()
         bot = AsyncMock()
         bot.get_chat_administrators = AsyncMock(return_value=[])
@@ -309,6 +317,9 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
             is_admin_or_owner=False,
         )
         msg.reply.assert_awaited_once()
+        pivo_service.record_pool_usage.assert_awaited_once_with(
+            msg.chat.id, {}, recent_pool_window=5
+        )
 
     async def test_pivo_passes_parsed_arguments_to_service(self) -> None:
         from app.handlers.pivo import cmd_pivo
@@ -316,7 +327,7 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         pivo_service = AsyncMock()
         quota = MagicMock(allowed=True, usage_day="2026-05-12")
         pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
-        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 1))
+        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 1, {}))
         state = _fake_state()
         bot = AsyncMock()
         bot.get_chat_administrators = AsyncMock(return_value=[])
@@ -369,7 +380,7 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
             usage_day="2026-05-12",
         )
         pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
-        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2))
+        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2, {}))
         state = _fake_state()
         bot = AsyncMock()
         bot.get_chat_administrators = AsyncMock(return_value=[])
@@ -379,6 +390,8 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
 
         pivo_service.build_call_message.assert_awaited_once()
         pivo_service.consume_daily_call_quota.assert_awaited_once()
+        # N3: a quota-rejected call must not rotate the anti-repeat pools.
+        pivo_service.record_pool_usage.assert_not_called()
         msg.reply.assert_awaited_once()
         assert "Лимит /pivo" in msg.reply.call_args[0][0]
 
@@ -388,7 +401,7 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         pivo_service = AsyncMock()
         quota = MagicMock(allowed=True, usage_day="2026-05-12")
         pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
-        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2))
+        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2, {}))
         state = _fake_state()
         bot = AsyncMock()
         bot.get_chat_administrators = AsyncMock(
@@ -410,7 +423,7 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         from app.handlers.pivo import cmd_pivo
         msg = _fake_message(user_id=42)
         pivo_service = AsyncMock()
-        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2))
+        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2, {}))
         state = _fake_state()
         bot = AsyncMock()
         settings = MagicMock(owner_id=42)
@@ -429,7 +442,7 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         pivo_service = AsyncMock()
         quota = MagicMock(allowed=True, usage_day="2026-05-12")
         pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
-        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2))
+        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2, {}))
         pivo_service.refund_daily_call_quota = AsyncMock()
         state = _fake_state()
         bot = AsyncMock()
@@ -1377,3 +1390,127 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(strengths[0], 0.5)
         self.assertGreater(strengths[-1], strengths[0])
         msg.reply.assert_awaited_once_with("третий ответ заметно длиннее")
+
+
+# ---------------------------------------------------------------------------
+# learning.py — mention anti-flood gate (N1)
+# ---------------------------------------------------------------------------
+
+class TestMentionCooldownGate(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        mask_patcher = patch(
+            "app.core.response_generator.mask_chat_id", return_value="chat"
+        )
+        mask_patcher.start()
+        self.addCleanup(mask_patcher.stop)
+
+    def _state(self, **overrides: object) -> MagicMock:
+        values: dict[str, object] = {
+            "normalize_lower": False,
+            "learned_messages": {},
+            "recent_short_replies": {},
+            "min_tokens_for_model": 10,
+            "min_cooldown_sec": 0,
+            "last_reply_ts": {},
+            "reply_probability": 0.0,
+            "use_reply_context": False,
+            "fuzzy_context_casefold": False,
+            "fuzzy_context_prefix": False,
+            "reply_context_last_tokens": 3,
+            "reply_context_bias": 1.8,
+            "reply_context_start_bias": 2.2,
+            "max_reply_chars": 280,
+            "max_reply_tokens": 45,
+            "randomness_strength": 0.0,
+            "repetition_penalty_strength": 1.0,
+            "recent_reply_penalty_strength": 1.0,
+            "length_mode_weights": (0.25, 0.55, 0.2),
+            "markov_order": 3,
+            "enable_backoff": True,
+            "backoff_min_order": 1,
+            "mention_cooldown_sec": 30,
+        }
+        values.update(overrides)
+        return _fake_state(**values)
+
+    def _services(self) -> tuple[AsyncMock, AsyncMock]:
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=102)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="сгенерированный ответ бота")
+        return learning_service, generator
+
+    async def _dispatch(self, msg: MagicMock, learning_service: AsyncMock,
+                        generator: AsyncMock, state: MagicMock) -> None:
+        from app.handlers.learning import on_text_message
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+    async def test_first_mention_replies_and_records_timestamp(self) -> None:
+        learning_service, generator = self._services()
+        state = self._state()
+        msg = _fake_message(text="pepe расскажи что-нибудь")
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        msg.reply.assert_awaited_once()
+        state.note_mention_reply.assert_called_once_with(
+            msg.chat.id, msg.from_user.id, ANY
+        )
+
+    async def test_mention_within_cooldown_is_demoted_to_unprompted_path(self) -> None:
+        import time as time_module
+
+        learning_service, generator = self._services()
+        state = self._state()
+        msg = _fake_message(text="pepe расскажи ещё")
+        state.last_mention_reply_ts = {
+            (msg.chat.id, msg.from_user.id): time_module.monotonic()
+        }
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        # Gated mention: no guaranteed reply (reply_probability=0 → silent),
+        # but the message is still learned as usual.
+        msg.reply.assert_not_awaited()
+        state.note_mention_reply.assert_not_called()
+        learning_service.record_message.assert_awaited_once()
+
+    async def test_gate_disabled_keeps_guaranteed_mention_reply(self) -> None:
+        import time as time_module
+
+        learning_service, generator = self._services()
+        state = self._state(mention_cooldown_sec=0)
+        msg = _fake_message(text="pepe расскажи снова")
+        state.last_mention_reply_ts = {
+            (msg.chat.id, msg.from_user.id): time_module.monotonic()
+        }
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        msg.reply.assert_awaited_once()
+
+    async def test_other_user_is_not_gated_by_someone_elses_mention(self) -> None:
+        import time as time_module
+
+        learning_service, generator = self._services()
+        state = self._state()
+        msg = _fake_message(text="pepe расскажи", user_id=2)
+        state.last_mention_reply_ts = {
+            (msg.chat.id, 1): time_module.monotonic()
+        }
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        msg.reply.assert_awaited_once()

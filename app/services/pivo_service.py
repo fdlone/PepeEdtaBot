@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
@@ -72,6 +72,14 @@ class PivoService:
             user_hash=self._security.hmac_value(user_id),
         )
 
+    async def clear_chat_data(self, chat_id: int) -> None:
+        """Удаляет все /pivo-данные чата (подписки, квоты, анти-повтор).
+
+        Вызывается из /clear: очистка чата должна затрагивать и opt-in
+        подписки, а не только модель генерации.
+        """
+        await self._db.clear_pivo_chat_data(self._security.hmac_value(chat_id))
+
     async def consume_daily_call_quota(
         self,
         *,
@@ -121,8 +129,13 @@ class PivoService:
         recent_pool_window: int = 0,
         temporal_flavor_chance: float = 0.0,
         now: datetime | None = None,
-    ) -> tuple[str, int]:
-        """Возвращает готовое сообщение для /pivo и число упомянутых участников."""
+    ) -> tuple[str, int, dict[str, int]]:
+        """Возвращает сообщение /pivo, число упоминаний и выбранные индексы пулов.
+
+        Метод не имеет побочных эффектов в БД: анти-повтор фиксируется отдельным
+        вызовом ``record_pool_usage`` только после успешной отправки, чтобы
+        отклонённые по квоте или недоставленные вызовы не крутили пулы.
+        """
         chat_hash = self._security.hmac_value(chat_id)
         if explicit_mentions:
             mention_items = list(explicit_mentions)
@@ -169,8 +182,20 @@ class PivoService:
             now=now,
             temporal_flavor_chance=temporal_flavor_chance,
         )
-        if recent_pool_window > 0 and result.picks:
-            await self._db.record_pivo_pool_usage(
-                chat_hash, result.picks, keep=recent_pool_window
-            )
-        return result.text, len(mention_items)
+        return result.text, len(mention_items), result.picks
+
+    async def record_pool_usage(
+        self,
+        chat_id: int,
+        picks: Mapping[str, int],
+        *,
+        recent_pool_window: int,
+    ) -> None:
+        """Фиксирует анти-повтор шаблонов после успешной отправки /pivo."""
+        if recent_pool_window <= 0 or not picks:
+            return
+        await self._db.record_pivo_pool_usage(
+            self._security.hmac_value(chat_id),
+            picks,
+            keep=recent_pool_window,
+        )

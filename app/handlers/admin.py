@@ -23,6 +23,7 @@ from app.presentation.bot_messages import (
     format_config_message,
     format_set_help_message,
 )
+from app.services import PivoService
 
 router = Router(name="admin")
 logger = logging.getLogger("chat_markov")
@@ -179,6 +180,7 @@ async def cmd_clear(
     runtime_state: RuntimeState,
     generator: MarkovGenerator,
     settings: Settings,
+    pivo_service: PivoService,
 ) -> None:
     raw = _extract_command_arg(message.text or "")
     if raw.strip().lower() != "confirm":
@@ -190,11 +192,12 @@ async def cmd_clear(
         )
         return
     await db.clear_chat(message.chat.id)
+    await pivo_service.clear_chat_data(message.chat.id)
     generator.invalidate_chat_cache(message.chat.id)
     runtime_state.forget_chat(message.chat.id)
     await reply_humanized(
         message,
-        "Данные чата очищены.",
+        "Данные чата очищены (включая подписки /pivo).",
         runtime_state.typing_min_ms,
         runtime_state.typing_max_ms,
     )

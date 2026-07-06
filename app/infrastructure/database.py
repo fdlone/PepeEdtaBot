@@ -367,6 +367,12 @@ class Database:
             usage_day=usage_day,
         )
 
+    async def clear_pivo_chat_data(self, chat_hash: str) -> None:
+        """Удаляет все /pivo-данные чата: подписки, квоты, анти-повтор пулов."""
+        await self._require(self.chat_members).remove_chat(chat_hash)
+        await self._require(self.pivo_usage).delete_chat_usage(chat_hash)
+        await self._require(self.pivo_pool_usage).delete_chat(chat_hash)
+
     async def get_pivo_pool_usage(self, chat_hash: str) -> dict[str, tuple[int, ...]]:
         return await self._require(self.pivo_pool_usage).get_recent(chat_hash)
 

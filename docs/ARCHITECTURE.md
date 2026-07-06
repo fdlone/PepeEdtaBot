@@ -2,8 +2,8 @@
 
 Документ описывает текущую слоистую архитектуру `PepeEdtaBot` (после
 рефакторинга `refactor/structure`, фазы 1–6). Если вы трогаете код впервые —
-читайте этот файл вместе с актуальным аудитом в `docs/project_audit/`
-(старые аудиты — в `docs/_pre_audit_archive/`).
+читайте этот файл вместе с историей аудитов в `docs/audits/`
+(индекс и статусы — в `docs/audits/README.md`).
 
 ## Слои
 
@@ -57,8 +57,10 @@
 ```
 
 \* Исключение — `PivoService.subscribe(chat_id, user)` принимает
-`aiogram.types.User` напрямую: осознанный компромисс, описан в
-`docs/_pre_audit_archive/PROJECT_AUDIT.md`, раздел 5.1.
+`aiogram.types.User` напрямую: осознанный компромисс — сервису нужны сразу
+несколько полей пользователя (`id`, `username`, `full_name`/`first_name`/
+`last_name`), и промежуточный DTO дублировал бы форму `aiogram.types.User`
+без практической выгоды при текущем размере проекта.
 
 ## Модули
 
@@ -250,7 +252,7 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
   `configure_dispatcher`, атомарность миграций, фикстуру с реальной
   legacy-схемой (`tests/fixtures/legacy_real_schema.sql`).
 - CI: `.github/workflows/ci.yml` — матрица Python 3.12/3.13/3.14, шаги
-  `ruff check` → `mypy app/` → `unittest discover` → `bandit` →
-  `safety check`; отдельный job выполняет Docker build smoke.
+  `ruff check` → `mypy app/` → `unittest discover` (с coverage) → `bandit` →
+  `pip-audit`; отдельный job выполняет Docker build smoke.
 
 Команды для локального прогона см. в `README.md`.

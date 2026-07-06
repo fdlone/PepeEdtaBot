@@ -58,6 +58,16 @@ class ChatMembersRepo:
             )
             await db.commit()
 
+    async def remove_chat(self, chat_hash: str) -> None:
+        """Удаляет всех участников чата (используется /clear)."""
+        async with self._lock:
+            db = await self._conn_provider()
+            await db.execute(
+                "DELETE FROM chat_members WHERE chat_hash = ?",
+                (chat_hash,),
+            )
+            await db.commit()
+
     async def remove(self, chat_hash: str, user_hash: str) -> None:
         async with self._lock:
             db = await self._conn_provider()

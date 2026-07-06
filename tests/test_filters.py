@@ -255,6 +255,39 @@ class TestThrottlingMiddleware(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         msg_confirm.reply.assert_awaited_once()
 
+    async def test_repeated_throttled_attempts_notify_only_once_per_window(self) -> None:
+        # N6: the throttle notification must not amplify a hammering user —
+        # inside notify_cooldown_sec only the first throttled attempt replies.
+        mw = self._make_middleware(notify_on_throttle={"clear"})
+        handler = AsyncMock(return_value="ok")
+        msg = self._make_cmd_message("/clear")
+        await mw(handler, msg, {})  # primes the cooldown
+        for _ in range(5):
+            result = await mw(handler, msg, {})
+            self.assertIsNone(result)
+        handler.assert_awaited_once()
+        msg.reply.assert_awaited_once()
+
+    async def test_notify_fires_again_after_notify_cooldown(self) -> None:
+        from app.middlewares import ThrottlingMiddleware
+
+        mw = ThrottlingMiddleware(
+            limits={"clear": 100.0},
+            notify_on_throttle={"clear"},
+            notify_cooldown_sec=10.0,
+        )
+        handler = AsyncMock(return_value="ok")
+        msg = self._make_cmd_message("/clear")
+        with patch("app.middlewares.throttling.time.monotonic", return_value=100.0):
+            await mw(handler, msg, {})  # primes the cooldown
+        with patch("app.middlewares.throttling.time.monotonic", return_value=101.0):
+            await mw(handler, msg, {})  # notifies
+        with patch("app.middlewares.throttling.time.monotonic", return_value=105.0):
+            await mw(handler, msg, {})  # silent (inside notify cooldown)
+        with patch("app.middlewares.throttling.time.monotonic", return_value=112.0):
+            await mw(handler, msg, {})  # notifies again
+        self.assertEqual(msg.reply.await_count, 2)
+
     async def test_stale_throttle_entries_expire_by_ttl(self) -> None:
         from app.middlewares import ThrottlingMiddleware
 

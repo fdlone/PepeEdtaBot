@@ -44,6 +44,16 @@ class PivoPoolUsageRepo:
             rows = await cursor.fetchall()
         return {str(row[0]): _parse_indices(str(row[1])) for row in rows}
 
+    async def delete_chat(self, chat_hash: str) -> None:
+        """Удаляет анти-повтор историю чата (используется /clear)."""
+        async with self._lock:
+            db = await self._conn_provider()
+            await db.execute(
+                "DELETE FROM pivo_pool_usage WHERE chat_hash = ?",
+                (chat_hash,),
+            )
+            await db.commit()
+
     async def record(
         self,
         chat_hash: str,

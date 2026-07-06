@@ -105,6 +105,16 @@ class PivoUsageRepo:
                 )
             await db.commit()
 
+    async def delete_chat_usage(self, chat_hash: str) -> None:
+        """Удаляет все квоты чата (используется /clear)."""
+        async with self._lock:
+            db = await self._conn_provider()
+            await db.execute(
+                "DELETE FROM pivo_daily_usage WHERE chat_hash = ?",
+                (chat_hash,),
+            )
+            await db.commit()
+
     async def delete_usage_before(self, cutoff_day: str) -> int:
         """Deletes quota rows older than cutoff_day and returns deleted row count."""
         async with self._lock:

@@ -219,6 +219,13 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # answered, never counted against the gate). 0 disables the cap.
     FieldSpec("reply_max_per_hour", "REPLY_MAX_PER_HOUR", "20",
               _int_in_range(0, 1000)),
+    # Anti-flood gate for mention-triggered replies: a direct address bypasses
+    # the chat cooldown and the hourly cap by design, so without this gate one
+    # user can force a generation+reply per message. Per-user per-chat seconds
+    # between mention-triggered replies; a gated mention falls back to the
+    # unprompted-reply path. 0 disables the gate (legacy behaviour).
+    FieldSpec("mention_cooldown_sec", "MENTION_COOLDOWN_SEC", "5",
+              _int_in_range(0, 3600)),
 )
 
 

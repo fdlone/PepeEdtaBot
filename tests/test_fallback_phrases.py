@@ -66,6 +66,7 @@ def _make_runtime_state() -> RuntimeState:
         reply_burst_suppress_sec=600,
         reply_burst_suppress_mult=0.5,
         reply_max_per_hour=20,
+        mention_cooldown_sec=5,
         runtime_state_ttl_sec=10,
         runtime_state_max_chats=8,
     )

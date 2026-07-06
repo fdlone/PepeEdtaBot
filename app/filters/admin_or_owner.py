@@ -14,9 +14,9 @@ logger = logging.getLogger("chat_markov")
 
 # Short TTL cache of admin user-id sets per chat. Admin commands are rare but
 # get_chat_administrators is a network round-trip subject to Telegram rate
-# limits (audit S4/P5); a few-second cache absorbs bursts without making stale
-# membership decisions noticeable. INVARIANT: single-instance — this in-memory
-# state is not shared across workers/instances (audit A4).
+# limits (audit S4/P5); a 60-second cache absorbs bursts at the cost of a
+# demoted admin keeping rights for up to the TTL. INVARIANT: single-instance —
+# this in-memory state is not shared across workers/instances (audit A4).
 ADMIN_CACHE_TTL_SECONDS = 60.0
 _admin_cache: dict[int, tuple[float, frozenset[int]]] = {}
 
