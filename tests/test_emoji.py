@@ -28,10 +28,24 @@ class TestExtractEmojis(unittest.TestCase):
         self.assertEqual(len(extract_emojis(text)), 5)
 
     def test_skin_tone_modifier_not_split_off(self) -> None:
-        # A skin-tone modifier must not be extracted as a bare glyph; only the
-        # base pictograph is counted.
-        self.assertEqual(extract_emojis("👍🏽"), ["👍"])
-        self.assertNotIn("🏽", extract_emojis("привет 👋🏿 всем"))
+        # A skin-tone modifier must not be extracted as a bare glyph; it stays
+        # attached to its base pictograph as one sequence.
+        self.assertEqual(extract_emojis("👍🏽"), ["👍🏽"])
+        self.assertNotIn("🏿", extract_emojis("привет 👋🏿 всем"))
+        self.assertEqual(extract_emojis("привет 👋🏿 всем"), ["👋🏿"])
+
+    def test_zwj_sequences_extracted_whole(self) -> None:
+        # ZWJ-composed emojis (rainbow flag, pirate flag, family) must be one
+        # sequence each — never split into base fragments.
+        self.assertEqual(extract_emojis("флаг 🏳️‍🌈 тут"), ["🏳️‍🌈"])
+        self.assertEqual(extract_emojis("пират 🏴‍☠️"), ["🏴‍☠️"])
+        self.assertEqual(extract_emojis("семья 👨‍👩‍👧"), ["👨‍👩‍👧"])
+        self.assertNotIn("🌈", extract_emojis("🏳️‍🌈"))
+
+    def test_zwj_sequence_counts_as_one(self) -> None:
+        counts = count_emojis("🏳️‍🌈 и ещё 🏳️‍🌈")
+        self.assertEqual(counts["🏳️‍🌈"], 2)
+        self.assertNotIn("🏳️", counts)
 
     def test_regional_indicators_folded_into_flag(self) -> None:
         self.assertEqual(extract_emojis("флаг 🇷🇺 тут"), ["🇷🇺"])
@@ -44,6 +58,11 @@ class TestExtractEmojis(unittest.TestCase):
         self.assertEqual(strip_trailing_emojis("привет как дела 🍺"), "привет как дела")
         self.assertEqual(strip_trailing_emojis("ну что там! 🔥🔥"), "ну что там")
         self.assertEqual(strip_trailing_emojis("без эмодзи"), "без эмодзи")
+
+    def test_strip_trailing_zwj_sequence(self) -> None:
+        # An appended ZWJ emoji must be stripped whole — no dangling fragments.
+        self.assertEqual(strip_trailing_emojis("ответ бота 🏳️‍🌈"), "ответ бота")
+        self.assertEqual(strip_trailing_emojis("ответ 🏴‍☠️!"), "ответ")
 
     def test_strip_trailing_emojis_keeps_bare_punctuation(self) -> None:
         # A punctuation-only tail is not an emoji flavor and must survive.

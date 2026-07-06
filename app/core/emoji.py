@@ -15,13 +15,14 @@ from collections import Counter
 from collections.abc import Mapping
 
 # Core emoji code-point ranges. This intentionally covers the common pictographic
-# blocks rather than the full, ever-growing Unicode emoji grammar (ZWJ sequences,
-# variation selectors): for frequency stats, counting the base pictographs is
-# enough, and a simple range match stays dependency-free. Two exceptions are
-# handled deliberately so the channel never echoes a bare fragment: skin-tone
-# modifiers (U+1F3FB–1F3FF) are excluded from the pictograph range, and the paired
-# regional indicators are folded into whole flags below rather than matched singly.
-_EMOJI_RE = re.compile(
+# blocks rather than the full, ever-growing Unicode emoji grammar: a range match
+# stays dependency-free. On top of the base ranges, *sequences* are matched so
+# the channel never stores or echoes a bare fragment: a base pictograph may carry
+# variation selectors (U+FE0F) and skin-tone modifiers (U+1F3FB–1F3FF), and ZWJ
+# (U+200D) glues bases into composed emojis (🏳️‍🌈, 🏴‍☠️, 👨‍👩‍👧) that are
+# extracted whole. Paired regional indicators are folded into whole flags below
+# rather than matched singly.
+_EMOJI_BASE_PATTERN = (
     "["
     "\U0001f300-\U0001f3fa"  # symbols & pictographs (below skin-tone modifiers)
     "\U0001f400-\U0001f5ff"  # symbols & pictographs (above skin-tone modifiers)
@@ -33,9 +34,16 @@ _EMOJI_RE = re.compile(
     "\U00002600-\U000026ff"  # miscellaneous symbols
     "\U00002700-\U000027bf"  # dingbats
     "\U0001f1e6-\U0001f1ff"  # regional indicators (flag halves)
-    "]",
-    flags=re.UNICODE,
+    "]"
 )
+# Modifiers that bind to the preceding base: variation selector + skin tones.
+_EMOJI_MODIFIERS_PATTERN = "(?:\ufe0f|[\U0001f3fb-\U0001f3ff])*"
+# One full emoji sequence: base(+modifiers), optionally chained with ZWJ (U+200D).
+_EMOJI_SEQ_PATTERN = (
+    f"(?:{_EMOJI_BASE_PATTERN}{_EMOJI_MODIFIERS_PATTERN}"
+    f"(?:\u200d{_EMOJI_BASE_PATTERN}{_EMOJI_MODIFIERS_PATTERN})*)"
+)
+_EMOJI_SEQ_RE = re.compile(_EMOJI_SEQ_PATTERN, flags=re.UNICODE)
 
 # Regional indicators only carry meaning in pairs (two halves make one flag), so
 # a lone half is dropped instead of leaking into stats or a reply.
@@ -46,7 +54,7 @@ _REGIONAL_INDICATOR_RE = re.compile("[\U0001f1e6-\U0001f1ff]")
 # The run must contain at least one emoji: a bare punctuation/space tail
 # ("привет...") is not an emoji flavor and must survive untouched.
 _TRAILING_EMOJI_RE = re.compile(
-    r"(?:[\s.!?…]*" + _EMOJI_RE.pattern + r")+[\s.!?…]*\Z",
+    r"(?:[\s.!?…]*" + _EMOJI_SEQ_PATTERN + r")+[\s.!?…]*\Z",
     flags=re.UNICODE,
 )
 
@@ -72,7 +80,7 @@ def extract_emojis(text: str) -> list[str]:
         return []
     result: list[str] = []
     pending_indicator: str | None = None
-    for ch in _EMOJI_RE.findall(text):
+    for ch in _EMOJI_SEQ_RE.findall(text):
         if _is_regional_indicator(ch):
             if pending_indicator is None:
                 pending_indicator = ch
