@@ -16,11 +16,15 @@ from collections.abc import Mapping
 
 # Core emoji code-point ranges. This intentionally covers the common pictographic
 # blocks rather than the full, ever-growing Unicode emoji grammar (ZWJ sequences,
-# skin-tone modifiers, variation selectors): for frequency stats, counting the
-# base pictographs is enough, and a simple range match stays dependency-free.
+# variation selectors): for frequency stats, counting the base pictographs is
+# enough, and a simple range match stays dependency-free. Two exceptions are
+# handled deliberately so the channel never echoes a bare fragment: skin-tone
+# modifiers (U+1F3FB–1F3FF) are excluded from the pictograph range, and the paired
+# regional indicators are folded into whole flags below rather than matched singly.
 _EMOJI_RE = re.compile(
     "["
-    "\U0001f300-\U0001f5ff"  # symbols & pictographs
+    "\U0001f300-\U0001f3fa"  # symbols & pictographs (below skin-tone modifiers)
+    "\U0001f400-\U0001f5ff"  # symbols & pictographs (above skin-tone modifiers)
     "\U0001f600-\U0001f64f"  # emoticons
     "\U0001f680-\U0001f6ff"  # transport & map
     "\U0001f700-\U0001f77f"  # alchemical
@@ -33,21 +37,59 @@ _EMOJI_RE = re.compile(
     flags=re.UNICODE,
 )
 
+# Regional indicators only carry meaning in pairs (two halves make one flag), so
+# a lone half is dropped instead of leaking into stats or a reply.
+_REGIONAL_INDICATOR_RE = re.compile("[\U0001f1e6-\U0001f1ff]")
+
+# Trailing run of emojis (plus the spaces/punctuation between and after them),
+# used to make anti-repeat normalization ignore an appended emoji flavor.
+_TRAILING_EMOJI_RE = re.compile(
+    r"(?:" + _EMOJI_RE.pattern + r"|[\s.!?…])+\Z",
+    flags=re.UNICODE,
+)
+
 # Flattening exponent applied to raw counts when sampling (same idea as the
 # Markov exploration flattening): < 1 lifts rarer emojis so a single dominant
 # meme does not win every time. Fixed in code; the live knob is the append chance.
 EMOJI_SAMPLE_POWER = 0.5
 
 
+def _is_regional_indicator(ch: str) -> bool:
+    return _REGIONAL_INDICATOR_RE.fullmatch(ch) is not None
+
+
 def extract_emojis(text: str) -> list[str]:
-    """Return every emoji code point in ``text``, in order, with repeats.
+    """Return every emoji in ``text``, in order, with repeats.
 
     Repeats are kept so the caller can fold them into a frequency Counter and a
-    burst of the same emoji counts proportionally.
+    burst of the same emoji counts proportionally. Regional indicators are folded
+    back into whole two-letter flags (a lone trailing half is dropped) so the
+    channel never stores or echoes a flag fragment.
     """
     if not text:
         return []
-    return _EMOJI_RE.findall(text)
+    result: list[str] = []
+    pending_indicator: str | None = None
+    for ch in _EMOJI_RE.findall(text):
+        if _is_regional_indicator(ch):
+            if pending_indicator is None:
+                pending_indicator = ch
+            else:
+                result.append(pending_indicator + ch)
+                pending_indicator = None
+        else:
+            pending_indicator = None
+            result.append(ch)
+    return result
+
+
+def strip_trailing_emojis(text: str) -> str:
+    """Strip a trailing run of emojis (and the punctuation/space around them).
+
+    Used by anti-repeat normalization so an appended emoji flavor does not make a
+    reply look different from the candidate it was built from.
+    """
+    return _TRAILING_EMOJI_RE.sub("", text)
 
 
 def count_emojis(text: str) -> Counter[str]:

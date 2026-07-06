@@ -8,6 +8,7 @@ from app.core.emoji import (
     count_emojis,
     extract_emojis,
     sample_emoji,
+    strip_trailing_emojis,
 )
 
 
@@ -25,6 +26,24 @@ class TestExtractEmojis(unittest.TestCase):
         # emoticon, pictograph, transport, symbol, dingbat
         text = "😀 🍺 🚗 ⚽ ✂"
         self.assertEqual(len(extract_emojis(text)), 5)
+
+    def test_skin_tone_modifier_not_split_off(self) -> None:
+        # A skin-tone modifier must not be extracted as a bare glyph; only the
+        # base pictograph is counted.
+        self.assertEqual(extract_emojis("👍🏽"), ["👍"])
+        self.assertNotIn("🏽", extract_emojis("привет 👋🏿 всем"))
+
+    def test_regional_indicators_folded_into_flag(self) -> None:
+        self.assertEqual(extract_emojis("флаг 🇷🇺 тут"), ["🇷🇺"])
+        self.assertEqual(extract_emojis("🇷🇺🇺🇸"), ["🇷🇺", "🇺🇸"])
+
+    def test_lone_regional_indicator_dropped(self) -> None:
+        self.assertEqual(extract_emojis("🇷 один"), [])
+
+    def test_strip_trailing_emojis(self) -> None:
+        self.assertEqual(strip_trailing_emojis("привет как дела 🍺"), "привет как дела")
+        self.assertEqual(strip_trailing_emojis("ну что там! 🔥🔥"), "ну что там")
+        self.assertEqual(strip_trailing_emojis("без эмодзи"), "без эмодзи")
 
     def test_count_folds_frequency(self) -> None:
         counts = count_emojis("😂 текст 😂🔥")
