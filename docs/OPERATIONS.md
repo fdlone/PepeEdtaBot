@@ -159,7 +159,10 @@ startup fails to protect verbatim-copy detection.
 The aggregated Markov tables (`starts`, `starts3`, `transitions`,
 `transitions3`, `transitions1`) are not pruned and continue to represent all
 learned history. `pivo_daily_usage` is cleaned up automatically on bot startup
-via `cleanup_pivo_daily_usage`.
+via `cleanup_pivo_daily_usage`. The dialogue-flavor tables `chat_emoji_stats`
+and `chat_hot_ngrams` decay on startup as well (counts not bumped within 7
+days are halved, rows reaching zero are deleted) — a long-running process that
+is never restarted keeps its sliding windows frozen until the next restart.
 
 Deleting rows does not shrink the main SQLite file by itself. Run `VACUUM`
 during a maintenance window to return unused pages to the filesystem. A manual
