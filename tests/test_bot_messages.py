@@ -89,15 +89,12 @@ class TestBotMessages(unittest.TestCase):
         self.assertNotIn("seed", command_names)
 
     def test_stats_message_is_compact_and_readable(self) -> None:
-        text = format_stats_message(
-            {"messages": 10, "volume": 250},
-            min_tokens_for_model=200,
-        )
+        text = format_stats_message({"messages": 10, "volume": 250})
 
-        self.assertIn("сообщений: 10", text)
-        self.assertIn("объём модели: 250", text)
+        self.assertEqual("объём модели: 250", text)
+        self.assertNotIn("сообщений", text)
+        self.assertNotIn("готовность", text)
         self.assertNotIn("250/200", text)
-        self.assertIn("готовность: достаточно", text)
         self.assertNotIn("transitions", text)
 
     def test_config_message_defaults_to_short_view(self) -> None:

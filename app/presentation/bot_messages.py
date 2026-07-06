@@ -42,20 +42,28 @@ def format_help_message() -> str:
         "/set <key> <value> - изменить настройку до перезапуска\n"
         "/setprob 0.2 - быстро изменить шанс ответа\n"
         "\n"
+        "Диалог (новое, PR50-58):\n"
+        "/set mood_enabled true - настроение чата\n"
+        "/set reply_director_enabled true - директор шанса ответа\n"
+        "/set reply_probability_min 0.02 - нижняя граница шанса\n"
+        "/set reply_probability_max 0.30 - верхняя граница шанса\n"
+        "/set reply_max_per_hour 20 - лимит ответов в час\n"
+        "/set mention_cooldown_sec 5 - пауза между ответами на упоминания\n"
+        "/set emoji_append_chance 0.15 - эмодзи в ответах\n"
+        "/set markov_jump_probability 0.04 - дрейф темы\n"
+        "/set hot_ngram_seed_chance 0.05 - подхват мемов чата\n"
+        "/set rare_event_chance 0.005 - редкие фишки в ответах\n"
+        "/set false_start_chance 0.03 - фальстарты\n"
+        "/set rare_event_daily_cap 3 - лимит фишек в день\n"
+        "/set pivo_temporal_flavor_chance 0.5 - вариации /pivo по времени\n"
+        "\n"
         "Админское:\n"
         "/clear - инструкция по очистке данных чата"
     )
 
 
-def format_stats_message(stats: dict[str, int], min_tokens_for_model: int) -> str:
-    effective_volume = stats["volume"]
-    ready_text = "достаточно" if effective_volume >= min_tokens_for_model else "мало"
-    return (
-        "Статистика:\n"
-        f"сообщений: {stats['messages']}\n"
-        f"объём модели: {effective_volume}\n"
-        f"готовность: {ready_text}"
-    )
+def format_stats_message(stats: dict[str, int]) -> str:
+    return f"объём модели: {stats['volume']}"
 
 
 def format_config_message(state: RuntimeState, full: bool = False) -> str:
