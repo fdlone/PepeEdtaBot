@@ -12,9 +12,11 @@ from app.config.runtime_state import RuntimeState
 from app.core.candidate_scorer import (
     CandidateScore,
     build_recent_reply_trigrams,
+    coherence_penalty_for_order,
     recent_reply_overlap,
     sample_length_mode,
     score_candidate,
+    verbatim_ngram_overlap,
 )
 from app.core.emoji import append_emoji_flavor, strip_trailing_emojis
 from app.core.markov import (
@@ -55,6 +57,9 @@ CandidateScorer = Callable[[str, list[str], list[str], str], CandidateScore]
 class VerbatimCopyChecker(Protocol):
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool: ...
     async def get_emoji_stats(self, chat_id: int) -> Mapping[str, int]: ...
+    async def get_verbatim_ngram_index(
+        self, chat_id: int
+    ) -> frozenset[tuple[str, ...]]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,6 +203,15 @@ class ResponseGenerator:
             if recent_penalty_strength > 0.0
             else set()
         )
+        # Quote detection: candidates whose content 4-grams all exist in the
+        # corpus are verbatim replays and lose score to recombined candidates.
+        # The index read is skipped entirely when the penalty is off.
+        verbatim_penalty_strength = self.runtime_state.verbatim_penalty_strength
+        corpus_ngrams: frozenset[tuple[str, ...]] = frozenset()
+        if verbatim_penalty_strength > 0.0:
+            corpus_ngrams = await self.learning_service.get_verbatim_ngram_index(
+                request.chat_id
+            )
         base_weights = self.runtime_state.length_mode_weights
         mood_weights = (
             base_weights[0] * modifiers.length_weight_mult[0],
@@ -223,7 +237,7 @@ class ResponseGenerator:
                 attempt,
                 GENERATION_ATTEMPT_BUDGET,
             )
-            candidate = await self.generator.generate_text(
+            candidate, candidate_trace = await self.generator.generate_text_with_trace(
                 chat_id=request.chat_id,
                 max_chars=self.runtime_state.max_reply_chars,
                 max_tokens=max_tokens,
@@ -238,6 +252,7 @@ class ResponseGenerator:
                 backoff_min_order=self.runtime_state.backoff_min_order,
                 fuzzy_context_casefold=self.runtime_state.fuzzy_context_casefold,
                 fuzzy_context_prefix=self.runtime_state.fuzzy_context_prefix,
+                context_emit_start=self.runtime_state.reply_context_emit_start,
                 jump_probability=self.runtime_state.markov_jump_probability,
                 rng=generation_rng,
                 attempt_budget=1,
@@ -323,6 +338,20 @@ class ResponseGenerator:
                                     candidate_tokens, recent_trigrams
                                 ),
                             )
+                        if corpus_ngrams:
+                            score = replace(
+                                score,
+                                verbatim_penalty=verbatim_penalty_strength
+                                * verbatim_ngram_overlap(
+                                    candidate_tokens, corpus_ngrams
+                                ),
+                            )
+                        score = replace(
+                            score,
+                            coherence_penalty=coherence_penalty_for_order(
+                                candidate_trace.markov_order_used
+                            ),
+                        )
                         candidates.append(
                             _ScoredCandidate(text=candidate, score=score)
                         )

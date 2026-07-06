@@ -49,6 +49,14 @@ REPEATED_TOKEN_WEIGHT = 0.60
 REPEATED_BIGRAM_WEIGHT = 1.00
 REPEATED_TRIGRAM_WEIGHT = 1.30
 
+# Verbatim-quote penalty: content n-gram size shared with the corpus index and
+# the per-backoff-order coherence penalties. A candidate whose 4-grams all come
+# from one training message is a quote; one that fell back to the 1-gram chain
+# is word salad — both lose to recombined middle-path candidates in selection.
+VERBATIM_NGRAM_SIZE = 4
+ORDER1_COHERENCE_PENALTY = 0.70
+ORDER2_COHERENCE_PENALTY = 0.10
+
 @dataclass(frozen=True, slots=True)
 class CandidateScore:
     completion_quality: float
@@ -57,6 +65,8 @@ class CandidateScore:
     context_relevance: float
     repetition_penalty: float
     recent_penalty: float = 0.0
+    verbatim_penalty: float = 0.0
+    coherence_penalty: float = 0.0
 
     @property
     def total(self) -> float:
@@ -67,6 +77,8 @@ class CandidateScore:
             + self.context_relevance
             - self.repetition_penalty
             - self.recent_penalty
+            - self.verbatim_penalty
+            - self.coherence_penalty
         )
 
 
@@ -217,6 +229,40 @@ def recent_reply_overlap(
         for index in range(len(content) - 2)
     }
     return len(candidate_trigrams & recent_trigrams) / len(candidate_trigrams)
+
+
+def verbatim_ngram_overlap(
+    tokens: list[str],
+    corpus_ngrams: frozenset[tuple[str, ...]] | set[tuple[str, ...]],
+    size: int = VERBATIM_NGRAM_SIZE,
+) -> float:
+    """Share of the candidate's content ``size``-grams found in the corpus index.
+
+    1.0 means every window of the candidate exists verbatim in some training
+    message (a quote); recombination across messages produces novel windows and
+    lowers the share. Candidates shorter than ``size`` content tokens score 0 —
+    they are governed by the short-reply anti-repeat instead.
+    """
+    if not corpus_ngrams:
+        return 0.0
+    content = _normalized_content(tokens)
+    if len(content) < size:
+        return 0.0
+    windows = [
+        tuple(content[index : index + size])
+        for index in range(len(content) - size + 1)
+    ]
+    hits = sum(1 for window in windows if window in corpus_ngrams)
+    return hits / len(windows)
+
+
+def coherence_penalty_for_order(markov_order_used: int) -> float:
+    """Penalty for how far the walk had to back off (1-gram = word salad)."""
+    if markov_order_used <= 1:
+        return ORDER1_COHERENCE_PENALTY
+    if markov_order_used == 2:
+        return ORDER2_COHERENCE_PENALTY
+    return 0.0
 
 
 def score_candidate(

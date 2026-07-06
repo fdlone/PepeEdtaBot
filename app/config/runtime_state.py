@@ -26,6 +26,7 @@ class RuntimeState:
     emoji_append_chance: float
     repetition_penalty_strength: float
     recent_reply_penalty_strength: float
+    verbatim_penalty_strength: float
     length_mode_weights: tuple[float, float, float]
     markov_order: int
     enable_backoff: bool
@@ -45,6 +46,7 @@ class RuntimeState:
     reply_context_bias: float
     reply_context_start_bias: float
     reply_context_only_for_replies: bool
+    reply_context_emit_start: bool
     reply_context_include_current_message: bool
     pivo_recent_pool_window: int
     pivo_temporal_flavor_chance: float
