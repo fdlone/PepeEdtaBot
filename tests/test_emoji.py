@@ -45,6 +45,13 @@ class TestExtractEmojis(unittest.TestCase):
         self.assertEqual(strip_trailing_emojis("ну что там! 🔥🔥"), "ну что там")
         self.assertEqual(strip_trailing_emojis("без эмодзи"), "без эмодзи")
 
+    def test_strip_trailing_emojis_keeps_bare_punctuation(self) -> None:
+        # A punctuation-only tail is not an emoji flavor and must survive.
+        self.assertEqual(strip_trailing_emojis("привет..."), "привет...")
+        self.assertEqual(strip_trailing_emojis("ну что там!"), "ну что там!")
+        # Punctuation *after* the emoji still goes with it.
+        self.assertEqual(strip_trailing_emojis("привет 🍺!"), "привет")
+
     def test_count_folds_frequency(self) -> None:
         counts = count_emojis("😂 текст 😂🔥")
         self.assertEqual(counts["😂"], 2)

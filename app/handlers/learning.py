@@ -5,7 +5,7 @@ import random
 import re
 import time
 from collections import deque
-from datetime import date, datetime
+from datetime import UTC, datetime
 
 from aiogram import F, Router
 from aiogram.types import Message
@@ -473,7 +473,9 @@ async def on_text_message(
         # double message) or false-start (filler → typing → real reply).
         # Bounded by a per-chat daily budget; fallback phrases never event.
         reply_parts = [reply_text]
-        today_iso = date.today().isoformat()
+        # UTC, как и остальные суточные механики (decay, /pivo-квоты): кап
+        # сбрасывается в одну и ту же полночь независимо от TZ контейнера.
+        today_iso = datetime.now(UTC).date().isoformat()
         if runtime_state.can_fire_rare_event(message.chat.id, today_iso):
             event_kind = roll_rare_event(
                 random.Random(),
