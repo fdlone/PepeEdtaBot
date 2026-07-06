@@ -43,8 +43,10 @@ _REGIONAL_INDICATOR_RE = re.compile("[\U0001f1e6-\U0001f1ff]")
 
 # Trailing run of emojis (plus the spaces/punctuation between and after them),
 # used to make anti-repeat normalization ignore an appended emoji flavor.
+# The run must contain at least one emoji: a bare punctuation/space tail
+# ("привет...") is not an emoji flavor and must survive untouched.
 _TRAILING_EMOJI_RE = re.compile(
-    r"(?:" + _EMOJI_RE.pattern + r"|[\s.!?…])+\Z",
+    r"(?:[\s.!?…]*" + _EMOJI_RE.pattern + r")+[\s.!?…]*\Z",
     flags=re.UNICODE,
 )
 

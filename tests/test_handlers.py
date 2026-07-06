@@ -1527,7 +1527,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.rare_events_today[msg.chat.id][1], 1)
 
     async def test_rare_event_respects_daily_cap(self) -> None:
-        from datetime import date
+        from datetime import UTC, datetime
 
         from app.handlers.learning import on_text_message
 
@@ -1541,7 +1541,10 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         state = self._reply_state(
             recent_replies={},
             false_start_chance=1.0,
-            rare_events_today={msg.chat.id: (date.today().isoformat(), 3)},
+            # UTC, как в хендлере: локальная дата около полуночи дала бы флаки.
+            rare_events_today={
+                msg.chat.id: (datetime.now(UTC).date().isoformat(), 3)
+            },
             rare_event_daily_cap=3,
         )
 

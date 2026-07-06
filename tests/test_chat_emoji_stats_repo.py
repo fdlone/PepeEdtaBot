@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import time
 import unittest
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from app.infrastructure.database import Database
+from app.infrastructure.database import FLAVOR_DECAY_INTERVAL_SEC, Database
 
 CHAT = 4242
 
@@ -60,6 +61,19 @@ class TestChatEmojiStatsRepo(unittest.IsolatedAsyncioTestCase):
         # Decay run "now" — the row was just bumped, so it is not yet stale.
         await self.db.decay_chat_emoji_stats()
         self.assertEqual(await self.db.get_chat_emoji_stats(CHAT), {"😂": 4})
+
+    async def test_lazy_decay_not_due_right_after_init(self) -> None:
+        # init() already ran the decay and stamped the clock.
+        self.assertFalse(await self.db.decay_flavor_stats_if_due())
+
+    async def test_lazy_decay_runs_once_after_interval(self) -> None:
+        # Pretend the last decay happened more than a day ago.
+        self.db._last_flavor_decay_monotonic = (
+            time.monotonic() - FLAVOR_DECAY_INTERVAL_SEC - 1.0
+        )
+        self.assertTrue(await self.db.decay_flavor_stats_if_due())
+        # The clock was re-stamped: an immediate second call is a no-op.
+        self.assertFalse(await self.db.decay_flavor_stats_if_due())
 
 
 if __name__ == "__main__":

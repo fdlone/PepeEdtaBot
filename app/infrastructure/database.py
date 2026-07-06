@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from datetime import UTC, date, datetime, timedelta
@@ -28,6 +29,11 @@ from app.repositories import (
 PIVO_DAILY_USAGE_RETENTION_DAYS = 7
 CHAT_EMOJI_DECAY_DAYS = 7
 CHAT_HOT_NGRAM_DECAY_DAYS = 7
+# Минимальный интервал между прогонами decay эмодзи/n-грамм. Планировщика в
+# проекте нет, поэтому decay перезапускается лениво с learn-пути (см.
+# decay_flavor_stats_if_due): при аптайме в недели окно «горячести» продолжает
+# скользить, а не замирает до рестарта.
+FLAVOR_DECAY_INTERVAL_SEC = 86400.0
 
 _RepoT = TypeVar("_RepoT")
 
@@ -62,6 +68,8 @@ class Database:
         self.pivo_pool_usage: Optional[PivoPoolUsageRepo] = None
         self.chat_emoji_stats: Optional[ChatEmojiStatsRepo] = None
         self.chat_hot_ngrams: Optional[ChatHotNgramsRepo] = None
+        # Monotonic-время последнего decay эмодзи/n-грамм (None до init()).
+        self._last_flavor_decay_monotonic: Optional[float] = None
 
     async def _get_conn(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -103,6 +111,7 @@ class Database:
         await self.cleanup_pivo_daily_usage()
         await self.decay_chat_emoji_stats()
         await self.decay_chat_hot_ngrams()
+        self._last_flavor_decay_monotonic = time.monotonic()
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -120,6 +129,9 @@ class Database:
         self, chat_id: int, raw_text: str, tokens: list[str]
     ) -> int:
         """Атомарно сохраняет raw-сообщение и обновляет счётчики переходов n=3/n=2/n=1."""
+        # Ленивый суточный decay эмодзи/n-грамм: learn-путь — единственное
+        # регулярное место, где Database получает управление (планировщика нет).
+        await self.decay_flavor_stats_if_due()
         starts2_pair: Optional[tuple[str, str]] = None
         starts3_triplet: Optional[tuple[str, str, str]] = None
 
@@ -409,9 +421,10 @@ class Database:
     ) -> int:
         """Halve emoji counts not bumped within ``decay_days`` so dead memes fade.
 
-        Runs once at init (no scheduler exists), mirroring
-        ``cleanup_pivo_daily_usage``. Stale rows are halved and their clock reset;
-        rows reaching 0 are removed. Returns the number of rows deleted.
+        Runs at init and then lazily once per ``FLAVOR_DECAY_INTERVAL_SEC`` from
+        the learn path (``decay_flavor_stats_if_due``) — no scheduler exists.
+        Stale rows are halved and their clock reset; rows reaching 0 are removed.
+        Returns the number of rows deleted.
         """
         if decay_days < 0:
             raise ValueError("decay_days must be non-negative")
@@ -443,8 +456,9 @@ class Database:
     ) -> int:
         """Halve n-gram counts not bumped within ``decay_days`` so jokes get old.
 
-        Runs once at init (no scheduler exists), same cadence and contract as
-        ``decay_chat_emoji_stats``. Returns the number of purged rows.
+        Same cadence and contract as ``decay_chat_emoji_stats`` (init + lazy
+        daily re-run via ``decay_flavor_stats_if_due``). Returns the number of
+        purged rows.
         """
         if decay_days < 0:
             raise ValueError("decay_days must be non-negative")
@@ -453,6 +467,25 @@ class Database:
         # so the string comparison in decay_stale is well-defined.
         cutoff = (current - timedelta(days=decay_days)).strftime("%Y-%m-%d %H:%M:%S")
         return await self._require(self.chat_hot_ngrams).decay_stale(cutoff)
+
+    async def decay_flavor_stats_if_due(self) -> bool:
+        """Перезапускает decay эмодзи/n-грамм, если прошёл суточный интервал.
+
+        Дешёвая монотонная проверка на каждом learn-вызове; сам decay
+        выполняется не чаще раза в ``FLAVOR_DECAY_INTERVAL_SEC``, так что
+        скользящее окно «горячести» продолжает двигаться и без рестартов.
+        Возвращает True, если decay действительно выполнялся.
+        """
+        now = time.monotonic()
+        if (
+            self._last_flavor_decay_monotonic is not None
+            and now - self._last_flavor_decay_monotonic < FLAVOR_DECAY_INTERVAL_SEC
+        ):
+            return False
+        self._last_flavor_decay_monotonic = now
+        await self.decay_chat_emoji_stats()
+        await self.decay_chat_hot_ngrams()
+        return True
 
     async def cleanup_pivo_daily_usage(
         self,
