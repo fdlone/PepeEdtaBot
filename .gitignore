@@ -53,3 +53,7 @@ test_*.sqlite-wal
 
 # Local MCP server configuration (may contain machine-specific settings)
 .mcp.json
+
+# Local prod-metric tools (contain prod chat ids / db copies — keep untracked)
+tools/eval_prod.py
+tools/eval_prod_baseline.json
