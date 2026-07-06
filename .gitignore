@@ -50,3 +50,7 @@ CLAUDE.md
 test_*.sqlite
 test_*.sqlite-shm
 test_*.sqlite-wal
+
+# Local prod-metric tools (contain prod chat ids / db copies — keep untracked)
+tools/eval_prod.py
+tools/eval_prod_baseline.json

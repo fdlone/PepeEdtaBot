@@ -447,6 +447,20 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             "привет как дела",
         )
 
+    async def test_normalize_reply_for_repeat_strips_appended_emoji(self) -> None:
+        from app.core.response_generator import normalize_reply_for_repeat
+
+        # An M3 emoji flavor appended to the sent form must not defeat the exact
+        # anti-repeat match against the pre-flavor candidate.
+        self.assertEqual(
+            normalize_reply_for_repeat("привет как дела 🍺"),
+            normalize_reply_for_repeat("привет как дела"),
+        )
+        self.assertEqual(
+            normalize_reply_for_repeat("привет как дела! 🔥"),
+            "привет как дела",
+        )
+
     async def test_remember_recent_reply_keeps_rolling_window(self) -> None:
         from app.core.response_generator import (
             RECENT_REPLY_LIMIT,
