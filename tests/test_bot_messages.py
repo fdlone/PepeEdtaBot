@@ -76,6 +76,18 @@ class TestBotMessages(unittest.TestCase):
         self.assertIn("/pivo_privacy", text)
         self.assertNotIn("/seed", text)
 
+    def test_help_dialogue_block_shows_registry_ranges(self) -> None:
+        text = format_help_message()
+
+        self.assertIn("Диалог (новое, PR50-58):", text)
+        # Range hints are generated from the registry, not hard-coded.
+        self.assertIn("/set mood_enabled - настроение чата (true/false)", text)
+        self.assertIn("/set emoji_append_chance - эмодзи в ответах (0..1)", text)
+        self.assertIn("/set reply_max_per_hour - лимит ответов в час (0..1000)", text)
+        self.assertIn(
+            "/set mention_cooldown_sec - пауза на упоминания, сек (0..3600)", text
+        )
+
     def test_telegram_commands_are_registered(self) -> None:
         command_names = {command for command, _ in TELEGRAM_COMMANDS}
 
