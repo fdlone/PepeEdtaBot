@@ -5,7 +5,7 @@ import random
 import re
 import time
 from collections import deque
-from datetime import datetime
+from datetime import date, datetime
 
 from aiogram import F, Router
 from aiogram.types import Message
@@ -24,6 +24,7 @@ from app.core.mood import (
     modifiers_for_mood,
     update_mood_state,
 )
+from app.core.reply_flavor import apply_rare_event, roll_rare_event
 from app.core.reply_policy import (
     bot_is_mentioned,
     burst_factor,
@@ -40,7 +41,11 @@ from app.core.response_generator import (
     remember_recent_reply,
 )
 from app.core.text import sanitize_text
-from app.handlers._helpers import is_group_message, reply_humanized
+from app.handlers._helpers import (
+    is_group_message,
+    reply_humanized,
+    reply_humanized_sequence,
+)
 from app.log_masking import mask_chat_id
 from app.presentation.fallback_phrases import (
     GENERATION_FAILED_PHRASES,
@@ -464,9 +469,34 @@ async def on_text_message(
             runtime_state.note_mention_reply(
                 message.chat.id, message.from_user.id, now
             )
-        await reply_humanized(
+        # L3 rare events: a generated reply may break shape (verdict/CAPS/
+        # double message) or false-start (filler → typing → real reply).
+        # Bounded by a per-chat daily budget; fallback phrases never event.
+        reply_parts = [reply_text]
+        today_iso = date.today().isoformat()
+        if runtime_state.can_fire_rare_event(message.chat.id, today_iso):
+            event_kind = roll_rare_event(
+                random.Random(),
+                event_chance=runtime_state.rare_event_chance,
+                false_start_chance=runtime_state.false_start_chance,
+            )
+            if event_kind is not None:
+                event_parts = apply_rare_event(
+                    event_kind, reply_text, random.Random()
+                )
+                if event_parts != [reply_text]:
+                    reply_parts = event_parts
+                    runtime_state.note_rare_event(message.chat.id, today_iso)
+                    logger.debug(
+                        "Rare event fired: chat=%s kind=%s parts=%s",
+                        mask_chat_id(message.chat.id),
+                        event_kind,
+                        len(reply_parts),
+                    )
+
+        await reply_humanized_sequence(
             message,
-            reply_text,
+            reply_parts,
             runtime_state.typing_min_ms,
             runtime_state.typing_max_ms,
             typing_per_char_ms=runtime_state.typing_per_char_ms,

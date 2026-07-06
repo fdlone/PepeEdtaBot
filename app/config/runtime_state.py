@@ -34,6 +34,9 @@ class RuntimeState:
     hot_ngram_seed_chance: float
     hot_ngram_min_count: int
     hot_ngram_recency_share: float
+    rare_event_chance: float
+    false_start_chance: float
+    rare_event_daily_cap: int
     use_reply_context: bool
     fuzzy_context_casefold: bool
     fuzzy_context_prefix: bool
@@ -75,6 +78,9 @@ class RuntimeState:
     # Anti-flood gate for mention-triggered replies: (chat_id, user_id) ->
     # monotonic timestamp of the last reply this user got by addressing the bot.
     last_mention_reply_ts: dict[tuple[int, int], float] = field(default_factory=dict)
+    # L3: (ISO day, fired count) per chat for the combined daily budget of
+    # rare events + false starts.
+    rare_events_today: dict[int, tuple[str, int]] = field(default_factory=dict)
     _last_chat_activity: dict[int, float] = field(default_factory=dict)
     _cleanup_tick: int = 0
 
@@ -110,6 +116,20 @@ class RuntimeState:
         while history and history[0] < cutoff:
             history.popleft()
 
+    def can_fire_rare_event(self, chat_id: int, today_iso: str) -> bool:
+        """True while the chat's combined daily event budget is not exhausted."""
+        day, count = self.rare_events_today.get(chat_id, (today_iso, 0))
+        if day != today_iso:
+            return self.rare_event_daily_cap > 0
+        return count < self.rare_event_daily_cap
+
+    def note_rare_event(self, chat_id: int, today_iso: str) -> None:
+        """Count a fired rare event; the counter resets on day change."""
+        day, count = self.rare_events_today.get(chat_id, (today_iso, 0))
+        if day != today_iso:
+            day, count = today_iso, 0
+        self.rare_events_today[chat_id] = (day, count + 1)
+
     def note_mention_reply(self, chat_id: int, user_id: int, now: float) -> None:
         self.last_mention_reply_ts[(chat_id, user_id)] = now
 
@@ -130,6 +150,7 @@ class RuntimeState:
         self.recent_fallbacks.pop(chat_id, None)
         self.chat_mood.pop(chat_id, None)
         self.recent_reply_times.pop(chat_id, None)
+        self.rare_events_today.pop(chat_id, None)
         for key in [k for k in self.last_mention_reply_ts if k[0] == chat_id]:
             self.last_mention_reply_ts.pop(key, None)
         self._last_chat_activity.pop(chat_id, None)

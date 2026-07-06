@@ -77,7 +77,7 @@
 | `core/` | `markov.py`, `response_generator.py`, `candidate_scorer.py`, `context_state_matcher.py`, `reply_flavor.py`, `emoji.py`, `hot_ngrams.py`, `mood.py`, `lexicon.py`, `privacy_filter.py`, `reply_policy.py`, `text.py` |
 | `domain/` | `pivo.py`, `pivo_templates.py` |
 | `presentation/` | `bot_messages.py`, `fallback_phrases.py` |
-| `handlers/` | `common.py`, `admin.py`, `pivo.py`, `learning.py` — `aiogram.Router` per file. `_helpers.py` — `reply_humanized`. |
+| `handlers/` | `common.py`, `admin.py`, `pivo.py`, `learning.py` — `aiogram.Router` per file. `_helpers.py` — `reply_humanized`, `reply_humanized_sequence`. |
 | `services/` | `learning_service.py`, `pivo_service.py`, `pivo_message_builder.py`, `pivo_parser.py` |
 | `repositories/` | `markov_repo.py`, `messages_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py`, `pivo_pool_usage_repo.py`, `chat_emoji_stats_repo.py`, `chat_hot_ngrams_repo.py` |
 | `filters/` | `group_only.py` (только `GROUP`/`SUPERGROUP`), `admin_or_owner.py` (`OWNER_ID` или админ чата, fail-closed при ошибке Telegram API) |
@@ -94,7 +94,7 @@
 | `app/core/response_generator.py` | Конвейер best-of-N: генерация кандидатов, фильтры (verbatim, echo, анти-повтор), softmax-отбор по скорингу, reply flavor. |
 | `app/core/candidate_scorer.py` | Скоринг кандидатов (качество завершения, разнообразие, длина по режимам short/medium/long, контекст, штрафы повторов). |
 | `app/core/mood.py` | Пер-чатовое настроение (sleepy/calm/lively/heated) из EWMA-сигналов; модулирует поведение генерации (M1). |
-| `app/core/reply_flavor.py` | Вариации финальной пунктуации ответа (QW5). |
+| `app/core/reply_flavor.py` | Вариации финальной пунктуации ответа (QW5); редкие события и фальстарты (L3): ролл и трансформация ответа в последовательность сообщений (вердикт/КАПС/двойное сообщение/филлер). |
 | `app/core/emoji.py` | Эмодзи-канал (M3): извлечение эмодзи из текста (без tone-модификаторов, флаги собираются из пары региональных индикаторов) и частотный сэмплинг для добавления в конец ответа; `strip_trailing_emojis` снимает добавленное эмодзи перед анти-повторным сравнением. |
 | `app/core/hot_ngrams.py` | «Локальные мемы» (L1): извлечение контентных би/триграмм выученного сообщения для окна горячих n-грамм; горячие n-граммы изредка сидируют самостоятельные ответы через seed API генератора. |
 | `app/presentation/fallback_phrases.py` | Пулы fallback-фраз с анти-повтором, ночными и «heated»-вариантами. |

@@ -46,6 +46,9 @@ class Settings:
     hot_ngram_seed_chance: float
     hot_ngram_min_count: int
     hot_ngram_recency_share: float
+    rare_event_chance: float
+    false_start_chance: float
+    rare_event_daily_cap: int
     use_reply_context: bool
     fuzzy_context_casefold: bool
     fuzzy_context_prefix: bool
