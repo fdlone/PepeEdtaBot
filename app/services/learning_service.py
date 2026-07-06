@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 from app.core.markov import MarkovGenerator
 from app.core.text import sanitize_text
@@ -51,6 +51,20 @@ class LearningService:
     async def get_emoji_stats(self, chat_id: int) -> dict[str, int]:
         """Per-chat emoji frequencies for the emoji-append channel (M3)."""
         return await self._db.get_chat_emoji_stats(chat_id)
+
+    async def record_hot_ngrams(
+        self, chat_id: int, ngrams: Iterable[tuple[str, ...]]
+    ) -> None:
+        """Fold a learned message's content n-grams into the hot-ngram window (L1)."""
+        await self._db.record_chat_hot_ngrams(chat_id, ngrams)
+
+    async def get_hot_ngrams(
+        self, chat_id: int, *, min_count: int, recency_share: float
+    ) -> list[tuple[str, ...]]:
+        """Currently-hot n-grams for unprompted-reply seeding (L1)."""
+        return await self._db.get_hot_chat_ngrams(
+            chat_id, min_count=min_count, recency_share=recency_share
+        )
 
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool:
         """True если текст дословно совпадает с одним из последних обучающих сообщений."""

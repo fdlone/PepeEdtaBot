@@ -12,6 +12,7 @@ from aiogram.types import Message
 
 from app.config.runtime_state import RuntimeState
 from app.core.emoji import count_emojis
+from app.core.hot_ngrams import extract_content_ngrams
 from app.core.markov import (
     MarkovGenerator,
     is_short_generated_reply,
@@ -391,11 +392,35 @@ async def on_text_message(
             mood_modifiers=mood_modifiers,
             mood=mood,
         )
+        # L1 running jokes: occasionally open an unprompted reply from a
+        # phrase the chat has been hot on lately. Mention replies are never
+        # seeded — a direct address should answer the person, not the meme.
+        seed: list[str] | None = None
+        if (
+            not address_reply
+            and runtime_state.hot_ngram_seed_chance > 0.0
+            and random.random() < runtime_state.hot_ngram_seed_chance
+        ):
+            hot_ngrams = await learning_service.get_hot_ngrams(
+                message.chat.id,
+                min_count=runtime_state.hot_ngram_min_count,
+                recency_share=runtime_state.hot_ngram_recency_share,
+            )
+            if hot_ngrams:
+                # Only the length is logged, never the n-gram text: chat
+                # content stays out of logs (project log-masking policy).
+                seed = list(random.choice(hot_ngrams))
+                logger.debug(
+                    "Hot-ngram seed picked: chat=%s ngram_len=%s",
+                    mask_chat_id(message.chat.id),
+                    len(seed),
+                )
+
         reply_text = await response_generator.generate(
             GenerationRequest(
                 chat_id=message.chat.id,
                 context_tokens=context_tokens,
-                seed=None,
+                seed=seed,
                 current_message_normalized=current_message_normalized,
             ),
             rng=random.Random(),
@@ -458,6 +483,15 @@ async def on_text_message(
                 raw_text=learn_source,
                 tokens=tokens,
             )
+            # L1 running jokes: fold the learned message's content n-grams
+            # into the sliding hot-ngram window. Gated on the channel knob so
+            # a zero chance keeps the learn path write-free (M3 pattern).
+            if runtime_state.hot_ngram_seed_chance > 0.0:
+                content_ngrams = extract_content_ngrams(tokens)
+                if content_ngrams:
+                    await learning_service.record_hot_ngrams(
+                        message.chat.id, content_ngrams
+                    )
             learned = runtime_state.learned_messages.get(message.chat.id, 0) + 1
             runtime_state.learned_messages[message.chat.id] = learned
             if learned == 1 or learned % 25 == 0:

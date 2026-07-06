@@ -317,6 +317,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
             tables,
             [
                 "chat_emoji_stats",
+                "chat_hot_ngrams",
                 "chat_members",
                 "chat_model_volume",
                 "messages",

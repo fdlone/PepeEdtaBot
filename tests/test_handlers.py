@@ -58,6 +58,11 @@ def _fake_state(**kwargs: object) -> MagicMock:
     # M4 jump off by default so generation tests stay deterministic; the markov
     # characterization tests drive jump_probability directly.
     s.markov_jump_probability = 0.0
+    # L1 hot-ngram channel off by default so learn/reply tests stay
+    # deterministic; dedicated hot-ngram tests enable it explicitly.
+    s.hot_ngram_seed_chance = 0.0
+    s.hot_ngram_min_count = 3
+    s.hot_ngram_recency_share = 0.5
     # Mood off by default so the existing behavioural assertions see the
     # unmodulated path; dedicated mood tests enable it explicitly.
     s.mood_enabled = False
@@ -1290,6 +1295,151 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             )
 
         msg.reply.assert_awaited_once_with("ответ бота готов 🍺")
+
+    async def test_learnable_message_records_hot_ngrams(self) -> None:
+        from app.core.hot_ngrams import extract_content_ngrams
+        from app.core.markov import tokenize
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="крутой бобёр пришёл")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=101)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="")
+        state = self._reply_state(hot_ngram_seed_chance=0.05)
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg, learning_service, generator, state,
+                "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+            )
+
+        expected = extract_content_ngrams(
+            tokenize("крутой бобёр пришёл", normalize_lower=False)
+        )
+        learning_service.record_hot_ngrams.assert_awaited_once_with(
+            msg.chat.id, expected
+        )
+
+    async def test_hot_ngram_recording_disabled_at_zero_chance(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="крутой бобёр пришёл")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=101)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="")
+        state = self._reply_state()  # hot_ngram_seed_chance = 0.0 default
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg, learning_service, generator, state,
+                "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+            )
+
+        learning_service.record_hot_ngrams.assert_not_awaited()
+
+    async def test_unprompted_reply_seeded_on_roll(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        # No mention; reply_probability 1.0 and the patched roll 0.0 win both
+        # the reply gate and the seed gate.
+        msg = _fake_message(text="обычное сообщение в чате")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=101)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        learning_service.get_hot_ngrams = AsyncMock(
+            return_value=[("крутой", "бобёр")]
+        )
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="ответ бота готов")
+        state = self._reply_state(
+            reply_probability=1.0,
+            hot_ngram_seed_chance=1.0,
+            recent_replies={},
+        )
+
+        with (
+            patch("app.handlers.learning.mask_chat_id", return_value="chat"),
+            patch("app.handlers.learning.random.random", return_value=0.0),
+        ):
+            await on_text_message(
+                msg, learning_service, generator, state,
+                "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+            )
+
+        learning_service.get_hot_ngrams.assert_awaited_once_with(
+            msg.chat.id,
+            min_count=state.hot_ngram_min_count,
+            recency_share=state.hot_ngram_recency_share,
+        )
+        first_call = generator.generate_text.await_args_list[0]
+        self.assertEqual(first_call.kwargs["seed_tokens"], ["крутой", "бобёр"])
+        msg.reply.assert_awaited_once()
+
+    async def test_mention_reply_never_seeded(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="pepe ответь развёрнуто")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=101)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="ответ бота готов")
+        state = self._reply_state(
+            hot_ngram_seed_chance=1.0,
+            recent_replies={},
+        )
+
+        with (
+            patch("app.handlers.learning.mask_chat_id", return_value="chat"),
+            patch("app.handlers.learning.random.random", return_value=0.0),
+        ):
+            await on_text_message(
+                msg, learning_service, generator, state,
+                "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+            )
+
+        learning_service.get_hot_ngrams.assert_not_awaited()
+        first_call = generator.generate_text.await_args_list[0]
+        self.assertIsNone(first_call.kwargs["seed_tokens"])
+        msg.reply.assert_awaited_once()
+
+    async def test_no_hot_ngrams_means_no_seed(self) -> None:
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="обычное сообщение в чате")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=101)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        learning_service.get_hot_ngrams = AsyncMock(return_value=[])
+        generator = AsyncMock()
+        generator.generate_text = AsyncMock(return_value="ответ бота готов")
+        state = self._reply_state(
+            reply_probability=1.0,
+            hot_ngram_seed_chance=1.0,
+            recent_replies={},
+        )
+
+        with (
+            patch("app.handlers.learning.mask_chat_id", return_value="chat"),
+            patch("app.handlers.learning.random.random", return_value=0.0),
+        ):
+            await on_text_message(
+                msg, learning_service, generator, state,
+                "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+            )
+
+        first_call = generator.generate_text.await_args_list[0]
+        self.assertIsNone(first_call.kwargs["seed_tokens"])
+        msg.reply.assert_awaited_once()
 
     async def test_recent_full_reply_is_retried_instead_of_sent(self) -> None:
         from app.handlers.learning import on_text_message

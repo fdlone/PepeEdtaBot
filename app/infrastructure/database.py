@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import UTC, date, datetime, timedelta
 from typing import Optional, TypeVar
 
@@ -17,6 +17,7 @@ from app.core.text import sanitize_text
 from app.infrastructure import migrator
 from app.repositories import (
     ChatEmojiStatsRepo,
+    ChatHotNgramsRepo,
     ChatMembersRepo,
     MarkovRepo,
     MessagesRepo,
@@ -26,6 +27,7 @@ from app.repositories import (
 
 PIVO_DAILY_USAGE_RETENTION_DAYS = 7
 CHAT_EMOJI_DECAY_DAYS = 7
+CHAT_HOT_NGRAM_DECAY_DAYS = 7
 
 _RepoT = TypeVar("_RepoT")
 
@@ -59,6 +61,7 @@ class Database:
         self.pivo_usage: Optional[PivoUsageRepo] = None
         self.pivo_pool_usage: Optional[PivoPoolUsageRepo] = None
         self.chat_emoji_stats: Optional[ChatEmojiStatsRepo] = None
+        self.chat_hot_ngrams: Optional[ChatHotNgramsRepo] = None
 
     async def _get_conn(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -96,8 +99,10 @@ class Database:
         self.pivo_usage = PivoUsageRepo(self._get_conn, self._lock)
         self.pivo_pool_usage = PivoPoolUsageRepo(self._get_conn, self._lock)
         self.chat_emoji_stats = ChatEmojiStatsRepo(self._get_conn, self._lock)
+        self.chat_hot_ngrams = ChatHotNgramsRepo(self._get_conn, self._lock)
         await self.cleanup_pivo_daily_usage()
         await self.decay_chat_emoji_stats()
+        await self.decay_chat_hot_ngrams()
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -109,6 +114,7 @@ class Database:
         self.pivo_usage = None
         self.pivo_pool_usage = None
         self.chat_emoji_stats = None
+        self.chat_hot_ngrams = None
 
     async def save_message_and_update_model(
         self, chat_id: int, raw_text: str, tokens: list[str]
@@ -415,6 +421,39 @@ class Database:
         cutoff = (current - timedelta(days=decay_days)).strftime("%Y-%m-%d %H:%M:%S")
         return await self._require(self.chat_emoji_stats).decay_stale(cutoff)
 
+    # --- Делегаты к ChatHotNgramsRepo (L1 running jokes) ---
+
+    async def record_chat_hot_ngrams(
+        self, chat_id: int, ngrams: Iterable[tuple[str, ...]]
+    ) -> None:
+        await self._require(self.chat_hot_ngrams).bump(chat_id, ngrams)
+
+    async def get_hot_chat_ngrams(
+        self, chat_id: int, *, min_count: int, recency_share: float
+    ) -> list[tuple[str, ...]]:
+        return await self._require(self.chat_hot_ngrams).get_hot(
+            chat_id, min_count=min_count, recency_share=recency_share
+        )
+
+    async def decay_chat_hot_ngrams(
+        self,
+        *,
+        decay_days: int = CHAT_HOT_NGRAM_DECAY_DAYS,
+        now: datetime | None = None,
+    ) -> int:
+        """Halve n-gram counts not bumped within ``decay_days`` so jokes get old.
+
+        Runs once at init (no scheduler exists), same cadence and contract as
+        ``decay_chat_emoji_stats``. Returns the number of purged rows.
+        """
+        if decay_days < 0:
+            raise ValueError("decay_days must be non-negative")
+        current = now or datetime.now(UTC)
+        # Match SQLite's datetime('now') text format ("YYYY-MM-DD HH:MM:SS", UTC)
+        # so the string comparison in decay_stale is well-defined.
+        cutoff = (current - timedelta(days=decay_days)).strftime("%Y-%m-%d %H:%M:%S")
+        return await self._require(self.chat_hot_ngrams).decay_stale(cutoff)
+
     async def cleanup_pivo_daily_usage(
         self,
         *,
@@ -483,4 +522,5 @@ class Database:
             await db.execute("DELETE FROM transitions1 WHERE chat_id = ?", (chat_id,))
             await db.execute("DELETE FROM chat_model_volume WHERE chat_id = ?", (chat_id,))
             await db.execute("DELETE FROM chat_emoji_stats WHERE chat_id = ?", (chat_id,))
+            await db.execute("DELETE FROM chat_hot_ngrams WHERE chat_id = ?", (chat_id,))
             await db.commit()
