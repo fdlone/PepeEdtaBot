@@ -32,7 +32,7 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(settings.runtime_state_max_chats, 2048)
         self.assertEqual(settings.throttle_state_ttl_sec, 21600)
         self.assertEqual(settings.throttle_state_max_keys, 4096)
-        self.assertEqual(settings.text_cache_max_messages, 500)
+        self.assertEqual(settings.text_cache_max_messages, 1000)
         self.assertEqual(settings.messages_retention_per_chat, 1000)
         self.assertEqual(settings.sqlite_busy_timeout_ms, 5000)
         self.assertEqual(settings.sqlite_wal_autocheckpoint_pages, 1000)

@@ -38,6 +38,7 @@ class Settings:
     emoji_append_chance: float
     repetition_penalty_strength: float
     recent_reply_penalty_strength: float
+    verbatim_penalty_strength: float
     length_mode_weights: tuple[float, float, float]
     markov_order: int
     enable_backoff: bool
@@ -57,6 +58,7 @@ class Settings:
     reply_context_bias: float
     reply_context_start_bias: float
     reply_context_only_for_replies: bool
+    reply_context_emit_start: bool
     reply_context_include_current_message: bool
     pivo_recent_pool_window: int
     pivo_temporal_flavor_chance: float
@@ -224,7 +226,7 @@ def load_settings(load_env: bool = True) -> Settings:
     if throttle_state_max_keys < 1:
         raise ValueError("THROTTLE_STATE_MAX_KEYS must be at least 1")
     text_cache_max_messages_raw = os.getenv(
-        "TEXT_CACHE_MAX_MESSAGES", "500"
+        "TEXT_CACHE_MAX_MESSAGES", "1000"
     ).strip()
     try:
         text_cache_max_messages = int(text_cache_max_messages_raw)

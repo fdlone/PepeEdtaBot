@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import unittest
 from collections import deque
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from app.core.candidate_scorer import CandidateScore
@@ -34,6 +35,8 @@ def _runtime_state() -> MagicMock:
     state.recent_short_replies = {}
     state.recent_replies = {}
     state.recent_reply_penalty_strength = 1.0
+    state.verbatim_penalty_strength = 0.0
+    state.reply_context_emit_start = True
     state.length_mode_weights = (0.25, 0.55, 0.2)
     # Argmax selection and no ending transforms: existing tests assert the
     # best-scored candidate text verbatim.
@@ -44,6 +47,20 @@ def _runtime_state() -> MagicMock:
     state.emoji_append_chance = 0.0
     state.markov_jump_probability = 0.0
     return state
+
+
+def _traced_generator() -> AsyncMock:
+    """MarkovGenerator mock whose generate_text_with_trace delegates to the
+    plain generate_text AsyncMock tests configure, wrapping the text in the
+    (text, trace) tuple the ResponseGenerator consumes."""
+    generator = AsyncMock()
+
+    async def _delegate(*args: object, **kwargs: object) -> tuple[str, SimpleNamespace]:
+        text = await generator.generate_text(*args, **kwargs)
+        return text, SimpleNamespace(markov_order_used=3)
+
+    generator.generate_text_with_trace = AsyncMock(side_effect=_delegate)
+    return generator
 
 
 def _request() -> GenerationRequest:
@@ -63,7 +80,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
     async def test_acceptance_checks_keep_existing_order(self) -> None:
         state = _runtime_state()
         state.recent_short_replies = {123: deque(["привет"], maxlen=5)}
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(
             side_effect=[
                 "same current message",
@@ -102,7 +119,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
 
     async def test_context_falls_back_after_context_attempt_budget(self) -> None:
         state = _runtime_state()
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(
             side_effect=[""] * GENERATION_ATTEMPTS_WITH_CONTEXT + ["accepted"]
         )
@@ -143,7 +160,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
 
     async def test_returns_none_after_single_bounded_budget(self) -> None:
         state = _runtime_state()
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="")
         learning_service = AsyncMock()
         response_generator = ResponseGenerator(
@@ -169,7 +186,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
 
     async def test_collects_multiple_candidates_and_picks_highest_score(self) -> None:
         state = _runtime_state()
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(
             side_effect=["first candidate", "best candidate", "third candidate"]
         )
@@ -203,7 +220,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
 
     async def test_duplicate_candidates_are_scored_once(self) -> None:
         state = _runtime_state()
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(
             side_effect=["same candidate"] * GENERATION_ATTEMPT_BUDGET
         )
@@ -229,7 +246,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
 
     async def test_equal_scores_use_first_seen_candidate(self) -> None:
         state = _runtime_state()
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(side_effect=["first choice", "second choice"])
         learning_service = AsyncMock()
         response_generator = ResponseGenerator(
@@ -290,7 +307,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         state.recent_replies = {
             123: deque(["дубль полного ответа"], maxlen=20)
         }
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(
             side_effect=["Дубль полного ответа.", "свежий ответ на этот раз"]
         )
@@ -319,7 +336,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         state.recent_replies = {
             123: deque(["один два три четыре пять"], maxlen=20)
         }
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(
             side_effect=[
                 "один два три четыре шесть",
@@ -353,7 +370,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         state.recent_replies = {
             123: deque(["один два три четыре пять"], maxlen=20)
         }
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(
             side_effect=[
                 "один два три четыре шесть",
@@ -384,7 +401,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
 
         state = _runtime_state()
         state.length_mode_weights = (1.0, 0.0, 0.0)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="короткий ответ")
         scorer = MagicMock(return_value=_score(1.0))
         response_generator = ResponseGenerator(
@@ -412,7 +429,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         state = _runtime_state()
         state.length_mode_weights = (0.0, 0.0, 1.0)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="длинный ответ важен")
         scorer = MagicMock(return_value=_score(1.0))
         response_generator = ResponseGenerator(
@@ -480,7 +497,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
     async def test_flavor_strength_applies_to_selected_text(self) -> None:
         state = _runtime_state()
         state.reply_flavor_strength = 2.0
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="стабильный ответ.")
         response_generator = ResponseGenerator(
             generator=generator,
@@ -509,7 +526,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         async def generate_with_flag(enabled: bool) -> str | None:
             state = _runtime_state()
             state.auto_capitalize_replies = enabled
-            generator = AsyncMock()
+            generator = _traced_generator()
             generator.generate_text = AsyncMock(return_value=candidate)
             response_generator = ResponseGenerator(
                 generator=generator,
@@ -543,7 +560,7 @@ class TestResponseGeneratorMoodModulation(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(patcher.stop)
 
     def _generator(self) -> AsyncMock:
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="fresh reply has four tokens")
         return generator
 

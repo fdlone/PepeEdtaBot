@@ -56,6 +56,13 @@ class _NoVerbatimCopies:
         # Emoji channel is off in eval; the generator never calls this.
         return {}
 
+    async def get_verbatim_ngram_index(
+        self, chat_id: int
+    ) -> frozenset[tuple[str, ...]]:
+        # Verbatim penalty is off in the synthetic eval (strength 0.0); the
+        # generator never calls this.
+        return frozenset()
+
 
 def load_synthetic_corpus(
     *,
@@ -92,8 +99,10 @@ class _InstrumentedMarkovGenerator(MarkovGenerator):
         self.context_prefix_singleton_matches = 0
         self.hidden_context_fallbacks = 0
 
-    async def generate_text(self, *args: Any, **kwargs: Any) -> str:
-        text, trace = await self.generate_text_with_trace(*args, **kwargs)
+    async def generate_text_with_trace(
+        self, *args: Any, **kwargs: Any
+    ) -> tuple[str, Any]:
+        text, trace = await super().generate_text_with_trace(*args, **kwargs)
         self.leading_punctuation_stripped += trace.leading_punctuation_stripped
         self.context_exact_matches += trace.context_exact_matches
         self.context_casefold_matches += trace.context_casefold_matches
@@ -102,7 +111,7 @@ class _InstrumentedMarkovGenerator(MarkovGenerator):
             trace.context_prefix_singleton_matches
         )
         self.hidden_context_fallbacks += trace.hidden_context_fallbacks
-        return text
+        return text, trace
 
 
 def build_ngrams(tokens: list[str], size: int) -> list[tuple[str, ...]]:
@@ -209,7 +218,7 @@ async def evaluate_generation(
             generator = _InstrumentedMarkovGenerator(db)
             runtime_state = SimpleNamespace(
                 randomness_strength=2.0,
-                candidate_selection_temperature=0.7,
+                candidate_selection_temperature=1.3,
                 reply_flavor_strength=1.0,
                 max_reply_chars=280,
                 max_reply_tokens=45,
@@ -217,6 +226,9 @@ async def evaluate_generation(
                 reply_context_start_bias=2.2,
                 repetition_penalty_strength=1.0,
                 recent_reply_penalty_strength=recent_reply_penalty_strength,
+                # Off in the synthetic eval: there is no prod corpus index here,
+                # the baselines measure the word model alone.
+                verbatim_penalty_strength=0.0,
                 length_mode_weights=length_mode_weights,
                 markov_order=3,
                 enable_backoff=True,
@@ -228,6 +240,7 @@ async def evaluate_generation(
                 normalize_lower=normalize_lower,
                 fuzzy_context_casefold=fuzzy_context_casefold,
                 fuzzy_context_prefix=fuzzy_context_prefix,
+                reply_context_emit_start=True,
                 auto_capitalize_replies=False,
                 recent_short_replies={},
                 recent_replies={},

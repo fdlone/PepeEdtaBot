@@ -9,11 +9,26 @@ from __future__ import annotations
 import random
 import unittest
 from collections import deque
+from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _traced_generator() -> AsyncMock:
+    """MarkovGenerator mock whose generate_text_with_trace delegates to the
+    plain generate_text AsyncMock tests configure, wrapping the text in the
+    (text, trace) tuple the ResponseGenerator consumes."""
+    generator = AsyncMock()
+
+    async def _delegate(*args: object, **kwargs: object) -> tuple[str, SimpleNamespace]:
+        text = await generator.generate_text(*args, **kwargs)
+        return text, SimpleNamespace(markov_order_used=3)
+
+    generator.generate_text_with_trace = AsyncMock(side_effect=_delegate)
+    return generator
+
 
 def _fake_message(
     *,
@@ -46,6 +61,8 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.recent_fallbacks = {}
     s.recent_replies = {}
     s.recent_reply_penalty_strength = 1.0
+    s.verbatim_penalty_strength = 0.0
+    s.reply_context_emit_start = True
     s.length_mode_weights = (0.25, 0.55, 0.2)
     # Deterministic selection and untouched reply text so handler tests can
     # assert generated candidates verbatim.
@@ -764,7 +781,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
 
         msg = _fake_message(text="hello")
         learning_service = AsyncMock()
-        generator = AsyncMock()
+        generator = _traced_generator()
         state = _fake_state(
             normalize_lower=False,
             learned_messages={},
@@ -795,7 +812,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=102)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="")
         state = self._reply_state()
 
@@ -824,7 +841,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service = AsyncMock()
         learning_service.get_token_volume = AsyncMock(return_value=9)
         learning_service.record_message = AsyncMock(return_value=11)
-        generator = AsyncMock()
+        generator = _traced_generator()
         state = self._reply_state()
 
         with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
@@ -863,7 +880,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=102)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(
             side_effect=["pepe ответь", "Нормально"] + [""] * 8
         )
@@ -891,7 +908,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service = AsyncMock()
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=102)
-        generator = AsyncMock()
+        generator = _traced_generator()
         state = self._reply_state(
             last_reply_ts={msg.chat.id: 10**20},
             min_cooldown_sec=60,
@@ -921,7 +938,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service = AsyncMock()
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=103)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="")
         state = self._reply_state()
 
@@ -974,7 +991,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.is_verbatim_copy = AsyncMock(
             side_effect=[True, True, True, True, False]
         )
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(
             side_effect=[
                 "один два три четыре",
@@ -1031,7 +1048,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=100)
         learning_service.is_verbatim_copy = AsyncMock(return_value=True)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="Привет")
         state = _fake_state(
             normalize_lower=False,
@@ -1081,7 +1098,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=100)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(
             side_effect=["Привет", "Нормально"] + [""] * 8
         )
@@ -1136,7 +1153,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=100)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(
             return_value="новый развёрнутый ответ бота."
         )
@@ -1168,7 +1185,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=100)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = AsyncMock()
+        generator = _traced_generator()
         state = self._reply_state(recent_replies={})
         state.mood_enabled = True
         state.chat_mood = {}
@@ -1251,7 +1268,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service = AsyncMock()
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=101)
-        generator = AsyncMock()
+        generator = _traced_generator()
         state = self._director_state(
             reply_max_per_hour=20,
             recent_reply_times={msg.chat.id: deque([10000.0] * 20)},
@@ -1285,7 +1302,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=101)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="ответ бота готов")
         state = self._director_state(recent_reply_times={})
 
@@ -1316,7 +1333,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=101)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="")
         state = self._reply_state(emoji_append_chance=0.15)
 
@@ -1341,7 +1358,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.record_message = AsyncMock(return_value=100)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
         learning_service.get_emoji_stats = AsyncMock(return_value={"🍺": 5})
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="ответ бота готов")
         state = self._reply_state(recent_replies={}, emoji_append_chance=1.0)
 
@@ -1363,7 +1380,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=101)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="")
         state = self._reply_state(hot_ngram_seed_chance=0.05)
 
@@ -1388,7 +1405,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=101)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="")
         state = self._reply_state()  # hot_ngram_seed_chance = 0.0 default
 
@@ -1413,7 +1430,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_hot_ngrams = AsyncMock(
             return_value=[("крутой", "бобёр")]
         )
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="ответ бота готов")
         state = self._reply_state(
             reply_probability=1.0,
@@ -1447,7 +1464,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=101)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="ответ бота готов")
         state = self._reply_state(
             hot_ngram_seed_chance=1.0,
@@ -1477,7 +1494,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.record_message = AsyncMock(return_value=101)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
         learning_service.get_hot_ngrams = AsyncMock(return_value=[])
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="ответ бота готов")
         state = self._reply_state(
             reply_probability=1.0,
@@ -1507,7 +1524,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=100)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="настоящий ответ бота")
         state = self._reply_state(
             recent_replies={},
@@ -1536,7 +1553,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=100)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="настоящий ответ бота")
         state = self._reply_state(
             recent_replies={},
@@ -1565,7 +1582,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=100)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="настоящий ответ бота")
         state = self._reply_state(recent_replies={})  # both chances 0.0 default
 
@@ -1586,7 +1603,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=100)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(
             side_effect=[
                 "недавно отправленный полный ответ.",
@@ -1625,7 +1642,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.is_verbatim_copy = AsyncMock(
             side_effect=[True, True, False]
         )
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(
             side_effect=[
                 "первый ответ заметно длиннее",
@@ -1725,7 +1742,7 @@ class TestMentionCooldownGate(unittest.IsolatedAsyncioTestCase):
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=102)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = AsyncMock()
+        generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="сгенерированный ответ бота")
         return learning_service, generator
 

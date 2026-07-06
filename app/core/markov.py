@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import NamedTuple
 
 from app.core.context_state_matcher import ContextStateMatcher
-from app.core.lexicon import BAD_ENDING_WORDS
+from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
 from app.infrastructure.database import Database
 
 logger = logging.getLogger("chat_markov")
@@ -26,6 +26,9 @@ REJECTION_RESULT_TOO_SHORT = "result_too_short"
 REJECTION_LOW_DIVERSITY = "low_diversity"
 REJECTION_SHORT_CONTEXT_COPY = "short_context_copy"
 REJECTION_CONTEXT_HEAVY = "context_heavy"
+# M4 jumps become possible once the reply has this many tokens (lowered from 9
+# so shorter replies can still drift to a new topic mid-generation).
+JUMP_MIN_GENERATED_TOKENS = 5
 
 # M4: connective phrases spliced in when a mid-generation jump drifts to a new
 # topic, so the shift reads as a deliberate aside rather than a non-sequitur.
@@ -44,6 +47,22 @@ JUMP_CONNECTIVE_TOKENS: tuple[tuple[str, ...], ...] = (
 
 def pick_jump_connective(rng: random.Random) -> tuple[str, ...]:
     return rng.choice(JUMP_CONNECTIVE_TOKENS)
+
+
+def context_emission_tokens(state: tuple[str, str, str]) -> list[str]:
+    """Tokens of a contextual start state worth emitting into the reply.
+
+    At most the last two state tokens are emitted (caps the visible echo of the
+    prompt), and leading stopwords/punctuation are dropped so the reply opens on
+    the content part of the matched window: a context match on
+    ``("кто", "гнойный", "пидор")`` emits ``["гнойный", "пидор"]`` and the chain
+    continues from the full state. An empty result means the start stays hidden
+    (the pre-emission Phase 4.1d behaviour).
+    """
+    tail = list(state[-2:])
+    while tail and (tail[0] in PUNCT_SET or tail[0].casefold() in STOPWORDS):
+        tail.pop(0)
+    return tail
 
 @dataclass(frozen=True, slots=True)
 class GenerationTrace:
@@ -629,48 +648,6 @@ class MarkovGenerator:
         self._touch_cache(self._cache1, key, rows)
         return rows
 
-    async def _select_contextual_start3(
-        self,
-        chat_id: int,
-        context_tokens: list[str],
-        explore_probability: float,
-        power: float,
-        context_start_bias: float,
-        rng: random.Random,
-    ) -> tuple[str, str, str] | None:
-        windows = build_windows(context_tokens, 3)
-        if not windows:
-            return None
-
-        exploring = rng.random() < explore_probability
-        frequency_power = exploration_adjusted_power(
-            power,
-            sampled_exploration(explore_probability, exploring, rng),
-        )
-        candidates: list[tuple[tuple[str, str, str], float]] = []
-        total = len(windows)
-        for index, window in enumerate(windows):
-            seeded3 = await self.db.get_start3_if_exists(
-                chat_id, window[0], window[1], window[2]
-            )
-            if not seeded3:
-                continue
-            recency_bonus = 1.0 + ((index + 1) / total) * 0.35
-            weight = (
-                (max(seeded3[3], 1) ** frequency_power)
-                * max(1.0, context_start_bias)
-                * recency_bonus
-            )
-            candidates.append(((seeded3[0], seeded3[1], seeded3[2]), weight))
-
-        if not candidates:
-            return None
-        population = [start for start, _ in candidates]
-        weights = [weight for _, weight in candidates]
-        if exploring:
-            return exploration_weighted_choice(population, weights, rng)
-        return rng.choices(population=population, weights=weights, k=1)[0]
-
     async def _build_exact3_candidates(
         self,
         chat_id: int,
@@ -934,6 +911,7 @@ class MarkovGenerator:
         backoff_min_order: int = 1,
         fuzzy_context_casefold: bool = False,
         fuzzy_context_prefix: bool = False,
+        context_emit_start: bool = False,
         jump_probability: float = 0.0,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
@@ -953,6 +931,7 @@ class MarkovGenerator:
             backoff_min_order=backoff_min_order,
             fuzzy_context_casefold=fuzzy_context_casefold,
             fuzzy_context_prefix=fuzzy_context_prefix,
+            context_emit_start=context_emit_start,
             jump_probability=jump_probability,
             rng=rng,
             attempt_budget=attempt_budget,
@@ -975,6 +954,7 @@ class MarkovGenerator:
         backoff_min_order: int = 1,
         fuzzy_context_casefold: bool = False,
         fuzzy_context_prefix: bool = False,
+        context_emit_start: bool = False,
         jump_probability: float = 0.0,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
@@ -1017,6 +997,7 @@ class MarkovGenerator:
                 backoff_min_order=backoff_min_order,
                 fuzzy_context_casefold=fuzzy_context_casefold,
                 fuzzy_context_prefix=fuzzy_context_prefix,
+                context_emit_start=context_emit_start,
                 jump_probability=jump_probability,
                 rng=generation_rng,
                 emit_start=True,
@@ -1333,7 +1314,7 @@ class MarkovGenerator:
         chat_id: int,
         start3: tuple[str, str, str],
         *,
-        emit_start: bool,
+        emit_tokens: list[str],
         order: int,
         order_used: int,
         max_tokens: int,
@@ -1341,13 +1322,11 @@ class MarkovGenerator:
         enable_backoff: bool,
         backoff_min_order: int,
         starts3: list[tuple[str, str, str, int]],
-        context_tokens: list[str],
         context_token_set: set[str],
         context_pairs: set[tuple[str, ...]],
         context_triplets: set[tuple[str, ...]],
         start_explore: float,
         start_power: float,
-        context_start_bias: float,
         next_explore: float,
         next_power: float,
         context_bias: float,
@@ -1357,7 +1336,10 @@ class MarkovGenerator:
     ) -> tuple[list[str], int, int]:
         """Walk the Markov chain from ``start3`` until a stop condition.
 
-        Returns ``(generated, order_used, jump_count)``. Per-step transitions
+        Returns ``(generated, order_used, jump_count)``. ``emit_tokens`` is the
+        prefix actually written into the output (the full start for a global or
+        seed start, a trimmed tail or nothing for a contextual start) while the
+        chain always walks from the full ``start3`` state. Per-step transitions
         fall back from order 3 to 2 to 1 when ``enable_backoff`` allows and
         ``backoff_min_order`` permits; dedup state suppresses immediate triplet
         repeats. Only local state is mutated.
@@ -1365,8 +1347,8 @@ class MarkovGenerator:
         token_limit = max(1, max_tokens)
         w1, w2, w3 = start3
         start_tokens = [w1, w2, w3]
-        generated: list[str] = start_tokens[:token_limit] if emit_start else []
-        dedup_seed = generated if emit_start else start_tokens
+        generated: list[str] = emit_tokens[:token_limit]
+        dedup_seed = start_tokens
         visited_triplets: OrderedDict[tuple[str, str, str], None] = (
             OrderedDict.fromkeys([(w1, w2, w3)])
         )
@@ -1382,29 +1364,22 @@ class MarkovGenerator:
             if len(generated) >= token_limit:
                 break
             if (
-                len(generated) > 8
+                len(generated) >= JUMP_MIN_GENERATED_TOKENS
                 and rng.random() < jump_probability
                 and starts3
                 and order >= 3
             ):
-                contextual_jump = None
-                if context_tokens:
-                    contextual_jump = await self._select_contextual_start3(
-                        chat_id,
-                        context_tokens,
-                        start_explore,
-                        start_power,
-                        context_start_bias,
-                        rng,
-                    )
-                if contextual_jump is None:
-                    contextual_jump = weighted_start3_choice(
-                        starts3,
-                        start_explore,
-                        start_power,
-                        rng,
-                    )
-                nw1, nw2, nw3 = contextual_jump
+                # Jumps drift to a *global* learned start on purpose: the reply
+                # context is already anchored by the (emitted) contextual start
+                # and the step bias, and a contextual jump target used to splice
+                # the same context n-gram back in several times per reply,
+                # which read as parroting the question.
+                nw1, nw2, nw3 = weighted_start3_choice(
+                    starts3,
+                    start_explore,
+                    start_power,
+                    rng,
+                )
                 # Splice a connective and the new sentence-start triplet into the
                 # output so the topic drift is voiced. The new triplet is a real
                 # learned start, so "<text>, кстати <new sentence>" reads as an
@@ -1532,6 +1507,7 @@ class MarkovGenerator:
         backoff_min_order: int = 1,
         fuzzy_context_casefold: bool = False,
         fuzzy_context_prefix: bool = False,
+        context_emit_start: bool = False,
         jump_probability: float = 0.0,
         rng: random.Random | None = None,
         emit_start: bool = True,
@@ -1557,6 +1533,7 @@ class MarkovGenerator:
 
         start3: tuple[str, str, str] | None = None
         start_source = "global"
+        contextual_emit_tokens: list[str] = []
         context_exact_matches = 0
         context_casefold_matches = 0
         context_prefix_matches = 0
@@ -1603,8 +1580,16 @@ class MarkovGenerator:
             if contextual_state is not None:
                 start3 = contextual_state.state
                 order_used = contextual_state.order
+                # Visible contextual start: emit the trimmed tail of the matched
+                # window so the reply picks the context up out loud instead of
+                # only continuing after it (design change over Phase 4.1d).
+                contextual_emit_tokens = (
+                    context_emission_tokens(start3) if context_emit_start else []
+                )
                 emit_start = False
-                start_source = "hidden_context"
+                start_source = (
+                    "context" if contextual_emit_tokens else "hidden_context"
+                )
                 (
                     context_exact_matches,
                     context_casefold_matches,
@@ -1648,10 +1633,11 @@ class MarkovGenerator:
                 )
             start3, order_used = global_start
 
+        emit_tokens = list(start3) if emit_start else contextual_emit_tokens
         generated, order_used, jump_count = await self._run_generation_loop(
             chat_id,
             start3,
-            emit_start=emit_start,
+            emit_tokens=emit_tokens,
             order=order,
             order_used=order_used,
             max_tokens=max_tokens,
@@ -1659,13 +1645,11 @@ class MarkovGenerator:
             enable_backoff=enable_backoff,
             backoff_min_order=backoff_min_order,
             starts3=starts3,
-            context_tokens=context_tokens,
             context_token_set=context_token_set,
             context_pairs=context_pairs,
             context_triplets=context_triplets,
             start_explore=start_explore,
             start_power=start_power,
-            context_start_bias=context_start_bias,
             next_explore=next_explore,
             next_power=next_power,
             context_bias=context_bias,

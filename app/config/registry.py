@@ -146,8 +146,11 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _int_in_range(0, 200)),
     FieldSpec("randomness_strength", "RANDOMNESS_STRENGTH", "2.0",
               _float_in_range(0.0, 3.0)),
+    # 1.3 (2026-07-06): raised from 0.7 with the verbatim/coherence score
+    # penalties in place — odd-but-valid candidates should win more often now
+    # that quotes and word salad are penalized instead of out-scoring them.
     FieldSpec("candidate_selection_temperature", "CANDIDATE_SELECTION_TEMPERATURE",
-              "0.7", _float_in_range(0.0, 3.0)),
+              "1.3", _float_in_range(0.0, 3.0)),
     FieldSpec("reply_flavor_strength", "REPLY_FLAVOR_STRENGTH", "1.0",
               _float_in_range(0.0, 2.0)),
     # M3 emoji channel: chance to append a frequency-sampled emoji (from this
@@ -162,6 +165,12 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # 0.14 with the same distinct-1/2 gain and ~1% empty-result rate.
     FieldSpec("recent_reply_penalty_strength", "RECENT_REPLY_PENALTY_STRENGTH",
               "0.5", _float_in_range(0.0, 3.0)),
+    # Score penalty for candidates that replay training messages verbatim:
+    # strength × share of the candidate's content 4-grams found in the corpus
+    # index. 0 disables (and skips the index read). Замена бинарного гейта,
+    # который цитаты с добавленной точкой раньше проходили насквозь.
+    FieldSpec("verbatim_penalty_strength", "VERBATIM_PENALTY_STRENGTH",
+              "1.0", _float_in_range(0.0, 3.0)),
     FieldSpec("length_mode_weights", "LENGTH_MODE_WEIGHTS", "0.25,0.55,0.2",
               _length_weights()),
     FieldSpec("markov_order", "MARKOV_ORDER", "3", _int_in_set({2, 3})),
@@ -171,7 +180,10 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # >8 tokens, order 3) of jumping to a new learned sentence start, splicing a
     # connective ("..., кстати ...") so the shift reads as a deliberate aside.
     # 0 disables (the pre-M4 behaviour).
-    FieldSpec("markov_jump_probability", "MARKOV_JUMP_PROBABILITY", "0.04",
+    # 0.12 (2026-07-06): tripled from 0.04 and the in-code minimum reply length
+    # for a jump dropped 9 -> 5 tokens — деталь «агрессивного хаоса»; связки
+    # («кстати», «короче») сохраняют читабельность сдвига темы.
+    FieldSpec("markov_jump_probability", "MARKOV_JUMP_PROBABILITY", "0.12",
               _float_in_range(0.0, 1.0)),
     # L1 running jokes: chance to seed an *unprompted* reply from a currently
     # hot n-gram (a phrase the chat picked up in the last ~7 days). 0 disables
@@ -218,6 +230,12 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("reply_context_start_bias", "REPLY_CONTEXT_START_BIAS", "2.2",
               _float_in_range(1.0, 4.0)),
     FieldSpec("reply_context_only_for_replies", "REPLY_CONTEXT_ONLY_FOR_REPLIES",
+              "true", _bool()),
+    # Visible contextual start: emit the trimmed tail (last <=2 tokens minus
+    # leading stopwords/punctuation) of the matched context window into the
+    # reply, so «кто гнойный пидор» может дать «гнойный пидор <продолжение>».
+    # false возвращает скрытое поведение Phase 4.1d.
+    FieldSpec("reply_context_emit_start", "REPLY_CONTEXT_EMIT_START",
               "true", _bool()),
     FieldSpec("reply_context_include_current_message",
               "REPLY_CONTEXT_INCLUDE_CURRENT_MESSAGE", "true", _bool()),
