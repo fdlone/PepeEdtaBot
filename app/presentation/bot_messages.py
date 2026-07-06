@@ -2,8 +2,26 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from app.config.registry import field_hint
+
 if TYPE_CHECKING:
     from app.config.runtime_state import RuntimeState
+
+# New dialogue-generation /set knobs surfaced in /help, one per feature.
+# The accepted-range hint is generated from the registry (see field_hint),
+# so it can never drift from the value the parser actually enforces.
+_DIALOGUE_HELP_KNOBS: tuple[tuple[str, str], ...] = (
+    ("mood_enabled", "настроение чата"),
+    ("reply_director_enabled", "директор шанса ответа"),
+    ("reply_max_per_hour", "лимит ответов в час"),
+    ("mention_cooldown_sec", "пауза на упоминания, сек"),
+    ("emoji_append_chance", "эмодзи в ответах"),
+    ("markov_jump_probability", "дрейф темы"),
+    ("hot_ngram_seed_chance", "подхват мемов чата"),
+    ("rare_event_chance", "редкие фишки в ответах"),
+    ("false_start_chance", "фальстарты"),
+    ("pivo_temporal_flavor_chance", "вариации /pivo"),
+)
 
 TELEGRAM_COMMANDS: tuple[tuple[str, str], ...] = (
     ("help", "Список команд"),
@@ -18,6 +36,13 @@ TELEGRAM_COMMANDS: tuple[tuple[str, str], ...] = (
     ("setprob", "Быстро изменить шанс ответа"),
     ("clear", "Очистка данных чата с подтверждением"),
 )
+
+
+def _dialogue_knobs_block() -> str:
+    lines = ["Диалог (новое, PR50-58):"]
+    for key, description in _DIALOGUE_HELP_KNOBS:
+        lines.append(f"/set {key} - {description} ({field_hint(key)})")
+    return "\n".join(lines)
 
 
 def format_help_message() -> str:
@@ -42,20 +67,15 @@ def format_help_message() -> str:
         "/set <key> <value> - изменить настройку до перезапуска\n"
         "/setprob 0.2 - быстро изменить шанс ответа\n"
         "\n"
+        f"{_dialogue_knobs_block()}\n"
+        "\n"
         "Админское:\n"
         "/clear - инструкция по очистке данных чата"
     )
 
 
-def format_stats_message(stats: dict[str, int], min_tokens_for_model: int) -> str:
-    effective_volume = stats["volume"]
-    ready_text = "достаточно" if effective_volume >= min_tokens_for_model else "мало"
-    return (
-        "Статистика:\n"
-        f"сообщений: {stats['messages']}\n"
-        f"объём модели: {effective_volume}\n"
-        f"готовность: {ready_text}"
-    )
+def format_stats_message(stats: dict[str, int]) -> str:
+    return f"объём модели: {stats['volume']}"
 
 
 def format_config_message(state: RuntimeState, full: bool = False) -> str:

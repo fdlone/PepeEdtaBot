@@ -76,6 +76,18 @@ class TestBotMessages(unittest.TestCase):
         self.assertIn("/pivo_privacy", text)
         self.assertNotIn("/seed", text)
 
+    def test_help_dialogue_block_shows_registry_ranges(self) -> None:
+        text = format_help_message()
+
+        self.assertIn("Диалог (новое, PR50-58):", text)
+        # Range hints are generated from the registry, not hard-coded.
+        self.assertIn("/set mood_enabled - настроение чата (true/false)", text)
+        self.assertIn("/set emoji_append_chance - эмодзи в ответах (0..1)", text)
+        self.assertIn("/set reply_max_per_hour - лимит ответов в час (0..1000)", text)
+        self.assertIn(
+            "/set mention_cooldown_sec - пауза на упоминания, сек (0..3600)", text
+        )
+
     def test_telegram_commands_are_registered(self) -> None:
         command_names = {command for command, _ in TELEGRAM_COMMANDS}
 
@@ -89,15 +101,12 @@ class TestBotMessages(unittest.TestCase):
         self.assertNotIn("seed", command_names)
 
     def test_stats_message_is_compact_and_readable(self) -> None:
-        text = format_stats_message(
-            {"messages": 10, "volume": 250},
-            min_tokens_for_model=200,
-        )
+        text = format_stats_message({"messages": 10, "volume": 250})
 
-        self.assertIn("сообщений: 10", text)
-        self.assertIn("объём модели: 250", text)
+        self.assertEqual("объём модели: 250", text)
+        self.assertNotIn("сообщений", text)
+        self.assertNotIn("готовность", text)
         self.assertNotIn("250/200", text)
-        self.assertIn("готовность: достаточно", text)
         self.assertNotIn("transitions", text)
 
     def test_config_message_defaults_to_short_view(self) -> None:

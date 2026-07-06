@@ -33,7 +33,7 @@ async def cmd_stats(
     message: Message, db: Database, runtime_state: RuntimeState
 ) -> None:
     stats = await db.get_stats(message.chat.id)
-    text = format_stats_message(stats, runtime_state.min_tokens_for_model)
+    text = format_stats_message(stats)
     await reply_humanized(
         message,
         text,
