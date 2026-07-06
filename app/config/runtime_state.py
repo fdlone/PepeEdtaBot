@@ -23,12 +23,14 @@ class RuntimeState:
     randomness_strength: float
     candidate_selection_temperature: float
     reply_flavor_strength: float
+    emoji_append_chance: float
     repetition_penalty_strength: float
     recent_reply_penalty_strength: float
     length_mode_weights: tuple[float, float, float]
     markov_order: int
     enable_backoff: bool
     backoff_min_order: int
+    markov_jump_probability: float
     use_reply_context: bool
     fuzzy_context_casefold: bool
     fuzzy_context_prefix: bool
@@ -78,14 +80,20 @@ class RuntimeState:
             max_rate_per_min=self.mood_max_rate_per_min,
         )
 
-    def note_reply_sent(self, chat_id: int, now: float) -> None:
+    def note_reply_sent(
+        self, chat_id: int, now: float, *, unprompted: bool = True
+    ) -> None:
         """Record that the bot replied in ``chat_id`` at ``now`` (monotonic sec).
 
-        Updates ``last_reply_ts`` (cooldown + burst rhythm) and appends to the
-        rolling per-hour history used by the reply cap, dropping entries older
-        than one hour so the deque stays bounded by the cap itself.
+        Always updates ``last_reply_ts`` (cooldown + burst rhythm apply to every
+        reply). Only ``unprompted`` replies are appended to the rolling per-hour
+        history used by the reply cap: mention answers are always sent and must
+        never count against the gate (see REPLY_MAX_PER_HOUR). Entries older than
+        one hour are dropped so the deque stays bounded by the cap itself.
         """
         self.last_reply_ts[chat_id] = now
+        if not unprompted:
+            return
         history = self.recent_reply_times.get(chat_id)
         if history is None:
             history = deque()

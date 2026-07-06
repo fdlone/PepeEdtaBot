@@ -21,12 +21,14 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
         "randomness_strength": 2.0,
         "candidate_selection_temperature": 0.7,
         "reply_flavor_strength": 1.0,
+        "emoji_append_chance": 0.15,
         "repetition_penalty_strength": 1.0,
         "recent_reply_penalty_strength": 1.0,
         "length_mode_weights": (0.25, 0.55, 0.2),
         "markov_order": 3,
         "enable_backoff": True,
         "backoff_min_order": 1,
+        "markov_jump_probability": 0.04,
         "use_reply_context": True,
         "fuzzy_context_casefold": False,
         "fuzzy_context_prefix": False,
@@ -134,6 +136,24 @@ class TestRuntimeState(unittest.TestCase):
         state.note_reply_sent(100, now=1000.0 + 3600.0 + 1.0)
 
         self.assertEqual(list(state.recent_reply_times[100]), [4601.0])
+
+    def test_note_reply_sent_prompted_reply_skips_hourly_history(self) -> None:
+        state = make_runtime_state()
+        # A mention answer updates cooldown/burst but must not count against the
+        # per-hour cap.
+        state.note_reply_sent(100, now=1000.0, unprompted=False)
+
+        self.assertEqual(state.last_reply_ts[100], 1000.0)
+        self.assertNotIn(100, state.recent_reply_times)
+
+    def test_note_reply_sent_mixes_prompted_and_unprompted(self) -> None:
+        state = make_runtime_state()
+        state.note_reply_sent(100, now=1000.0, unprompted=True)
+        state.note_reply_sent(100, now=1050.0, unprompted=False)
+        state.note_reply_sent(100, now=1100.0, unprompted=True)
+
+        self.assertEqual(state.last_reply_ts[100], 1100.0)
+        self.assertEqual(list(state.recent_reply_times[100]), [1000.0, 1100.0])
 
 
 if __name__ == "__main__":

@@ -116,6 +116,11 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               "0.7", _float_in_range(0.0, 3.0)),
     FieldSpec("reply_flavor_strength", "REPLY_FLAVOR_STRENGTH", "1.0",
               _float_in_range(0.0, 2.0)),
+    # M3 emoji channel: chance to append a frequency-sampled emoji (from this
+    # chat's own usage) to a reply. 0 disables. Suppressed after a "?" ending;
+    # a heated mood scales it up.
+    FieldSpec("emoji_append_chance", "EMOJI_APPEND_CHANCE", "0.15",
+              _float_in_range(0.0, 1.0)),
     FieldSpec("repetition_penalty_strength", "REPETITION_PENALTY_STRENGTH", "1.0",
               _float_in_range(0.0, 3.0)),
     # 0.5 chosen by eval sweep (2026-07-02): in the case-preserved profile
@@ -128,6 +133,12 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("markov_order", "MARKOV_ORDER", "3", _int_in_set({2, 3})),
     FieldSpec("enable_backoff", "ENABLE_BACKOFF", "true", _parse_bool),
     FieldSpec("backoff_min_order", "BACKOFF_MIN_ORDER", "1", _int_in_set({1, 2})),
+    # M4 topic drift: probability per generation step (only after the reply has
+    # >8 tokens, order 3) of jumping to a new learned sentence start, splicing a
+    # connective ("..., кстати ...") so the shift reads as a deliberate aside.
+    # 0 disables (the pre-M4 behaviour).
+    FieldSpec("markov_jump_probability", "MARKOV_JUMP_PROBABILITY", "0.04",
+              _float_in_range(0.0, 1.0)),
     FieldSpec("use_reply_context", "USE_REPLY_CONTEXT", "true", _parse_bool),
     FieldSpec(
         "fuzzy_context_casefold",

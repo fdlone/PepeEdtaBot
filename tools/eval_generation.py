@@ -52,6 +52,10 @@ class _NoVerbatimCopies:
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool:
         return False
 
+    async def get_emoji_stats(self, chat_id: int) -> dict[str, int]:
+        # Emoji channel is off in eval; the generator never calls this.
+        return {}
+
 
 def load_synthetic_corpus(
     *,
@@ -217,6 +221,10 @@ async def evaluate_generation(
                 markov_order=3,
                 enable_backoff=True,
                 backoff_min_order=1,
+                # Keep the M3/M4 channels off in eval so the baselines measure the
+                # word model alone (and no emoji-stats DB reads are attempted).
+                markov_jump_probability=0.0,
+                emoji_append_chance=0.0,
                 normalize_lower=normalize_lower,
                 fuzzy_context_casefold=fuzzy_context_casefold,
                 fuzzy_context_prefix=fuzzy_context_prefix,

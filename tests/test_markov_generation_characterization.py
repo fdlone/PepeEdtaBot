@@ -251,6 +251,43 @@ class TestGenerateTextOnceCharacterization(_GenerationCharacterizationBase):
         self.assertEqual(attempt.token_count, 12)
 
 
+class TestMidGenerationJump(_GenerationCharacterizationBase):
+    """M4: a mid-generation topic-drift jump splices a connective + new start."""
+
+    def _connective_words(self) -> set[str]:
+        from app.core.markov import JUMP_CONNECTIVE_TOKENS
+
+        return {tok for phrase in JUMP_CONNECTIVE_TOKENS for tok in phrase}
+
+    async def test_jump_probability_zero_matches_pre_m4_output(self) -> None:
+        # The default (0.0) must reproduce the exact pre-M4 characterization
+        # output — the feature is off unless explicitly enabled.
+        attempt = await self.generator._generate_text_once(
+            chat_id=CHAT_ID, max_chars=200, max_tokens=12,
+            randomness_strength=0.0, jump_probability=0.0,
+            rng=random.Random(1), emit_start=True,
+        )
+        self.assertEqual(attempt.text, "папа читал газету утром на кухне за столом.")
+        self.assertEqual(attempt.jump_count, 0)
+
+    async def test_certain_jump_splices_connective_and_extends(self) -> None:
+        # With a certain jump and room to grow, the walk drifts to new starts
+        # once it passes 8 tokens: the trace records the jumps and a connective
+        # word appears spliced in, running well past a single 9-token sentence.
+        attempt = await self.generator._generate_text_once(
+            chat_id=CHAT_ID, max_chars=200, max_tokens=30,
+            randomness_strength=0.0, jump_probability=1.0,
+            rng=random.Random(2), emit_start=True,
+        )
+        self.assertGreaterEqual(attempt.jump_count, 1)
+        words = set(attempt.text.replace(",", " ").split())
+        self.assertTrue(
+            words & self._connective_words(),
+            f"expected a connective in {attempt.text!r}",
+        )
+        self.assertGreater(attempt.token_count, 9)
+
+
 class TestGenerateTextWithTraceCharacterization(_GenerationCharacterizationBase):
     async def test_trace_single_attempt_success(self) -> None:
         text, trace = await self.generator.generate_text_with_trace(

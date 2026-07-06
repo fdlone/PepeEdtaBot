@@ -23,6 +23,7 @@ EXPECTED_MIGRATIONS = [
     "008_drop_redundant_indexes",
     "009_chat_model_volume",
     "010_pivo_pool_usage",
+    "011_chat_emoji_stats",
 ]
 
 EXPECTED_TABLES = {
@@ -36,6 +37,7 @@ EXPECTED_TABLES = {
     "pivo_daily_usage",
     "pivo_pool_usage",
     "chat_model_volume",
+    "chat_emoji_stats",
     "schema_migrations",
 }
 

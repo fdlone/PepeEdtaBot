@@ -11,6 +11,7 @@ from aiogram import F, Router
 from aiogram.types import Message
 
 from app.config.runtime_state import RuntimeState
+from app.core.emoji import count_emojis
 from app.core.markov import (
     MarkovGenerator,
     is_short_generated_reply,
@@ -211,6 +212,15 @@ async def on_text_message(
                 chat_rhythm.mood, runtime_state.mood_modulation_strength
             )
 
+    # M3 emoji channel: learn this chat's emoji vocabulary from the raw text
+    # (the word model drops emojis). Recorded before the learnability gates so
+    # emoji-only reactions — which never pass the word-token threshold — still
+    # count toward what the bot can echo later.
+    if runtime_state.emoji_append_chance > 0.0:
+        emoji_counts = count_emojis(raw_text)
+        if emoji_counts:
+            await learning_service.record_emojis(message.chat.id, dict(emoji_counts))
+
     # Strip a leading "<bot-alias>, ..." direct address before learning so the
     # corpus does not absorb boilerplate openings. Mention detection above still
     # sees the original text. The same stripped text feeds both the model tokens
@@ -265,6 +275,7 @@ async def on_text_message(
             )
             return
 
+        has_replied_before = message.chat.id in runtime_state.last_reply_ts
         last_ts = runtime_state.last_reply_ts.get(message.chat.id, 0.0)
         cooldown_ok = cooldown_allows_reply(now, last_ts, runtime_state.min_cooldown_sec)
 
@@ -281,8 +292,12 @@ async def on_text_message(
                 is_reply=message.reply_to_message is not None,
                 lively_rate_per_min=runtime_state.mood_lively_rate_per_min,
             )
+            # A chat with no reply yet gets the neutral factor (a negative sentinel):
+            # last_ts=0.0 against monotonic time would otherwise fake a recent reply
+            # right after process start and spuriously boost/suppress.
+            seconds_since_reply = now - last_ts if has_replied_before else -1.0
             burst = burst_factor(
-                seconds_since_reply=now - last_ts,
+                seconds_since_reply=seconds_since_reply,
                 boost_window_sec=runtime_state.reply_burst_boost_sec,
                 boost_mult=runtime_state.reply_burst_boost_mult,
                 suppress_window_sec=runtime_state.reply_burst_suppress_sec,
@@ -360,6 +375,7 @@ async def on_text_message(
             learning_service=learning_service,
             runtime_state=runtime_state,
             mood_modifiers=mood_modifiers,
+            mood=mood,
         )
         reply_text = await response_generator.generate(
             GenerationRequest(
@@ -386,7 +402,8 @@ async def on_text_message(
                     runtime_state.typing_max_ms,
                     typing_per_char_ms=runtime_state.typing_per_char_ms,
                 )
-                runtime_state.note_reply_sent(message.chat.id, now)
+                # A mention fallback is always sent; never count it against the cap.
+                runtime_state.note_reply_sent(message.chat.id, now, unprompted=False)
             logger.debug(
                 "Generation failed: chat=%s mentioned=%s",
                 mask_chat_id(message.chat.id),
@@ -394,7 +411,11 @@ async def on_text_message(
             )
             return
 
-        runtime_state.note_reply_sent(message.chat.id, now)
+        # Mention answers are always sent and never counted against the per-hour
+        # cap; only self-initiated (unprompted) replies feed the gate.
+        runtime_state.note_reply_sent(
+            message.chat.id, now, unprompted=not mentioned
+        )
         await reply_humanized(
             message,
             reply_text,
