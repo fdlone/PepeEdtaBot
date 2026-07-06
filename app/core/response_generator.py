@@ -16,7 +16,7 @@ from app.core.candidate_scorer import (
     sample_length_mode,
     score_candidate,
 )
-from app.core.emoji import append_emoji_flavor
+from app.core.emoji import append_emoji_flavor, strip_trailing_emojis
 from app.core.markov import (
     MarkovGenerator,
     escalated_randomness_strength,
@@ -119,11 +119,11 @@ def was_recent_short_reply(
 def normalize_reply_for_repeat(text: str) -> str:
     """Normalize a reply for full-text anti-repeat comparison.
 
-    The trailing punctuation cluster is stripped so a pre-flavor candidate
-    matches its post-flavor sent form (the flavor pass only rewrites the
-    ending punctuation).
+    The trailing emoji flavor and punctuation cluster are stripped so a
+    pre-flavor candidate matches its post-flavor sent form (the flavor pass only
+    rewrites the ending punctuation and may append a sampled emoji, M3).
     """
-    return sanitize_text(text).lower().rstrip(" .!?…")
+    return strip_trailing_emojis(sanitize_text(text).lower()).rstrip(" .!?…")
 
 
 def remember_recent_reply(

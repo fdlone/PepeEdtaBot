@@ -289,6 +289,7 @@ async def on_text_message(
             )
             return
 
+        has_replied_before = message.chat.id in runtime_state.last_reply_ts
         last_ts = runtime_state.last_reply_ts.get(message.chat.id, 0.0)
         cooldown_ok = cooldown_allows_reply(now, last_ts, runtime_state.min_cooldown_sec)
 
@@ -305,8 +306,12 @@ async def on_text_message(
                 is_reply=message.reply_to_message is not None,
                 lively_rate_per_min=runtime_state.mood_lively_rate_per_min,
             )
+            # A chat with no reply yet gets the neutral factor (a negative sentinel):
+            # last_ts=0.0 against monotonic time would otherwise fake a recent reply
+            # right after process start and spuriously boost/suppress.
+            seconds_since_reply = now - last_ts if has_replied_before else -1.0
             burst = burst_factor(
-                seconds_since_reply=now - last_ts,
+                seconds_since_reply=seconds_since_reply,
                 boost_window_sec=runtime_state.reply_burst_boost_sec,
                 boost_mult=runtime_state.reply_burst_boost_mult,
                 suppress_window_sec=runtime_state.reply_burst_suppress_sec,
@@ -411,7 +416,8 @@ async def on_text_message(
                     runtime_state.typing_max_ms,
                     typing_per_char_ms=runtime_state.typing_per_char_ms,
                 )
-                runtime_state.note_reply_sent(message.chat.id, now)
+                # A mention fallback is always sent; never count it against the cap.
+                runtime_state.note_reply_sent(message.chat.id, now, unprompted=False)
                 runtime_state.note_mention_reply(
                     message.chat.id, message.from_user.id, now
                 )
@@ -422,7 +428,13 @@ async def on_text_message(
             )
             return
 
-        runtime_state.note_reply_sent(message.chat.id, now)
+        # Mention answers are always sent and never counted against the per-hour
+        # cap; only self-initiated (unprompted) replies feed the gate. A mention
+        # demoted by the mention-cooldown (address_reply=False) goes through the
+        # unprompted path and so does count.
+        runtime_state.note_reply_sent(
+            message.chat.id, now, unprompted=not address_reply
+        )
         if address_reply:
             runtime_state.note_mention_reply(
                 message.chat.id, message.from_user.id, now
