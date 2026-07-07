@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 from collections import Counter
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Iterable
 
-import aiosqlite
-
-ConnProvider = Callable[[], Awaitable[aiosqlite.Connection]]
+from app.repositories.base_repo import BaseRepo
 
 
-class ChatHotNgramsRepo:
+class ChatHotNgramsRepo(BaseRepo):
     """Sliding-window content n-gram counts for the L1 running-jokes channel.
 
     Keyed by raw ``chat_id`` to match the Markov model tables; per-chat
@@ -17,10 +14,6 @@ class ChatHotNgramsRepo:
     is the window count's share of the all-time count in ``transitions`` /
     ``transitions1``: a spike means the chat picked the phrase up recently.
     """
-
-    def __init__(self, conn_provider: ConnProvider, lock: asyncio.Lock) -> None:
-        self._conn_provider = conn_provider
-        self._lock = lock
 
     async def bump(self, chat_id: int, ngrams: Iterable[tuple[str, ...]]) -> None:
         """Add one occurrence per listed n-gram (no-op if empty)."""
@@ -31,19 +24,16 @@ class ChatHotNgramsRepo:
             (chat_id, ngram[0], ngram[1], ngram[2] if len(ngram) == 3 else "", n)
             for ngram, n in counts.items()
         ]
-        async with self._lock:
-            db = await self._conn_provider()
-            await db.executemany(
-                """
-                INSERT INTO chat_hot_ngrams(chat_id, w1, w2, w3, cnt)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(chat_id, w1, w2, w3) DO UPDATE SET
-                    cnt = cnt + excluded.cnt,
-                    updated_at = datetime('now')
-                """,
-                rows,
-            )
-            await db.commit()
+        await self._execute_many(
+            """
+            INSERT INTO chat_hot_ngrams(chat_id, w1, w2, w3, cnt)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id, w1, w2, w3) DO UPDATE SET
+                cnt = cnt + excluded.cnt,
+                updated_at = datetime('now')
+            """,
+            rows,
+        )
 
     async def get_hot(
         self,
@@ -87,10 +77,7 @@ class ChatHotNgramsRepo:
             recency_share,
             limit,
         )
-        async with self._lock:
-            db = await self._conn_provider()
-            cursor = await db.execute(query, params)
-            rows = await cursor.fetchall()
+        rows = await self._fetch_all(query, params)
         result: list[tuple[str, ...]] = []
         for w1, w2, w3, _cnt in rows:
             if w3:
@@ -100,22 +87,5 @@ class ChatHotNgramsRepo:
         return result
 
     async def decay_stale(self, cutoff_iso: str) -> int:
-        """Halve counts of rows not bumped since ``cutoff_iso``; purge zeros.
-
-        Same contract as ``ChatEmojiStatsRepo.decay_stale``: halved rows get a
-        fresh clock so they will not re-decay for another window; returns the
-        number of purged rows.
-        """
-        async with self._lock:
-            db = await self._conn_provider()
-            await db.execute(
-                """
-                UPDATE chat_hot_ngrams
-                SET cnt = cnt / 2, updated_at = datetime('now')
-                WHERE updated_at < ?
-                """,
-                (cutoff_iso,),
-            )
-            cursor = await db.execute("DELETE FROM chat_hot_ngrams WHERE cnt <= 0")
-            await db.commit()
-            return max(0, cursor.rowcount)
+        """Halve counts of rows not bumped since ``cutoff_iso``; purge zeros."""
+        return await self._decay_stale("chat_hot_ngrams", cutoff_iso)
