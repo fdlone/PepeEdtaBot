@@ -1,35 +1,12 @@
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Awaitable, Callable
-
 import aiosqlite
 
-ConnProvider = Callable[[], Awaitable[aiosqlite.Connection]]
+from app.repositories.base_repo import BaseRepo
 
 
-class MarkovRepo:
+class MarkovRepo(BaseRepo):
     """Read-only доступ к таблицам starts/transitions/transitions3/transitions1."""
-
-    def __init__(self, conn_provider: ConnProvider, lock: asyncio.Lock) -> None:
-        self._conn_provider = conn_provider
-        self._lock = lock
-
-    async def _fetch_all(
-        self, sql: str, params: tuple[object, ...]
-    ) -> list[aiosqlite.Row]:
-        async with self._lock:
-            db = await self._conn_provider()
-            cursor = await db.execute(sql, params)
-            return list(await cursor.fetchall())
-
-    async def _fetch_one(
-        self, sql: str, params: tuple[object, ...]
-    ) -> aiosqlite.Row | None:
-        async with self._lock:
-            db = await self._conn_provider()
-            cursor = await db.execute(sql, params)
-            return await cursor.fetchone()
 
     async def get_starts(self, chat_id: int) -> list[tuple[str, str, int]]:
         rows = await self._fetch_all(
@@ -153,8 +130,7 @@ class MarkovRepo:
     async def get_chat_token_volume(self, chat_id: int) -> int:
         # Both sums share one lock acquisition: the 2-gram fallback only fires
         # when the 3-gram table is empty, and this runs on the per-message path.
-        async with self._lock:
-            db = await self._conn_provider()
+        async with self._connection() as db:
             volume3 = await self._sum_cnt(db, "transitions3", chat_id)
             if volume3 > 0:
                 return volume3
