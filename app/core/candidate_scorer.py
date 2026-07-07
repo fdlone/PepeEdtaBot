@@ -174,24 +174,25 @@ def context_relevance(tokens: list[str], context_tokens: list[str]) -> float:
     return min(CONTEXT_RELEVANCE_CAP, overlap_ratio * CONTEXT_RELEVANCE_WEIGHT)
 
 
-def _repeated_ngram_ratio(tokens: list[str], size: int) -> float:
-    ngrams = build_windows(tokens, size)
-    if not ngrams:
+def _repeated_ratio(items: list[tuple[str, ...]] | list[str]) -> float:
+    """Share of ``items`` that are duplicate occurrences (0 for empty input)."""
+    if not items:
         return 0.0
-    counts = Counter(ngrams)
+    counts = Counter(items)
     repeated = sum(count - 1 for count in counts.values() if count > 1)
-    return repeated / len(ngrams)
+    return repeated / len(items)
+
+
+def _repeated_ngram_ratio(tokens: list[str], size: int) -> float:
+    return _repeated_ratio(build_windows(tokens, size))
 
 
 def repetition_penalty(tokens: list[str]) -> float:
     content = _normalized_content(tokens)
     if not content:
         return 0.0
-    token_counts = Counter(content)
-    repeated_tokens = sum(count - 1 for count in token_counts.values() if count > 1)
-    token_ratio = repeated_tokens / len(content)
     return (
-        token_ratio * REPEATED_TOKEN_WEIGHT
+        _repeated_ratio(content) * REPEATED_TOKEN_WEIGHT
         + _repeated_ngram_ratio(content, 2) * REPEATED_BIGRAM_WEIGHT
         + _repeated_ngram_ratio(content, 3) * REPEATED_TRIGRAM_WEIGHT
     )
