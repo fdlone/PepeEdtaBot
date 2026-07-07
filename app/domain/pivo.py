@@ -101,21 +101,3 @@ def collect_pivo_mentions(
         if mention:
             mentions.append(mention)
     return mentions
-
-
-def build_pivo_mentions(
-    members: list[PivoMember],
-    caller_user_id: int,
-    security: PivoSecurity,
-) -> str:
-    mentions = collect_pivo_mentions(members, caller_user_id, security)
-
-    if not mentions:
-        return PIVO_FALLBACK_MENTIONS
-    return " ".join(mentions)
-
-
-def get_random_pivo_message(mentions: str) -> str:
-    from app.services.pivo_message_builder import build_pivo_message
-
-    return build_pivo_message(mentions)

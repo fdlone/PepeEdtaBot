@@ -105,7 +105,7 @@ The `pyproject.toml` comment labels these as «НЕ ТРОГАТЬ / legacy бе
 
 ### 3.3 Dead code
 
-- **Q8 — `get_random_pivo_message` (Medium, test-only).** `app/domain/pivo.py:118`. The only callers are `tests/test_pivo.py`; production `PivoService` builds messages directly via `pivo_message_builder` (the lazy import inside this function exists only to break a cycle — see [06_dependency_graph.md:78]). Either wire it as the single message-building entry point or remove it and its test. Confirms M1 parked item.
+- **Q8 — `get_random_pivo_message` (Medium, test-only).** `app/domain/pivo.py:118`. The only callers are `tests/test_pivo.py`; production `PivoService` builds messages directly via `pivo_message_builder` (the lazy import inside this function exists only to break a cycle — see [06_dependency_graph.md:78]). Either wire it as the single message-building entry point or remove it and its test. Confirms M1 parked item. — ✅ **RESOLVED 2026-07-07** (branch `refactor/simplify-core-modules`): removed `get_random_pivo_message` and the equally test-only `build_pivo_mentions` along with their tests; the cycle-breaking lazy import is gone with them.
 
 ### 3.4 Testability smell (non-injectable randomness)
 
@@ -130,7 +130,7 @@ The Trail of Bits modern-python guidance (uv + ruff + ty, py312 idioms) is **alr
 | **P3** | Q4/Q3 — `_generate_text_once`/`_select_contextual_state` extraction | M–L | Medium (maintainability, see [16]) |
 | **P3** | Q7 — consolidate `parse_bool` | S | Low/Medium |
 | **P3** | Q9 — inject RNG into pivo builder / `_helpers` | S | Medium (testability) |
-| **P4** | Q8 — resolve dead `get_random_pivo_message` | XS | Low |
+| ~~P4~~ ✅ | Q8 — ~~resolve dead `get_random_pivo_message`~~ **DONE 2026-07-07** (removed + `build_pivo_mentions` + tests) | XS | Low |
 | **P4** | Q2/Q4 — blind-except review, os.path→pathlib | XS | Low |
 
 All P1–P2 items are safe, mechanical, and covered by existing tests — see [18_quick_wins.md] once M6 is reached.

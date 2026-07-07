@@ -13,9 +13,7 @@ from app.domain.pivo import (
     PivoMember,
     PivoSecurity,
     build_pivo_mention,
-    build_pivo_mentions,
     display_name_from_user,
-    get_random_pivo_message,
     normalize_username,
 )
 from app.domain.pivo_templates import (
@@ -109,25 +107,6 @@ class TestPivo(unittest.TestCase):
             '<a href="tg://user?id=101">Pepe &lt;Admin&gt;</a>',
         )
 
-    def test_build_pivo_mentions_excludes_caller(self) -> None:
-        security = make_security()
-        members = [
-            make_member(security, user_id=201, username="caller"),
-            make_member(security, user_id=202, username="friend"),
-        ]
-
-        mentions = build_pivo_mentions(members, caller_user_id=201, security=security)
-
-        self.assertEqual(mentions, "@friend")
-
-    def test_build_pivo_mentions_fallback_when_empty(self) -> None:
-        security = make_security()
-        members = [make_member(security, user_id=301, username="caller")]
-
-        mentions = build_pivo_mentions(members, caller_user_id=301, security=security)
-
-        self.assertEqual(mentions, PIVO_FALLBACK_MENTIONS)
-
     def test_display_name_from_user_supports_fallback(self) -> None:
         self.assertEqual(
             display_name_from_user(SimpleNamespace(full_name="Pepe Tester")),
@@ -140,12 +119,6 @@ class TestPivo(unittest.TestCase):
             "Pepe Tester",
         )
         self.assertEqual(display_name_from_user(SimpleNamespace()), "участник")
-
-    def test_get_random_pivo_message_uses_whole_template(self) -> None:
-        text = get_random_pivo_message("@pepe")
-
-        self.assertIn("@pepe", text)
-        self.assertIn("Discord", text)
 
     def test_pivo_privacy_message_has_no_technical_details(self) -> None:
         self.assertIn("/pivo_on", PIVO_PRIVACY_MESSAGE)

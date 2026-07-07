@@ -31,7 +31,7 @@
 
 ### M1 findings parked for later phases
 - mypy `strict=true` for `app.*` but `ignore_errors=true` for 10 core modules (settings, database, registry, runtime_*, reply_policy, text, pivo, pivo_templates, bot_messages) → effective strict coverage is partial. → M2/[11]
-- `domain.pivo.get_random_pivo_message` has no production caller (lazy import to break cycle) → possible dead code. → M2/[11]
+- `domain.pivo.get_random_pivo_message` has no production caller (lazy import to break cycle) → possible dead code. → M2/[11] — ✅ RESOLVED 2026-07-07 (branch `refactor/simplify-core-modules`): removed it and the also-test-only `build_pivo_mentions`, with their tests.
 - `runtime_config.parse_bool` duplicates `registry._parse_bool` (different return contract). → M2/[11]
 - `database.py` god-object tendency; ~10 repeated `if self.x is None: raise` guards. → M2/[11]
 - `pivo_message_builder`/`_helpers.reply_humanized` use module-global `random` (non-injectable). → M2/[11]
@@ -52,7 +52,7 @@
 - Q6: `database.py` repeats `if self.markov is None: raise RuntimeError(...)` ~12× → extract `_require_init()`.
 - Q1: silent `except Exception: pass` in `_helpers.py:25` (typing chat-action) → log debug.
 - Complexity hotspots: `markov._generate_text_once` C901=36, `_select_contextual_state`=29, `settings.load_settings`=25.
-- Q7 parse_bool dup, Q8 dead `get_random_pivo_message` (test-only), Q9 non-injectable module-global `random`.
+- Q7 parse_bool dup, Q8 dead `get_random_pivo_message` (test-only) — ✅ RESOLVED 2026-07-07 (removed with `build_pivo_mentions` + tests), Q9 non-injectable module-global `random`.
 
 ### M3 — Security + Dependencies + Configuration (docs 08, 13) — task #3 ✅ DONE
 - [x] ToB `static-analysis`: Bandit gate clean medium/medium (Low=24 benign B311/B110) + Semgrep (uvx, p/python+security-audit+secrets, 237 rules) → 4 findings ALL false-positive (logger-credential-leak matched "tokens"/"context" words; values are counts/booleans at debug, chat_id masked)

@@ -61,10 +61,12 @@ respected. Known boundary observations (carried into [11_code_quality.md] M2):
   both directions (different modules, so no true import cycle, but the layering
   is not strictly acyclic at package granularity). Confirmed acyclic at module
   granularity in [06_dependency_graph.md](06_dependency_graph.md).
-- **`app/domain/pivo.py:119`** lazily imports `app/services/pivo_message_builder`
-  inside a function — a deliberate cycle-break (domain↔services). The function
-  `get_random_pivo_message` appears unused by handlers (PivoService calls the
-  builder directly); flagged as possible dead code in [11_code_quality.md] M2.
+- ~~**`app/domain/pivo.py:119`** lazily imports `app/services/pivo_message_builder`
+  inside a function — a deliberate cycle-break (domain↔services).~~ ✅ **RESOLVED
+  2026-07-07** (branch `refactor/simplify-core-modules`): the dead-code function
+  `get_random_pivo_message` (its only caller was tests) was removed along with
+  the lazy import, so `domain/pivo.py` no longer imports services and the
+  cycle-break is unnecessary. See [11_code_quality.md] Q8.
 
 ## Dependency injection
 

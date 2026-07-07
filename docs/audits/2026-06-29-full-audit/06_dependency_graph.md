@@ -72,12 +72,14 @@ Modules with **no internal imports** (leaves): `config/registry`,
 
 ## Cycles
 
-**No import-time cycles.** The only back-edge against the intended inward
+**No import-time cycles.** ~~The only back-edge against the intended inward
 direction is `domain/pivo.py → services/pivo_message_builder`, and it is a
 **lazy in-function import** (`app/domain/pivo.py:119`, inside
-`get_random_pivo_message`) specifically to avoid an import cycle
-(`pivo_service → domain.pivo → pivo_message_builder → domain.pivo_templates`).
-Since the edge is not evaluated at import time, the module graph is acyclic.
+`get_random_pivo_message`).~~ ✅ **UPDATE 2026-07-07** (branch
+`refactor/simplify-core-modules`): `get_random_pivo_message` was dead code and
+was removed (see [11_code_quality.md] Q8), taking the lazy import with it. There
+is now **no** back-edge from `domain` to `services` at all — the module graph is
+acyclic even without the lazy-import workaround.
 
 Two notable bidirectional couplings at *package* granularity (not cycles, since
 distinct modules):

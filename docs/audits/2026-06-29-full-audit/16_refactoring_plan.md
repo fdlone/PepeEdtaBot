@@ -17,7 +17,7 @@ Close the real (if low-severity) exposures and re-enable safety nets. **No archi
 
 - **Security/config:** QW2 (CI `pip-audit` gate), QW3 (reject placeholder/equal secrets) — closes R1, R2.
 - **Type safety:** QW1 (type `state`, drop `ignore_errors`) — restores strict on 10 modules.
-- **Hygiene:** QW4 (log swallowed exception), QW5 (resolve dead `get_random_pivo_message`), QW6 (unify logger name), QW8 (document single-instance invariant).
+- **Hygiene:** QW4 (log swallowed exception), QW5 (resolve dead `get_random_pivo_message` — ✅ done 2026-07-07, removed with `build_pivo_mentions` + tests), QW6 (unify logger name), QW8 (document single-instance invariant).
 - **DB write-path (cheap half):** QW7 (drop 8 redundant indexes via migration `008`).
 
 **Exit criteria:** CI trio green; `mypy app/` strict with no overrides; `pip-audit` gate active; new `test_settings` rejections + `test_migrator` plan assertion pass.
