@@ -426,12 +426,7 @@ class Database:
         Stale rows are halved and their clock reset; rows reaching 0 are removed.
         Returns the number of rows deleted.
         """
-        if decay_days < 0:
-            raise ValueError("decay_days must be non-negative")
-        current = now or datetime.now(UTC)
-        # Match SQLite's datetime('now') text format ("YYYY-MM-DD HH:MM:SS", UTC)
-        # so the string comparison in decay_stale is well-defined.
-        cutoff = (current - timedelta(days=decay_days)).strftime("%Y-%m-%d %H:%M:%S")
+        cutoff = self._decay_cutoff(decay_days, now)
         return await self._require(self.chat_emoji_stats).decay_stale(cutoff)
 
     # --- Делегаты к ChatHotNgramsRepo (L1 running jokes) ---
@@ -460,13 +455,18 @@ class Database:
         daily re-run via ``decay_flavor_stats_if_due``). Returns the number of
         purged rows.
         """
+        cutoff = self._decay_cutoff(decay_days, now)
+        return await self._require(self.chat_hot_ngrams).decay_stale(cutoff)
+
+    @staticmethod
+    def _decay_cutoff(decay_days: int, now: datetime | None) -> str:
+        """Cutoff timestamp for decay_stale, in SQLite's datetime('now') text
+        format ("YYYY-MM-DD HH:MM:SS", UTC) so the string comparison there is
+        well-defined."""
         if decay_days < 0:
             raise ValueError("decay_days must be non-negative")
         current = now or datetime.now(UTC)
-        # Match SQLite's datetime('now') text format ("YYYY-MM-DD HH:MM:SS", UTC)
-        # so the string comparison in decay_stale is well-defined.
-        cutoff = (current - timedelta(days=decay_days)).strftime("%Y-%m-%d %H:%M:%S")
-        return await self._require(self.chat_hot_ngrams).decay_stale(cutoff)
+        return (current - timedelta(days=decay_days)).strftime("%Y-%m-%d %H:%M:%S")
 
     async def decay_flavor_stats_if_due(self) -> bool:
         """Перезапускает decay эмодзи/n-грамм, если прошёл суточный интервал.
@@ -545,15 +545,19 @@ class Database:
         }
 
     async def clear_chat(self, chat_id: int) -> None:
+        tables = (
+            "messages",
+            "starts",
+            "starts3",
+            "transitions",
+            "transitions3",
+            "transitions1",
+            "chat_model_volume",
+            "chat_emoji_stats",
+            "chat_hot_ngrams",
+        )
         async with self._lock:
             db = await self._get_conn()
-            await db.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM starts WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM starts3 WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM transitions WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM transitions3 WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM transitions1 WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM chat_model_volume WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM chat_emoji_stats WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM chat_hot_ngrams WHERE chat_id = ?", (chat_id,))
+            for table in tables:
+                await db.execute(f"DELETE FROM {table} WHERE chat_id = ?", (chat_id,))
             await db.commit()
