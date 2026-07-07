@@ -3,12 +3,11 @@ from __future__ import annotations
 import logging
 import math
 import random
-from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Protocol
 
-from app.config.runtime_state import RuntimeState
+from app.config.runtime_state import RuntimeState, get_recent_deque
 from app.core.candidate_scorer import (
     CandidateScore,
     build_recent_reply_trigrams,
@@ -139,10 +138,9 @@ def remember_recent_reply(
     normalized = normalize_reply_for_repeat(reply_text)
     if not normalized:
         return
-    recent = runtime_state.recent_replies.get(chat_id)
-    if recent is None:
-        recent = deque(maxlen=RECENT_REPLY_LIMIT)
-        runtime_state.recent_replies[chat_id] = recent
+    recent = get_recent_deque(
+        runtime_state.recent_replies, chat_id, RECENT_REPLY_LIMIT
+    )
     recent.append(normalized)
 
 
@@ -182,6 +180,33 @@ class ResponseGenerator:
             candidate_target=candidate_target,
         )
         return result.text
+
+    async def _candidate_reject_reason(
+        self,
+        request: GenerationRequest,
+        candidate: str,
+        candidate_normalized: str,
+        is_short_candidate: bool,
+    ) -> str | None:
+        """Reason to discard a generated candidate, or None if it is usable.
+
+        Ordered gates: echo of the current message, short-reply anti-repeat,
+        full-reply anti-repeat, verbatim training-sample copy (long replies
+        only — short ones are governed by the short-reply anti-repeat).
+        """
+        if candidate_normalized == request.current_message_normalized:
+            return "Generated text copied the current message"
+        if is_short_candidate and was_recent_short_reply(
+            self.runtime_state, request.chat_id, candidate
+        ):
+            return "Generated short reply was used recently"
+        if was_recent_reply(self.runtime_state, request.chat_id, candidate):
+            return "Generated reply repeats a recently sent one"
+        if not is_short_candidate and await self.learning_service.is_verbatim_copy(
+            request.chat_id, candidate
+        ):
+            return "Generated text starts like a training sample"
+        return None
 
     async def generate_with_result(
         self,
@@ -272,45 +297,16 @@ class ResponseGenerator:
                     normalize_lower=self.runtime_state.normalize_lower,
                 )
                 is_short_candidate = is_short_generated_reply(candidate_tokens)
-                if candidate_normalized == request.current_message_normalized:
-                    logger.debug(
-                        "Generated text copied the current message, retrying: "
-                        "chat=%s attempt=%s",
-                        mask_chat_id(request.chat_id),
-                        attempt + 1,
-                    )
-                elif is_short_candidate and was_recent_short_reply(
-                    self.runtime_state,
-                    request.chat_id,
+                reject_reason = await self._candidate_reject_reason(
+                    request,
                     candidate,
-                ):
+                    candidate_normalized,
+                    is_short_candidate,
+                )
+                if reject_reason is not None:
                     logger.debug(
-                        "Generated short reply was used recently, retrying: "
-                        "chat=%s attempt=%s",
-                        mask_chat_id(request.chat_id),
-                        attempt + 1,
-                    )
-                elif was_recent_reply(
-                    self.runtime_state,
-                    request.chat_id,
-                    candidate,
-                ):
-                    logger.debug(
-                        "Generated reply repeats a recently sent one, retrying: "
-                        "chat=%s attempt=%s",
-                        mask_chat_id(request.chat_id),
-                        attempt + 1,
-                    )
-                elif (
-                    not is_short_candidate
-                    and await self.learning_service.is_verbatim_copy(
-                        request.chat_id,
-                        candidate,
-                    )
-                ):
-                    logger.debug(
-                        "Generated text starts like a training sample, retrying: "
-                        "chat=%s attempt=%s",
+                        "%s, retrying: chat=%s attempt=%s",
+                        reject_reason,
                         mask_chat_id(request.chat_id),
                         attempt + 1,
                     )
@@ -324,30 +320,29 @@ class ResponseGenerator:
                     )
                     if candidate not in seen_candidates:
                         seen_candidates.add(candidate)
-                        score = self.scorer(
-                            candidate,
-                            candidate_tokens,
-                            request.context_tokens,
-                            length_mode,
-                        )
-                        if recent_trigrams:
-                            score = replace(
-                                score,
-                                recent_penalty=recent_penalty_strength
+                        score = replace(
+                            self.scorer(
+                                candidate,
+                                candidate_tokens,
+                                request.context_tokens,
+                                length_mode,
+                            ),
+                            recent_penalty=(
+                                recent_penalty_strength
                                 * recent_reply_overlap(
                                     candidate_tokens, recent_trigrams
-                                ),
-                            )
-                        if corpus_ngrams:
-                            score = replace(
-                                score,
-                                verbatim_penalty=verbatim_penalty_strength
+                                )
+                                if recent_trigrams
+                                else 0.0
+                            ),
+                            verbatim_penalty=(
+                                verbatim_penalty_strength
                                 * verbatim_ngram_overlap(
                                     candidate_tokens, corpus_ngrams
-                                ),
-                            )
-                        score = replace(
-                            score,
+                                )
+                                if corpus_ngrams
+                                else 0.0
+                            ),
                             coherence_penalty=coherence_penalty_for_order(
                                 candidate_trace.markov_order_used
                             ),
