@@ -151,16 +151,24 @@ class MarkovRepo:
         ]
 
     async def get_chat_token_volume(self, chat_id: int) -> int:
-        volume3 = await self._sum_cnt("transitions3", chat_id)
-        if volume3 > 0:
-            return volume3
-        return await self._sum_cnt("transitions", chat_id)
+        # Both sums share one lock acquisition: the 2-gram fallback only fires
+        # when the 3-gram table is empty, and this runs on the per-message path.
+        async with self._lock:
+            db = await self._conn_provider()
+            volume3 = await self._sum_cnt(db, "transitions3", chat_id)
+            if volume3 > 0:
+                return volume3
+            return await self._sum_cnt(db, "transitions", chat_id)
 
-    async def _sum_cnt(self, table: str, chat_id: int) -> int:
-        row = await self._fetch_one(
+    @staticmethod
+    async def _sum_cnt(
+        db: aiosqlite.Connection, table: str, chat_id: int
+    ) -> int:
+        cursor = await db.execute(
             f"SELECT COALESCE(SUM(cnt), 0) FROM {table} WHERE chat_id = ?",
             (chat_id,),
         )
+        row = await cursor.fetchone()
         if row is None:
             raise RuntimeError("COALESCE query returned None in get_chat_token_volume")
         return int(row[0] or 0)
