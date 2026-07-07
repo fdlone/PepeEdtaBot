@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
-from app.core.markov import content_tokens, tokenize
+from app.core.markov import build_windows, content_tokens, tokenize
 
 SHORT_REPLY_MAX_TOKENS = 3
 NATURAL_LENGTH_MIN = 5
@@ -175,12 +175,9 @@ def context_relevance(tokens: list[str], context_tokens: list[str]) -> float:
 
 
 def _repeated_ngram_ratio(tokens: list[str], size: int) -> float:
-    if len(tokens) < size:
+    ngrams = build_windows(tokens, size)
+    if not ngrams:
         return 0.0
-    ngrams = [
-        tuple(tokens[index : index + size])
-        for index in range(len(tokens) - size + 1)
-    ]
     counts = Counter(ngrams)
     repeated = sum(count - 1 for count in counts.values() if count > 1)
     return repeated / len(ngrams)
@@ -202,32 +199,24 @@ def repetition_penalty(tokens: list[str]) -> float:
 
 def build_recent_reply_trigrams(
     recent_texts: Iterable[str],
-) -> set[tuple[str, str, str]]:
+) -> set[tuple[str, ...]]:
     """Collect content trigrams of recently sent replies for overlap penalties."""
-    trigrams: set[tuple[str, str, str]] = set()
+    trigrams: set[tuple[str, ...]] = set()
     for text in recent_texts:
-        content = _normalized_content(tokenize(text))
-        trigrams.update(
-            (content[index], content[index + 1], content[index + 2])
-            for index in range(len(content) - 2)
-        )
+        trigrams.update(build_windows(_normalized_content(tokenize(text)), 3))
     return trigrams
 
 
 def recent_reply_overlap(
     tokens: list[str],
-    recent_trigrams: set[tuple[str, str, str]],
+    recent_trigrams: set[tuple[str, ...]],
 ) -> float:
     """Share of the candidate's content trigrams already seen in recent replies."""
     if not recent_trigrams:
         return 0.0
-    content = _normalized_content(tokens)
-    if len(content) < 3:
+    candidate_trigrams = set(build_windows(_normalized_content(tokens), 3))
+    if not candidate_trigrams:
         return 0.0
-    candidate_trigrams = {
-        (content[index], content[index + 1], content[index + 2])
-        for index in range(len(content) - 2)
-    }
     return len(candidate_trigrams & recent_trigrams) / len(candidate_trigrams)
 
 
@@ -245,13 +234,9 @@ def verbatim_ngram_overlap(
     """
     if not corpus_ngrams:
         return 0.0
-    content = _normalized_content(tokens)
-    if len(content) < size:
+    windows = build_windows(_normalized_content(tokens), size)
+    if not windows:
         return 0.0
-    windows = [
-        tuple(content[index : index + size])
-        for index in range(len(content) - size + 1)
-    ]
     hits = sum(1 for window in windows if window in corpus_ngrams)
     return hits / len(windows)
 
