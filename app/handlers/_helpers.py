@@ -4,9 +4,13 @@ import asyncio
 import logging
 import random
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from aiogram.enums import ChatAction, ChatType
 from aiogram.types import Message
+
+if TYPE_CHECKING:
+    from app.config.runtime_state import RuntimeState
 
 logger = logging.getLogger("chat_markov")
 
@@ -51,6 +55,27 @@ async def reply_humanized(
         typing_max_ms,
         typing_per_char_ms=typing_per_char_ms,
         rng=rng,
+    )
+
+
+async def reply_humanized_state(
+    message: Message,
+    text: str,
+    runtime_state: RuntimeState,
+) -> None:
+    """``reply_humanized`` sourcing the typing pause from ``runtime_state``.
+
+    Every command handler sends its reply with the same two runtime typing
+    knobs (``typing_min_ms``/``typing_max_ms``, no per-char scaling — that is
+    reserved for generated replies); this wrapper keeps them from reaching into
+    ``runtime_state`` at each call site. ``reply_humanized`` itself stays
+    knob-typed for tests and callers that pass explicit timings.
+    """
+    await reply_humanized(
+        message,
+        text,
+        runtime_state.typing_min_ms,
+        runtime_state.typing_max_ms,
     )
 
 

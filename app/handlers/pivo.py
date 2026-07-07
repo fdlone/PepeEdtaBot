@@ -12,7 +12,7 @@ from app.config.runtime_state import RuntimeState
 from app.config.settings import Settings
 from app.domain.pivo import PIVO_PRIVACY_MESSAGE
 from app.filters import GroupOnly, is_admin_or_owner
-from app.handlers._helpers import reply_humanized
+from app.handlers._helpers import reply_humanized_state
 from app.services import PivoService
 from app.services.pivo_parser import parse_pivo_command
 from app.services.pivo_service import PivoCallLimitError
@@ -49,12 +49,7 @@ async def cmd_pivo(
             now=datetime.now(),
         )
     except PivoCallLimitError as exc:
-        await reply_humanized(
-            message,
-            str(exc),
-            runtime_state.typing_min_ms,
-            runtime_state.typing_max_ms,
-        )
+        await reply_humanized_state(message, str(exc), runtime_state)
         logger.info("pivo command rejected by call limit: %s", exc)
         return
 
@@ -66,11 +61,10 @@ async def cmd_pivo(
             is_admin_or_owner=is_privileged,
         )
         if not quota.allowed:
-            await reply_humanized(
+            await reply_humanized_state(
                 message,
                 f"Лимит /pivo на сегодня исчерпан: {quota.limit} раз(а) в сутки.",
-                runtime_state.typing_min_ms,
-                runtime_state.typing_max_ms,
+                runtime_state,
             )
             logger.info(
                 "pivo command rejected by daily quota: limit=%s day=%s",
@@ -114,21 +108,15 @@ async def cmd_pivo_on(
     if message.from_user is None:
         return
     if message.from_user.is_bot:
-        await reply_humanized(
-            message,
-            "Ботов в пивной список не добавляю.",
-            runtime_state.typing_min_ms,
-            runtime_state.typing_max_ms,
+        await reply_humanized_state(
+            message, "Ботов в пивной список не добавляю.", runtime_state
         )
         return
 
     await pivo_service.subscribe(message.chat.id, message.from_user)
     logger.info("pivo member subscribed")
-    await reply_humanized(
-        message,
-        "Готово, теперь я буду звать тебя через /pivo.",
-        runtime_state.typing_min_ms,
-        runtime_state.typing_max_ms,
+    await reply_humanized_state(
+        message, "Готово, теперь я буду звать тебя через /pivo.", runtime_state
     )
 
 
@@ -141,19 +129,11 @@ async def cmd_pivo_off(
 
     await pivo_service.unsubscribe(message.chat.id, message.from_user.id)
     logger.info("pivo member removed")
-    await reply_humanized(
-        message,
-        "Готово, больше не буду звать тебя через /pivo.",
-        runtime_state.typing_min_ms,
-        runtime_state.typing_max_ms,
+    await reply_humanized_state(
+        message, "Готово, больше не буду звать тебя через /pivo.", runtime_state
     )
 
 
 @router.message(Command("pivo_privacy"), GroupOnly())
 async def cmd_pivo_privacy(message: Message, runtime_state: RuntimeState) -> None:
-    await reply_humanized(
-        message,
-        PIVO_PRIVACY_MESSAGE,
-        runtime_state.typing_min_ms,
-        runtime_state.typing_max_ms,
-    )
+    await reply_humanized_state(message, PIVO_PRIVACY_MESSAGE, runtime_state)
