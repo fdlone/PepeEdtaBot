@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable
 
-from app.repositories.base_repo import BaseRepo
+from app.repositories.base_repo import DecayableCountsRepo
 
 
-class ChatHotNgramsRepo(BaseRepo):
+class ChatHotNgramsRepo(DecayableCountsRepo):
     """Sliding-window content n-gram counts for the L1 running-jokes channel.
 
     Keyed by raw ``chat_id`` to match the Markov model tables; per-chat

@@ -64,13 +64,22 @@ class BaseRepo:
         async with self._transaction() as db:
             await db.executemany(sql, seq_params)
 
+
+class DecayableCountsRepo(BaseRepo):
+    """BaseRepo for the flavor tables whose ``cnt`` decays when a chat goes quiet.
+
+    The emoji-stats and hot-ngram tables share the same
+    ``(..., cnt, updated_at)`` shape and the same lazy-decay contract, so the
+    halving/purge statement lives here rather than in the generic base.
+    """
+
     async def _decay_stale(self, table: str, cutoff_iso: str) -> int:
         """Halve counts of rows not touched since ``cutoff_iso``; purge zeros.
 
-        Shared by the flavor repos (emoji / hot n-grams): stale rows are halved
-        and their ``updated_at`` clock reset so they will not re-decay for
-        another window, and rows reaching 0 are removed. Returns the number of
-        purged rows. ``table`` is a hardcoded caller constant, never user input.
+        Stale rows are halved and their ``updated_at`` clock reset so they will
+        not re-decay for another window, and rows reaching 0 are removed.
+        Returns the number of purged rows. ``table`` is a hardcoded caller
+        constant, never user input.
         """
         async with self._transaction() as db:
             await db.execute(

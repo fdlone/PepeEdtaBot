@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from app.repositories.base_repo import BaseRepo
+from app.repositories.base_repo import DecayableCountsRepo
 
 
-class ChatEmojiStatsRepo(BaseRepo):
+class ChatEmojiStatsRepo(DecayableCountsRepo):
     """Per-chat emoji frequency for the M3 emoji channel.
 
     Keyed by raw ``chat_id`` to match the Markov model tables. Emojis are a
