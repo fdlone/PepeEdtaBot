@@ -778,18 +778,20 @@ class MarkovGenerator:
         rng: random.Random,
     ) -> _ContextualStateSelection:
         """Weighted pick of a 3-gram start state from ``(state, weight, count)``
-        candidates. The stored transition count is the best one among duplicate
-        states (only prefix matches actually consume it, for singleton stats)."""
+        candidates. Only prefix matches carry a transition count (the best one
+        among duplicate states), consumed by the singleton stats."""
         population = [state for state, _, _ in candidates]
         weights = [weight for _, weight, _ in candidates]
         selected = weighted_population_choice(
             population, weights, exploring=exploring, rng=rng
         )
-        selected_count = max(
-            transition_count
-            for state, _, transition_count in candidates
-            if state == selected
-        )
+        selected_count = 0
+        if match_kind == "prefix":
+            selected_count = max(
+                transition_count
+                for state, _, transition_count in candidates
+                if state == selected
+            )
         return _ContextualStateSelection(selected, 3, match_kind, selected_count)
 
     async def _select_contextual_state(
