@@ -559,5 +559,8 @@ class Database:
         async with self._lock:
             db = await self._get_conn()
             for table in tables:
-                await db.execute(f"DELETE FROM {table} WHERE chat_id = ?", (chat_id,))
+                await db.execute(
+                    f"DELETE FROM {table} WHERE chat_id = ?",  # nosec B608 - tables is a literal tuple
+                    (chat_id,),
+                )
             await db.commit()

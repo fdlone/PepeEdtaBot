@@ -116,7 +116,7 @@ class MarkovRepo(BaseRepo):
             WHERE chat_id = ?
             GROUP BY {columns}
             ORDER BY {columns}
-            """,
+            """,  # nosec B608 - table/columns picked from two literals above
             (chat_id,),
         )
         return [
@@ -141,7 +141,7 @@ class MarkovRepo(BaseRepo):
         db: aiosqlite.Connection, table: str, chat_id: int
     ) -> int:
         cursor = await db.execute(
-            f"SELECT COALESCE(SUM(cnt), 0) FROM {table} WHERE chat_id = ?",
+            f"SELECT COALESCE(SUM(cnt), 0) FROM {table} WHERE chat_id = ?",  # nosec B608 - table is a hardcoded caller constant
             (chat_id,),
         )
         row = await cursor.fetchone()

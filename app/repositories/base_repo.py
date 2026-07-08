@@ -87,8 +87,10 @@ class DecayableCountsRepo(BaseRepo):
                 UPDATE {table}
                 SET cnt = cnt / 2, updated_at = datetime('now')
                 WHERE updated_at < ?
-                """,
+                """,  # nosec B608 - table is a hardcoded caller constant
                 (cutoff_iso,),
             )
-            cursor = await db.execute(f"DELETE FROM {table} WHERE cnt <= 0")
+            cursor = await db.execute(
+                f"DELETE FROM {table} WHERE cnt <= 0"  # nosec B608 - hardcoded constant
+            )
             return max(0, cursor.rowcount)
