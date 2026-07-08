@@ -327,22 +327,10 @@ class ResponseGenerator:
                                 request.context_tokens,
                                 length_mode,
                             ),
-                            recent_penalty=(
-                                recent_penalty_strength
-                                * recent_reply_overlap(
-                                    candidate_tokens, recent_trigrams
-                                )
-                                if recent_trigrams
-                                else 0.0
-                            ),
-                            verbatim_penalty=(
-                                verbatim_penalty_strength
-                                * verbatim_ngram_overlap(
-                                    candidate_tokens, corpus_ngrams
-                                )
-                                if corpus_ngrams
-                                else 0.0
-                            ),
+                            recent_penalty=recent_penalty_strength
+                            * recent_reply_overlap(candidate_tokens, recent_trigrams),
+                            verbatim_penalty=verbatim_penalty_strength
+                            * verbatim_ngram_overlap(candidate_tokens, corpus_ngrams),
                             coherence_penalty=coherence_penalty_for_order(
                                 candidate_trace.markov_order_used
                             ),
