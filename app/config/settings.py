@@ -176,64 +176,18 @@ def load_settings(load_env: bool = True) -> Settings:
         raise ValueError(
             "PIVO_HMAC_SECRET and PIVO_ENCRYPTION_SECRET must be different values"
         )
-    pivo_explicit_mentions_limit_raw = os.getenv(
-        "PIVO_EXPLICIT_MENTIONS_LIMIT",
-        "10",
-    ).strip()
-    pivo_subscriber_fanout_limit_raw = os.getenv(
-        "PIVO_SUBSCRIBER_FANOUT_LIMIT",
-        "20",
-    ).strip()
-    try:
-        pivo_explicit_mentions_limit = int(pivo_explicit_mentions_limit_raw)
-    except ValueError as exc:
-        raise ValueError("PIVO_EXPLICIT_MENTIONS_LIMIT must be an integer") from exc
-    if pivo_explicit_mentions_limit < 1:
-        raise ValueError("PIVO_EXPLICIT_MENTIONS_LIMIT must be at least 1")
-    try:
-        pivo_subscriber_fanout_limit = int(pivo_subscriber_fanout_limit_raw)
-    except ValueError as exc:
-        raise ValueError("PIVO_SUBSCRIBER_FANOUT_LIMIT must be an integer") from exc
-    if pivo_subscriber_fanout_limit < 1:
-        raise ValueError("PIVO_SUBSCRIBER_FANOUT_LIMIT must be at least 1")
+    pivo_explicit_mentions_limit = _load_int(
+        "PIVO_EXPLICIT_MENTIONS_LIMIT", 10, minimum=1
+    )
+    pivo_subscriber_fanout_limit = _load_int(
+        "PIVO_SUBSCRIBER_FANOUT_LIMIT", 20, minimum=1
+    )
 
-    runtime_state_ttl_sec_raw = os.getenv("RUNTIME_STATE_TTL_SEC", "86400").strip()
-    runtime_state_max_chats_raw = os.getenv("RUNTIME_STATE_MAX_CHATS", "2048").strip()
-    throttle_state_ttl_sec_raw = os.getenv("THROTTLE_STATE_TTL_SEC", "21600").strip()
-    throttle_state_max_keys_raw = os.getenv("THROTTLE_STATE_MAX_KEYS", "4096").strip()
-    try:
-        runtime_state_ttl_sec = int(runtime_state_ttl_sec_raw)
-    except ValueError as exc:
-        raise ValueError("RUNTIME_STATE_TTL_SEC must be an integer") from exc
-    if runtime_state_ttl_sec < 1:
-        raise ValueError("RUNTIME_STATE_TTL_SEC must be at least 1")
-    try:
-        runtime_state_max_chats = int(runtime_state_max_chats_raw)
-    except ValueError as exc:
-        raise ValueError("RUNTIME_STATE_MAX_CHATS must be an integer") from exc
-    if runtime_state_max_chats < 1:
-        raise ValueError("RUNTIME_STATE_MAX_CHATS must be at least 1")
-    try:
-        throttle_state_ttl_sec = int(throttle_state_ttl_sec_raw)
-    except ValueError as exc:
-        raise ValueError("THROTTLE_STATE_TTL_SEC must be an integer") from exc
-    if throttle_state_ttl_sec < 1:
-        raise ValueError("THROTTLE_STATE_TTL_SEC must be at least 1")
-    try:
-        throttle_state_max_keys = int(throttle_state_max_keys_raw)
-    except ValueError as exc:
-        raise ValueError("THROTTLE_STATE_MAX_KEYS must be an integer") from exc
-    if throttle_state_max_keys < 1:
-        raise ValueError("THROTTLE_STATE_MAX_KEYS must be at least 1")
-    text_cache_max_messages_raw = os.getenv(
-        "TEXT_CACHE_MAX_MESSAGES", "1000"
-    ).strip()
-    try:
-        text_cache_max_messages = int(text_cache_max_messages_raw)
-    except ValueError as exc:
-        raise ValueError("TEXT_CACHE_MAX_MESSAGES must be an integer") from exc
-    if text_cache_max_messages < 1:
-        raise ValueError("TEXT_CACHE_MAX_MESSAGES must be at least 1")
+    runtime_state_ttl_sec = _load_int("RUNTIME_STATE_TTL_SEC", 86400, minimum=1)
+    runtime_state_max_chats = _load_int("RUNTIME_STATE_MAX_CHATS", 2048, minimum=1)
+    throttle_state_ttl_sec = _load_int("THROTTLE_STATE_TTL_SEC", 21600, minimum=1)
+    throttle_state_max_keys = _load_int("THROTTLE_STATE_MAX_KEYS", 4096, minimum=1)
+    text_cache_max_messages = _load_int("TEXT_CACHE_MAX_MESSAGES", 1000, minimum=1)
     if messages_retention_per_chat < text_cache_max_messages:
         raise ValueError(
             "MESSAGES_RETENTION_PER_CHAT must be greater than or equal to "

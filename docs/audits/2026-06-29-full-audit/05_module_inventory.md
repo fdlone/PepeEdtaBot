@@ -72,9 +72,9 @@ Legend: **Pub** = primary public symbols. **Deps** = internal app deps. **Caller
 ## `app/domain/` — `/pivo` domain
 
 ### `pivo.py` — crypto + mention assembly
-- **Pub:** `PivoSecurity` (`hmac_value`, `encrypt_value`, `decrypt_value`), `PivoMember`, `build_pivo_mention(s)`, `collect_pivo_mentions`, `normalize_username`, `display_name_from_user`, `get_random_pivo_message`, `PIVO_FALLBACK_MENTIONS`, `PIVO_PRIVACY_MESSAGE`.
-- **Deps:** services.pivo_message_builder (**lazy**, in `get_random_pivo_message`). **Callers:** main, services.pivo_service, handlers.pivo.
-- **Note:** `get_random_pivo_message` has no production caller (PivoService builds messages directly) — possible dead code ([11_code_quality.md] M2).
+- **Pub:** `PivoSecurity` (`hmac_value`, `encrypt_value`, `decrypt_value`), `PivoMember`, `build_pivo_mention`, `collect_pivo_mentions`, `normalize_username`, `display_name_from_user`, `PIVO_FALLBACK_MENTIONS`, `PIVO_PRIVACY_MESSAGE`.
+- **Deps:** none (no import of services). **Callers:** main, services.pivo_service, handlers.pivo.
+- **Note:** ~~`get_random_pivo_message` has no production caller~~ — ✅ **RESOLVED 2026-07-07** (branch `refactor/simplify-core-modules`): `get_random_pivo_message` and the also-test-only `build_pivo_mentions` were removed with their tests; the lazy `services.pivo_message_builder` import is gone, so this module no longer imports services at all.
 
 ### `pivo_templates.py` — template string pools (399 LOC, data only)
 - **Pub:** `PIVO_DEFAULT_*` / `PIVO_TARGET_*` part tuples, `PIVO_NOTIFICATION_LINES`. **Callers:** pivo_message_builder. ruff `E501` ignored here.

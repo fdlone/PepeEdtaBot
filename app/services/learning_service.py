@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 
 from app.core.candidate_scorer import VERBATIM_NGRAM_SIZE
-from app.core.markov import MarkovGenerator, content_tokens, tokenize
+from app.core.markov import MarkovGenerator, build_windows, content_tokens, tokenize
 from app.core.text import sanitize_text
 from app.infrastructure.database import Database
 
@@ -24,10 +24,7 @@ def content_ngram_windows(
 ) -> list[tuple[str, ...]]:
     """Casefolded content-token ``size``-grams of one message."""
     content = [token.casefold() for token in content_tokens(tokenize(text))]
-    return [
-        tuple(content[index : index + size])
-        for index in range(len(content) - size + 1)
-    ]
+    return build_windows(content, size)
 
 
 class LearningService:

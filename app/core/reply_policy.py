@@ -32,6 +32,11 @@ def is_mention_entity(entity_type: object) -> bool:
     return value == "mention" or name == "MENTION"
 
 
+def _reply_is_to_bot(reply_to_message: object, bot_id: int) -> bool:
+    reply_from_user = getattr(reply_to_message, "from_user", None)
+    return reply_from_user is not None and getattr(reply_from_user, "id", None) == bot_id
+
+
 def bot_is_mentioned(
     message: object,
     bot_username: str,
@@ -42,11 +47,7 @@ def bot_is_mentioned(
     text = getattr(message, "text", None)
 
     if not text:
-        reply_from_user = getattr(reply_to_message, "from_user", None)
-        return (
-            reply_from_user is not None
-            and getattr(reply_from_user, "id", None) == bot_id
-        )
+        return _reply_is_to_bot(reply_to_message, bot_id)
 
     username_mention = f"@{bot_username}".lower()
     if username_mention in text.lower():
@@ -62,10 +63,7 @@ def bot_is_mentioned(
                 if mention.lower() == username_mention:
                     return True
 
-    reply_from_user = getattr(reply_to_message, "from_user", None)
-    if reply_from_user is not None and getattr(reply_from_user, "id", None) == bot_id:
-        return True
-    return False
+    return _reply_is_to_bot(reply_to_message, bot_id)
 
 
 def has_enough_model_data(token_volume: int, min_tokens_for_model: int) -> bool:

@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Mapping
 
-import aiosqlite
-
-ConnProvider = Callable[[], Awaitable[aiosqlite.Connection]]
+from app.repositories.base_repo import BaseRepo
 
 
 def _parse_indices(raw: str) -> tuple[int, ...]:
@@ -22,37 +19,27 @@ def _parse_indices(raw: str) -> tuple[int, ...]:
     return tuple(indices)
 
 
-class PivoPoolUsageRepo:
+class PivoPoolUsageRepo(BaseRepo):
     """Per-chat memory of recently used /pivo template indices (anti-repeat)."""
-
-    def __init__(self, conn_provider: ConnProvider, lock: asyncio.Lock) -> None:
-        self._conn_provider = conn_provider
-        self._lock = lock
 
     async def get_recent(self, chat_hash: str) -> dict[str, tuple[int, ...]]:
         """Return {pool_name: recent indices (most-recent last)} for a chat."""
-        async with self._lock:
-            db = await self._conn_provider()
-            cursor = await db.execute(
-                """
-                SELECT pool_name, recent_indices
-                FROM pivo_pool_usage
-                WHERE chat_hash = ?
-                """,
-                (chat_hash,),
-            )
-            rows = await cursor.fetchall()
+        rows = await self._fetch_all(
+            """
+            SELECT pool_name, recent_indices
+            FROM pivo_pool_usage
+            WHERE chat_hash = ?
+            """,
+            (chat_hash,),
+        )
         return {str(row[0]): _parse_indices(str(row[1])) for row in rows}
 
     async def delete_chat(self, chat_hash: str) -> None:
         """Удаляет анти-повтор историю чата (используется /clear)."""
-        async with self._lock:
-            db = await self._conn_provider()
-            await db.execute(
-                "DELETE FROM pivo_pool_usage WHERE chat_hash = ?",
-                (chat_hash,),
-            )
-            await db.commit()
+        await self._execute(
+            "DELETE FROM pivo_pool_usage WHERE chat_hash = ?",
+            (chat_hash,),
+        )
 
     async def record(
         self,
@@ -67,8 +54,7 @@ class PivoPoolUsageRepo:
         """
         if keep <= 0 or not picks:
             return
-        async with self._lock:
-            db = await self._conn_provider()
+        async with self._transaction() as db:
             for pool_name, index in picks.items():
                 cursor = await db.execute(
                     """
@@ -93,4 +79,3 @@ class PivoPoolUsageRepo:
                     """,
                     (chat_hash, pool_name, serialized),
                 )
-            await db.commit()

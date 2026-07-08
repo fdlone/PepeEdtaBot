@@ -26,9 +26,10 @@ In `app/config/settings.py` (~line 90-95) add: reject secrets that start with `c
 `app/handlers/_helpers.py:25`: change `except Exception: pass` → `except Exception as exc: logger.debug("chat action failed: %s", exc)`.
 **Payoff:** no more silent failures; satisfies the Bandit `B110` / Ruff `S110` note.
 
-### QW5 — Drop the dead `get_random_pivo_message` (or wire it) · XS · ([11] Q8)
+### QW5 — Drop the dead `get_random_pivo_message` (or wire it) · XS · ([11] Q8) — ✅ DONE 2026-07-07
 `app/domain/pivo.py:118` has no production caller (only `tests/test_pivo.py`). Either remove it and its test, or make `PivoService` call it as the single message-building entry point. Decide and act.
 **Payoff:** removes confusing dead code + its cycle-breaking lazy import.
+**Resolution (2026-07-07, branch `refactor/simplify-core-modules`):** removed `get_random_pivo_message` and the also-test-only `build_pivo_mentions`, plus their tests; the cycle-breaking lazy import is gone.
 
 ### QW6 — Unify the `errors.py` logger name · XS · ([14] L2)
 `app/handlers/errors.py:10`: `logging.getLogger(__name__)` → `logging.getLogger("chat_markov")`.

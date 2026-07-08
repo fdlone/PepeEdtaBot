@@ -417,6 +417,20 @@ def sampled_exploration(
     return max(0.0, min(1.0, explore_probability)) * sample_mean
 
 
+def _roll_exploration(
+    explore_probability: float,
+    power: float,
+    rng: random.Random,
+) -> tuple[bool, float]:
+    """Roll the exploring branch and derive the frequency power for this pick."""
+    exploring = rng.random() < explore_probability
+    frequency_power = exploration_adjusted_power(
+        power,
+        sampled_exploration(explore_probability, exploring, rng),
+    )
+    return exploring, frequency_power
+
+
 def exploration_weighted_choice[T](
     population: list[T],
     weights: list[float],
@@ -465,11 +479,7 @@ def weighted_next_choice(
 ) -> str:
     ordered_items = sorted(items, key=lambda item: item[0])
     population = [token for token, _ in ordered_items]
-    exploring = rng.random() < explore_probability
-    frequency_power = exploration_adjusted_power(
-        power,
-        sampled_exploration(explore_probability, exploring, rng),
-    )
+    exploring, frequency_power = _roll_exploration(explore_probability, power, rng)
     step_bias = 1.0 + (max(1.0, context_bias) - 1.0) * context_decay(step_index)
     penalty_strength = max(0.0, repetition_penalty_strength)
     recent_tokens = recent_tokens or []
@@ -505,9 +515,9 @@ def weighted_next_choice(
 
         weight = max(weight, 0.01)
         weights.append(weight)
-    if exploring:
-        return exploration_weighted_choice(population, weights, rng)
-    return rng.choices(population=population, weights=weights, k=1)[0]
+    return weighted_population_choice(
+        population, weights, exploring=exploring, rng=rng
+    )
 
 
 def weighted_start2_choice(
@@ -518,15 +528,11 @@ def weighted_start2_choice(
 ) -> tuple[str, str]:
     ordered_items = sorted(items, key=lambda item: (item[0], item[1]))
     population = [(w1, w2) for w1, w2, _ in ordered_items]
-    exploring = rng.random() < explore_probability
-    frequency_power = exploration_adjusted_power(
-        power,
-        sampled_exploration(explore_probability, exploring, rng),
-    )
+    exploring, frequency_power = _roll_exploration(explore_probability, power, rng)
     weights = [max(cnt, 1) ** frequency_power for _, _, cnt in ordered_items]
-    if exploring:
-        return exploration_weighted_choice(population, weights, rng)
-    return rng.choices(population=population, weights=weights, k=1)[0]
+    return weighted_population_choice(
+        population, weights, exploring=exploring, rng=rng
+    )
 
 
 def weighted_start3_choice(
@@ -537,15 +543,11 @@ def weighted_start3_choice(
 ) -> tuple[str, str, str]:
     ordered_items = sorted(items, key=lambda item: (item[0], item[1], item[2]))
     population = [(w1, w2, w3) for w1, w2, w3, _ in ordered_items]
-    exploring = rng.random() < explore_probability
-    frequency_power = exploration_adjusted_power(
-        power,
-        sampled_exploration(explore_probability, exploring, rng),
-    )
+    exploring, frequency_power = _roll_exploration(explore_probability, power, rng)
     weights = [max(cnt, 1) ** frequency_power for _, _, _, cnt in ordered_items]
-    if exploring:
-        return exploration_weighted_choice(population, weights, rng)
-    return rng.choices(population=population, weights=weights, k=1)[0]
+    return weighted_population_choice(
+        population, weights, exploring=exploring, rng=rng
+    )
 
 
 @dataclass(slots=True)
@@ -590,11 +592,11 @@ class MarkovGenerator:
         self._cache_starts2.pop(chat_id, None)
         self._context_state_matcher.invalidate_chat_cache(chat_id)
 
-    def _touch_cache[K](
+    def _touch_cache[K, V](
         self,
-        cache: OrderedDict[K, list[tuple[str, int]]],
+        cache: OrderedDict[K, V],
         key: K,
-        value: list[tuple[str, int]],
+        value: V,
     ) -> None:
         cache[key] = value
         cache.move_to_end(key)
@@ -605,18 +607,14 @@ class MarkovGenerator:
         if chat_id in self._cache_starts3:
             return self._cache_starts3[chat_id]
         rows = await self.db.get_starts3(chat_id)
-        self._cache_starts3[chat_id] = rows
-        if len(self._cache_starts3) > self.cache_limit:
-            self._cache_starts3.popitem(last=False)
+        self._touch_cache(self._cache_starts3, chat_id, rows)
         return rows
 
     async def _get_starts2(self, chat_id: int) -> list[tuple[str, str, int]]:
         if chat_id in self._cache_starts2:
             return self._cache_starts2[chat_id]
         rows = await self.db.get_starts(chat_id)
-        self._cache_starts2[chat_id] = rows
-        if len(self._cache_starts2) > self.cache_limit:
-            self._cache_starts2.popitem(last=False)
+        self._touch_cache(self._cache_starts2, chat_id, rows)
         return rows
 
     async def _get3(
@@ -654,17 +652,19 @@ class MarkovGenerator:
         windows3: list[tuple[str, ...]],
         total3: int,
         frequency_power: float,
-    ) -> list[tuple[tuple[str, str, str], float]]:
+    ) -> list[tuple[tuple[str, str, str], float, int]]:
         """Exact 3-gram context windows that have stored transitions, weighted
         by transition count and recency."""
-        candidates3: list[tuple[tuple[str, str, str], float]] = []
+        candidates3: list[tuple[tuple[str, str, str], float, int]] = []
         for index, window in enumerate(windows3):
             transitions = await self._get3(chat_id, window[0], window[1], window[2])
             if transitions:
                 transition_count = sum(count for _, count in transitions)
                 recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
                 weight = max(transition_count, 1) ** frequency_power * recency_bonus
-                candidates3.append(((window[0], window[1], window[2]), weight))
+                candidates3.append(
+                    ((window[0], window[1], window[2]), weight, transition_count)
+                )
         return candidates3
 
     async def _build_exact2_candidates(
@@ -769,6 +769,31 @@ class MarkovGenerator:
                 )
         return additions, transition_counts
 
+    @staticmethod
+    def _select_state3(
+        candidates: list[tuple[tuple[str, str, str], float, int]],
+        match_kind: str,
+        *,
+        exploring: bool,
+        rng: random.Random,
+    ) -> _ContextualStateSelection:
+        """Weighted pick of a 3-gram start state from ``(state, weight, count)``
+        candidates. Only prefix matches carry a transition count (the best one
+        among duplicate states), consumed by the singleton stats."""
+        population = [state for state, _, _ in candidates]
+        weights = [weight for _, weight, _ in candidates]
+        selected = weighted_population_choice(
+            population, weights, exploring=exploring, rng=rng
+        )
+        selected_count = 0
+        if match_kind == "prefix":
+            selected_count = max(
+                transition_count
+                for state, _, transition_count in candidates
+                if state == selected
+            )
+        return _ContextualStateSelection(selected, 3, match_kind, selected_count)
+
     async def _select_contextual_state(
         self,
         chat_id: int,
@@ -786,10 +811,8 @@ class MarkovGenerator:
         fuzzy_context_prefix: bool,
         rng: random.Random,
     ) -> _ContextualStateSelection | None:
-        exploring = rng.random() < start_explore
-        frequency_power = exploration_adjusted_power(
-            start_power,
-            sampled_exploration(start_explore, exploring, rng),
+        exploring, frequency_power = _roll_exploration(
+            start_explore, start_power, rng
         )
         windows3 = build_windows(context_tokens, 3)
         total3 = len(windows3)
@@ -798,12 +821,9 @@ class MarkovGenerator:
         )
 
         if candidates3:
-            population3 = [state for state, _ in candidates3]
-            weights3 = [weight for _, weight in candidates3]
-            state3 = weighted_population_choice(
-                population3, weights3, exploring=exploring, rng=rng
+            return self._select_state3(
+                candidates3, "exact", exploring=exploring, rng=rng
             )
-            return _ContextualStateSelection(state3, 3, "exact")
 
         windows2 = build_windows(context_tokens, 2)
         total2 = len(windows2)
@@ -819,15 +839,8 @@ class MarkovGenerator:
                 match_kind="casefold", include_prefix=False,
             )
             if casefold_candidates3:
-                population3 = [state for state, _, _ in casefold_candidates3]
-                weights3 = [weight for _, weight, _ in casefold_candidates3]
-                selected_state3 = weighted_population_choice(
-                    population3, weights3, exploring=exploring, rng=rng
-                )
-                return _ContextualStateSelection(
-                    selected_state3,
-                    3,
-                    "casefold",
+                return self._select_state3(
+                    casefold_candidates3, "casefold", exploring=exploring, rng=rng
                 )
 
             additions, _ = await self._build_fuzzy2_candidates(
@@ -843,21 +856,8 @@ class MarkovGenerator:
                 match_kind="prefix", include_prefix=True,
             )
             if prefix_candidates3:
-                population3 = [state for state, _, _ in prefix_candidates3]
-                weights3 = [weight for _, weight, _ in prefix_candidates3]
-                selected_state3 = weighted_population_choice(
-                    population3, weights3, exploring=exploring, rng=rng
-                )
-                selected_count = max(
-                    transition_count
-                    for state, _, transition_count in prefix_candidates3
-                    if state == selected_state3
-                )
-                return _ContextualStateSelection(
-                    selected_state3,
-                    3,
-                    "prefix",
-                    selected_count,
+                return self._select_state3(
+                    prefix_candidates3, "prefix", exploring=exploring, rng=rng
                 )
 
             additions, prefix_transition_counts = await self._build_fuzzy2_candidates(
@@ -869,7 +869,7 @@ class MarkovGenerator:
 
         if not candidates2:
             return None
-        population2 = [index for index in range(len(candidates2))]
+        population2 = list(range(len(candidates2)))
         weights2 = [weight for _, _, weight in candidates2]
         selected_index = weighted_population_choice(
             population2, weights2, exploring=exploring, rng=rng
@@ -961,28 +961,14 @@ class MarkovGenerator:
     ) -> tuple[str, GenerationTrace]:
         generation_rng = rng or random.Random()
         total_attempts = max(1, attempt_budget)
-        last_attempt = _GenerationAttempt(
-            text="",
-            markov_order_used=0,
-            jump_count=0,
-            rejection_reason=REJECTION_NO_STARTS,
-            token_count=0,
-            start_source="global",
-        )
-        total_jump_count = 0
-        total_leading_punctuation_stripped = 0
-        total_context_exact_matches = 0
-        total_context_casefold_matches = 0
-        total_context_prefix_matches = 0
-        total_context_prefix_singleton_matches = 0
-        total_hidden_context_fallbacks = 0
+        attempts: list[_GenerationAttempt] = []
         for attempt_index in range(total_attempts):
             attempt_randomness_strength = escalated_randomness_strength(
                 randomness_strength,
                 attempt_index,
                 total_attempts,
             )
-            last_attempt = await self._generate_text_once(
+            attempt = await self._generate_text_once(
                 chat_id=chat_id,
                 max_chars=max_chars,
                 max_tokens=max_tokens,
@@ -1002,57 +988,38 @@ class MarkovGenerator:
                 rng=generation_rng,
                 emit_start=True,
             )
-            total_jump_count += last_attempt.jump_count
-            total_leading_punctuation_stripped += (
-                last_attempt.leading_punctuation_stripped
-            )
-            total_context_exact_matches += last_attempt.context_exact_matches
-            total_context_casefold_matches += last_attempt.context_casefold_matches
-            total_context_prefix_matches += last_attempt.context_prefix_matches
-            total_context_prefix_singleton_matches += (
-                last_attempt.context_prefix_singleton_matches
-            )
-            total_hidden_context_fallbacks += last_attempt.hidden_context_fallbacks
-            if last_attempt.text:
-                trace = GenerationTrace(
-                    attempts_used=attempt_index + 1,
-                    markov_order_used=last_attempt.markov_order_used,
-                    jump_count=total_jump_count,
-                    rejection_reason=None,
-                    token_count=last_attempt.token_count,
-                    start_source=last_attempt.start_source,
-                    leading_punctuation_stripped=(
-                        total_leading_punctuation_stripped
-                    ),
-                    context_exact_matches=total_context_exact_matches,
-                    context_casefold_matches=total_context_casefold_matches,
-                    context_prefix_matches=total_context_prefix_matches,
-                    context_prefix_singleton_matches=(
-                        total_context_prefix_singleton_matches
-                    ),
-                    hidden_context_fallbacks=total_hidden_context_fallbacks,
-                )
-                self._log_trace(trace)
-                return last_attempt.text, trace
+            attempts.append(attempt)
+            if attempt.text:
+                break
 
+        # Per-attempt counters are summed over all attempts; the final
+        # attempt supplies the outcome fields (rejected attempts always carry
+        # an empty text, token_count 0 and a rejection reason).
+        last = attempts[-1]
         trace = GenerationTrace(
-            attempts_used=total_attempts,
-            markov_order_used=last_attempt.markov_order_used,
-            jump_count=total_jump_count,
-            rejection_reason=last_attempt.rejection_reason,
-            token_count=0,
-            start_source=last_attempt.start_source,
-            leading_punctuation_stripped=total_leading_punctuation_stripped,
-            context_exact_matches=total_context_exact_matches,
-            context_casefold_matches=total_context_casefold_matches,
-            context_prefix_matches=total_context_prefix_matches,
-            context_prefix_singleton_matches=(
-                total_context_prefix_singleton_matches
+            attempts_used=len(attempts),
+            markov_order_used=last.markov_order_used,
+            jump_count=sum(a.jump_count for a in attempts),
+            rejection_reason=last.rejection_reason,
+            token_count=last.token_count,
+            start_source=last.start_source,
+            leading_punctuation_stripped=sum(
+                a.leading_punctuation_stripped for a in attempts
             ),
-            hidden_context_fallbacks=total_hidden_context_fallbacks,
+            context_exact_matches=sum(a.context_exact_matches for a in attempts),
+            context_casefold_matches=sum(
+                a.context_casefold_matches for a in attempts
+            ),
+            context_prefix_matches=sum(a.context_prefix_matches for a in attempts),
+            context_prefix_singleton_matches=sum(
+                a.context_prefix_singleton_matches for a in attempts
+            ),
+            hidden_context_fallbacks=sum(
+                a.hidden_context_fallbacks for a in attempts
+            ),
         )
         self._log_trace(trace)
-        return "", trace
+        return last.text, trace
 
     def _log_trace(self, trace: GenerationTrace) -> None:
         logger.debug(

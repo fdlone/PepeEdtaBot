@@ -27,7 +27,7 @@ This is a **low-debt, well-built codebase**. There are **no Critical/High securi
 | **Q7** | Duplicate `parse_bool` (registry vs runtime_config, different contracts) | DRY | Low | S | **P3** | [11] |
 | **Q9** | Module-global `random` in pivo builder & `_helpers` (non-injectable) | Testability (forces monkeypatch) | Low | S | **P3** | [11] |
 | **T1/T2** | `registry` & `throttling` pruning undertested | Contract regressions slip through | Low | S | **P3** | [12] |
-| **Q8** | Dead `get_random_pivo_message` (test-only caller) | Confusing dead code | Low | XS | **P4** | [11] |
+| ~~**Q8**~~ ✅ | Dead `get_random_pivo_message` (test-only caller) — **RESOLVED 2026-07-07** (removed + `build_pivo_mentions` + tests) | Confusing dead code | Low | XS | ~~P4~~ done | [11] |
 | **L2** | `errors.py` uses `getLogger(__name__)` not `"chat_markov"` | Log-level control inconsistency | Low | XS | **P4** | [14] |
 | **L4** | Health check is Docker `SELECT 1` only (not Telegram-liveness) | False-healthy if session dies | Low | M | **P4** | [14] |
 | **P6** | `ResponseGenerator` instantiated per message | Minor allocation on hot path | Low | S | **P4** | [09] |

@@ -285,36 +285,40 @@ def _format_time_phrase_soft(planned_time: str | None) -> str:
     return f"примерно в {value}"
 
 
+# Localized day-prefixes: "<en/ru day marker> <time tail>" -> "<ru day> <tail>".
+# The tail offset is always len(prefix), so it need not be stored. Order matters:
+# the longer "... at "/"... в " forms must precede their bare-space variants.
+_TIME_DAY_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("today at ", "сегодня"),
+    ("today ", "сегодня"),
+    ("tomorrow at ", "завтра"),
+    ("tomorrow ", "завтра"),
+    ("сегодня в ", "сегодня"),
+    ("завтра в ", "завтра"),
+)
+# Standalone day/part-of-day words with a fixed localized form.
+_TIME_EXACT_WORDS: dict[str, str] = {
+    "today": "сегодня",
+    "tomorrow": "завтра",
+    "сегодня": "сегодня",
+    "завтра": "завтра",
+    "evening": "вечером",
+    "вечером": "вечером",
+}
+
+
 def _format_time_value(planned_time: str) -> str:
     raw = planned_time.strip()
     normalized = raw.lower()
 
     if re.fullmatch(r"(?:[01]?\d|2[0-3]):[0-5]\d", normalized):
         return html.escape(raw, quote=False)
-    if normalized.startswith("today at "):
-        return f"сегодня {_normalize_time_tail(raw[9:])}"
-    if normalized.startswith("today "):
-        return f"сегодня {_normalize_time_tail(raw[6:])}"
-    if normalized.startswith("tomorrow at "):
-        return f"завтра {_normalize_time_tail(raw[12:])}"
-    if normalized.startswith("tomorrow "):
-        return f"завтра {_normalize_time_tail(raw[9:])}"
-    if normalized == "today":
-        return "сегодня"
-    if normalized == "tomorrow":
-        return "завтра"
-    if normalized.startswith("сегодня в "):
-        return f"сегодня {_normalize_time_tail(raw[10:])}"
-    if normalized.startswith("завтра в "):
-        return f"завтра {_normalize_time_tail(raw[9:])}"
-    if normalized == "сегодня":
-        return "сегодня"
-    if normalized == "завтра":
-        return "завтра"
-    if normalized == "evening":
-        return "вечером"
-    if normalized == "вечером":
-        return "вечером"
+    for prefix, day_word in _TIME_DAY_PREFIXES:
+        if normalized.startswith(prefix):
+            return f"{day_word} {_normalize_time_tail(raw[len(prefix):])}"
+    exact = _TIME_EXACT_WORDS.get(normalized)
+    if exact is not None:
+        return exact
     return html.escape(raw, quote=False)
 
 

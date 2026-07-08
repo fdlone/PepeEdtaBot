@@ -7,7 +7,6 @@ select = ["E", "F", "I", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
 "app/domain/pivo_templates.py" = ["E501"]
-"app/infrastructure/database.py" = ["UP045"]
 "tools/seed_db.py" = ["E402", "E501"]
 "tools/seed_diverse.py" = ["E402", "E501"]
 

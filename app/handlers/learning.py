@@ -4,13 +4,12 @@ import logging
 import random
 import re
 import time
-from collections import deque
 from datetime import UTC, datetime
 
 from aiogram import F, Router
 from aiogram.types import Message
 
-from app.config.runtime_state import RuntimeState
+from app.config.runtime_state import RuntimeState, get_recent_deque
 from app.core.emoji import count_emojis
 from app.core.hot_ngrams import extract_content_ngrams
 from app.core.markov import (
@@ -43,8 +42,8 @@ from app.core.response_generator import (
 from app.core.text import sanitize_text
 from app.handlers._helpers import (
     is_group_message,
-    reply_humanized,
-    reply_humanized_sequence,
+    reply_humanized_sequence_state,
+    reply_humanized_state,
 )
 from app.log_masking import mask_chat_id
 from app.presentation.fallback_phrases import (
@@ -99,10 +98,9 @@ def normalize_short_reply_text(text: str) -> str:
 def remember_short_reply(
     runtime_state: RuntimeState, chat_id: int, reply_text: str
 ) -> None:
-    recent = runtime_state.recent_short_replies.get(chat_id)
-    if recent is None:
-        recent = deque(maxlen=RECENT_SHORT_REPLY_LIMIT)
-        runtime_state.recent_short_replies[chat_id] = recent
+    recent = get_recent_deque(
+        runtime_state.recent_short_replies, chat_id, RECENT_SHORT_REPLY_LIMIT
+    )
     recent.append(normalize_short_reply_text(reply_text))
 
 
@@ -120,10 +118,9 @@ def next_fallback_phrase(
     a heated chat mood adds punchier phrases (M1). Both are additive, so the
     neutral pool always remains available.
     """
-    recent = runtime_state.recent_fallbacks.get(chat_id)
-    if recent is None:
-        recent = deque(maxlen=RECENT_FALLBACK_LIMIT)
-        runtime_state.recent_fallbacks[chat_id] = recent
+    recent = get_recent_deque(
+        runtime_state.recent_fallbacks, chat_id, RECENT_FALLBACK_LIMIT
+    )
     effective_pool = mood_fallback_pool(late_night_pool(pool, now), mood)
     phrase = pick_fallback_phrase(effective_pool, recent, rng=rng)
     recent.append(phrase)
@@ -250,39 +247,38 @@ async def on_text_message(
     tokens = tokenize(clean, normalize_lower=runtime_state.normalize_lower)
     learnable = is_learnable_message_length(clean) and has_enough_tokens_for_learning(tokens)
 
-    if not learnable:
-        if not address_reply:
-            logger.debug(
-                "Skip message by length/tokens: chat=%s len=%s tokens=%s",
-                mask_chat_id(message.chat.id),
-                len(clean),
-                len(tokens),
-            )
-            return
-        token_volume = await learning_service.get_token_volume(message.chat.id)
-    else:
-        token_volume = await learning_service.get_token_volume(message.chat.id)
+    if not learnable and not address_reply:
+        logger.debug(
+            "Skip message by length/tokens: chat=%s len=%s tokens=%s",
+            mask_chat_id(message.chat.id),
+            len(clean),
+            len(tokens),
+        )
+        return
+    token_volume = await learning_service.get_token_volume(message.chat.id)
 
     enough_data = has_enough_model_data(
         token_volume, runtime_state.min_tokens_for_model
     )
     current_message_normalized = clean.lower()
 
+    async def send_fallback_reply(pool: tuple[str, ...]) -> None:
+        await reply_humanized_state(
+            message,
+            next_fallback_phrase(
+                runtime_state,
+                message.chat.id,
+                pool,
+                now=datetime.now(),
+                mood=mood,
+            ),
+            runtime_state,
+            per_char=True,
+        )
+
     try:
         if address_reply and not enough_data:
-            await reply_humanized(
-                message,
-                next_fallback_phrase(
-                    runtime_state,
-                    message.chat.id,
-                    NOT_ENOUGH_DATA_PHRASES,
-                    now=datetime.now(),
-                    mood=mood,
-                ),
-                runtime_state.typing_min_ms,
-                runtime_state.typing_max_ms,
-                typing_per_char_ms=runtime_state.typing_per_char_ms,
-            )
+            await send_fallback_reply(NOT_ENOUGH_DATA_PHRASES)
             runtime_state.note_mention_reply(message.chat.id, message.from_user.id, now)
             return
 
@@ -433,19 +429,7 @@ async def on_text_message(
 
         if not reply_text:
             if address_reply:
-                await reply_humanized(
-                    message,
-                    next_fallback_phrase(
-                        runtime_state,
-                        message.chat.id,
-                        GENERATION_FAILED_PHRASES,
-                        now=datetime.now(),
-                        mood=mood,
-                    ),
-                    runtime_state.typing_min_ms,
-                    runtime_state.typing_max_ms,
-                    typing_per_char_ms=runtime_state.typing_per_char_ms,
-                )
+                await send_fallback_reply(GENERATION_FAILED_PHRASES)
                 # A mention fallback is always sent; never count it against the cap.
                 runtime_state.note_reply_sent(message.chat.id, now, unprompted=False)
                 runtime_state.note_mention_reply(
@@ -496,12 +480,8 @@ async def on_text_message(
                         len(reply_parts),
                     )
 
-        await reply_humanized_sequence(
-            message,
-            reply_parts,
-            runtime_state.typing_min_ms,
-            runtime_state.typing_max_ms,
-            typing_per_char_ms=runtime_state.typing_per_char_ms,
+        await reply_humanized_sequence_state(
+            message, reply_parts, runtime_state, per_char=True
         )
         if is_short_generated_reply(
             tokenize(reply_text, normalize_lower=runtime_state.normalize_lower)

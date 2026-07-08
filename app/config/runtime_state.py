@@ -8,6 +8,17 @@ from app.config.settings import Settings
 from app.core.mood import ChatMoodState, MoodConfig
 
 
+def get_recent_deque(
+    store: dict[int, deque[str]], chat_id: int, maxlen: int
+) -> deque[str]:
+    """Per-chat bounded history from ``store``, created on first access."""
+    recent = store.get(chat_id)
+    if recent is None:
+        recent = deque(maxlen=maxlen)
+        store[chat_id] = recent
+    return recent
+
+
 @dataclass(slots=True)
 class RuntimeState:
     reply_probability: float

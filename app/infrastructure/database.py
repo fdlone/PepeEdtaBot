@@ -5,7 +5,7 @@ import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from datetime import UTC, date, datetime, timedelta
-from typing import Optional, TypeVar
+from typing import TypeVar
 
 import aiosqlite
 
@@ -59,17 +59,17 @@ class Database:
         self.messages_retention_per_chat = messages_retention_per_chat
         self.busy_timeout_ms = busy_timeout_ms
         self.wal_autocheckpoint_pages = wal_autocheckpoint_pages
-        self._conn: Optional[aiosqlite.Connection] = None
+        self._conn: aiosqlite.Connection | None = None
         self._lock = asyncio.Lock()
-        self.markov: Optional[MarkovRepo] = None
-        self.messages: Optional[MessagesRepo] = None
-        self.chat_members: Optional[ChatMembersRepo] = None
-        self.pivo_usage: Optional[PivoUsageRepo] = None
-        self.pivo_pool_usage: Optional[PivoPoolUsageRepo] = None
-        self.chat_emoji_stats: Optional[ChatEmojiStatsRepo] = None
-        self.chat_hot_ngrams: Optional[ChatHotNgramsRepo] = None
+        self.markov: MarkovRepo | None = None
+        self.messages: MessagesRepo | None = None
+        self.chat_members: ChatMembersRepo | None = None
+        self.pivo_usage: PivoUsageRepo | None = None
+        self.pivo_pool_usage: PivoPoolUsageRepo | None = None
+        self.chat_emoji_stats: ChatEmojiStatsRepo | None = None
+        self.chat_hot_ngrams: ChatHotNgramsRepo | None = None
         # Monotonic-время последнего decay эмодзи/n-грамм (None до init()).
-        self._last_flavor_decay_monotonic: Optional[float] = None
+        self._last_flavor_decay_monotonic: float | None = None
 
     async def _get_conn(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -77,7 +77,7 @@ class Database:
         return self._conn
 
     @staticmethod
-    def _require(repo: Optional[_RepoT]) -> _RepoT:
+    def _require(repo: _RepoT | None) -> _RepoT:
         """Возвращает репозиторий или бросает, если init() ещё не вызван."""
         if repo is None:
             raise RuntimeError(
@@ -132,8 +132,8 @@ class Database:
         # Ленивый суточный decay эмодзи/n-грамм: learn-путь — единственное
         # регулярное место, где Database получает управление (планировщика нет).
         await self.decay_flavor_stats_if_due()
-        starts2_pair: Optional[tuple[str, str]] = None
-        starts3_triplet: Optional[tuple[str, str, str]] = None
+        starts2_pair: tuple[str, str] | None = None
+        starts3_triplet: tuple[str, str, str] | None = None
 
         trans2_counter: Counter[tuple[str, str, str]] = Counter()
         trans3_counter: Counter[tuple[str, str, str, str]] = Counter()
@@ -289,12 +289,12 @@ class Database:
 
     async def get_start_if_exists(
         self, chat_id: int, w1: str, w2: str
-    ) -> Optional[tuple[str, str, int]]:
+    ) -> tuple[str, str, int] | None:
         return await self._require(self.markov).get_start_if_exists(chat_id, w1, w2)
 
     async def get_start3_if_exists(
         self, chat_id: int, w1: str, w2: str, w3: str
-    ) -> Optional[tuple[str, str, str, int]]:
+    ) -> tuple[str, str, str, int] | None:
         return await self._require(self.markov).get_start3_if_exists(
             chat_id, w1, w2, w3
         )
@@ -426,12 +426,7 @@ class Database:
         Stale rows are halved and their clock reset; rows reaching 0 are removed.
         Returns the number of rows deleted.
         """
-        if decay_days < 0:
-            raise ValueError("decay_days must be non-negative")
-        current = now or datetime.now(UTC)
-        # Match SQLite's datetime('now') text format ("YYYY-MM-DD HH:MM:SS", UTC)
-        # so the string comparison in decay_stale is well-defined.
-        cutoff = (current - timedelta(days=decay_days)).strftime("%Y-%m-%d %H:%M:%S")
+        cutoff = self._decay_cutoff(decay_days, now)
         return await self._require(self.chat_emoji_stats).decay_stale(cutoff)
 
     # --- Делегаты к ChatHotNgramsRepo (L1 running jokes) ---
@@ -460,13 +455,18 @@ class Database:
         daily re-run via ``decay_flavor_stats_if_due``). Returns the number of
         purged rows.
         """
+        cutoff = self._decay_cutoff(decay_days, now)
+        return await self._require(self.chat_hot_ngrams).decay_stale(cutoff)
+
+    @staticmethod
+    def _decay_cutoff(decay_days: int, now: datetime | None) -> str:
+        """Cutoff timestamp for decay_stale, in SQLite's datetime('now') text
+        format ("YYYY-MM-DD HH:MM:SS", UTC) so the string comparison there is
+        well-defined."""
         if decay_days < 0:
             raise ValueError("decay_days must be non-negative")
         current = now or datetime.now(UTC)
-        # Match SQLite's datetime('now') text format ("YYYY-MM-DD HH:MM:SS", UTC)
-        # so the string comparison in decay_stale is well-defined.
-        cutoff = (current - timedelta(days=decay_days)).strftime("%Y-%m-%d %H:%M:%S")
-        return await self._require(self.chat_hot_ngrams).decay_stale(cutoff)
+        return (current - timedelta(days=decay_days)).strftime("%Y-%m-%d %H:%M:%S")
 
     async def decay_flavor_stats_if_due(self) -> bool:
         """Перезапускает decay эмодзи/n-грамм, если прошёл суточный интервал.
@@ -545,15 +545,22 @@ class Database:
         }
 
     async def clear_chat(self, chat_id: int) -> None:
+        tables = (
+            "messages",
+            "starts",
+            "starts3",
+            "transitions",
+            "transitions3",
+            "transitions1",
+            "chat_model_volume",
+            "chat_emoji_stats",
+            "chat_hot_ngrams",
+        )
         async with self._lock:
             db = await self._get_conn()
-            await db.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM starts WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM starts3 WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM transitions WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM transitions3 WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM transitions1 WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM chat_model_volume WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM chat_emoji_stats WHERE chat_id = ?", (chat_id,))
-            await db.execute("DELETE FROM chat_hot_ngrams WHERE chat_id = ?", (chat_id,))
+            for table in tables:
+                await db.execute(
+                    f"DELETE FROM {table} WHERE chat_id = ?",  # nosec B608 - tables is a literal tuple
+                    (chat_id,),
+                )
             await db.commit()

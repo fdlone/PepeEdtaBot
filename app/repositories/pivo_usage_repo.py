@@ -1,19 +1,10 @@
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Awaitable, Callable
-
-import aiosqlite
-
-ConnProvider = Callable[[], Awaitable[aiosqlite.Connection]]
+from app.repositories.base_repo import BaseRepo
 
 
-class PivoUsageRepo:
+class PivoUsageRepo(BaseRepo):
     """Суточные квоты вызова /pivo по chat/user hash."""
-
-    def __init__(self, conn_provider: ConnProvider, lock: asyncio.Lock) -> None:
-        self._conn_provider = conn_provider
-        self._lock = lock
 
     async def consume_daily_call(
         self,
@@ -24,8 +15,7 @@ class PivoUsageRepo:
         limit: int,
     ) -> tuple[bool, int]:
         """Пытается списать один вызов и возвращает (allowed, used_count)."""
-        async with self._lock:
-            db = await self._conn_provider()
+        async with self._transaction() as db:
             cursor = await db.execute(
                 """
                 SELECT used_count
@@ -44,7 +34,6 @@ class PivoUsageRepo:
                     """,
                     (chat_hash, user_hash, usage_day),
                 )
-                await db.commit()
                 return True, 1
 
             used_count = int(row[0])
@@ -60,7 +49,6 @@ class PivoUsageRepo:
                 """,
                 (used_count, chat_hash, user_hash, usage_day),
             )
-            await db.commit()
             return True, used_count
 
     async def refund_daily_call(
@@ -71,8 +59,7 @@ class PivoUsageRepo:
         usage_day: str,
     ) -> None:
         """Возвращает один списанный вызов, если ответ /pivo не был доставлен."""
-        async with self._lock:
-            db = await self._conn_provider()
+        async with self._transaction() as db:
             cursor = await db.execute(
                 """
                 SELECT used_count
@@ -103,28 +90,17 @@ class PivoUsageRepo:
                     """,
                     (used_count - 1, chat_hash, user_hash, usage_day),
                 )
-            await db.commit()
 
     async def delete_chat_usage(self, chat_hash: str) -> None:
         """Удаляет все квоты чата (используется /clear)."""
-        async with self._lock:
-            db = await self._conn_provider()
-            await db.execute(
-                "DELETE FROM pivo_daily_usage WHERE chat_hash = ?",
-                (chat_hash,),
-            )
-            await db.commit()
+        await self._execute(
+            "DELETE FROM pivo_daily_usage WHERE chat_hash = ?",
+            (chat_hash,),
+        )
 
     async def delete_usage_before(self, cutoff_day: str) -> int:
         """Deletes quota rows older than cutoff_day and returns deleted row count."""
-        async with self._lock:
-            db = await self._conn_provider()
-            cursor = await db.execute(
-                """
-                DELETE FROM pivo_daily_usage
-                WHERE usage_day < ?
-                """,
-                (cutoff_day,),
-            )
-            await db.commit()
-            return cursor.rowcount
+        return await self._execute(
+            "DELETE FROM pivo_daily_usage WHERE usage_day < ?",
+            (cutoff_day,),
+        )
