@@ -42,8 +42,8 @@ from app.core.response_generator import (
 from app.core.text import sanitize_text
 from app.handlers._helpers import (
     is_group_message,
-    reply_humanized,
-    reply_humanized_sequence,
+    reply_humanized_sequence_state,
+    reply_humanized_state,
 )
 from app.log_masking import mask_chat_id
 from app.presentation.fallback_phrases import (
@@ -263,7 +263,7 @@ async def on_text_message(
     current_message_normalized = clean.lower()
 
     async def send_fallback_reply(pool: tuple[str, ...]) -> None:
-        await reply_humanized(
+        await reply_humanized_state(
             message,
             next_fallback_phrase(
                 runtime_state,
@@ -272,9 +272,8 @@ async def on_text_message(
                 now=datetime.now(),
                 mood=mood,
             ),
-            runtime_state.typing_min_ms,
-            runtime_state.typing_max_ms,
-            typing_per_char_ms=runtime_state.typing_per_char_ms,
+            runtime_state,
+            per_char=True,
         )
 
     try:
@@ -481,12 +480,8 @@ async def on_text_message(
                         len(reply_parts),
                     )
 
-        await reply_humanized_sequence(
-            message,
-            reply_parts,
-            runtime_state.typing_min_ms,
-            runtime_state.typing_max_ms,
-            typing_per_char_ms=runtime_state.typing_per_char_ms,
+        await reply_humanized_sequence_state(
+            message, reply_parts, runtime_state, per_char=True
         )
         if is_short_generated_reply(
             tokenize(reply_text, normalize_lower=runtime_state.normalize_lower)
