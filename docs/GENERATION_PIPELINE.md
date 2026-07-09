@@ -177,7 +177,7 @@ Telegram message (F.text)
 
 Константы: `GENERATION_ATTEMPT_BUDGET=10`, `GENERATION_ATTEMPTS_WITH_CONTEXT=5`
 (после 5-й попытки контекст отбрасывается), `CANDIDATE_TARGET=5`,
-`SELECTION_SCORE_MARGIN=0.5`, `SHORT_MODE_MAX_TOKENS=8`.
+`SELECTION_SCORE_MARGIN=0.3`, `SHORT_MODE_MAX_TOKENS=8`.
 
 Порядок:
 1. **Режим длины**: `sample_length_mode` по весам `length_mode_weights=0.25,0.55,0.2`
@@ -199,8 +199,10 @@ Telegram message (F.text)
    `recent_penalty = recent_reply_penalty_strength=0.5 × доля триграмм,
    совпавших с последними 20 ответами` (`recent_reply_overlap`).
 6. **Выбор**: `select_scored_candidate` — softmax с
-   `candidate_selection_temperature=1.3` среди кандидатов в пределах 0.5
+   `candidate_selection_temperature=0.7` среди кандидатов в пределах 0.3
    (`SELECTION_SCORE_MARGIN`) от лучшего скора; t=0 или один кандидат → argmax.
+   Именно `SELECTION_SCORE_MARGIN`, а не температура, решает, победит ли лучший
+   кандидат: окно отсекает слабых до того, как софтмаксу есть что размазывать.
 7. **Пост-обработка**:
    - `capitalize_reply_sentences` (только при `auto_capitalize_replies=true`,
      по умолчанию false);

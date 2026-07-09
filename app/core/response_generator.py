@@ -38,10 +38,12 @@ GENERATION_ATTEMPTS_WITH_CONTEXT = 5
 CANDIDATE_TARGET = 5
 # Softmax candidate selection only considers candidates whose score is within
 # this margin of the best one; clearly weaker candidates never win the roll.
-# 0.5 keeps context relevance influential (its score weight caps at 0.8) while
-# still letting near-best candidates win: with margin 1.0 the synthetic eval's
-# context_token_overlap collapsed from 0.38 to 0.13.
-SELECTION_SCORE_MARGIN = 0.5
+# 0.3 (2026-07-09): this margin, not the temperature, is what decides whether
+# the best candidate wins -- eval_prod moved context_win_given_top 0.55 -> 0.89
+# on the margin alone, while temperatures 1.3/0.7/0.3 stayed within 1pp of each
+# other. Widening it hurts: at 1.0 the synthetic eval's context_token_overlap
+# collapsed from 0.38 to 0.13.
+SELECTION_SCORE_MARGIN = 0.3
 # How many recently sent replies are remembered per chat for the full-reply
 # anti-repeat: exact re-sends are rejected, partial (trigram) overlap is
 # penalized before softmax selection.

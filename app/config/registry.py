@@ -146,11 +146,13 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _int_in_range(0, 200)),
     FieldSpec("randomness_strength", "RANDOMNESS_STRENGTH", "2.0",
               _float_in_range(0.0, 3.0)),
-    # 1.3 (2026-07-06): raised from 0.7 with the verbatim/coherence score
-    # penalties in place — odd-but-valid candidates should win more often now
-    # that quotes and word salad are penalized instead of out-scoring them.
+    # 0.7 (2026-07-09): three eval_prod sweeps found the temperature nearly
+    # inert -- 1.3/0.7/0.3 land within 1pp of each other on every metric,
+    # because SELECTION_SCORE_MARGIN culls the pool before the softmax has
+    # anything to spread over. Set to the middle of the range that was tested;
+    # tune the margin, not this, if the wrong candidate keeps winning.
     FieldSpec("candidate_selection_temperature", "CANDIDATE_SELECTION_TEMPERATURE",
-              "1.3", _float_in_range(0.0, 3.0)),
+              "0.7", _float_in_range(0.0, 3.0)),
     FieldSpec("reply_flavor_strength", "REPLY_FLAVOR_STRENGTH", "1.0",
               _float_in_range(0.0, 2.0)),
     # M3 emoji channel: chance to append a frequency-sampled emoji (from this
@@ -169,8 +171,13 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # strength × share of the candidate's content 4-grams found in the corpus
     # index. 0 disables (and skips the index read). Замена бинарного гейта,
     # который цитаты с добавленной точкой раньше проходили насквозь.
+    # 1.5 (2026-07-09): raising the context weight makes on-topic continuations
+    # win, and continuing from an exact context state retraces the original
+    # message -- so quoting rose with it. 1.5 pulls verbatim_run_ratio back to
+    # the old 0.075 and near-verbatim replies to zero; past 1.5 the penalty
+    # starts hitting the on-topic candidates themselves.
     FieldSpec("verbatim_penalty_strength", "VERBATIM_PENALTY_STRENGTH",
-              "1.0", _float_in_range(0.0, 3.0)),
+              "1.5", _float_in_range(0.0, 3.0)),
     FieldSpec("length_mode_weights", "LENGTH_MODE_WEIGHTS", "0.25,0.55,0.2",
               _length_weights()),
     FieldSpec("markov_order", "MARKOV_ORDER", "3", _int_in_set({2, 3})),

@@ -43,8 +43,15 @@ LEXICAL_DIVERSITY_WEIGHT = 1.00
 SHORT_LEXICAL_DIVERSITY_BASE = 0.40
 SHORT_LEXICAL_DIVERSITY_WEIGHT = 0.40
 NATURAL_LENGTH_WEIGHT = 1.00
-CONTEXT_RELEVANCE_WEIGHT = 0.80
-CONTEXT_RELEVANCE_CAP = 0.80
+# 1.6 (2026-07-09): at 0.80 the topic term could not outweigh the completion +
+# diversity + natural_length ceiling (2.35), so fluent off-topic candidates won.
+# Raised together with SELECTION_SCORE_MARGIN 0.3 -- neither alone was enough:
+# IDF fixed which candidate ranks top, the margin fixed whether it survives the
+# softmax roll. eval_prod: context_win_given_top 0.55 -> 0.89, verbatim flat.
+# The cap is pinned to the weight: idf_context_relevance is already normalized
+# to [0, 1], so a lower cap would only clip the strongest on-topic matches.
+CONTEXT_RELEVANCE_WEIGHT = 1.60
+CONTEXT_RELEVANCE_CAP = 1.60
 
 REPEATED_TOKEN_WEIGHT = 0.60
 REPEATED_BIGRAM_WEIGHT = 1.00
