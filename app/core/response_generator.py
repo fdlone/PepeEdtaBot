@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from typing import Protocol
 
 from app.config.runtime_state import RuntimeState, get_recent_deque
+from app.core import gen_trace_log
 from app.core.candidate_scorer import (
     CandidateScore,
     build_recent_reply_trigrams,
@@ -251,6 +252,18 @@ class ResponseGenerator:
         if length_mode == "short":
             max_tokens = min(max_tokens, SHORT_MODE_MAX_TOKENS)
 
+        gen_trace_log.log_request_header(
+            request.chat_id,
+            length_mode=length_mode,
+            randomness=effective_randomness,
+            temperature=self.runtime_state.candidate_selection_temperature,
+            target=target,
+            budget=GENERATION_ATTEMPT_BUDGET,
+            attempts_with_context=GENERATION_ATTEMPTS_WITH_CONTEXT,
+            recent_penalty_strength=recent_penalty_strength,
+            verbatim_penalty_strength=verbatim_penalty_strength,
+        )
+
         for attempt in range(GENERATION_ATTEMPT_BUDGET):
             attempt_context_tokens = (
                 request.context_tokens
@@ -290,6 +303,11 @@ class ResponseGenerator:
                     bool(attempt_context_tokens),
                     len(seed or []),
                 )
+                gen_trace_log.log_attempt_failed(
+                    request.chat_id,
+                    attempt + 1,
+                    context_used=bool(attempt_context_tokens),
+                )
             else:
                 candidate_normalized = sanitize_text(candidate).lower()
                 candidate_tokens = tokenize(
@@ -310,6 +328,13 @@ class ResponseGenerator:
                         mask_chat_id(request.chat_id),
                         attempt + 1,
                     )
+                    gen_trace_log.log_attempt_rejected(
+                        request.chat_id,
+                        attempt + 1,
+                        context_used=bool(attempt_context_tokens),
+                        reason=reject_reason,
+                        text=candidate,
+                    )
                 else:
                     logger.debug(
                         "Reply generated: chat=%s attempt=%s tokens=%s context=%s",
@@ -320,6 +345,9 @@ class ResponseGenerator:
                     )
                     if candidate not in seen_candidates:
                         seen_candidates.add(candidate)
+                        coherence_penalty = coherence_penalty_for_order(
+                            candidate_trace.markov_order_used
+                        )
                         score = replace(
                             self.scorer(
                                 candidate,
@@ -331,24 +359,52 @@ class ResponseGenerator:
                             * recent_reply_overlap(candidate_tokens, recent_trigrams),
                             verbatim_penalty=verbatim_penalty_strength
                             * verbatim_ngram_overlap(candidate_tokens, corpus_ngrams),
-                            coherence_penalty=coherence_penalty_for_order(
-                                candidate_trace.markov_order_used
-                            ),
+                            coherence_penalty=coherence_penalty,
                         )
                         candidates.append(
                             _ScoredCandidate(text=candidate, score=score)
                         )
+                        gen_trace_log.log_attempt_accepted(
+                            request.chat_id,
+                            attempt + 1,
+                            context_used=bool(attempt_context_tokens),
+                            index=len(candidates),
+                            trace=candidate_trace,
+                            score=score,
+                            text=candidate,
+                        )
                         if len(candidates) >= target:
                             break
+                    else:
+                        gen_trace_log.log_attempt_duplicate(
+                            request.chat_id,
+                            attempt + 1,
+                            context_used=bool(attempt_context_tokens),
+                        )
 
             seed = None
 
         if not candidates:
+            gen_trace_log.log_selection(
+                request.chat_id,
+                candidates,
+                temperature=self.runtime_state.candidate_selection_temperature,
+                margin=SELECTION_SCORE_MARGIN,
+                selection_margin_used=True,
+            )
             return ResponseGenerationResult(text=None, candidates_scored=0)
         selected = select_scored_candidate(
             candidates,
             self.runtime_state.candidate_selection_temperature,
             generation_rng,
+        )
+        gen_trace_log.log_selection(
+            request.chat_id,
+            candidates,
+            temperature=self.runtime_state.candidate_selection_temperature,
+            margin=SELECTION_SCORE_MARGIN,
+            selection_margin_used=True,
+            selected=selected,
         )
         text = (
             capitalize_reply_sentences(selected.text)

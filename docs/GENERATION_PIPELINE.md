@@ -199,8 +199,8 @@ Telegram message (F.text)
    `recent_penalty = recent_reply_penalty_strength=0.5 × доля триграмм,
    совпавших с последними 20 ответами` (`recent_reply_overlap`).
 6. **Выбор**: `select_scored_candidate` — softmax с
-   `candidate_selection_temperature=0.7` среди кандидатов в пределах 0.5 от
-   лучшего скора; t=0 → argmax.
+   `candidate_selection_temperature=1.3` среди кандидатов в пределах 0.5
+   (`SELECTION_SCORE_MARGIN`) от лучшего скора; t=0 или один кандидат → argmax.
 7. **Пост-обработка**:
    - `capitalize_reply_sentences` (только при `auto_capitalize_replies=true`,
      по умолчанию false);
@@ -245,8 +245,16 @@ floor 0.02); выбор — через `rng.expovariate` (`exploration_weighted_
    - prefix-матчи (при `fuzzy_context_prefix=false` — выключено): кириллические
      токены ≥5 симв., общий префикс ≥6, coverage ≥0.75, confidence =
      0.65·string + 0.35·log-frequency ≥ 0.68, ≥2 переходов.
-   При контекстном старте `emit_start=False` — стартовая тройка **не** попадает
-   в текст (контекст «скрытый»), генерация продолжается из состояния.
+   Гейт: контекстный старт вообще пробуется лишь с вероятностью
+   `context_start_probability(2.2)≈0.545` за попытку (`use_contextual_start`);
+   в остальных ~45% сразу глобальный старт. При совпадении и
+   `reply_context_emit_start=true` (дефолт) в текст эмитится **хвост** совпавшего
+   окна (`context_emission_tokens`) — ответ «подхватывает» контекст вслух,
+   `start_source="context"` (**видимый** старт). При `reply_context_emit_start=false`
+   тройка не эмитится (`start_source="hidden_context"`, «скрытый» контекст),
+   генерация продолжается из состояния. Если контекстный старт пробовался, но ни
+   одно окно не совпало — откат на глобальный старт со счётчиком
+   `hidden_context_fallbacks` (в трейсе `context=HIDDEN_FALLBACK`).
 3. **Глобальный старт** (`_pick_global_start`, `markov.py:1148`): взвешенный
    выбор из всех стартов чата (3-граммы, иначе 2-граммы + шаг).
 
@@ -255,8 +263,8 @@ floor 0.02); выбор — через `rng.expovariate` (`exploration_weighted_
 `max_chars=280`.
 
 Каждый шаг:
-- **Прыжок темы M4**: при >8 токенах, order 3, с шансом
-  `markov_jump_probability=0.04` — новый учёный старт (сначала пробуется
+- **Прыжок темы M4**: при ≥5 токенах (`JUMP_MIN_GENERATED_TOKENS`), order 3,
+  с шансом `markov_jump_probability=0.12` — новый учёный старт (сначала пробуется
   контекстный `_select_contextual_start3`, иначе глобальный), в текст
   вклеивается связка из `JUMP_CONNECTIVE_TOKENS` («, кстати», «, короче», …).
 - **Переход**: пул 3-граммы; кандидаты, ведущие в уже посещённую тройку,
@@ -294,8 +302,10 @@ floor 0.02); выбор — через `rng.expovariate` (`exploration_weighted_
   или overlap ≥0.92 при общем прогоне ≥5, или общий прогон ≥ len−1.
 
 `GenerationTrace` пишется в debug-лог: attempts, order_used, jumps, rejection,
-start_source (global/seed/hidden_context), счётчики exact/casefold/prefix
-матчей и фолбэков.
+start_source (**global / seed / context / hidden_context**), счётчики
+exact/casefold/prefix матчей и фолбэков. `context` = видимый контекстный старт
+(токены эмитятся, `reply_context_emit_start=true`); `hidden_context` = совпадение
+было, но старт не эмитился.
 
 ---
 
@@ -393,14 +403,14 @@ Fallback на обращение не считается в hourly cap.
 | normalize_lower | false | lowercase-токенизация |
 | auto_capitalize_replies | false | капитализация предложений |
 | randomness_strength | 2.0 | база explore/power (§5.1) |
-| candidate_selection_temperature | 0.7 | softmax выбора кандидата |
+| candidate_selection_temperature | 1.3 | softmax выбора кандидата |
 | length_mode_weights | 0.25,0.55,0.2 | веса short/medium/long |
 | repetition_penalty_strength | 1.0 | локальные анти-повторы шага |
 | recent_reply_penalty_strength | 0.5 | штраф пересечения с прошлыми ответами |
 | reply_flavor_strength | 1.0 | вариации концовки |
 | emoji_append_chance | 0.15 | M3 эмодзи-хвост |
 | markov_order / enable_backoff / backoff_min_order | 3 / true / 1 | порядок цепи |
-| markov_jump_probability | 0.04 | M4 прыжки темы |
+| markov_jump_probability | 0.12 | M4 прыжки темы |
 | use_reply_context | true | контекст из reply |
 | reply_context_max_tokens | 12 | окно контекста |
 | reply_context_bias / start_bias | 1.8 / 2.2 | сила контекста в шаге/старте |
@@ -431,3 +441,9 @@ Fallback на обращение не считается в hourly cap.
 - Характеризационные тесты: `tests/test_markov_generation_characterization.py`,
   `tests/test_response_generator.py`, `tests/test_candidate_scorer.py`,
   `tests/test_eval_generation.py` и остальные `tests/test_*` по модулям выше.
+- `app/core/gen_trace_log.py` — пошаговый лайв-трейс отбора кандидатов на
+  логгере `chat_markov.gen` (INFO): заголовок генерации, по каждой попытке
+  маршрут (`start_source`/order/тип контекст-матча/jumps) и разбивка очков,
+  таблица финального softmax-выбора с весами/вероятностями. Гейтится уровнем
+  INFO (`enabled()`), поведение не меняет. Для читаемой кириллицы в лог-файле
+  запускать бота в UTF-8 (`PYTHONUTF8=1`).
