@@ -28,8 +28,11 @@ gen_logger = logging.getLogger("chat_markov.gen")
 
 
 class _HasScore(Protocol):
-    text: str
-    score: CandidateScore
+    @property
+    def text(self) -> str: ...
+
+    @property
+    def score(self) -> CandidateScore: ...
 
 
 def enabled() -> bool:
