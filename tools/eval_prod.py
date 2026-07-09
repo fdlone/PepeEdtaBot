@@ -36,6 +36,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app import log_masking  # noqa: E402
+from app.config.registry import RUNTIME_FIELDS  # noqa: E402
 from app.core import candidate_scorer as _cs  # noqa: E402
 from app.core import context_state_matcher, gen_trace_log  # noqa: E402
 from app.core import response_generator as _rg  # noqa: E402
@@ -299,35 +300,18 @@ async def evaluate(
                 candidates, selected
             )
         )
-        # Mirrors the production registry defaults (app/config/registry.py) so
-        # the eval measures the pipeline the bot actually runs. Deviations are
+        # Built from the registry defaults (app/config/registry.py) so the eval
+        # always measures the pipeline the bot actually runs -- a hand-copied
+        # namespace silently drifts when a default is retuned. Deviations are
         # deliberate: reply_flavor_strength=0 and emoji_append_chance=0 keep the
         # surface layers out of content metrics.
         runtime_state = SimpleNamespace(
-            randomness_strength=2.0,
-            max_reply_chars=280,
-            max_reply_tokens=45,
-            reply_context_bias=1.8,
-            reply_context_start_bias=2.2,
-            repetition_penalty_strength=1.0,
-            recent_reply_penalty_strength=0.5,
-            verbatim_penalty_strength=1.0,
-            candidate_selection_temperature=1.3,
-            length_mode_weights=(0.25, 0.55, 0.2),
-            markov_order=3,
-            enable_backoff=True,
-            backoff_min_order=2,
-            markov_jump_probability=0.12,
-            normalize_lower=False,
-            fuzzy_context_casefold=True,
-            fuzzy_context_prefix=False,
-            reply_context_emit_start=True,
-            auto_capitalize_replies=False,
-            reply_flavor_strength=0.0,
-            emoji_append_chance=0.0,
-            recent_short_replies={},
-            recent_replies={},
+            **{spec.name: spec.parse(spec.default) for spec in RUNTIME_FIELDS}
         )
+        runtime_state.reply_flavor_strength = 0.0
+        runtime_state.emoji_append_chance = 0.0
+        runtime_state.recent_short_replies = {}
+        runtime_state.recent_replies = {}
         for key, value in (overrides or {}).items():
             setattr(runtime_state, key, value)
         response_generator = ResponseGenerator(

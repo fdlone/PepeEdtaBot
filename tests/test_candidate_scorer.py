@@ -7,8 +7,10 @@ from app.core.candidate_scorer import (
     CONTEXT_RELEVANCE_CAP,
     LENGTH_MODES,
     build_recent_reply_trigrams,
+    build_token_idf,
     completion_quality,
     context_relevance,
+    idf_context_relevance,
     lexical_diversity,
     natural_length,
     recent_reply_overlap,
@@ -48,6 +50,22 @@ class TestCandidateScorer(unittest.TestCase):
 
         self.assertEqual(stopword_only, 0.0)
         self.assertEqual(meaningful, CONTEXT_RELEVANCE_CAP)
+
+    def test_pure_echo_scores_zero_relevance(self) -> None:
+        # A candidate whose informative tokens all come from the context is a
+        # parrot: it must not collect the context bonus, on either formula.
+        idf = build_token_idf([tokenize("старая копия бд лежит на диске")])
+        context = tokenize("старая копия бд")
+
+        echo_with_idf = idf_context_relevance(tokenize("копия бд"), context, idf)
+        echo_no_idf = idf_context_relevance(tokenize("копия бд"), context, {})
+        novel = idf_context_relevance(
+            tokenize("копия бд лежит на диске"), context, idf
+        )
+
+        self.assertEqual(echo_with_idf, 0.0)
+        self.assertEqual(echo_no_idf, 0.0)
+        self.assertGreater(novel, 0.0)
 
     def test_short_candidate_uses_separate_diversity_threshold(self) -> None:
         short = lexical_diversity(tokenize("да да"))

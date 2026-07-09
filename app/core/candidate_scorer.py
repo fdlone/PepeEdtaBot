@@ -216,12 +216,19 @@ def idf_context_relevance(
     normalized by the context's own IDF mass: matching a rare name is worth much
     more than matching "кто", and candidate length no longer enters.
     """
-    if not idf:
-        return context_relevance(tokens, context_tokens)
     candidate = set(meaningful_tokens(tokens))
     context = set(meaningful_tokens(context_tokens))
     if not candidate or not context:
         return 0.0
+    # A candidate whose informative tokens are all echoed from the context adds
+    # nothing new -- it is a parrot, not a reply. Without this guard a pure echo
+    # scores the *maximum* relevance (it returns 100% of whatever context mass
+    # it shares), and short echoes slip past both the verbatim gate (needs
+    # 4-grams) and the short_context_copy reject.
+    if candidate <= context:
+        return 0.0
+    if not idf:
+        return context_relevance(tokens, context_tokens)
     default = max(idf.values())
     context_mass = sum(idf.get(token, default) for token in context)
     if context_mass <= 0.0:
