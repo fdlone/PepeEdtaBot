@@ -13,6 +13,7 @@ from app.core.candidate_scorer import (
     CandidateScore,
     build_recent_reply_trigrams,
     coherence_penalty_for_order,
+    idf_context_relevance,
     recent_reply_overlap,
     sample_length_mode,
     score_candidate,
@@ -60,6 +61,7 @@ class VerbatimCopyChecker(Protocol):
     async def get_verbatim_ngram_index(
         self, chat_id: int
     ) -> frozenset[tuple[str, ...]]: ...
+    async def get_context_idf(self, chat_id: int) -> Mapping[str, float]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,6 +240,14 @@ class ResponseGenerator:
             corpus_ngrams = await self.learning_service.get_verbatim_ngram_index(
                 request.chat_id
             )
+        # Topic overlap is scored by how much of the context's *informative* mass
+        # the candidate echoes, not by raw token count -- otherwise a short reply
+        # sharing a pronoun beats a long one sharing a proper noun.
+        context_idf: Mapping[str, float] = {}
+        if request.context_tokens:
+            context_idf = await self.learning_service.get_context_idf(
+                request.chat_id
+            )
         base_weights = self.runtime_state.length_mode_weights
         mood_weights = (
             base_weights[0] * modifiers.length_weight_mult[0],
@@ -354,6 +364,11 @@ class ResponseGenerator:
                                 candidate_tokens,
                                 request.context_tokens,
                                 length_mode,
+                            ),
+                            context_relevance=idf_context_relevance(
+                                candidate_tokens,
+                                request.context_tokens,
+                                context_idf,
                             ),
                             recent_penalty=recent_penalty_strength
                             * recent_reply_overlap(candidate_tokens, recent_trigrams),

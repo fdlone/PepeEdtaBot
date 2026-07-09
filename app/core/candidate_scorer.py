@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import math
 import random
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
@@ -172,6 +173,57 @@ def context_relevance(tokens: list[str], context_tokens: list[str]) -> float:
         return 0.0
     overlap_ratio = len(candidate & context) / len(candidate)
     return min(CONTEXT_RELEVANCE_CAP, overlap_ratio * CONTEXT_RELEVANCE_WEIGHT)
+
+
+def build_token_idf(documents: Iterable[list[str]]) -> dict[str, float]:
+    """Inverse document frequency of each content token across ``documents``.
+
+    A document is one training message. Tokens appearing in most messages
+    (pronouns, fillers) get an IDF near 0; rare ones (names, jargon) get a high
+    one. Smoothed so a token present in every document still scores above 0.
+    """
+    document_count = 0
+    seen: Counter[str] = Counter()
+    for tokens in documents:
+        document_count += 1
+        seen.update(set(meaningful_tokens(tokens)))
+    if not document_count:
+        return {}
+    return {
+        token: math.log((document_count + 1) / (count + 1)) + 1.0
+        for token, count in seen.items()
+    }
+
+
+def idf_context_relevance(
+    tokens: list[str],
+    context_tokens: list[str],
+    idf: Mapping[str, float],
+) -> float:
+    """Share of the context's *informative* mass that the candidate echoes back.
+
+    The plain ``context_relevance`` divides the overlap by the candidate length,
+    so a one-word echo sharing a pronoun outscores a long on-topic continuation
+    sharing a proper noun -- raising CONTEXT_RELEVANCE_WEIGHT only amplifies
+    that. Here each shared token contributes its IDF, and the total is
+    normalized by the context's own IDF mass: matching a rare name is worth much
+    more than matching "кто", and candidate length no longer enters.
+    """
+    if not idf:
+        return context_relevance(tokens, context_tokens)
+    candidate = set(meaningful_tokens(tokens))
+    context = set(meaningful_tokens(context_tokens))
+    if not candidate or not context:
+        return 0.0
+    default = max(idf.values())
+    context_mass = sum(idf.get(token, default) for token in context)
+    if context_mass <= 0.0:
+        return 0.0
+    shared_mass = sum(idf.get(token, default) for token in candidate & context)
+    return min(
+        CONTEXT_RELEVANCE_CAP,
+        (shared_mass / context_mass) * CONTEXT_RELEVANCE_WEIGHT,
+    )
 
 
 def _repeated_ratio(items: list[tuple[str, ...]] | list[str]) -> float:
