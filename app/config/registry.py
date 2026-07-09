@@ -175,7 +175,12 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _length_weights()),
     FieldSpec("markov_order", "MARKOV_ORDER", "3", _int_in_set({2, 3})),
     FieldSpec("enable_backoff", "ENABLE_BACKOFF", "true", _bool()),
-    FieldSpec("backoff_min_order", "BACKOFF_MIN_ORDER", "1", _int_in_set({1, 2})),
+    # 2 (2026-07-09): order-1 walks are word salad that the coherence penalty
+    # only discounts rather than blocks. Forbidding the 1-gram backoff nearly
+    # doubled the coherent (order>=2) context-anchored wins in eval_prod (16 ->
+    # 29 of 200) and cut verbatim_run_ratio 0.090 -> 0.064, with no rise in
+    # empty_result_rate: the attempt budget refills the candidate pool.
+    FieldSpec("backoff_min_order", "BACKOFF_MIN_ORDER", "2", _int_in_set({1, 2})),
     # M4 topic drift: probability per generation step (only after the reply has
     # >8 tokens, order 3) of jumping to a new learned sentence start, splicing a
     # connective ("..., кстати ...") so the shift reads as a deliberate aside.
