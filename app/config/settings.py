@@ -89,6 +89,7 @@ class Settings:
     throttle_state_max_keys: int
     text_cache_max_messages: int
     log_level: str
+    gen_trace_log: bool
     bot_text_aliases: frozenset[str]
 
 
@@ -201,6 +202,13 @@ def load_settings(load_env: bool = True) -> Settings:
             "LOG_LEVEL must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL"
         )
 
+    # Verbose per-candidate generation trace (chat_markov.gen). Off by default:
+    # it dumps candidate texts into the log on every reply -- a debugging tool,
+    # not something a prod deployment should have to remember to switch off.
+    gen_trace_log = os.getenv("GEN_TRACE_LOG", "false").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
     # BOT_TEXT_ALIASES: comma-separated. Empty / unset → built-in defaults
     # so deployments without .env access keep working.
     aliases_raw = os.getenv("BOT_TEXT_ALIASES", "").strip()
@@ -234,6 +242,7 @@ def load_settings(load_env: bool = True) -> Settings:
         throttle_state_max_keys=throttle_state_max_keys,
         text_cache_max_messages=text_cache_max_messages,
         log_level=log_level,
+        gen_trace_log=gen_trace_log,
         bot_text_aliases=bot_text_aliases,
         **runtime_values,  # type: ignore[arg-type]
     )

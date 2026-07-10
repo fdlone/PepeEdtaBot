@@ -72,6 +72,10 @@ async def run_bot() -> None:
     )
     logger = logging.getLogger("chat_markov")
     logging.getLogger("aiogram").setLevel(logging.WARNING)
+    if not settings.gen_trace_log:
+        # Per-candidate generation trace is a debugging tool: without the
+        # GEN_TRACE_LOG flag prod must not dump candidate texts into the log.
+        logging.getLogger("chat_markov.gen").setLevel(logging.WARNING)
 
     db = Database(
         settings.db_path,
