@@ -275,6 +275,8 @@ async def evaluate(
     saved_weight = _cs.CONTEXT_RELEVANCE_WEIGHT
     saved_cap = _cs.CONTEXT_RELEVANCE_CAP
     saved_log_selection = gen_trace_log.log_selection
+    saved_log_rejected = gen_trace_log.log_attempt_rejected
+    saved_log_extended = gen_trace_log.log_attempt_extended
     if selection_margin is not None:
         _rg.SELECTION_SCORE_MARGIN = float(selection_margin)
     if prefix_confidence is not None:
@@ -303,6 +305,22 @@ async def evaluate(
                 candidates, selected
             )
         )
+        # Response-generator-level events: gate rejections (the markov-level
+        # ones live in generator.rejections) and verbatim-copy extensions.
+        rg_rejections: Counter[str] = Counter()
+        extended_texts: set[str] = set()
+        extension_count = 0
+
+        def _on_rejected(_chat_id, attempt, *, context_used, reason, text):
+            rg_rejections[reason] += 1
+
+        def _on_extended(_chat_id, attempt, *, original, extended):
+            nonlocal extension_count
+            extension_count += 1
+            extended_texts.add(extended)
+
+        gen_trace_log.log_attempt_rejected = _on_rejected  # type: ignore[assignment]
+        gen_trace_log.log_attempt_extended = _on_extended  # type: ignore[assignment]
         # Built from the registry defaults (app/config/registry.py) so the eval
         # always measures the pipeline the bot actually runs -- a hand-copied
         # namespace silently drifts when a default is retuned. Deviations are
@@ -340,6 +358,7 @@ async def evaluate(
         # map). Multi-jump winners are the "long salad" replies; per-bucket
         # length/verbatim slices show what each extra jump costs.
         winner_jumps: Counter[int] = Counter()
+        extension_wins = 0
         length_by_jumps: dict[int, list[int]] = {}
         verbatim_by_jumps: dict[int, list[float]] = {}
         try:
@@ -382,6 +401,8 @@ async def evaluate(
                 verbatim_runs.append(run)
                 verbatim_ratios.append(run / len(content_cf) if content_cf else 0.0)
                 jumps = generator.attempt_jumps.get(result.text, -1)
+                if result.text in extended_texts:
+                    extension_wins += 1
                 winner_jumps[jumps] += 1
                 length_by_jumps.setdefault(jumps, []).append(len(reply_content))
                 verbatim_by_jumps.setdefault(jumps, []).append(verbatim_ratios[-1])
@@ -397,6 +418,8 @@ async def evaluate(
         _cs.CONTEXT_RELEVANCE_WEIGHT = saved_weight
         _cs.CONTEXT_RELEVANCE_CAP = saved_cap
         gen_trace_log.log_selection = saved_log_selection  # type: ignore[assignment]
+        gen_trace_log.log_attempt_rejected = saved_log_rejected  # type: ignore[assignment]
+        gen_trace_log.log_attempt_extended = saved_log_extended  # type: ignore[assignment]
 
     produced = len(outputs)
     lengths = [len(output) for output in outputs]
@@ -471,6 +494,11 @@ async def evaluate(
             }
             for jumps in sorted(length_by_jumps)
         },
+        # Verbatim-copy extension channel: how often a 1:1 training-sample walk
+        # was extended with novel continuation, and how often that won.
+        "verbatim_extension_count": extension_count,
+        "verbatim_extension_win_rate": round(extension_wins / produced, 4) if produced else 0.0,
+        "rg_rejections": dict(rg_rejections.most_common()),
         "verbatim_run_ratio_mean": round(mean(verbatim_ratios), 4) if verbatim_ratios else 0.0,
         "verbatim_run_ratio_median": round(median(verbatim_ratios), 4) if verbatim_ratios else 0.0,
         "verbatim_run_len_median": median(verbatim_runs) if verbatim_runs else 0,

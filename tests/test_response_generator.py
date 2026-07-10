@@ -91,6 +91,8 @@ def _score(value: float) -> CandidateScore:
 
 class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
     async def test_acceptance_checks_keep_existing_order(self) -> None:
+        # Echo and anti-repeat gates still discard; a verbatim training-sample
+        # copy is EXTENDED with a fresh continuation instead of discarded.
         state = _runtime_state()
         state.recent_short_replies = {123: deque(["привет"], maxlen=5)}
         generator = _traced_generator()
@@ -99,7 +101,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
                 "same current message",
                 "Привет",
                 "training sample has four tokens",
-                "fresh response has four tokens",
+                "fresh continuation has four tokens",
             ]
         )
         learning_service = _learning_service()
@@ -119,16 +121,18 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
                 candidate_target=1,
             )
 
-        self.assertEqual(result, "fresh response has four tokens")
+        assert result is not None
+        self.assertTrue(result.startswith("training sample has four tokens,"))
+        self.assertIn("fresh continuation has four tokens", result)
         self.assertEqual(generator.generate_text.await_count, 4)
         scorer.assert_called_once()
+        # Gate ran on the original copy, then again on the extended text.
+        verbatim_calls = learning_service.is_verbatim_copy.await_args_list
+        self.assertEqual(len(verbatim_calls), 2)
         self.assertEqual(
-            learning_service.is_verbatim_copy.await_args_list,
-            [
-                call(123, "training sample has four tokens"),
-                call(123, "fresh response has four tokens"),
-            ],
+            verbatim_calls[0], call(123, "training sample has four tokens")
         )
+        self.assertEqual(verbatim_calls[1], call(123, result))
 
     async def test_coherence_penalty_applies_regardless_of_start_source(self) -> None:
         # An order-1 walk is word salad whatever anchored it: the coherence

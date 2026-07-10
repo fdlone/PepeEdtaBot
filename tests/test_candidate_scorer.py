@@ -100,6 +100,15 @@ class TestCandidateScorer(unittest.TestCase):
 
         self.assertEqual(echoed, 0.0)
 
+    def test_verbatim_quote_severity_tolerates_extended_copies(self) -> None:
+        from app.core.candidate_scorer import verbatim_quote_severity
+
+        self.assertEqual(verbatim_quote_severity(0.0), 0.0)
+        self.assertEqual(verbatim_quote_severity(0.5), 0.0)  # quote + tail
+        self.assertEqual(verbatim_quote_severity(0.6), 0.0)
+        self.assertAlmostEqual(verbatim_quote_severity(0.8), 0.5)
+        self.assertAlmostEqual(verbatim_quote_severity(1.0), 1.0)  # pure quote
+
     def test_pure_echo_scores_zero_relevance(self) -> None:
         # A candidate whose informative tokens all come from the context is a
         # parrot: it must not collect the context bonus, on either formula.

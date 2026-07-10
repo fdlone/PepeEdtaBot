@@ -18,13 +18,20 @@ from app.core.candidate_scorer import (
     sample_length_mode,
     score_candidate,
     verbatim_ngram_overlap,
+    verbatim_quote_severity,
 )
 from app.core.emoji import append_emoji_flavor, strip_trailing_emojis
 from app.core.markov import (
+    JUMP_CONNECTIVE_TOKENS,
+    PUNCT_SET,
     MarkovGenerator,
+    detokenize,
     escalated_randomness_strength,
+    finalize_reply_ending,
     is_short_generated_reply,
+    pick_jump_connective,
     tokenize,
+    trim_splice_tail,
 )
 from app.core.mood import HEATED, NEUTRAL_MODIFIERS, MoodModifiers
 from app.core.reply_flavor import apply_reply_flavor
@@ -53,6 +60,11 @@ RECENT_REPLY_LIMIT = 20
 # 8 raw tokens chosen by eval sweep: cap 6 starved generation on the
 # synthetic corpus (11% empty results), 8 shifts lengths with ~1% empties.
 SHORT_MODE_MAX_TOKENS = 8
+# A candidate that IS a training message 1:1 is not discarded: it gets a
+# connective + a fresh short walk appended, so the reply is "corpus base +
+# отсебятина" instead of a bare quote. This is the walk budget of the tail.
+VERBATIM_COPY_REASON = "Generated text is a training sample 1:1"
+EXTENSION_MAX_TOKENS = 10
 
 CandidateScorer = Callable[[str, list[str], list[str], str], CandidateScore]
 
@@ -210,8 +222,66 @@ class ResponseGenerator:
         if not is_short_candidate and await self.learning_service.is_verbatim_copy(
             request.chat_id, candidate
         ):
-            return "Generated text starts like a training sample"
+            return VERBATIM_COPY_REASON
         return None
+
+    async def _extend_verbatim_candidate(
+        self,
+        request: GenerationRequest,
+        candidate: str,
+        rng: random.Random,
+    ) -> str | None:
+        """Append a connective + fresh short walk to a 1:1 training-sample copy.
+
+        The tail starts from a global (context-affine) start — never from a
+        contextual anchor, which would just keep continuing the quote. Returns
+        None when no usable continuation could be generated.
+        """
+        state = self.runtime_state
+        continuation, _ = await self.generator.generate_text_with_trace(
+            chat_id=request.chat_id,
+            max_chars=state.max_reply_chars,
+            max_tokens=EXTENSION_MAX_TOKENS,
+            context_tokens=request.context_tokens,
+            context_bias=state.reply_context_bias,
+            context_start_bias=1.0,
+            context_start_affinity=state.context_start_affinity,
+            randomness_strength=state.randomness_strength,
+            repetition_penalty_strength=state.repetition_penalty_strength,
+            markov_order=state.markov_order,
+            enable_backoff=state.enable_backoff,
+            backoff_min_order=state.backoff_min_order,
+            jump_probability=0.0,
+            rng=rng,
+            attempt_budget=2,
+        )
+        if not continuation:
+            return None
+        base_tokens = tokenize(candidate, normalize_lower=state.normalize_lower)
+        while base_tokens and base_tokens[-1] in PUNCT_SET:
+            base_tokens.pop()
+        trim_splice_tail(base_tokens)
+        if not base_tokens:
+            return None
+        tail_tokens = tokenize(continuation, normalize_lower=state.normalize_lower)
+        # Same stutter guard as the M4 splice: never pick a connective that
+        # contains the continuation's first word (", ну и" + "ну как..." read
+        # as "ну и ну" in live samples).
+        connective = pick_jump_connective(
+            rng,
+            exclude=[
+                phrase
+                for phrase in JUMP_CONNECTIVE_TOKENS
+                if tail_tokens and tail_tokens[0].casefold() in phrase
+            ],
+        )
+        combined = finalize_reply_ending(
+            base_tokens + list(connective) + tail_tokens
+        )
+        extended = detokenize(combined, max_chars=state.max_reply_chars)
+        if not extended or extended == candidate:
+            return None
+        return extended
 
     async def generate_with_result(
         self,
@@ -334,6 +404,35 @@ class ResponseGenerator:
                     candidate_normalized,
                     is_short_candidate,
                 )
+                if reject_reason == VERBATIM_COPY_REASON:
+                    # Corpus replies are welcome — bare quotes are not: extend
+                    # the copy with отсебятина and re-run the gates on the
+                    # combined text instead of discarding the attempt.
+                    extended = await self._extend_verbatim_candidate(
+                        request, candidate, generation_rng
+                    )
+                    if extended is not None:
+                        gen_trace_log.log_attempt_extended(
+                            request.chat_id,
+                            attempt + 1,
+                            original=candidate,
+                            extended=extended,
+                        )
+                        candidate = extended
+                        candidate_normalized = sanitize_text(candidate).lower()
+                        candidate_tokens = tokenize(
+                            candidate,
+                            normalize_lower=self.runtime_state.normalize_lower,
+                        )
+                        is_short_candidate = is_short_generated_reply(
+                            candidate_tokens
+                        )
+                        reject_reason = await self._candidate_reject_reason(
+                            request,
+                            candidate,
+                            candidate_normalized,
+                            is_short_candidate,
+                        )
                 if reject_reason is not None:
                     logger.debug(
                         "%s, retrying: chat=%s attempt=%s",
@@ -376,7 +475,11 @@ class ResponseGenerator:
                             recent_penalty=recent_penalty_strength
                             * recent_reply_overlap(candidate_tokens, recent_trigrams),
                             verbatim_penalty=verbatim_penalty_strength
-                            * verbatim_ngram_overlap(candidate_tokens, corpus_ngrams),
+                            * verbatim_quote_severity(
+                                verbatim_ngram_overlap(
+                                    candidate_tokens, corpus_ngrams
+                                )
+                            ),
                             coherence_penalty=coherence_penalty,
                         )
                         candidates.append(
