@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
-from app.core.candidate_scorer import VERBATIM_NGRAM_SIZE
+from app.core.candidate_scorer import VERBATIM_NGRAM_SIZE, build_token_idf
 from app.core.markov import MarkovGenerator, build_windows, content_tokens, tokenize
 from app.core.text import sanitize_text
 from app.infrastructure.database import Database
@@ -48,6 +48,9 @@ class LearningService:
         # из той же выборки последних N сообщений и сбрасывается вместе с
         # текстовым кэшем.
         self._ngram_index: dict[int, frozenset[tuple[str, ...]]] = {}
+        # IDF контент-токенов по той же выборке: нужен, чтобы совпадение ответа
+        # с контекстом по редкому имени весило больше, чем по частому «кто».
+        self._token_idf: dict[int, dict[str, float]] = {}
 
     async def get_token_volume(self, chat_id: int) -> int:
         return await self._db.get_chat_token_volume(chat_id)
@@ -123,6 +126,22 @@ class LearningService:
         self._ngram_index[chat_id] = index
         return index
 
+    async def get_context_idf(self, chat_id: int) -> Mapping[str, float]:
+        """IDF контент-токенов по последним N сообщениям чата.
+
+        Выборка та же, что у ``get_verbatim_ngram_index``, и она уже́ ретенции
+        модели: ``messages`` подрезается, а ``transitions3`` — нет. Токены,
+        которых в выборке не оказалось, считаются максимально редкими
+        (см. ``idf_context_relevance``), что для имён собственных верно.
+        """
+        cached = self._token_idf.get(chat_id)
+        if cached is not None:
+            return cached
+        recent_texts = await self._get_recent_texts(chat_id)
+        idf = build_token_idf(tokenize(text) for text in recent_texts)
+        self._token_idf[chat_id] = idf
+        return idf
+
     # --- приватные методы ---
 
     async def _get_recent_texts(self, chat_id: int) -> list[str]:
@@ -140,3 +159,4 @@ class LearningService:
     def _invalidate_text_cache(self, chat_id: int) -> None:
         self._text_cache.pop(chat_id, None)
         self._ngram_index.pop(chat_id, None)
+        self._token_idf.pop(chat_id, None)

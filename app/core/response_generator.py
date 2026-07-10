@@ -8,10 +8,12 @@ from dataclasses import dataclass, replace
 from typing import Protocol
 
 from app.config.runtime_state import RuntimeState, get_recent_deque
+from app.core import gen_trace_log
 from app.core.candidate_scorer import (
     CandidateScore,
     build_recent_reply_trigrams,
     coherence_penalty_for_order,
+    idf_context_relevance,
     recent_reply_overlap,
     sample_length_mode,
     score_candidate,
@@ -36,10 +38,12 @@ GENERATION_ATTEMPTS_WITH_CONTEXT = 5
 CANDIDATE_TARGET = 5
 # Softmax candidate selection only considers candidates whose score is within
 # this margin of the best one; clearly weaker candidates never win the roll.
-# 0.5 keeps context relevance influential (its score weight caps at 0.8) while
-# still letting near-best candidates win: with margin 1.0 the synthetic eval's
-# context_token_overlap collapsed from 0.38 to 0.13.
-SELECTION_SCORE_MARGIN = 0.5
+# 0.3 (2026-07-09): this margin, not the temperature, is what decides whether
+# the best candidate wins -- eval_prod moved context_win_given_top 0.55 -> 0.89
+# on the margin alone, while temperatures 1.3/0.7/0.3 stayed within 1pp of each
+# other. Widening it hurts: at 1.0 the synthetic eval's context_token_overlap
+# collapsed from 0.38 to 0.13.
+SELECTION_SCORE_MARGIN = 0.3
 # How many recently sent replies are remembered per chat for the full-reply
 # anti-repeat: exact re-sends are rejected, partial (trigram) overlap is
 # penalized before softmax selection.
@@ -59,6 +63,7 @@ class VerbatimCopyChecker(Protocol):
     async def get_verbatim_ngram_index(
         self, chat_id: int
     ) -> frozenset[tuple[str, ...]]: ...
+    async def get_context_idf(self, chat_id: int) -> Mapping[str, float]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +242,14 @@ class ResponseGenerator:
             corpus_ngrams = await self.learning_service.get_verbatim_ngram_index(
                 request.chat_id
             )
+        # Topic overlap is scored by how much of the context's *informative* mass
+        # the candidate echoes, not by raw token count -- otherwise a short reply
+        # sharing a pronoun beats a long one sharing a proper noun.
+        context_idf: Mapping[str, float] = {}
+        if request.context_tokens:
+            context_idf = await self.learning_service.get_context_idf(
+                request.chat_id
+            )
         base_weights = self.runtime_state.length_mode_weights
         mood_weights = (
             base_weights[0] * modifiers.length_weight_mult[0],
@@ -250,6 +263,18 @@ class ResponseGenerator:
         max_tokens = self.runtime_state.max_reply_tokens
         if length_mode == "short":
             max_tokens = min(max_tokens, SHORT_MODE_MAX_TOKENS)
+
+        gen_trace_log.log_request_header(
+            request.chat_id,
+            length_mode=length_mode,
+            randomness=effective_randomness,
+            temperature=self.runtime_state.candidate_selection_temperature,
+            target=target,
+            budget=GENERATION_ATTEMPT_BUDGET,
+            attempts_with_context=GENERATION_ATTEMPTS_WITH_CONTEXT,
+            recent_penalty_strength=recent_penalty_strength,
+            verbatim_penalty_strength=verbatim_penalty_strength,
+        )
 
         for attempt in range(GENERATION_ATTEMPT_BUDGET):
             attempt_context_tokens = (
@@ -290,6 +315,11 @@ class ResponseGenerator:
                     bool(attempt_context_tokens),
                     len(seed or []),
                 )
+                gen_trace_log.log_attempt_failed(
+                    request.chat_id,
+                    attempt + 1,
+                    context_used=bool(attempt_context_tokens),
+                )
             else:
                 candidate_normalized = sanitize_text(candidate).lower()
                 candidate_tokens = tokenize(
@@ -310,6 +340,13 @@ class ResponseGenerator:
                         mask_chat_id(request.chat_id),
                         attempt + 1,
                     )
+                    gen_trace_log.log_attempt_rejected(
+                        request.chat_id,
+                        attempt + 1,
+                        context_used=bool(attempt_context_tokens),
+                        reason=reject_reason,
+                        text=candidate,
+                    )
                 else:
                     logger.debug(
                         "Reply generated: chat=%s attempt=%s tokens=%s context=%s",
@@ -320,6 +357,9 @@ class ResponseGenerator:
                     )
                     if candidate not in seen_candidates:
                         seen_candidates.add(candidate)
+                        coherence_penalty = coherence_penalty_for_order(
+                            candidate_trace.markov_order_used
+                        )
                         score = replace(
                             self.scorer(
                                 candidate,
@@ -327,28 +367,61 @@ class ResponseGenerator:
                                 request.context_tokens,
                                 length_mode,
                             ),
+                            context_relevance=idf_context_relevance(
+                                candidate_tokens,
+                                request.context_tokens,
+                                context_idf,
+                            ),
                             recent_penalty=recent_penalty_strength
                             * recent_reply_overlap(candidate_tokens, recent_trigrams),
                             verbatim_penalty=verbatim_penalty_strength
                             * verbatim_ngram_overlap(candidate_tokens, corpus_ngrams),
-                            coherence_penalty=coherence_penalty_for_order(
-                                candidate_trace.markov_order_used
-                            ),
+                            coherence_penalty=coherence_penalty,
                         )
                         candidates.append(
                             _ScoredCandidate(text=candidate, score=score)
                         )
+                        gen_trace_log.log_attempt_accepted(
+                            request.chat_id,
+                            attempt + 1,
+                            context_used=bool(attempt_context_tokens),
+                            index=len(candidates),
+                            trace=candidate_trace,
+                            score=score,
+                            text=candidate,
+                        )
                         if len(candidates) >= target:
                             break
+                    else:
+                        gen_trace_log.log_attempt_duplicate(
+                            request.chat_id,
+                            attempt + 1,
+                            context_used=bool(attempt_context_tokens),
+                        )
 
             seed = None
 
         if not candidates:
+            gen_trace_log.log_selection(
+                request.chat_id,
+                candidates,
+                temperature=self.runtime_state.candidate_selection_temperature,
+                margin=SELECTION_SCORE_MARGIN,
+                selection_margin_used=True,
+            )
             return ResponseGenerationResult(text=None, candidates_scored=0)
         selected = select_scored_candidate(
             candidates,
             self.runtime_state.candidate_selection_temperature,
             generation_rng,
+        )
+        gen_trace_log.log_selection(
+            request.chat_id,
+            candidates,
+            temperature=self.runtime_state.candidate_selection_temperature,
+            margin=SELECTION_SCORE_MARGIN,
+            selection_margin_used=True,
+            selected=selected,
         )
         text = (
             capitalize_reply_sentences(selected.text)

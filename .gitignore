@@ -54,6 +54,7 @@ test_*.sqlite-wal
 # Local MCP server configuration (may contain machine-specific settings)
 .mcp.json
 
-# Local prod-metric tools (contain prod chat ids / db copies — keep untracked)
-tools/eval_prod.py
+# Prod-metric eval reports embed a real chat_id and a db path — keep untracked.
+# The tool itself (tools/eval_prod.py) is tracked: it takes --db/--chat-id as
+# arguments and hardcodes nothing.
 tools/eval_prod_baseline.json

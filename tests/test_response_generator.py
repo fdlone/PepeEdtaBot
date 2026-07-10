@@ -49,6 +49,19 @@ def _runtime_state() -> MagicMock:
     return state
 
 
+def _learning_service() -> AsyncMock:
+    """LearningService mock whose corpus reads return real empty containers.
+
+    A bare AsyncMock hands back a MagicMock for these, which happens to survive
+    ``in`` checks but not ``max(idf.values())``. Returning the real empty types
+    keeps the scorer on its documented no-corpus path.
+    """
+    service = AsyncMock()
+    service.get_verbatim_ngram_index = AsyncMock(return_value=frozenset())
+    service.get_context_idf = AsyncMock(return_value={})
+    return service
+
+
 def _traced_generator() -> AsyncMock:
     """MarkovGenerator mock whose generate_text_with_trace delegates to the
     plain generate_text AsyncMock tests configure, wrapping the text in the
@@ -57,7 +70,7 @@ def _traced_generator() -> AsyncMock:
 
     async def _delegate(*args: object, **kwargs: object) -> tuple[str, SimpleNamespace]:
         text = await generator.generate_text(*args, **kwargs)
-        return text, SimpleNamespace(markov_order_used=3)
+        return text, SimpleNamespace(markov_order_used=3, start_source="global")
 
     generator.generate_text_with_trace = AsyncMock(side_effect=_delegate)
     return generator
@@ -89,7 +102,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
                 "fresh response has four tokens",
             ]
         )
-        learning_service = AsyncMock()
+        learning_service = _learning_service()
         learning_service.is_verbatim_copy = AsyncMock(side_effect=[True, False])
         scorer = MagicMock(return_value=_score(1.0))
         response_generator = ResponseGenerator(
@@ -117,13 +130,50 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_coherence_penalty_applies_regardless_of_start_source(self) -> None:
+        # An order-1 walk is word salad whatever anchored it: the coherence
+        # penalty must not be discounted for context-anchored candidates.
+        ctx_text = "context anchored reply text"
+        global_text = "global fluent reply text"
+
+        state = _runtime_state()
+        state.candidate_selection_temperature = 0.0  # argmax
+        generator = AsyncMock()
+        generator.generate_text_with_trace = AsyncMock(
+            side_effect=[
+                (ctx_text, SimpleNamespace(markov_order_used=1, start_source="context")),
+                (
+                    global_text,
+                    SimpleNamespace(markov_order_used=3, start_source="global"),
+                ),
+            ]
+        )
+        learning_service = _learning_service()
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        scores = {ctx_text: _score(1.1), global_text: _score(1.0)}
+        scorer = MagicMock(side_effect=lambda text, tokens, context, mode: scores[text])
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=scorer,
+        )
+
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            selected = await response_generator.generate(
+                _request(), rng=random.Random(1), candidate_target=2
+            )
+
+        # ctx 1.1 - 0.70 (order-1 coherence) = 0.40 < global 1.0 -> global wins.
+        self.assertEqual(selected, global_text)
+
     async def test_context_falls_back_after_context_attempt_budget(self) -> None:
         state = _runtime_state()
         generator = _traced_generator()
         generator.generate_text = AsyncMock(
             side_effect=[""] * GENERATION_ATTEMPTS_WITH_CONTEXT + ["accepted"]
         )
-        learning_service = AsyncMock()
+        learning_service = _learning_service()
         response_generator = ResponseGenerator(
             generator=generator,
             learning_service=learning_service,
@@ -162,7 +212,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         state = _runtime_state()
         generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="")
-        learning_service = AsyncMock()
+        learning_service = _learning_service()
         response_generator = ResponseGenerator(
             generator=generator,
             learning_service=learning_service,
@@ -190,7 +240,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         generator.generate_text = AsyncMock(
             side_effect=["first candidate", "best candidate", "third candidate"]
         )
-        learning_service = AsyncMock()
+        learning_service = _learning_service()
         scores = {
             "first candidate": _score(1.0),
             "best candidate": _score(3.0),
@@ -224,7 +274,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         generator.generate_text = AsyncMock(
             side_effect=["same candidate"] * GENERATION_ATTEMPT_BUDGET
         )
-        learning_service = AsyncMock()
+        learning_service = _learning_service()
         scorer = MagicMock(return_value=_score(1.0))
         response_generator = ResponseGenerator(
             generator=generator,
@@ -248,7 +298,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         state = _runtime_state()
         generator = _traced_generator()
         generator.generate_text = AsyncMock(side_effect=["first choice", "second choice"])
-        learning_service = AsyncMock()
+        learning_service = _learning_service()
         response_generator = ResponseGenerator(
             generator=generator,
             learning_service=learning_service,
@@ -311,7 +361,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         generator.generate_text = AsyncMock(
             side_effect=["Дубль полного ответа.", "свежий ответ на этот раз"]
         )
-        learning_service = AsyncMock()
+        learning_service = _learning_service()
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
         scorer = MagicMock(return_value=_score(1.0))
         response_generator = ResponseGenerator(
@@ -343,7 +393,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
                 "совсем другой свежий ответ",
             ]
         )
-        learning_service = AsyncMock()
+        learning_service = _learning_service()
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
         scorer = MagicMock(return_value=_score(1.0))
         response_generator = ResponseGenerator(
@@ -377,7 +427,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
                 "совсем другой свежий ответ",
             ]
         )
-        learning_service = AsyncMock()
+        learning_service = _learning_service()
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
         response_generator = ResponseGenerator(
             generator=generator,
@@ -406,7 +456,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         scorer = MagicMock(return_value=_score(1.0))
         response_generator = ResponseGenerator(
             generator=generator,
-            learning_service=AsyncMock(),
+            learning_service=_learning_service(),
             runtime_state=state,
             scorer=scorer,
         )
@@ -434,7 +484,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         scorer = MagicMock(return_value=_score(1.0))
         response_generator = ResponseGenerator(
             generator=generator,
-            learning_service=AsyncMock(),
+            learning_service=_learning_service(),
             runtime_state=state,
             scorer=scorer,
         )
@@ -501,7 +551,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         generator.generate_text = AsyncMock(return_value="стабильный ответ.")
         response_generator = ResponseGenerator(
             generator=generator,
-            learning_service=AsyncMock(),
+            learning_service=_learning_service(),
             runtime_state=state,
             scorer=MagicMock(return_value=_score(1.0)),
         )
@@ -530,7 +580,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             generator.generate_text = AsyncMock(return_value=candidate)
             response_generator = ResponseGenerator(
                 generator=generator,
-                learning_service=AsyncMock(),
+                learning_service=_learning_service(),
                 runtime_state=state,
                 scorer=scorer,
             )
@@ -565,7 +615,7 @@ class TestResponseGeneratorMoodModulation(unittest.IsolatedAsyncioTestCase):
         return generator
 
     def _learning(self) -> AsyncMock:
-        learning_service = AsyncMock()
+        learning_service = _learning_service()
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
         return learning_service
 

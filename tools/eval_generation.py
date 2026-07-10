@@ -63,6 +63,11 @@ class _NoVerbatimCopies:
         # generator never calls this.
         return frozenset()
 
+    async def get_context_idf(self, chat_id: int) -> dict[str, float]:
+        # Empty IDF makes idf_context_relevance fall back to the length-normalized
+        # formula, which is what the committed baselines below encode.
+        return {}
+
 
 def load_synthetic_corpus(
     *,

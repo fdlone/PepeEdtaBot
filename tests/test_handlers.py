@@ -24,7 +24,7 @@ def _traced_generator() -> AsyncMock:
 
     async def _delegate(*args: object, **kwargs: object) -> tuple[str, SimpleNamespace]:
         text = await generator.generate_text(*args, **kwargs)
-        return text, SimpleNamespace(markov_order_used=3)
+        return text, SimpleNamespace(markov_order_used=3, start_source="global")
 
     generator.generate_text_with_trace = AsyncMock(side_effect=_delegate)
     return generator
