@@ -123,6 +123,27 @@ def log_attempt_rejected(
     )
 
 
+def log_attempt_extended(
+    _chat_id: int,
+    attempt: int,
+    *,
+    original: str,
+    extended: str,
+) -> None:
+    """A verbatim training-sample copy was extended with novel continuation
+    instead of being rejected."""
+    if not enabled():
+        return
+    gen_logger.info(
+        "  attempt %02d -> VERBATIM COPY EXTENDED\n"
+        "        original: %r\n"
+        "        extended: %r",
+        attempt,
+        original,
+        extended,
+    )
+
+
 def log_attempt_duplicate(_chat_id: int, attempt: int, *, context_used: bool) -> None:
     if not enabled():
         return
