@@ -18,6 +18,7 @@ from app.core.candidate_scorer import (
     sample_length_mode,
     score_candidate,
     verbatim_ngram_overlap,
+    verbatim_quote_severity,
 )
 from app.core.emoji import append_emoji_flavor, strip_trailing_emojis
 from app.core.markov import (
@@ -462,7 +463,11 @@ class ResponseGenerator:
                             recent_penalty=recent_penalty_strength
                             * recent_reply_overlap(candidate_tokens, recent_trigrams),
                             verbatim_penalty=verbatim_penalty_strength
-                            * verbatim_ngram_overlap(candidate_tokens, corpus_ngrams),
+                            * verbatim_quote_severity(
+                                verbatim_ngram_overlap(
+                                    candidate_tokens, corpus_ngrams
+                                )
+                            ),
                             coherence_penalty=coherence_penalty,
                         )
                         candidates.append(

@@ -319,6 +319,22 @@ def verbatim_ngram_overlap(
     return hits / len(windows)
 
 
+# Corpus-based replies are the bot's voice — a training message plus its own
+# continuation is welcome. Only near-pure quotes should pay: below this share
+# of corpus 4-grams the verbatim penalty is zero, above it the penalty ramps
+# linearly to full strength at share 1.0. With the tolerated base at 0.6 a
+# typical extended copy (quote + ~8 novel tokens, share ~0.5) pays nothing,
+# while a quote with one word changed (share ~0.9) still pays 75%.
+VERBATIM_TOLERATED_SHARE = 0.6
+
+
+def verbatim_quote_severity(share: float) -> float:
+    """Map corpus 4-gram share to penalty severity in [0, 1]."""
+    if share <= VERBATIM_TOLERATED_SHARE:
+        return 0.0
+    return (share - VERBATIM_TOLERATED_SHARE) / (1.0 - VERBATIM_TOLERATED_SHARE)
+
+
 def coherence_penalty_for_order(markov_order_used: int) -> float:
     """Penalty for how far the walk had to back off (1-gram = word salad)."""
     if markov_order_used <= 1:
