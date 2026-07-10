@@ -102,6 +102,53 @@ def meaningful_tokens(tokens: list[str]) -> list[str]:
     ]
 
 
+# Russian inflectional endings for the approximate stemmer below, longest
+# match wins. Deliberately NOT a full Snowball: adjective/noun/verb endings
+# only, one strip per token, and a minimum stem length so short words pass
+# through untouched. Occasional over/under-stripping is fine — the stem is
+# used purely as a fold key for relevance overlap, never shown to anyone.
+_RU_INFLECTION_ENDINGS: tuple[str, ...] = tuple(
+    sorted(
+        {
+            # adjectives / participles
+            "ыми", "ими", "ого", "его", "ому", "ему",
+            "ая", "яя", "ое", "ее", "ые", "ие", "ый", "ий", "ой",
+            "ым", "им", "ых", "их", "ую", "юю",
+            # nouns
+            "иями", "ями", "ами", "иях", "ях", "ах",
+            "ием", "ием", "ем", "ом", "ев", "ов", "ией", "ей",
+            "ам", "ям", "ию", "ью", "ия", "ья",
+            "а", "я", "ы", "и", "е", "у", "ю", "о",
+            # verbs (light)
+            "ться", "ешь", "ете", "ет", "ут", "ют", "ит", "ат", "ят",
+            "ила", "ил", "ло", "ли", "л", "ть",
+        },
+        key=len,
+        reverse=True,
+    )
+)
+
+_MIN_STEM_LEN = 3
+
+
+def stem_token(token: str) -> str:
+    """Fold a Russian inflected form to an approximate stem.
+
+    "гнойному"/"гнойный" -> "гнойн", "пидору"/"пидора" -> "пидор",
+    "славу" -> "слав". Tokens shorter than the minimum stem plus an ending
+    (and non-Cyrillic tokens) come back unchanged.
+    """
+    for ending in _RU_INFLECTION_ENDINGS:
+        if token.endswith(ending) and len(token) - len(ending) >= _MIN_STEM_LEN:
+            return token[: -len(ending)]
+    return token
+
+
+def stemmed_meaningful_tokens(tokens: list[str]) -> set[str]:
+    """Stemmed content-token set: the fold key for relevance overlap."""
+    return {stem_token(token) for token in meaningful_tokens(tokens)}
+
+
 def _delimiter_balance(text: str) -> tuple[bool, bool]:
     pairs = {"(": ")", "[": "]", "{": "}"}
     stack: list[str] = []
@@ -193,7 +240,7 @@ def build_token_idf(documents: Iterable[list[str]]) -> dict[str, float]:
     seen: Counter[str] = Counter()
     for tokens in documents:
         document_count += 1
-        seen.update(set(meaningful_tokens(tokens)))
+        seen.update(stemmed_meaningful_tokens(tokens))
     if not document_count:
         return {}
     return {
@@ -215,9 +262,14 @@ def idf_context_relevance(
     that. Here each shared token contributes its IDF, and the total is
     normalized by the context's own IDF mass: matching a rare name is worth much
     more than matching "кто", and candidate length no longer enters.
+
+    Overlap is computed on approximate stems (``stem_token``): exact-form
+    matching scored "гнойному пидору" at zero against "гнойный пидор", muting
+    the context bonus for most inflected Russian answers. The IDF mapping is
+    keyed by the same stems (``build_token_idf``).
     """
-    candidate = set(meaningful_tokens(tokens))
-    context = set(meaningful_tokens(context_tokens))
+    candidate = stemmed_meaningful_tokens(tokens)
+    context = stemmed_meaningful_tokens(context_tokens)
     if not candidate or not context:
         return 0.0
     # A candidate whose informative tokens are all echoed from the context adds

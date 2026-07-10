@@ -51,6 +51,55 @@ class TestCandidateScorer(unittest.TestCase):
         self.assertEqual(stopword_only, 0.0)
         self.assertEqual(meaningful, CONTEXT_RELEVANCE_CAP)
 
+    def test_stem_token_folds_inflected_forms(self) -> None:
+        from app.core.candidate_scorer import stem_token
+
+        # Live finding: "гнойному пидору" scored context_rel=0 against
+        # "гнойный пидор" because exact-token overlap sees different forms.
+        self.assertEqual(stem_token("гнойному"), stem_token("гнойный"))
+        self.assertEqual(stem_token("пидору"), stem_token("пидор"))
+        self.assertEqual(stem_token("пидора"), stem_token("пидор"))
+        self.assertEqual(stem_token("славу"), stem_token("слава"))
+        self.assertEqual(stem_token("стасу"), stem_token("стас"))
+        self.assertEqual(stem_token("хоссейна"), stem_token("хоссейн"))
+
+    def test_stem_token_leaves_short_and_latin_untouched(self) -> None:
+        from app.core.candidate_scorer import stem_token
+
+        self.assertEqual(stem_token("кто"), "кто")
+        self.assertEqual(stem_token("дом"), "дом")
+        self.assertEqual(stem_token("fy"), "fy")
+        self.assertEqual(stem_token("javascript"), "javascript")
+
+    def test_idf_relevance_sees_through_inflection(self) -> None:
+        from app.core.candidate_scorer import build_token_idf, idf_context_relevance
+
+        idf = build_token_idf(
+            [tokenize("гнойный пидор слава"), tokenize("обед готовила мама")]
+        )
+        context = tokenize("кто гнойный пидор")
+
+        inflected = idf_context_relevance(
+            tokenize("славу назвали гнойным пидором"), context, idf
+        )
+        unrelated = idf_context_relevance(
+            tokenize("мама готовила обед"), context, idf
+        )
+
+        self.assertGreater(inflected, 0.0)
+        self.assertEqual(unrelated, 0.0)
+
+    def test_echo_guard_folds_inflection_too(self) -> None:
+        from app.core.candidate_scorer import build_token_idf, idf_context_relevance
+
+        idf = build_token_idf([tokenize("старая копия бд лежит на диске")])
+        # "копию бд" is the same parrot as "копия бд", just declined.
+        echoed = idf_context_relevance(
+            tokenize("копию бд"), tokenize("старая копия бд"), idf
+        )
+
+        self.assertEqual(echoed, 0.0)
+
     def test_pure_echo_scores_zero_relevance(self) -> None:
         # A candidate whose informative tokens all come from the context is a
         # parrot: it must not collect the context bonus, on either formula.
