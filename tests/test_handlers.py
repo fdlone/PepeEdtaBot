@@ -993,15 +993,21 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             side_effect=[True, True, True, True, False]
         )
         generator = _traced_generator()
+        # Empty strings after each verbatim candidate make the extension pass
+        # fail, preserving the reject-and-retry flow this test exercises.
         generator.generate_text = AsyncMock(
             side_effect=[
                 "один два три четыре",
+                "",
                 "один два три четыре",
+                "",
                 "один два три четыре",
+                "",
                 "один два три четыре",
+                "",
                 "новый ответ теперь",
             ]
-            + [""] * 5
+            + [""] * 6
         )
         state = _fake_state(
             normalize_lower=False,
@@ -1039,7 +1045,8 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 frozenset({"pepe", "пепе"}),
             )
 
-        self.assertEqual(generator.generate_text.await_count, 10)
+        # 10 attempt walks + 4 failed extension walks after each verbatim hit.
+        self.assertEqual(generator.generate_text.await_count, 14)
         msg.reply.assert_awaited_once_with("новый ответ теперь")
 
     async def test_short_reply_skips_training_prefix_filter(self) -> None:
@@ -1647,10 +1654,14 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             side_effect=[True, True, False]
         )
         generator = _traced_generator()
+        # Empty strings after each verbatim candidate make the extension pass
+        # fail, preserving the reject-and-retry escalation this test measures.
         generator.generate_text = AsyncMock(
             side_effect=[
                 "первый ответ заметно длиннее",
+                "",
                 "второй ответ заметно длиннее",
+                "",
                 "третий ответ заметно длиннее",
             ]
             + [""] * 7
@@ -1694,6 +1705,9 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         strengths = [
             call.kwargs["randomness_strength"]
             for call in generator.generate_text.await_args_list
+            # Extension walks (max_tokens=10) run at base strength; only the
+            # attempt walks carry the escalation this test measures.
+            if call.kwargs.get("max_tokens") != 10
         ]
         self.assertEqual(strengths, sorted(strengths))
         self.assertEqual(strengths[0], 0.5)
