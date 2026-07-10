@@ -606,17 +606,22 @@ def weighted_start3_choice(
         # only retrace what followed the question in the corpus, while a start
         # like «слава гнойный пидор» that *shares stems* with the question is
         # the reply we want — boost it exponentially per shared stem so it
-        # surfaces among thousands of unrelated starts.
-        weights = [
-            weight
-            * context_start_affinity
-            ** len(
-                {stem_token(w1.casefold()), stem_token(w2.casefold()),
-                 stem_token(w3.casefold())}
-                & context_stems
-            )
-            for weight, (w1, w2, w3) in zip(weights, population, strict=True)
-        ]
+        # surfaces among thousands of unrelated starts. A start whose stems are
+        # ALL contained in the context gets no boost: it re-asks the question
+        # («кто гнойный пидор» is itself a learned start and out-boosted the
+        # actual answers 10:1 — same parrot problem as the scorer's echo guard).
+        boosted: list[float] = []
+        for weight, (w1, w2, w3) in zip(weights, population, strict=True):
+            state_stems = {
+                stem_token(w1.casefold()),
+                stem_token(w2.casefold()),
+                stem_token(w3.casefold()),
+            }
+            shared = len(state_stems & context_stems)
+            if shared and not state_stems <= context_stems:
+                weight *= context_start_affinity**shared
+            boosted.append(weight)
+        weights = boosted
     return weighted_population_choice(
         population, weights, exploring=exploring, rng=rng
     )

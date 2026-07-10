@@ -359,6 +359,30 @@ class TestContextStartAffinity(unittest.TestCase):
         self.assertLess(plain, 10)
         self.assertGreater(boosted, plain * 3)
 
+    def test_affinity_skips_question_echo_start(self) -> None:
+        # A start that is entirely made of context stems re-asks the question
+        # («кто гнойный пидор» is itself a learned start) — it must not be
+        # boosted, or it out-boosts the actual answers.
+        from app.core.markov import context_start_stems, weighted_start3_choice
+
+        starts = [
+            ("кто", "гнойный", "пидор", 12),   # echo of the question
+            ("слава", "гнойный", "пидор", 2),  # the answer
+        ]
+        stems = context_start_stems("кто гнойный пидор ?".split())
+
+        rng = random.Random(3)
+        wins = sum(
+            weighted_start3_choice(
+                starts, 0.0, 0.75, rng,
+                context_stems=stems, context_start_affinity=6.0,
+            )[0]
+            == "слава"
+            for _ in range(300)
+        )
+        # answer boosted 36x vs echo cnt-advantage 6x -> answer must dominate
+        self.assertGreater(wins, 200)
+
     def test_affinity_one_is_identical_to_plain(self) -> None:
         from app.core.markov import context_start_stems, weighted_start3_choice
 
