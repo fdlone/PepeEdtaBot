@@ -241,6 +241,15 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _float_in_range(1.0, 4.0)),
     FieldSpec("reply_context_start_bias", "REPLY_CONTEXT_START_BIAS", "2.2",
               _float_in_range(1.0, 4.0)),
+    # Context affinity of GLOBAL start sampling: each learned start's weight is
+    # multiplied by affinity^(shared stems with the context's informative
+    # tokens). Answers live in starts, not in continuations: for «кто гнойный
+    # пидор?» the contextual anchor can only retrace what followed the question
+    # in the corpus, while the wanted reply «слава гнойный пидор ...» is a
+    # high-count learned START that plain sampling almost never draws among
+    # ~3000. 1.0 disables.
+    FieldSpec("context_start_affinity", "CONTEXT_START_AFFINITY", "3.0",
+              _float_in_range(1.0, 10.0)),
     FieldSpec("reply_context_only_for_replies", "REPLY_CONTEXT_ONLY_FOR_REPLIES",
               "true", _bool()),
     # Visible contextual start: emit the trimmed tail (last <=2 tokens minus

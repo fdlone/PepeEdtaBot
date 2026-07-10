@@ -57,6 +57,7 @@ class Settings:
     reply_context_last_tokens: int
     reply_context_bias: float
     reply_context_start_bias: float
+    context_start_affinity: float
     reply_context_only_for_replies: bool
     reply_context_emit_start: bool
     reply_context_include_current_message: bool
