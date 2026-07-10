@@ -10,6 +10,7 @@ from typing import NamedTuple
 
 from app.core.context_state_matcher import ContextStateMatcher
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
+from app.core.morphology import stem_token
 from app.infrastructure.database import Database
 
 logger = logging.getLogger("chat_markov")
@@ -578,16 +579,49 @@ def weighted_start2_choice(
     )
 
 
+def context_start_stems(context_tokens: list[str]) -> frozenset[str]:
+    """Stems of the context's informative tokens, for start affinity."""
+    return frozenset(
+        stem_token(token)
+        for token in (raw.casefold() for raw in content_tokens(context_tokens))
+        if token not in STOPWORDS
+    )
+
+
 def weighted_start3_choice(
     items: list[tuple[str, str, str, int]],
     explore_probability: float,
     power: float,
     rng: random.Random,
+    *,
+    context_stems: frozenset[str] | None = None,
+    context_start_affinity: float = 1.0,
 ) -> tuple[str, str, str]:
     ordered_items = sorted(items, key=lambda item: (item[0], item[1], item[2]))
     population = [(w1, w2, w3) for w1, w2, w3, _ in ordered_items]
     exploring, frequency_power = _roll_exploration(explore_probability, power, rng)
     weights = [max(cnt, 1) ** frequency_power for _, _, _, cnt in ordered_items]
+    if context_stems and context_start_affinity > 1.0:
+        # Answers live in starts, not in continuations: a contextual anchor can
+        # only retrace what followed the question in the corpus, while a start
+        # like «слава гнойный пидор» that *shares stems* with the question is
+        # the reply we want — boost it exponentially per shared stem so it
+        # surfaces among thousands of unrelated starts. A start whose stems are
+        # ALL contained in the context gets no boost: it re-asks the question
+        # («кто гнойный пидор» is itself a learned start and out-boosted the
+        # actual answers 10:1 — same parrot problem as the scorer's echo guard).
+        boosted: list[float] = []
+        for weight, (w1, w2, w3) in zip(weights, population, strict=True):
+            state_stems = {
+                stem_token(w1.casefold()),
+                stem_token(w2.casefold()),
+                stem_token(w3.casefold()),
+            }
+            shared = len(state_stems & context_stems)
+            if shared and not state_stems <= context_stems:
+                weight *= context_start_affinity**shared
+            boosted.append(weight)
+        weights = boosted
     return weighted_population_choice(
         population, weights, exploring=exploring, rng=rng
     )
@@ -947,6 +981,7 @@ class MarkovGenerator:
         context_tokens: list[str] | None = None,
         context_bias: float = 1.0,
         context_start_bias: float = 1.0,
+        context_start_affinity: float = 1.0,
         randomness_strength: float = 1.0,
         repetition_penalty_strength: float = 1.0,
         markov_order: int = 3,
@@ -967,6 +1002,7 @@ class MarkovGenerator:
             context_tokens=context_tokens,
             context_bias=context_bias,
             context_start_bias=context_start_bias,
+            context_start_affinity=context_start_affinity,
             randomness_strength=randomness_strength,
             repetition_penalty_strength=repetition_penalty_strength,
             markov_order=markov_order,
@@ -990,6 +1026,7 @@ class MarkovGenerator:
         context_tokens: list[str] | None = None,
         context_bias: float = 1.0,
         context_start_bias: float = 1.0,
+        context_start_affinity: float = 1.0,
         randomness_strength: float = 1.0,
         repetition_penalty_strength: float = 1.0,
         markov_order: int = 3,
@@ -1019,6 +1056,7 @@ class MarkovGenerator:
                 context_tokens=context_tokens,
                 context_bias=context_bias,
                 context_start_bias=context_start_bias,
+            context_start_affinity=context_start_affinity,
                 randomness_strength=attempt_randomness_strength,
                 repetition_penalty_strength=repetition_penalty_strength,
                 markov_order=markov_order,
@@ -1152,6 +1190,8 @@ class MarkovGenerator:
         context_triplets: set[tuple[str, ...]],
         context_bias: float,
         repetition_penalty_strength: float,
+        context_stems: frozenset[str] = frozenset(),
+        context_start_affinity: float = 1.0,
         rng: random.Random,
     ) -> tuple[tuple[str, str, str], int] | None:
         """Resolve a start triplet from the global start tables.
@@ -1164,7 +1204,14 @@ class MarkovGenerator:
         """
         if starts3:
             return (
-                weighted_start3_choice(starts3, start_explore, start_power, rng),
+                weighted_start3_choice(
+                    starts3,
+                    start_explore,
+                    start_power,
+                    rng,
+                    context_stems=context_stems,
+                    context_start_affinity=context_start_affinity,
+                ),
                 default_order,
             )
         if starts2:
@@ -1532,6 +1579,7 @@ class MarkovGenerator:
         context_tokens: list[str] | None = None,
         context_bias: float = 1.0,
         context_start_bias: float = 1.0,
+        context_start_affinity: float = 1.0,
         randomness_strength: float = 1.0,
         repetition_penalty_strength: float = 1.0,
         markov_order: int = 3,
@@ -1557,6 +1605,11 @@ class MarkovGenerator:
         context_token_set = set(context_tokens)
         context_pairs = set(build_windows(context_tokens, 2))
         context_triplets = set(build_windows(context_tokens, 3))
+        context_stems = (
+            context_start_stems(context_tokens)
+            if context_tokens and context_start_affinity > 1.0
+            else frozenset()
+        )
 
         starts3 = await self._get_starts3(chat_id) if order >= 3 else []
         starts2 = await self._get_starts2(chat_id)
@@ -1646,6 +1699,8 @@ class MarkovGenerator:
                 context_triplets=context_triplets,
                 context_bias=context_bias,
                 repetition_penalty_strength=repetition_penalty_strength,
+                context_stems=context_stems,
+                context_start_affinity=context_start_affinity,
                 rng=generation_rng,
             )
             if global_start is None:

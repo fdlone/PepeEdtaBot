@@ -295,6 +295,7 @@ class ResponseGenerator:
                 context_tokens=attempt_context_tokens,
                 context_bias=self.runtime_state.reply_context_bias,
                 context_start_bias=self.runtime_state.reply_context_start_bias,
+                context_start_affinity=self.runtime_state.context_start_affinity,
                 randomness_strength=attempt_randomness_strength,
                 repetition_penalty_strength=self.runtime_state.repetition_penalty_strength,
                 markov_order=self.runtime_state.markov_order,
