@@ -37,6 +37,50 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(settings.sqlite_busy_timeout_ms, 5000)
         self.assertEqual(settings.sqlite_wal_autocheckpoint_pages, 1000)
 
+    def test_env_example_covers_runtime_fields_with_registry_defaults(self) -> None:
+        # "git clone and go": a fresh deployment copies .env.example, so every
+        # runtime knob must be present there and its value must match the
+        # registry default -- otherwise prod silently runs a stale config.
+        import re
+        from pathlib import Path
+
+        from app.config.registry import RUNTIME_FIELDS
+
+        env_text = (Path(__file__).parents[1] / ".env.example").read_text(
+            encoding="utf-8"
+        )
+        env_values = dict(
+            re.findall(r"^([A-Z_0-9]+)=(.*)$", env_text, re.MULTILINE)
+        )
+
+        missing = [
+            spec.env_var for spec in RUNTIME_FIELDS
+            if spec.env_var not in env_values
+        ]
+        self.assertEqual(missing, [], f".env.example misses: {missing}")
+
+        drifted = {
+            spec.env_var: (env_values[spec.env_var].strip(), spec.default)
+            for spec in RUNTIME_FIELDS
+            if spec.parse(env_values[spec.env_var].strip())
+            != spec.parse(spec.default)
+        }
+        self.assertEqual(
+            drifted, {},
+            f".env.example drifted from registry (env, registry): {drifted}",
+        )
+
+    def test_gen_trace_log_defaults_off(self) -> None:
+        with patch.dict(os.environ, minimal_env(), clear=True):
+            settings = load_settings(load_env=False)
+        self.assertFalse(settings.gen_trace_log)
+
+        with patch.dict(
+            os.environ, minimal_env() | {"GEN_TRACE_LOG": "true"}, clear=True
+        ):
+            settings = load_settings(load_env=False)
+        self.assertTrue(settings.gen_trace_log)
+
     def test_load_settings_rejects_missing_bot_token(self) -> None:
         env = minimal_env()
         env.pop("BOT_TOKEN")
