@@ -122,10 +122,12 @@ class _TraceCapturingGenerator(MarkovGenerator):
         self.hidden_context_fallbacks = 0
         self.attempt_sources: dict[str, str] = {}
         self.attempt_orders: dict[str, int] = {}
+        self.attempt_jumps: dict[str, int] = {}
 
     def reset_generation(self) -> None:
         self.attempt_sources.clear()
         self.attempt_orders.clear()
+        self.attempt_jumps.clear()
 
     async def generate_text_with_trace(
         self, *args: Any, **kwargs: Any
@@ -135,6 +137,7 @@ class _TraceCapturingGenerator(MarkovGenerator):
             self.order_used[trace.markov_order_used] += 1
             self.attempt_sources[text] = trace.start_source
             self.attempt_orders[text] = trace.markov_order_used
+            self.attempt_jumps[text] = trace.jump_count
         elif trace.rejection_reason is not None:
             self.rejections[trace.rejection_reason] += 1
         self.context_exact += trace.context_exact_matches
@@ -333,6 +336,12 @@ async def evaluate(
         # Joint (start_source, markov order) of winners: the marginals alone
         # cannot say whether relief buys on-topic replies or on-topic salad.
         winner_source_order: Counter[tuple[str, int]] = Counter()
+        # M4 jumps of the winning walk (-1 = winner not found in the attempt
+        # map). Multi-jump winners are the "long salad" replies; per-bucket
+        # length/verbatim slices show what each extra jump costs.
+        winner_jumps: Counter[int] = Counter()
+        length_by_jumps: dict[int, list[int]] = {}
+        verbatim_by_jumps: dict[int, list[float]] = {}
         try:
             for _ in range(generations):
                 generator.reset_generation()
@@ -372,6 +381,10 @@ async def evaluate(
                 run = longest_verbatim_run(content_cf, verbatim_index)
                 verbatim_runs.append(run)
                 verbatim_ratios.append(run / len(content_cf) if content_cf else 0.0)
+                jumps = generator.attempt_jumps.get(result.text, -1)
+                winner_jumps[jumps] += 1
+                length_by_jumps.setdefault(jumps, []).append(len(reply_content))
+                verbatim_by_jumps.setdefault(jumps, []).append(verbatim_ratios[-1])
                 context_overlaps.append(
                     context_token_overlap(reply_content, content_tokens(context_tokens))
                 )
@@ -439,6 +452,25 @@ async def evaluate(
             ) / max(1, sum(winner_sources[s] for s in _CONTEXT_START_SOURCES)),
             4,
         ),
+        # M4 jump load of the winners. The multijump rate is the headline: those
+        # replies are the incoherent "three topics per message" tail, and the
+        # per-bucket slice shows length/verbatim per extra jump.
+        "winner_jump_histogram": {
+            str(jumps): count for jumps, count in sorted(winner_jumps.items())
+        },
+        "winner_multijump_rate": round(
+            sum(count for jumps, count in winner_jumps.items() if jumps >= 2)
+            / produced,
+            4,
+        ) if produced else 0.0,
+        "jump_bucket_stats": {
+            f"jumps{jumps}": {
+                "n": len(length_by_jumps[jumps]),
+                "avg_len": round(mean(length_by_jumps[jumps]), 2),
+                "verbatim_mean": round(mean(verbatim_by_jumps[jumps]), 4),
+            }
+            for jumps in sorted(length_by_jumps)
+        },
         "verbatim_run_ratio_mean": round(mean(verbatim_ratios), 4) if verbatim_ratios else 0.0,
         "verbatim_run_ratio_median": round(median(verbatim_ratios), 4) if verbatim_ratios else 0.0,
         "verbatim_run_len_median": median(verbatim_runs) if verbatim_runs else 0,
