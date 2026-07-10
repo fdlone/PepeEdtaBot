@@ -331,6 +331,15 @@ class TestJumpSpliceHelpers(unittest.TestCase):
         trim_splice_tail(generated)
         self.assertEqual(generated, ["мама", "мыла", "раму"])
 
+    def test_trim_splice_tail_drops_dangling_preposition(self) -> None:
+        # Live trace: "я и такие ессе писал на, а вообще ..." — the jump fired
+        # while the walk stood on a preposition, leaving a fragment.
+        from app.core.markov import trim_splice_tail
+
+        generated = ["ессе", "писал", "на"]
+        trim_splice_tail(generated)
+        self.assertEqual(generated, ["ессе", "писал"])
+
     def test_trim_splice_tail_keeps_at_least_one_token(self) -> None:
         from app.core.markov import trim_splice_tail
 

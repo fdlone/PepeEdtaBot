@@ -57,11 +57,15 @@ JUMP_MAX_PER_REPLY = 1
 JUMP_MIN_TOKENS_BETWEEN = 6
 
 # Tokens dropped from the tail of the walk right before a connective splice: a
-# dangling comma or conjunction at the splice point yields ",," and
-# "хотя, хотя"-style stutter. Includes the connective words themselves so
-# "<...> хотя" + ", хотя <...>" cannot double up.
+# dangling comma, conjunction or preposition at the splice point yields ",,",
+# "хотя, хотя" and "писал на, а вообще"-style fragments. Includes the
+# connective words themselves so "<...> хотя" + ", хотя <...>" cannot double
+# up. Prepositions were missed in the first pass — live traces showed jumps
+# firing mid-phrase on "на"/"с".
 _JUMP_SPLICE_TRIM: frozenset[str] = frozenset(
-    {",", "и", "а", "но", "ну", "что"}
+    {",", "и", "а", "но", "ну", "что", "как"}
+    | {"в", "на", "с", "со", "по", "у", "к", "ко", "о", "об", "за", "до",
+       "из", "от", "под", "над", "при", "про", "без", "для", "через"}
     | {token for phrase in JUMP_CONNECTIVE_TOKENS for token in phrase}
 )
 
@@ -1400,13 +1404,16 @@ class MarkovGenerator:
                 # the jump was disabled before M4). Overshooting token_limit is
                 # fine — the top-of-loop guard and the finalize trims handle it.
                 trim_splice_tail(generated)
+                # Exclude connectives containing the jump target's first word
+                # anywhere, not just as the last token: ", ну и" + "ну ..."
+                # stuttered into "ну и ну" when only phrase[-1] was checked.
                 connective = pick_jump_connective(
                     rng,
                     exclude=used_connectives
                     + [
                         phrase
                         for phrase in JUMP_CONNECTIVE_TOKENS
-                        if phrase[-1] == nw1
+                        if nw1 in phrase
                     ],
                 )
                 used_connectives.append(connective)
