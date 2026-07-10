@@ -4,7 +4,7 @@ import logging
 import random
 import re
 from collections import Counter, OrderedDict
-from collections.abc import Container
+from collections.abc import Container, Iterable
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
@@ -44,9 +44,48 @@ JUMP_CONNECTIVE_TOKENS: tuple[tuple[str, ...], ...] = (
     (",", "ну", "и"),
 )
 
+# One aside per reply reads as deliberate topic drift; two or more read as
+# salad. Uncapped, the 0.12/step hazard gave 18% of selection winners >=2
+# jumps, and those were exactly the incoherent long replies (avg 18-23 content
+# tokens vs 6.3 without jumps). Extra length must come from the chain itself,
+# not from splicing more topics.
+JUMP_MAX_PER_REPLY = 1
 
-def pick_jump_connective(rng: random.Random) -> tuple[str, ...]:
-    return rng.choice(JUMP_CONNECTIVE_TOKENS)
+# Insurance for a raised cap: a further jump may not fire until the reply has
+# grown this many tokens past the previous splice, so asides cannot chain
+# back-to-back. Dead while JUMP_MAX_PER_REPLY is 1.
+JUMP_MIN_TOKENS_BETWEEN = 6
+
+# Tokens dropped from the tail of the walk right before a connective splice: a
+# dangling comma or conjunction at the splice point yields ",," and
+# "хотя, хотя"-style stutter. Includes the connective words themselves so
+# "<...> хотя" + ", хотя <...>" cannot double up.
+_JUMP_SPLICE_TRIM: frozenset[str] = frozenset(
+    {",", "и", "а", "но", "ну", "что"}
+    | {token for phrase in JUMP_CONNECTIVE_TOKENS for token in phrase}
+)
+
+
+def trim_splice_tail(generated: list[str]) -> None:
+    """Drop dangling comma/conjunction tokens so a connective splices cleanly.
+
+    Mutates ``generated`` in place; always leaves at least one token."""
+    while len(generated) > 1 and generated[-1] in _JUMP_SPLICE_TRIM:
+        generated.pop()
+
+
+def pick_jump_connective(
+    rng: random.Random,
+    exclude: Iterable[tuple[str, ...]] = (),
+) -> tuple[str, ...]:
+    """A connective outside ``exclude``, so one reply does not reuse an aside
+    marker (and the splice does not stutter into the jump target's first word).
+    Falls back to the full pool when everything is excluded."""
+    excluded = set(exclude)
+    fresh = [
+        phrase for phrase in JUMP_CONNECTIVE_TOKENS if phrase not in excluded
+    ]
+    return rng.choice(fresh or list(JUMP_CONNECTIVE_TOKENS))
 
 
 def context_emission_tokens(state: tuple[str, str, str]) -> list[str]:
@@ -1326,12 +1365,19 @@ class MarkovGenerator:
             build_windows(dedup_seed, 3)
         )
         jump_count = 0
+        last_jump_end = 0
+        used_connectives: list[tuple[str, ...]] = []
 
         for step_index in range(self.max_steps):
             if len(generated) >= token_limit:
                 break
             if (
                 len(generated) >= JUMP_MIN_GENERATED_TOKENS
+                and jump_count < JUMP_MAX_PER_REPLY
+                and (
+                    jump_count == 0
+                    or len(generated) - last_jump_end >= JUMP_MIN_TOKENS_BETWEEN
+                )
                 and rng.random() < jump_probability
                 and starts3
                 and order >= 3
@@ -1353,8 +1399,20 @@ class MarkovGenerator:
                 # aside instead of silently dropping into mid-chain (which is why
                 # the jump was disabled before M4). Overshooting token_limit is
                 # fine — the top-of-loop guard and the finalize trims handle it.
-                generated.extend(pick_jump_connective(rng))
+                trim_splice_tail(generated)
+                connective = pick_jump_connective(
+                    rng,
+                    exclude=used_connectives
+                    + [
+                        phrase
+                        for phrase in JUMP_CONNECTIVE_TOKENS
+                        if phrase[-1] == nw1
+                    ],
+                )
+                used_connectives.append(connective)
+                generated.extend(connective)
                 generated.extend((nw1, nw2, nw3))
+                last_jump_end = len(generated)
                 w1, w2, w3 = nw1, nw2, nw3
                 remember_bounded(visited_triplets, (w1, w2, w3), 40)
                 remember_bounded(seen_pairs, (generated[-2], generated[-1]), 80)

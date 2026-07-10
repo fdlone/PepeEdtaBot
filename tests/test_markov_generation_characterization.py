@@ -287,6 +287,73 @@ class TestMidGenerationJump(_GenerationCharacterizationBase):
         )
         self.assertGreater(attempt.token_count, 9)
 
+    async def test_jumps_capped_per_reply(self) -> None:
+        # Even a certain per-step jump may fire at most JUMP_MAX_PER_REPLY
+        # times: extra length must come from the chain, not from splicing more
+        # topics (uncapped, 18% of winners carried >=2 jumps — the salad tail).
+        from app.core.markov import JUMP_MAX_PER_REPLY
+
+        for seed in range(1, 6):
+            attempt = await self.generator._generate_text_once(
+                chat_id=CHAT_ID, max_chars=400, max_tokens=45,
+                randomness_strength=0.0, jump_probability=1.0,
+                rng=random.Random(seed), emit_start=True,
+            )
+            self.assertLessEqual(attempt.jump_count, JUMP_MAX_PER_REPLY)
+
+    async def test_certain_jump_leaves_no_splice_stutter(self) -> None:
+        # The splice point must not read ",," or repeat the connective word
+        # ("хотя, хотя") — the trim drops dangling commas/conjunctions first.
+        connective_words = self._connective_words() - {","}
+        for seed in range(1, 8):
+            attempt = await self.generator._generate_text_once(
+                chat_id=CHAT_ID, max_chars=400, max_tokens=45,
+                randomness_strength=0.0, jump_probability=1.0,
+                rng=random.Random(seed), emit_start=True,
+            )
+            self.assertNotIn(",,", attempt.text)
+            tokens = attempt.text.replace(",", " ").split()
+            for first, second in zip(tokens, tokens[1:], strict=False):
+                if first in connective_words:
+                    self.assertNotEqual(
+                        first, second,
+                        f"stuttered connective in {attempt.text!r}",
+                    )
+
+
+class TestJumpSpliceHelpers(unittest.TestCase):
+    """Pure helpers behind the M4 connective splice."""
+
+    def test_trim_splice_tail_drops_dangling_tail(self) -> None:
+        from app.core.markov import trim_splice_tail
+
+        generated = ["мама", "мыла", "раму", ",", "хотя"]
+        trim_splice_tail(generated)
+        self.assertEqual(generated, ["мама", "мыла", "раму"])
+
+    def test_trim_splice_tail_keeps_at_least_one_token(self) -> None:
+        from app.core.markov import trim_splice_tail
+
+        generated = [",", "и", "ну"]
+        trim_splice_tail(generated)
+        self.assertEqual(generated, [","])
+
+    def test_pick_jump_connective_skips_excluded(self) -> None:
+        from app.core.markov import JUMP_CONNECTIVE_TOKENS, pick_jump_connective
+
+        exclude = list(JUMP_CONNECTIVE_TOKENS[1:])
+        for seed in range(10):
+            picked = pick_jump_connective(random.Random(seed), exclude=exclude)
+            self.assertEqual(picked, JUMP_CONNECTIVE_TOKENS[0])
+
+    def test_pick_jump_connective_falls_back_when_all_excluded(self) -> None:
+        from app.core.markov import JUMP_CONNECTIVE_TOKENS, pick_jump_connective
+
+        picked = pick_jump_connective(
+            random.Random(1), exclude=list(JUMP_CONNECTIVE_TOKENS)
+        )
+        self.assertIn(picked, JUMP_CONNECTIVE_TOKENS)
+
 
 class TestGenerateTextWithTraceCharacterization(_GenerationCharacterizationBase):
     async def test_trace_single_attempt_success(self) -> None:
