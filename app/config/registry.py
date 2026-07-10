@@ -248,7 +248,11 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # in the corpus, while the wanted reply «слава гнойный пидор ...» is a
     # high-count learned START that plain sampling almost never draws among
     # ~3000. 1.0 disables.
-    FieldSpec("context_start_affinity", "CONTEXT_START_AFFINITY", "3.0",
+    # 6.0 (2026-07-10): probe sweep on «кто гнойный пидор» — assertion-style
+    # answers 1%/4%/8%/13% at affinity 1/3/6/10, with every 5-seed eval metric
+    # flat up to 6.0; at 10.0 distinct_2 dips 0.904 -> 0.888 (the same starts
+    # get re-picked). 6.0 is the knee: the gain is real, the cost is not yet.
+    FieldSpec("context_start_affinity", "CONTEXT_START_AFFINITY", "6.0",
               _float_in_range(1.0, 10.0)),
     FieldSpec("reply_context_only_for_replies", "REPLY_CONTEXT_ONLY_FOR_REPLIES",
               "true", _bool()),
