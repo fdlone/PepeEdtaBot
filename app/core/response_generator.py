@@ -22,6 +22,7 @@ from app.core.candidate_scorer import (
 )
 from app.core.emoji import append_emoji_flavor, strip_trailing_emojis
 from app.core.markov import (
+    JUMP_CONNECTIVE_TOKENS,
     PUNCT_SET,
     MarkovGenerator,
     detokenize,
@@ -263,8 +264,19 @@ class ResponseGenerator:
         if not base_tokens:
             return None
         tail_tokens = tokenize(continuation, normalize_lower=state.normalize_lower)
+        # Same stutter guard as the M4 splice: never pick a connective that
+        # contains the continuation's first word (", ну и" + "ну как..." read
+        # as "ну и ну" in live samples).
+        connective = pick_jump_connective(
+            rng,
+            exclude=[
+                phrase
+                for phrase in JUMP_CONNECTIVE_TOKENS
+                if tail_tokens and tail_tokens[0].casefold() in phrase
+            ],
+        )
         combined = finalize_reply_ending(
-            base_tokens + list(pick_jump_connective(rng)) + tail_tokens
+            base_tokens + list(connective) + tail_tokens
         )
         extended = detokenize(combined, max_chars=state.max_reply_chars)
         if not extended or extended == candidate:
