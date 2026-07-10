@@ -321,6 +321,60 @@ class TestMidGenerationJump(_GenerationCharacterizationBase):
                     )
 
 
+class TestContextStartAffinity(unittest.TestCase):
+    """Context-affine global start sampling (pure helpers)."""
+
+    def test_context_start_stems_folds_and_drops_stopwords(self) -> None:
+        from app.core.markov import context_start_stems
+
+        stems = context_start_stems("А гнойному пидору навалил".split())
+        self.assertIn("гнойн", stems)
+        self.assertIn("пидор", stems)
+        self.assertNotIn("а", stems)  # stopword
+
+    def test_affinity_boosts_context_sharing_start(self) -> None:
+        from app.core.markov import context_start_stems, weighted_start3_choice
+
+        # 1 on-topic start among 50 heavier off-topic ones: plain sampling
+        # almost never draws it, affinity 3.0 (два общих стема => x9) must.
+        starts = [("слава", "гнойный", "пидор", 2)] + [
+            (f"слово{i}", f"текст{i}", f"конец{i}", 10) for i in range(50)
+        ]
+        stems = context_start_stems("кто гнойный пидор ?".split())
+
+        rng = random.Random(7)
+        plain = sum(
+            weighted_start3_choice(starts, 0.0, 0.75, rng)[0] == "слава"
+            for _ in range(300)
+        )
+        rng = random.Random(7)
+        boosted = sum(
+            weighted_start3_choice(
+                starts, 0.0, 0.75, rng,
+                context_stems=stems, context_start_affinity=3.0,
+            )[0] == "слава"
+            for _ in range(300)
+        )
+
+        self.assertLess(plain, 10)
+        self.assertGreater(boosted, plain * 3)
+
+    def test_affinity_one_is_identical_to_plain(self) -> None:
+        from app.core.markov import context_start_stems, weighted_start3_choice
+
+        starts = [(f"а{i}", f"б{i}", f"в{i}", i + 1) for i in range(20)]
+        stems = context_start_stems("а3 б3".split())
+        for seed in range(20):
+            plain = weighted_start3_choice(
+                starts, 0.3, 0.75, random.Random(seed)
+            )
+            with_knob_off = weighted_start3_choice(
+                starts, 0.3, 0.75, random.Random(seed),
+                context_stems=stems, context_start_affinity=1.0,
+            )
+            self.assertEqual(plain, with_knob_off)
+
+
 class TestJumpSpliceHelpers(unittest.TestCase):
     """Pure helpers behind the M4 connective splice."""
 

@@ -229,6 +229,9 @@ async def evaluate_generation(
                 max_reply_tokens=45,
                 reply_context_bias=1.8,
                 reply_context_start_bias=2.2,
+                # 1.0 keeps the committed baselines byte-identical: the
+                # affinity boost is measured on the prod-copy eval instead.
+                context_start_affinity=1.0,
                 repetition_penalty_strength=1.0,
                 recent_reply_penalty_strength=recent_reply_penalty_strength,
                 # Off in the synthetic eval: there is no prod corpus index here,
