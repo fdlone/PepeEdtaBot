@@ -240,7 +240,7 @@ def build_token_idf(documents: Iterable[list[str]]) -> dict[str, float]:
     seen: Counter[str] = Counter()
     for tokens in documents:
         document_count += 1
-        seen.update(set(meaningful_tokens(tokens)))
+        seen.update(stemmed_meaningful_tokens(tokens))
     if not document_count:
         return {}
     return {
@@ -262,9 +262,14 @@ def idf_context_relevance(
     that. Here each shared token contributes its IDF, and the total is
     normalized by the context's own IDF mass: matching a rare name is worth much
     more than matching "кто", and candidate length no longer enters.
+
+    Overlap is computed on approximate stems (``stem_token``): exact-form
+    matching scored "гнойному пидору" at zero against "гнойный пидор", muting
+    the context bonus for most inflected Russian answers. The IDF mapping is
+    keyed by the same stems (``build_token_idf``).
     """
-    candidate = set(meaningful_tokens(tokens))
-    context = set(meaningful_tokens(context_tokens))
+    candidate = stemmed_meaningful_tokens(tokens)
+    context = stemmed_meaningful_tokens(context_tokens)
     if not candidate or not context:
         return 0.0
     # A candidate whose informative tokens are all echoed from the context adds
