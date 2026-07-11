@@ -166,7 +166,7 @@ Telegram message (F.text)
 и биасы — литеральный seed из контекста больше не строится.
 
 ### 3.2 Hot-ngram seed (L1): `learning.py:403`
-Только для **непрошеных** ответов, с шансом `hot_ngram_seed_chance=0.05`.
+Только для **непрошеных** ответов, с шансом `hot_ngram_seed_chance=0.25`.
 `learning_service.get_hot_ngrams` → n-граммы с ≥ `hot_ngram_min_count=3`
 попаданиями в окне и долей окна ≥ `hot_ngram_recency_share=0.5`; случайная
 становится `seed` генерации (реплика «в тему локального мема»).
@@ -356,10 +356,10 @@ context_relevance − repetition_penalty − recent_penalty`:
 ### 7.1 Редкие события: `roll_rare_event` / `apply_rare_event` (`reply_flavor.py:87`)
 Только для сгенерированных (не fallback) ответов, бюджет
 `rare_event_daily_cap=3`/чат/день (UTC).
-- `rare_event_chance=0.005` → равновероятно: **verdict** (замена ответа словом
+- `rare_event_chance=0.03` → равновероятно: **verdict** (замена ответа словом
   «база/жиза/классика/…»), **caps** (UPPERCASE), **double** (сплит по границе
   предложения на два сообщения);
-- иначе `false_start_chance=0.03` → **false_start**: филлер («ну как бы...»,
+- иначе `false_start_chance=0.05` → **false_start**: филлер («ну как бы...»,
   «щас», …) + настоящий ответ вторым сообщением.
 
 ### 7.2 Fallback-фразы (`presentation/fallback_phrases.py`)
@@ -433,8 +433,8 @@ Fallback на обращение не считается в hourly cap.
 | reply_context_only_for_replies | true | контекст только для реплаев |
 | reply_context_include_current_message | true | + текущее сообщение |
 | fuzzy_context_casefold / prefix | true / false | нечёткий матчинг контекста |
-| hot_ngram_seed_chance / min_count / recency_share | 0.05 / 3 / 0.5 | L1 running jokes |
-| rare_event_chance / false_start_chance / rare_event_daily_cap | 0.005 / 0.03 / 3 | L3 |
+| hot_ngram_seed_chance / min_count / recency_share | 0.25 / 3 / 0.5 | L1 running jokes |
+| rare_event_chance / false_start_chance / rare_event_daily_cap | 0.03 / 0.05 / 3 | L3 |
 | mood_enabled / mood_modulation_strength | true / 1.0 | M1 |
 | mood_ewma_alpha | 0.3 | сглаживание сигналов |
 | mood_lively/sleepy_rate_per_min | 12 / 2 | пороги темпа |
