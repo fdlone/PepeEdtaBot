@@ -557,7 +557,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
             rng=random.Random(42),
         )
         self.assertTrue(text)
@@ -578,7 +577,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
             rng=random.Random(42),
         )
 
@@ -609,7 +607,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
             rng=random.Random(11),
         )
 
@@ -791,7 +788,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
             rng=random.Random(5),
         )
 
@@ -819,7 +815,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
             rng=random.Random(13),
         )
 
@@ -974,7 +969,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             max_chars=100,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
             rng=random.Random(9),
         )
 
@@ -998,7 +992,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             randomness_strength=2.0,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
             rng=random.Random(3),
         )
 
@@ -1023,7 +1016,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
                 randomness_strength=2.0,
                 markov_order=3,
                 enable_backoff=True,
-                backoff_min_order=1,
                 rng=random.Random(4),
             )
 
@@ -1046,7 +1038,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
         )
 
         self.assertEqual(text, "fresh")

@@ -6,7 +6,7 @@ from app.repositories.base_repo import BaseRepo
 
 
 class MarkovRepo(BaseRepo):
-    """Read-only доступ к таблицам starts/transitions/transitions3/transitions1."""
+    """Read-only доступ к таблицам starts/transitions/transitions3."""
 
     async def get_starts(self, chat_id: int) -> list[tuple[str, str, int]]:
         rows = await self._fetch_all(
@@ -83,18 +83,6 @@ class MarkovRepo(BaseRepo):
             ORDER BY w4
             """,
             (chat_id, w1, w2, w3),
-        )
-        return [(str(r[0]), int(r[1])) for r in rows]
-
-    async def get_transitions1(self, chat_id: int, w1: str) -> list[tuple[str, int]]:
-        rows = await self._fetch_all(
-            """
-            SELECT w2, cnt
-            FROM transitions1
-            WHERE chat_id = ? AND w1 = ?
-            ORDER BY w2
-            """,
-            (chat_id, w1),
         )
         return [(str(r[0]), int(r[1])) for r in rows]
 

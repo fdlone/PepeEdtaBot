@@ -174,13 +174,12 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
 |---|---|
 | `messages` | `chat_id`, `author_id` (анонимизирован), `normalized_text`, `created_at`. Сырой `text` удалён миграцией 005. |
 | `starts3` / `transitions3` | Основная триграммная модель (`(w1, w2) → w3`). |
-| `starts` / `transitions` | Биграммный fallback (`w1 → w2`). |
-| `transitions1` | Униграммный fallback. |
+| `starts` / `transitions` | Биграммный fallback (`w1 → w2`). Униграммная `transitions1` удалена миграцией 013. |
 | `chat_members` | Каноническая таблица участников чата. PK `(chat_hash, user_hash)`, payload зашифрован Fernet. Сейчас единственный потребитель — `/pivo` (присутствие в таблице ≡ подписка); будущие фичи, которым нужно персистентное состояние участника, ходят сюда же. |
 | `pivo_daily_usage` | Суточная квота `/pivo` (`chat_hash`, `user_hash`, `usage_day`, `used_count`). Retention 7 дней. |
 | `pivo_pool_usage` | Анти-повтор шаблонов `/pivo`: последние использованные индексы top/body/bottom per chat per pool (`chat_hash`, `pool_name`, `recent_indices`). Миграция 010. |
 | `chat_emoji_stats` | Частоты эмодзи per chat для эмодзи-канала (`chat_id`, `emoji`, `cnt`, `updated_at`); ключ — сырой `chat_id`, как у таблиц модели; чистится в `clear_chat`, стареющие строки затухают. Миграция 011 (M3). |
-| `chat_hot_ngrams` | Скользящее окно контентных n-грамм per chat (`chat_id`, `w1`, `w2`, `w3` (`''` для биграмм), `cnt`, `updated_at`); «горячесть» = доля оконного счётчика от всевременного в `transitions`/`transitions1`. Ключ — сырой `chat_id`; чистится в `clear_chat`, затухает при старте. Миграция 012 (L1). |
+| `chat_hot_ngrams` | Скользящее окно контентных n-грамм per chat (`chat_id`, `w1`, `w2`, `w3` (`''` для биграмм), `cnt`, `updated_at`); «горячесть» = доля оконного счётчика от всевременного в `transitions` (для биграмм — SUM по `w3`). Ключ — сырой `chat_id`; чистится в `clear_chat`, затухает при старте. Миграция 012 (L1). |
 | `schema_migrations` | Учёт применённых миграций. |
 
 ## Миграции

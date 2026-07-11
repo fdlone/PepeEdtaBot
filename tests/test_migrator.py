@@ -25,6 +25,7 @@ EXPECTED_MIGRATIONS = [
     "010_pivo_pool_usage",
     "011_chat_emoji_stats",
     "012_chat_hot_ngrams",
+    "013_drop_transitions1",
 ]
 
 EXPECTED_TABLES = {
@@ -33,7 +34,6 @@ EXPECTED_TABLES = {
     "starts3",
     "transitions",
     "transitions3",
-    "transitions1",
     "chat_members",
     "pivo_daily_usage",
     "pivo_pool_usage",
@@ -303,10 +303,11 @@ class TestMigratorFullCompatibility(unittest.IsolatedAsyncioTestCase):
         # Counts are taken from the legacy table names; after migration 007
         # `pivo_chat_members` becomes `chat_members` but its rows are copied
         # verbatim, so the count comparison maps the old name to the new one.
+        # transitions1 is not compared: migration 013 drops it outright.
         legacy_counts = {
             t: await self._count(t)
             for t in ("messages", "starts", "transitions", "starts3",
-                      "transitions3", "transitions1", "pivo_chat_members")
+                      "transitions3", "pivo_chat_members")
         }
         await migrator.run(self.conn)
         for legacy_table, before in legacy_counts.items():
@@ -341,10 +342,11 @@ class TestMigratorFullCompatibility(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual((await cur.fetchone())[0], 1)
 
+        # Migration 013 drops the legacy order-1 table entirely.
         cur = await self.conn.execute(
-            "SELECT SUM(cnt) FROM transitions1 WHERE chat_id=100"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='transitions1'"
         )
-        self.assertEqual((await cur.fetchone())[0], 10)
+        self.assertIsNone(await cur.fetchone())
 
     async def test_pivo_members_migrated_to_chat_members(self) -> None:
         await migrator.run(self.conn)
@@ -495,7 +497,7 @@ class TestMigratorRealSchemaFixture(unittest.IsolatedAsyncioTestCase):
     async def test_markov_row_counts_unchanged(self) -> None:
         counts = {
             t: await self._count(t)
-            for t in ("starts", "starts3", "transitions", "transitions1", "transitions3")
+            for t in ("starts", "starts3", "transitions", "transitions3")
         }
         await migrator.run(self.conn)
         for table, before in counts.items():
@@ -532,9 +534,9 @@ class TestMigratorRealSchemaFixture(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await cur.fetchone())[0], 1)
 
         cur = await self.conn.execute(
-            "SELECT SUM(cnt) FROM transitions1 WHERE chat_id=-1003736119498"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='transitions1'"
         )
-        self.assertEqual((await cur.fetchone())[0], 5)
+        self.assertIsNone(await cur.fetchone())
 
     async def test_text_column_removed(self) -> None:
         await migrator.run(self.conn)

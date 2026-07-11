@@ -244,14 +244,5 @@ class TestSettings(unittest.TestCase):
             settings = load_settings(load_env=False)
         self.assertEqual(settings.bot_text_aliases, frozenset({"bim", "бим"}))
 
-    def test_load_settings_rejects_conflicting_backoff(self) -> None:
-        env = minimal_env()
-        env["MARKOV_ORDER"] = "2"
-        env["BACKOFF_MIN_ORDER"] = "2"
-        with patch.dict(os.environ, env, clear=True):
-            with self.assertRaisesRegex(ValueError, "BACKOFF_MIN_ORDER"):
-                load_settings(load_env=False)
-
-
 if __name__ == "__main__":
     unittest.main()

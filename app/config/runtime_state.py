@@ -41,7 +41,6 @@ class RuntimeState:
     length_mode_weights: tuple[float, float, float]
     markov_order: int
     enable_backoff: bool
-    backoff_min_order: int
     markov_jump_probability: float
     hot_ngram_seed_chance: float
     hot_ngram_min_count: int

@@ -240,7 +240,6 @@ async def evaluate_generation(
                 length_mode_weights=length_mode_weights,
                 markov_order=3,
                 enable_backoff=True,
-                backoff_min_order=1,
                 # Keep the M3/M4 channels off in eval so the baselines measure the
                 # word model alone (and no emoji-stats DB reads are attempted).
                 markov_jump_probability=0.0,

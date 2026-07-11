@@ -25,7 +25,6 @@ def _make_state(**overrides: object) -> SimpleNamespace:
     base = {
         "typing_min_ms": 350,
         "typing_max_ms": 1100,
-        "backoff_min_order": 1,
         "markov_order": 3,
         "reply_context_last_tokens": 3,
         "reply_context_max_tokens": 12,
@@ -114,10 +113,6 @@ class TestValidateCrossFields(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_cross_fields(_make_state(typing_min_ms=2000))
 
-    def test_backoff_min_order_must_be_below_markov_order(self) -> None:
-        with self.assertRaises(ValueError):
-            validate_cross_fields(_make_state(backoff_min_order=3, markov_order=3))
-
     def test_reply_context_last_must_not_exceed_max(self) -> None:
         with self.assertRaises(ValueError):
             validate_cross_fields(
@@ -137,16 +132,15 @@ class TestTryApply(unittest.TestCase):
         self.assertEqual(state.markov_order, 3)
 
     def test_cross_field_violation_does_not_mutate_state(self) -> None:
-        # markov_order=2 with backoff_min_order=1 is valid, but lowering
-        # markov_order to 2 while backoff_min_order stays >= 2 must be rejected
-        # without touching the real state.
-        state = _make_state(markov_order=3, backoff_min_order=2)
+        # reply_context_last_tokens=3 with max=12 is valid, but lowering the
+        # max below last_tokens must be rejected without touching the state.
+        state = _make_state(reply_context_last_tokens=3, reply_context_max_tokens=12)
         with self.assertRaises(ValueError):
-            try_apply(state, "markov_order", "2")
-        self.assertEqual(state.markov_order, 3)
+            try_apply(state, "reply_context_max_tokens", "2")
+        self.assertEqual(state.reply_context_max_tokens, 12)
 
     def test_valid_apply_mutates_state(self) -> None:
-        state = _make_state(markov_order=3, backoff_min_order=1)
+        state = _make_state(markov_order=3)
         try_apply(state, "markov_order", "2")
         self.assertEqual(state.markov_order, 2)
 

@@ -457,24 +457,11 @@ async def evaluate(
             4,
         ) if produced else 0.0,
         "winner_start_sources": dict(winner_sources.most_common()),
-        # Salad guard: share of replies whose winning walk had backed off to the
-        # 1-gram chain. Relieving the coherence penalty must not inflate this.
-        "winner_order1_rate": round(winner_orders[1] / produced, 4) if produced else 0.0,
         "winner_orders": dict(sorted(winner_orders.items())),
         "winner_source_order": {
             f"{source}/order{order}": count
             for (source, order), count in sorted(winner_source_order.items())
         },
-        # Of the replies that won from a context start, the share whose walk had
-        # already backed off to 1-grams. This is what decides the relief knob.
-        "context_win_order1_share": round(
-            sum(
-                count
-                for (source, order), count in winner_source_order.items()
-                if source in _CONTEXT_START_SOURCES and order == 1
-            ) / max(1, sum(winner_sources[s] for s in _CONTEXT_START_SOURCES)),
-            4,
-        ),
         # M4 jump load of the winners. The multijump rate is the headline: those
         # replies are the incoherent "three topics per message" tail, and the
         # per-bucket slice shows length/verbatim per extra jump.

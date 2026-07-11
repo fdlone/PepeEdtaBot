@@ -138,8 +138,8 @@ class TestCommonHandlers(unittest.IsolatedAsyncioTestCase):
         db = AsyncMock()
         db.get_stats = AsyncMock(return_value={
             "messages": 5, "starts2": 1, "starts3": 1,
-            "transitions2": 2, "transitions3": 1, "transitions1": 3,
-            "volume2": 10, "volume3": 5, "volume1": 15, "volume": 5,
+            "transitions2": 2, "transitions3": 1,
+            "volume2": 10, "volume3": 5, "volume": 5,
         })
         state = _fake_state(min_tokens_for_model=50)
         await cmd_stats(msg, db, state)
@@ -772,7 +772,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             "length_mode_weights": (0.25, 0.55, 0.2),
             "markov_order": 3,
             "enable_backoff": True,
-            "backoff_min_order": 1,
         }
         values.update(overrides)
         return _fake_state(**values)
@@ -1031,7 +1030,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             length_mode_weights=(0.25, 0.55, 0.2),
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
         )
 
         with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
@@ -1082,7 +1080,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             length_mode_weights=(0.25, 0.55, 0.2),
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
         )
 
         with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
@@ -1135,7 +1132,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             length_mode_weights=(0.25, 0.55, 0.2),
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
         )
 
         with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
@@ -1688,7 +1684,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             length_mode_weights=(0.25, 0.55, 0.2),
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
         )
 
         with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
@@ -1751,7 +1746,6 @@ class TestMentionCooldownGate(unittest.IsolatedAsyncioTestCase):
             "length_mode_weights": (0.25, 0.55, 0.2),
             "markov_order": 3,
             "enable_backoff": True,
-            "backoff_min_order": 1,
             "mention_cooldown_sec": 30,
         }
         values.update(overrides)

@@ -14,7 +14,7 @@
 > 2. Скоринг: новые компоненты `verbatim_penalty` (= `verbatim_penalty_strength=1.0`
 >    × доля контент-4-грамм кандидата, найденных в корпусном индексе
 >    `LearningService.get_verbatim_ngram_index`) и `coherence_penalty`
->    (order 1 → 0.70, order 2 → 0.10; трасса пробрасывается в ResponseGenerator
+>    (order 2 → 0.10; order-1 цепь удалена миграцией 013 — трасса пробрасывается в ResponseGenerator
 >    через `generate_text_with_trace`).
 > 3. Дыры verbatim-гейта закрыты: сравнение без хвостовой пунктуации
 >    (`normalize_for_verbatim`), окно кэша 500 → 1000.
@@ -281,7 +281,8 @@ floor 0.02); выбор — через `rng.expovariate` (`exploration_weighted_
   повторяется и не заикается в первое слово нового старта.
 - **Переход**: пул 3-граммы; кандидаты, ведущие в уже посещённую тройку,
   фильтруются (окно 40). Пусто → бэкофф на 2-грамму (`enable_backoff=true`);
-  откат на 1-грамму запрещён дефолтом `backoff_min_order=2` (словесная каша).
+  order-1 цепи больше нет (удалена вместе с ручкой `backoff_min_order` и
+  таблицей `transitions1`, миграция 013): пустой order-2 пул завершает фразу.
 - **`weighted_next_choice`** (`markov.py:431`) — сердце сэмплинга. Вес токена:
   - `count^frequency_power`;
   - ×`step_bias`, если токен в контекст-множестве; step_bias =
@@ -425,7 +426,7 @@ Fallback на обращение не считается в hourly cap.
 | recent_reply_penalty_strength | 0.5 | штраф пересечения с прошлыми ответами |
 | reply_flavor_strength | 1.0 | вариации концовки |
 | emoji_append_chance | 0.15 | M3 эмодзи-хвост |
-| markov_order / enable_backoff / backoff_min_order | 3 / true / 1 | порядок цепи |
+| markov_order / enable_backoff | 3 / true | порядок цепи |
 | markov_jump_probability | 0.12 | M4 прыжки темы |
 | use_reply_context | true | контекст из reply |
 | reply_context_max_tokens | 12 | окно контекста |
