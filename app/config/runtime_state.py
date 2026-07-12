@@ -57,7 +57,6 @@ class RuntimeState:
     reply_context_start_bias: float
     context_start_affinity: float
     reply_context_only_for_replies: bool
-    reply_context_emit_start: bool
     reply_context_include_current_message: bool
     pivo_recent_pool_window: int
     pivo_temporal_flavor_chance: float

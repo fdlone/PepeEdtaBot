@@ -35,7 +35,6 @@ def _runtime_state() -> MagicMock:
     state.recent_replies = {}
     state.recent_reply_penalty_strength = 1.0
     state.verbatim_penalty_strength = 0.0
-    state.reply_context_emit_start = True
     state.length_mode_weights = (0.25, 0.55, 0.2)
     # Argmax selection and no ending transforms: existing tests assert the
     # best-scored candidate text verbatim.

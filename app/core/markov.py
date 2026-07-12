@@ -944,7 +944,6 @@ class MarkovGenerator:
         enable_backoff: bool = True,
         fuzzy_context_casefold: bool = False,
         fuzzy_context_stem: bool = False,
-        context_emit_start: bool = False,
         jump_probability: float = 0.0,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
@@ -964,7 +963,6 @@ class MarkovGenerator:
             enable_backoff=enable_backoff,
             fuzzy_context_casefold=fuzzy_context_casefold,
             fuzzy_context_stem=fuzzy_context_stem,
-            context_emit_start=context_emit_start,
             jump_probability=jump_probability,
             rng=rng,
             attempt_budget=attempt_budget,
@@ -987,7 +985,6 @@ class MarkovGenerator:
         enable_backoff: bool = True,
         fuzzy_context_casefold: bool = False,
         fuzzy_context_stem: bool = False,
-        context_emit_start: bool = False,
         jump_probability: float = 0.0,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
@@ -1016,7 +1013,6 @@ class MarkovGenerator:
                 enable_backoff=enable_backoff,
                 fuzzy_context_casefold=fuzzy_context_casefold,
                 fuzzy_context_stem=fuzzy_context_stem,
-                context_emit_start=context_emit_start,
                 jump_probability=jump_probability,
                 rng=generation_rng,
                 emit_start=True,
@@ -1507,7 +1503,6 @@ class MarkovGenerator:
         enable_backoff: bool = True,
         fuzzy_context_casefold: bool = False,
         fuzzy_context_stem: bool = False,
-        context_emit_start: bool = False,
         jump_probability: float = 0.0,
         rng: random.Random | None = None,
         emit_start: bool = True,
@@ -1586,10 +1581,9 @@ class MarkovGenerator:
                 order_used = contextual_state.order
                 # Visible contextual start: emit the trimmed tail of the matched
                 # window so the reply picks the context up out loud instead of
-                # only continuing after it (design change over Phase 4.1d).
-                contextual_emit_tokens = (
-                    context_emission_tokens(start3) if context_emit_start else []
-                )
+                # only continuing after it. An empty tail (all stopwords) keeps
+                # the start hidden.
+                contextual_emit_tokens = context_emission_tokens(start3)
                 emit_start = False
                 start_source = (
                     "context" if contextual_emit_tokens else "hidden_context"

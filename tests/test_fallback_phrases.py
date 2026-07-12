@@ -55,7 +55,6 @@ def _make_runtime_state() -> RuntimeState:
         reply_context_start_bias=2.2,
             context_start_affinity=3.0,
         reply_context_only_for_replies=True,
-        reply_context_emit_start=True,
         reply_context_include_current_message=True,
         pivo_recent_pool_window=5,
         pivo_temporal_flavor_chance=0.5,

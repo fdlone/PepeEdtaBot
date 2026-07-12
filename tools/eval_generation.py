@@ -243,7 +243,6 @@ async def evaluate_generation(
                 normalize_lower=normalize_lower,
                 fuzzy_context_casefold=fuzzy_context_casefold,
                 fuzzy_context_stem=fuzzy_context_stem,
-                reply_context_emit_start=True,
                 auto_capitalize_replies=False,
                 recent_short_replies={},
                 recent_replies={},

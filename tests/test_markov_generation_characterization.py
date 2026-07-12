@@ -194,9 +194,9 @@ class TestGenerateTextOnceCharacterization(_GenerationCharacterizationBase):
             rng=random.Random(3), emit_start=True,
         )
         self.assertEqual(
-            attempt.text, "в гараже целый выходной день."
+            attempt.text, "чинил машину в гараже целый выходной день."
         )
-        self.assertEqual(attempt.start_source, "hidden_context")
+        self.assertEqual(attempt.start_source, "context")
         self.assertEqual(attempt.context_exact_matches, 1)
         self.assertEqual(attempt.context_casefold_matches, 0)
         self.assertEqual(attempt.markov_order_used, 3)
@@ -209,9 +209,9 @@ class TestGenerateTextOnceCharacterization(_GenerationCharacterizationBase):
             fuzzy_context_casefold=True, rng=random.Random(3), emit_start=True,
         )
         self.assertEqual(
-            attempt.text, "в гараже целый выходной день."
+            attempt.text, "чинил машину в гараже целый выходной день."
         )
-        self.assertEqual(attempt.start_source, "hidden_context")
+        self.assertEqual(attempt.start_source, "context")
         self.assertEqual(attempt.context_exact_matches, 0)
         self.assertEqual(attempt.context_casefold_matches, 1)
 

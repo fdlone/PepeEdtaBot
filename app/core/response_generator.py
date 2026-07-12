@@ -372,7 +372,6 @@ class ResponseGenerator:
                 enable_backoff=self.runtime_state.enable_backoff,
                 fuzzy_context_casefold=self.runtime_state.fuzzy_context_casefold,
                 fuzzy_context_stem=self.runtime_state.fuzzy_context_stem,
-                context_emit_start=self.runtime_state.reply_context_emit_start,
                 jump_probability=self.runtime_state.markov_jump_probability,
                 rng=generation_rng,
                 attempt_budget=1,
