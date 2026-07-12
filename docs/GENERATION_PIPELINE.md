@@ -9,8 +9,10 @@
 > 33% → 5.5%):
 > 1. Контекстный старт стал **видимым**: из матчнутого окна эмитятся последние
 >    ≤2 токена без ведущих стоп-слов/пунктуации («кто гнойный пидор» →
->    «гнойный пидор …»), ручка `reply_context_emit_start=true`
->    (`context_emission_tokens`, markov.py).
+>    «гнойный пидор …») (`context_emission_tokens`, markov.py). Ручка
+>    `reply_context_emit_start` удалена 2026-07-12 (SIM-9): эмиссия всегда
+>    включена, скрытая ветка Phase 4.1d осталась только как случай пустого
+>    хвоста.
 > 2. Скоринг: новый компонент `verbatim_penalty` (= `verbatim_penalty_strength=1.0`
 >    × доля контент-4-грамм кандидата, найденных в корпусном индексе
 >    `LearningService.get_verbatim_ngram_index`). `coherence_penalty` и
@@ -252,12 +254,12 @@ floor 0.02); выбор — через `rng.expovariate` (`exploration_weighted_
      частоте, дубли exact/casefold исключаются.
    Гейт: контекстный старт вообще пробуется лишь с вероятностью
    `context_start_probability(2.2)≈0.545` за попытку (`use_contextual_start`);
-   в остальных ~45% сразу глобальный старт. При совпадении и
-   `reply_context_emit_start=true` (дефолт) в текст эмитится **хвост** совпавшего
-   окна (`context_emission_tokens`) — ответ «подхватывает» контекст вслух,
-   `start_source="context"` (**видимый** старт). При `reply_context_emit_start=false`
-   тройка не эмитится (`start_source="hidden_context"`, «скрытый» контекст),
-   генерация продолжается из состояния. Если контекстный старт пробовался, но ни
+   в остальных ~45% сразу глобальный старт. При совпадении в текст эмитится
+   **хвост** совпавшего окна (`context_emission_tokens`) — ответ «подхватывает»
+   контекст вслух, `start_source="context"` (**видимый** старт). Если хвост
+   пуст (одни стоп-слова/пунктуация), старт остаётся скрытым
+   (`start_source="hidden_context"`), генерация продолжается из состояния.
+   Если контекстный старт пробовался, но ни
    одно окно не совпало — откат на глобальный старт со счётчиком
    `hidden_context_fallbacks` (в трейсе `context=HIDDEN_FALLBACK`).
 3. **Глобальный старт** (`_pick_global_start`, `markov.py:1148`): взвешенный
@@ -320,8 +322,8 @@ floor 0.02); выбор — через `rng.expovariate` (`exploration_weighted_
 `GenerationTrace` пишется в debug-лог: attempts, order_used, jumps, rejection,
 start_source (**global / seed / context / hidden_context**), счётчики
 exact/casefold/stem матчей и фолбэков. `context` = видимый контекстный старт
-(токены эмитятся, `reply_context_emit_start=true`); `hidden_context` = совпадение
-было, но старт не эмитился.
+(токены эмитятся); `hidden_context` = совпадение было, но хвост окна пуст
+(одни стоп-слова) и старт не эмитился.
 
 ---
 

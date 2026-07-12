@@ -62,7 +62,6 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.recent_replies = {}
     s.recent_reply_penalty_strength = 1.0
     s.verbatim_penalty_strength = 0.0
-    s.reply_context_emit_start = True
     s.length_mode_weights = (0.25, 0.55, 0.2)
     # Deterministic selection and untouched reply text so handler tests can
     # assert generated candidates verbatim.

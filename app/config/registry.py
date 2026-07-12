@@ -258,12 +258,6 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _float_in_range(1.0, 10.0)),
     FieldSpec("reply_context_only_for_replies", "REPLY_CONTEXT_ONLY_FOR_REPLIES",
               "true", _bool()),
-    # Visible contextual start: emit the trimmed tail (last <=2 tokens minus
-    # leading stopwords/punctuation) of the matched context window into the
-    # reply, so «кто гнойный пидор» может дать «гнойный пидор <продолжение>».
-    # false возвращает скрытое поведение Phase 4.1d.
-    FieldSpec("reply_context_emit_start", "REPLY_CONTEXT_EMIT_START",
-              "true", _bool()),
     FieldSpec("reply_context_include_current_message",
               "REPLY_CONTEXT_INCLUDE_CURRENT_MESSAGE", "true", _bool()),
     # S2: how many recently used /pivo template indices to remember per pool per
