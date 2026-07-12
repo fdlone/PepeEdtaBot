@@ -26,7 +26,7 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(settings.max_reply_tokens, 45)
         self.assertFalse(settings.auto_capitalize_replies)
         self.assertTrue(settings.fuzzy_context_casefold)
-        self.assertFalse(settings.fuzzy_context_prefix)
+        self.assertTrue(settings.fuzzy_context_stem)
         self.assertEqual(settings.typing_per_char_ms, 12)
         self.assertEqual(settings.runtime_state_ttl_sec, 86400)
         self.assertEqual(settings.runtime_state_max_chats, 2048)
@@ -147,13 +147,13 @@ class TestSettings(unittest.TestCase):
 
         self.assertTrue(settings.fuzzy_context_casefold)
 
-    def test_load_settings_enables_fuzzy_context_prefix(self) -> None:
+    def test_load_settings_disables_fuzzy_context_stem(self) -> None:
         env = minimal_env()
-        env["FUZZY_CONTEXT_PREFIX"] = "true"
+        env["FUZZY_CONTEXT_STEM"] = "false"
         with patch.dict(os.environ, env, clear=True):
             settings = load_settings(load_env=False)
 
-        self.assertTrue(settings.fuzzy_context_prefix)
+        self.assertFalse(settings.fuzzy_context_stem)
 
     def test_load_settings_rejects_negative_min_cooldown(self) -> None:
         env = minimal_env()

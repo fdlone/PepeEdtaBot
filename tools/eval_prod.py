@@ -38,7 +38,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from app import log_masking  # noqa: E402
 from app.config.registry import RUNTIME_FIELDS  # noqa: E402
 from app.core import candidate_scorer as _cs  # noqa: E402
-from app.core import context_state_matcher, gen_trace_log  # noqa: E402
+from app.core import gen_trace_log  # noqa: E402
 from app.core import response_generator as _rg  # noqa: E402
 from app.core.candidate_scorer import build_token_idf  # noqa: E402
 from app.core.markov import (  # noqa: E402
@@ -118,7 +118,7 @@ class _TraceCapturingGenerator(MarkovGenerator):
         self.rejections: Counter[str] = Counter()
         self.context_exact = 0
         self.context_casefold = 0
-        self.context_prefix = 0
+        self.context_stem = 0
         self.hidden_context_fallbacks = 0
         self.attempt_sources: dict[str, str] = {}
         self.attempt_orders: dict[str, int] = {}
@@ -142,7 +142,7 @@ class _TraceCapturingGenerator(MarkovGenerator):
             self.rejections[trace.rejection_reason] += 1
         self.context_exact += trace.context_exact_matches
         self.context_casefold += trace.context_casefold_matches
-        self.context_prefix += trace.context_prefix_matches
+        self.context_stem += trace.context_stem_matches
         self.hidden_context_fallbacks += trace.hidden_context_fallbacks
         return text, trace
 
@@ -257,7 +257,6 @@ async def evaluate(
     generations: int,
     overrides: dict[str, Any] | None = None,
     selection_margin: float | None = None,
-    prefix_confidence: float | None = None,
     context_weight: float | None = None,
     context_cap: float | None = None,
 ) -> dict[str, Any]:
@@ -265,13 +264,12 @@ async def evaluate(
 
     ``overrides`` sets ``runtime_state`` knobs. The remaining arguments patch
     module constants that are not runtime-configurable
-    (``SELECTION_SCORE_MARGIN``, ``_MIN_PREFIX_CONFIDENCE``,
-    ``CONTEXT_RELEVANCE_WEIGHT``, ``CONTEXT_RELEVANCE_CAP``); all are restored
+    (``SELECTION_SCORE_MARGIN``, ``CONTEXT_RELEVANCE_WEIGHT``,
+    ``CONTEXT_RELEVANCE_CAP``); all are restored
     before returning so a sweep can call this repeatedly in one process.
     """
     log_masking.init_masking("prod-generation-evaluation")
     saved_margin = _rg.SELECTION_SCORE_MARGIN
-    saved_confidence = context_state_matcher._MIN_PREFIX_CONFIDENCE
     saved_weight = _cs.CONTEXT_RELEVANCE_WEIGHT
     saved_cap = _cs.CONTEXT_RELEVANCE_CAP
     saved_log_selection = gen_trace_log.log_selection
@@ -279,8 +277,6 @@ async def evaluate(
     saved_log_extended = gen_trace_log.log_attempt_extended
     if selection_margin is not None:
         _rg.SELECTION_SCORE_MARGIN = float(selection_margin)
-    if prefix_confidence is not None:
-        context_state_matcher._MIN_PREFIX_CONFIDENCE = float(prefix_confidence)
     if context_weight is not None:
         _cs.CONTEXT_RELEVANCE_WEIGHT = float(context_weight)
     if context_cap is not None:
@@ -414,7 +410,6 @@ async def evaluate(
     finally:
         temp_dir.cleanup()
         _rg.SELECTION_SCORE_MARGIN = saved_margin
-        context_state_matcher._MIN_PREFIX_CONFIDENCE = saved_confidence
         _cs.CONTEXT_RELEVANCE_WEIGHT = saved_weight
         _cs.CONTEXT_RELEVANCE_CAP = saved_cap
         gen_trace_log.log_selection = saved_log_selection  # type: ignore[assignment]
@@ -426,7 +421,7 @@ async def evaluate(
     total_context = (
         generator.context_exact
         + generator.context_casefold
-        + generator.context_prefix
+        + generator.context_stem
         + generator.hidden_context_fallbacks
     )
     return {
@@ -436,9 +431,6 @@ async def evaluate(
         "generations": generations,
         "overrides": overrides or {},
         "selection_margin": saved_margin if selection_margin is None else selection_margin,
-        "prefix_confidence": (
-            saved_confidence if prefix_confidence is None else prefix_confidence
-        ),
         "context_relevance_weight": saved_weight if context_weight is None else context_weight,
         "context_relevance_cap": saved_cap if context_cap is None else context_cap,
         # How often a context-anchored candidate is the best-scoring one, and --
@@ -503,7 +495,7 @@ async def evaluate(
         "rejections": dict(generator.rejections.most_common()),
         "context_exact": generator.context_exact,
         "context_casefold": generator.context_casefold,
-        "context_prefix": generator.context_prefix,
+        "context_stem": generator.context_stem,
         "hidden_context_fallbacks": generator.hidden_context_fallbacks,
         "hidden_context_fallback_rate": round(
             generator.hidden_context_fallbacks / total_context, 4
@@ -556,12 +548,6 @@ def parse_args() -> argparse.Namespace:
         help="override SELECTION_SCORE_MARGIN (module constant)",
     )
     parser.add_argument(
-        "--prefix-confidence",
-        type=float,
-        default=None,
-        help="override _MIN_PREFIX_CONFIDENCE (module constant)",
-    )
-    parser.add_argument(
         "--context-weight",
         type=float,
         default=None,
@@ -586,7 +572,6 @@ def main() -> None:
             generations=args.generations,
             overrides=dict(args.overrides),
             selection_margin=args.margin,
-            prefix_confidence=args.prefix_confidence,
             context_weight=args.context_weight,
             context_cap=args.context_cap,
         )
