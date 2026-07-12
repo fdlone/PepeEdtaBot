@@ -648,46 +648,47 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.context_exact_matches, 0)
         self.assertEqual(trace.context_casefold_matches, 1)
 
-    async def test_context_prefix_prefers_frequent_coherent_state(self) -> None:
+    async def test_context_stem_matches_inflected_context(self) -> None:
+        # The context arrives inflected ("тренировки помогают"); exact and
+        # casefold lookups miss, the stem fold finds the learned state.
         chat_id = 5553
         for _ in range(10):
             await self.db.save_message_and_update_model(
                 chat_id=chat_id,
-                raw_text="хоссейн джаббар продолжает точно сейчас",
+                raw_text="тренировка помогает телу очень сильно",
                 tokens=[
-                    "хоссейн",
-                    "джаббар",
-                    "продолжает",
-                    "точно",
-                    "сейчас",
+                    "тренировка",
+                    "помогает",
+                    "телу",
+                    "очень",
+                    "сильно",
                 ],
             )
         await self.db.save_message_and_update_model(
             chat_id=chat_id,
-            raw_text="хоссейно джаббаров ошибается редко сейчас",
+            raw_text="жетон висит криво совсем редко",
             tokens=[
-                "хоссейно",
-                "джаббаров",
-                "ошибается",
+                "жетон",
+                "висит",
+                "криво",
+                "совсем",
                 "редко",
-                "сейчас",
             ],
         )
 
         text, trace = await self.generator.generate_text_with_trace(
             chat_id=chat_id,
             max_chars=100,
-            context_tokens=["хоссейном", "джаббаровичем"],
+            context_tokens=["тренировки", "помогают"],
             context_start_bias=4.0,
             randomness_strength=0.0,
-            fuzzy_context_prefix=True,
+            fuzzy_context_stem=True,
             rng=random.Random(11),
         )
 
-        self.assertTrue(text.startswith("точно сейчас"))
+        self.assertTrue(text.startswith("очень сильно"))
         self.assertEqual(trace.start_source, "hidden_context")
-        self.assertEqual(trace.context_prefix_matches, 1)
-        self.assertEqual(trace.context_prefix_singleton_matches, 0)
+        self.assertEqual(trace.context_stem_matches, 1)
 
     async def test_context_start_bias_gates_contextual_start_path(self) -> None:
         chat_id = 5556

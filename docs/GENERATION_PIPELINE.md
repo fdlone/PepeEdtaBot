@@ -245,9 +245,11 @@ floor 0.02); выбор — через `rng.expovariate` (`exploration_weighted_
    - exact 2-граммные (+30% recency);
    - casefold 3/2-граммы (при `fuzzy_context_casefold=true`) через
      `ContextStateMatcher`;
-   - prefix-матчи (при `fuzzy_context_prefix=false` — выключено): кириллические
-     токены ≥5 симв., общий префикс ≥6, coverage ≥0.75, confidence =
-     0.65·string + 0.35·log-frequency ≥ 0.68, ≥2 переходов.
+   - stem-матчи (при `fuzzy_context_stem=true`, дефолт): состояния модели,
+     чей приблизительный стем (`stem_token`, тот же что в
+     `context_start_affinity` и IDF-релевантности) совпадает со стемом
+     контекстного окна («билеты стоят» ≡ «билет стоит»); сортировка по
+     частоте, дубли exact/casefold исключаются.
    Гейт: контекстный старт вообще пробуется лишь с вероятностью
    `context_start_probability(2.2)≈0.545` за попытку (`use_contextual_start`);
    в остальных ~45% сразу глобальный старт. При совпадении и
@@ -317,7 +319,7 @@ floor 0.02); выбор — через `rng.expovariate` (`exploration_weighted_
 
 `GenerationTrace` пишется в debug-лог: attempts, order_used, jumps, rejection,
 start_source (**global / seed / context / hidden_context**), счётчики
-exact/casefold/prefix матчей и фолбэков. `context` = видимый контекстный старт
+exact/casefold/stem матчей и фолбэков. `context` = видимый контекстный старт
 (токены эмитятся, `reply_context_emit_start=true`); `hidden_context` = совпадение
 было, но старт не эмитился.
 
@@ -433,7 +435,7 @@ Fallback на обращение не считается в hourly cap.
 | reply_context_bias / start_bias | 1.8 / 2.2 | сила контекста в шаге/старте |
 | reply_context_only_for_replies | true | контекст только для реплаев |
 | reply_context_include_current_message | true | + текущее сообщение |
-| fuzzy_context_casefold / prefix | true / false | нечёткий матчинг контекста |
+| fuzzy_context_casefold / stem | true / true | нечёткий матчинг контекста |
 | hot_ngram_seed_chance / min_count / recency_share | 0.05 / 3 / 0.5 | L1 running jokes |
 | rare_event_chance / false_start_chance / rare_event_daily_cap | 0.005 / 0.03 / 3 | L3 |
 | mood_enabled / mood_modulation_strength | true / 1.0 | M1 |
@@ -445,7 +447,7 @@ Fallback на обращение не считается в hourly cap.
 Константы, зашитые в код (не /set): бюджеты попыток/кандидатов и margin (§4),
 `SHORT_MODE_MAX_TOKENS=8`, `max_steps=90`, формулы explore/power, веса скоринга
 (§6.1), веса momentum (0.55/0.30/0.15), вероятности flavor-концовок,
-`EMOJI_SAMPLE_POWER=0.5`, пороги fuzzy-prefix (§5.2), окна анти-повторов
+`EMOJI_SAMPLE_POWER=0.5`, окна анти-повторов
 (5 коротких / 20 полных / 3 fallback), decay-окна эмодзи и n-грамм.
 
 ---

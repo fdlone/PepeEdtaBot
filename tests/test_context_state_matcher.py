@@ -83,131 +83,99 @@ class TestContextStateMatcher(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "length"):
             await self.matcher.match(1, ("alpha",), 2)
 
-    async def test_prefix_frequency_prior_beats_rare_closer_state(self) -> None:
+    async def test_stem_matches_inflected_variants_ordered_by_count(self) -> None:
+        # "тренировки помогают" folds to the same stems as both learned forms;
+        # the more frequent state must come first.
         self.db.get_markov_states.return_value = [
-            (("хоссейн", "джаббар"), 10),
-            (("хоссейно", "джаббаров"), 1),
+            (("тренировка", "помогает"), 10),
+            (("тренировку", "помогает"), 1),
         ]
 
         matches = await self.matcher.match(
             5,
-            ("хоссейном", "джаббаровичем"),
+            ("тренировки", "помогают"),
             2,
-            include_prefix=True,
+            include_stem=True,
         )
 
-        prefix_matches = [
-            match for match in matches if match.match_kind == "prefix"
+        stem_matches = [
+            match for match in matches if match.match_kind == "stem"
         ]
         self.assertEqual(
-            [match.state for match in prefix_matches],
-            [("хоссейн", "джаббар")],
+            [match.state for match in stem_matches],
+            [("тренировка", "помогает"), ("тренировку", "помогает")],
         )
-        self.assertEqual(prefix_matches[0].transition_count, 10)
+        self.assertEqual(stem_matches[0].transition_count, 10)
 
-    async def test_prefix_requires_cyrillic_length_and_common_prefix_guards(
-        self,
-    ) -> None:
+    async def test_stem_requires_every_token_to_fold(self) -> None:
         self.db.get_markov_states.return_value = [
-            (("alpha", "джаббар"), 10),
-            (("котик", "джаббар"), 10),
-            (("хоссейн", "джаббар"), 10),
+            (("тренировка", "помогает"), 10),
         ]
 
-        latin = await self.matcher.match(
+        matches = await self.matcher.match(
             6,
-            ("alphabet", "джаббаровичем"),
+            ("тренировку", "висит"),
             2,
-            include_prefix=True,
-        )
-        short = await self.matcher.match(
-            6,
-            ("котика", "джаббаровичем"),
-            2,
-            include_prefix=True,
-        )
-        low_coverage = await self.matcher.match(
-            6,
-            ("хоссейновичдлинный", "джаббаровичем"),
-            2,
-            include_prefix=True,
+            include_stem=True,
         )
 
-        self.assertFalse(any(match.match_kind == "prefix" for match in latin))
-        self.assertFalse(any(match.match_kind == "prefix" for match in short))
-        self.assertFalse(
-            any(match.match_kind == "prefix" for match in low_coverage)
-        )
+        self.assertFalse(any(match.match_kind == "stem" for match in matches))
 
-    async def test_prefix_rejects_low_confidence_singleton(self) -> None:
+    async def test_stem_folds_short_tokens_prefix_matching_could_not(self) -> None:
+        # The retired prefix heuristic required a 6-char common prefix, so
+        # "котика" never matched "котик"; the stemmer folds it.
         self.db.get_markov_states.return_value = [
-            (("хоссейн", "говорит"), 1),
+            (("котик", "спит"), 3),
         ]
 
         matches = await self.matcher.match(
             7,
-            ("хоссейном", "говорит"),
+            ("котика", "спит"),
             2,
-            include_prefix=True,
+            include_stem=True,
         )
 
-        self.assertFalse(any(match.match_kind == "prefix" for match in matches))
+        self.assertEqual(
+            [(match.state, match.match_kind) for match in matches],
+            [(("котик", "спит"), "stem")],
+        )
 
-    async def test_exact_and_casefold_precede_prefix(self) -> None:
+    async def test_exact_and_casefold_precede_stem_without_duplicates(self) -> None:
         self.db.get_markov_states.return_value = [
-            (("Хоссейн", "Джаббар"), 8),
-            (("хоссейн", "джаббар"), 10),
-            (("хоссейна", "джаббара"), 10),
+            (("Тренировка", "Помогает"), 8),
+            (("тренировка", "помогает"), 10),
+            (("тренировку", "помогает"), 10),
         ]
 
         matches = await self.matcher.match(
             8,
-            ("Хоссейн", "Джаббар"),
+            ("Тренировка", "Помогает"),
             2,
-            include_prefix=True,
+            include_stem=True,
         )
 
-        self.assertEqual(matches[0].match_kind, "exact")
-        self.assertEqual(matches[1].match_kind, "casefold")
-        self.assertEqual(matches[2].match_kind, "prefix")
+        self.assertEqual(
+            [(match.state, match.match_kind) for match in matches],
+            [
+                (("Тренировка", "Помогает"), "exact"),
+                (("тренировка", "помогает"), "casefold"),
+                (("тренировку", "помогает"), "stem"),
+            ],
+        )
 
-    async def test_prefix_index_is_built_only_when_requested(self) -> None:
+    async def test_stem_index_is_built_only_when_requested(self) -> None:
         self.db.get_markov_states.return_value = [
-            (("хоссейн", "джаббар"), 10),
+            (("тренировка", "помогает"), 10),
         ]
 
-        await self.matcher.match(9, ("ХОССЕЙН", "ДЖАББАР"), 2)
+        await self.matcher.match(9, ("ТРЕНИРОВКА", "ПОМОГАЕТ"), 2)
         index = self.matcher._cache[(9, 2)]
-        self.assertIsNone(index.prefix_tokens)
+        self.assertIsNone(index.stemmed)
 
         await self.matcher.match(
             9,
-            ("хоссейном", "джаббаровичем"),
+            ("тренировки", "помогают"),
             2,
-            include_prefix=True,
+            include_stem=True,
         )
-        self.assertIsNotNone(index.prefix_tokens)
-
-    async def test_prefix_token_candidates_are_bounded(self) -> None:
-        self.db.get_markov_states.return_value = [
-            ((f"хоссейн{suffix}", "джаббар"), count)
-            for suffix, count in zip(
-                ("а", "б", "в", "г", "д", "е", "ж", "з"),
-                range(10, 2, -1),
-            )
-        ]
-
-        matches = await self.matcher.match(
-            10,
-            ("хоссейном", "джаббар"),
-            2,
-            include_prefix=True,
-        )
-        prefix_matches = [
-            match for match in matches if match.match_kind == "prefix"
-        ]
-
-        self.assertLessEqual(len(prefix_matches), 6)
-        self.assertIn(("хоссейна", "джаббар"), {
-            match.state for match in prefix_matches
-        })
+        self.assertIsNotNone(index.stemmed)

@@ -48,7 +48,7 @@ def _make_runtime_state() -> RuntimeState:
         rare_event_daily_cap=3,
         use_reply_context=True,
         fuzzy_context_casefold=True,
-        fuzzy_context_prefix=False,
+        fuzzy_context_stem=False,
         reply_context_max_tokens=12,
         reply_context_last_tokens=3,
         reply_context_bias=1.8,

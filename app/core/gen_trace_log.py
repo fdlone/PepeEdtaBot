@@ -79,13 +79,8 @@ def _route(trace: GenerationTrace) -> str:
         ctx = f"context=EXACTx{trace.context_exact_matches}"
     elif trace.context_casefold_matches:
         ctx = f"context=CASEFOLDx{trace.context_casefold_matches}"
-    elif trace.context_prefix_matches:
-        singleton = (
-            f" (singletonx{trace.context_prefix_singleton_matches})"
-            if trace.context_prefix_singleton_matches
-            else ""
-        )
-        ctx = f"context=PREFIXx{trace.context_prefix_matches}{singleton}"
+    elif trace.context_stem_matches:
+        ctx = f"context=STEMx{trace.context_stem_matches}"
     elif trace.hidden_context_fallbacks:
         ctx = f"context=HIDDEN_FALLBACKx{trace.hidden_context_fallbacks}"
     else:
