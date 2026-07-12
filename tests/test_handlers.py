@@ -719,11 +719,27 @@ class TestStripLeadingBotVocative(unittest.TestCase):
                     strip_leading_bot_vocative(text, self.aliases), expected
                 )
 
-    def test_preserves_alias_without_separator(self) -> None:
+    def test_strips_leading_alias_without_separator(self) -> None:
+        # SIM-8: a bare "<alias> ..." address is as common as the comma form;
+        # unstripped it taught the corpus the bot's own name.
         from app.handlers.learning import strip_leading_bot_vocative
 
-        text = "Пепе хороший бот"
-        self.assertEqual(strip_leading_bot_vocative(text, self.aliases), text)
+        for text, expected in (
+            ("Пепе хороший бот", "хороший бот"),
+            ("пепе кто гнойный пидор", "кто гнойный пидор"),
+            ("  pepe   what is up", "what is up"),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    strip_leading_bot_vocative(text, self.aliases), expected
+                )
+
+    def test_preserves_bare_alias_with_no_content(self) -> None:
+        from app.handlers.learning import strip_leading_bot_vocative
+
+        for text in ("Пепе", "пепе  ", " pepe"):
+            with self.subTest(text=text):
+                self.assertEqual(strip_leading_bot_vocative(text, self.aliases), text)
 
     def test_preserves_mid_sentence_alias_and_other_vocatives(self) -> None:
         from app.handlers.learning import strip_leading_bot_vocative
@@ -876,14 +892,16 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
     async def test_current_incoming_message_copy_is_rejected(self) -> None:
         from app.handlers.learning import on_text_message
 
-        msg = _fake_message(text="pepe ответь")
+        # SIM-8: the leading alias is stripped before learning, so the echo
+        # gate compares against the stripped text ("ответь мне").
+        msg = _fake_message(text="pepe ответь мне")
         learning_service = AsyncMock()
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=102)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
         generator = _traced_generator()
         generator.generate_text = AsyncMock(
-            side_effect=["pepe ответь", "Нормально"] + [""] * 8
+            side_effect=["ответь мне", "Нормально"] + [""] * 8
         )
         state = self._reply_state()
 
