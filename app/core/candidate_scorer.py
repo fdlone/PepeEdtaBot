@@ -59,11 +59,10 @@ REPEATED_BIGRAM_WEIGHT = 1.00
 REPEATED_TRIGRAM_WEIGHT = 1.30
 
 # Verbatim-quote penalty: content n-gram size shared with the corpus index and
-# the per-backoff-order coherence penalties. A candidate whose 4-grams all come
-# from one training message is a quote; one that fell back to the 1-gram chain
-# is word salad — both lose to recombined middle-path candidates in selection.
+# the backoff coherence penalty. A candidate whose 4-grams all come from one
+# training message is a quote; one that fell back to the 2-gram chain is less
+# coherent — both lose to recombined full-order candidates in selection.
 VERBATIM_NGRAM_SIZE = 4
-ORDER1_COHERENCE_PENALTY = 0.70
 ORDER2_COHERENCE_PENALTY = 0.10
 
 @dataclass(frozen=True, slots=True)
@@ -336,10 +335,8 @@ def verbatim_quote_severity(share: float) -> float:
 
 
 def coherence_penalty_for_order(markov_order_used: int) -> float:
-    """Penalty for how far the walk had to back off (1-gram = word salad)."""
-    if markov_order_used <= 1:
-        return ORDER1_COHERENCE_PENALTY
-    if markov_order_used == 2:
+    """Penalty for how far the walk had to back off."""
+    if markov_order_used <= 2:
         return ORDER2_COHERENCE_PENALTY
     return 0.0
 

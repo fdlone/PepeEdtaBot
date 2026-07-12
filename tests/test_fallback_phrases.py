@@ -39,7 +39,6 @@ def _make_runtime_state() -> RuntimeState:
         length_mode_weights=(0.25, 0.55, 0.2),
         markov_order=3,
         enable_backoff=True,
-        backoff_min_order=1,
         markov_jump_probability=0.04,
         hot_ngram_seed_chance=0.05,
         hot_ngram_min_count=3,

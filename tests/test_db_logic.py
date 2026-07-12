@@ -37,7 +37,6 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["starts3"], 0)
         self.assertEqual(stats["transitions2"], 0)
         self.assertEqual(stats["transitions3"], 0)
-        self.assertEqual(stats["transitions1"], 0)
         self.assertEqual(stats["volume"], 0)
 
     async def _sum_volume(self, table: str, chat_id: int) -> int:
@@ -114,7 +113,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(row)
         self.assertEqual(row[0], 0)
 
-    async def test_transitions_and_starts_are_counted_for_3_2_1(self) -> None:
+    async def test_transitions_and_starts_are_counted_for_3_2(self) -> None:
         tokens = ["Я", "очень", "люблю", "чат", "!"]
         volume = await self.db.save_message_and_update_model(
             chat_id=2002,
@@ -132,15 +131,12 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transitions2, [("люблю", 1)])
         transitions3 = await self.db.get_transitions3(2002, "Я", "очень", "люблю")
         self.assertEqual(transitions3, [("чат", 1)])
-        transitions1 = await self.db.get_transitions1(2002, "чат")
-        self.assertEqual(transitions1, [("!", 1)])
 
         stats = await self.db.get_stats(2002)
         self.assertEqual(stats["starts2"], 1)
         self.assertEqual(stats["starts3"], 1)
         self.assertEqual(stats["transitions2"], 3)
         self.assertEqual(stats["transitions3"], 2)
-        self.assertEqual(stats["transitions1"], 4)
         self.assertEqual(stats["volume3"], 2)
 
     async def test_markov_query_results_have_stable_lexical_order(self) -> None:
@@ -189,7 +185,6 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(stats["starts2"], 0)
         self.assertEqual(stats["starts3"], 0)
-        self.assertEqual(stats["transitions1"], 0)
         self.assertEqual(stats["transitions2"], 0)
         self.assertEqual(stats["transitions3"], 0)
 
@@ -327,7 +322,6 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
                 "starts",
                 "starts3",
                 "transitions",
-                "transitions1",
                 "transitions3",
             ],
         )

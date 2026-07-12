@@ -23,12 +23,12 @@ class TestChatHotNgramsRepo(unittest.IsolatedAsyncioTestCase):
         self.db_path.unlink(missing_ok=True)
 
     async def _seed_long_term_counts(self, chat_id: int, cnt: int) -> None:
-        """Plant all-time model counts the hotness ratio compares against."""
+        """Plant all-time model counts the hotness ratio compares against.
+
+        A single transitions row seeds both denominators: the trigram uses it
+        directly, the bigram aggregates SUM(cnt) over its (w1, w2) prefix.
+        """
         conn = await self.db._get_conn()
-        await conn.execute(
-            "INSERT INTO transitions1(chat_id, w1, w2, cnt) VALUES (?, ?, ?, ?)",
-            (chat_id, *BIGRAM, cnt),
-        )
         await conn.execute(
             "INSERT INTO transitions(chat_id, w1, w2, w3, cnt) VALUES (?, ?, ?, ?, ?)",
             (chat_id, *TRIGRAM, cnt),

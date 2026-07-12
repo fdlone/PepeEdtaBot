@@ -137,13 +137,9 @@ class Database:
 
         trans2_counter: Counter[tuple[str, str, str]] = Counter()
         trans3_counter: Counter[tuple[str, str, str, str]] = Counter()
-        trans1_counter: Counter[tuple[str, str]] = Counter()
 
         if len(tokens) >= 2:
             starts2_pair = (tokens[0], tokens[1])
-            trans1_counter = Counter(
-                (tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1)
-            )
         if len(tokens) >= 3:
             starts3_triplet = (tokens[0], tokens[1], tokens[2])
             trans2_counter = Counter(
@@ -206,19 +202,6 @@ class Database:
                         starts3_triplet[1],
                         starts3_triplet[2],
                     ),
-                )
-            if trans1_counter:
-                await db.executemany(
-                    """
-                    INSERT INTO transitions1(chat_id, w1, w2, cnt)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(chat_id, w1, w2)
-                    DO UPDATE SET cnt = cnt + excluded.cnt
-                    """,
-                    [
-                        (chat_id, w1, w2, cnt)
-                        for (w1, w2), cnt in trans1_counter.items()
-                    ],
                 )
             if trans2_counter:
                 await db.executemany(
@@ -309,8 +292,6 @@ class Database:
     ) -> list[tuple[str, int]]:
         return await self._require(self.markov).get_transitions3(chat_id, w1, w2, w3)
 
-    async def get_transitions1(self, chat_id: int, w1: str) -> list[tuple[str, int]]:
-        return await self._require(self.markov).get_transitions1(chat_id, w1)
 
     async def get_markov_states(
         self,
@@ -520,15 +501,11 @@ class Database:
             starts3      = await f(db, "SELECT COUNT(*) FROM starts3 WHERE chat_id = ?", p)
             trans2_count = await f(db, "SELECT COUNT(*) FROM transitions WHERE chat_id = ?", p)
             trans3_count = await f(db, "SELECT COUNT(*) FROM transitions3 WHERE chat_id = ?", p)
-            trans1_count = await f(db, "SELECT COUNT(*) FROM transitions1 WHERE chat_id = ?", p)
             volume2 = await f(
                 db, "SELECT COALESCE(SUM(cnt), 0) FROM transitions WHERE chat_id = ?", p
             )
             volume3 = await f(
                 db, "SELECT COALESCE(SUM(cnt), 0) FROM transitions3 WHERE chat_id = ?", p
-            )
-            volume1 = await f(
-                db, "SELECT COALESCE(SUM(cnt), 0) FROM transitions1 WHERE chat_id = ?", p
             )
 
         return {
@@ -537,10 +514,8 @@ class Database:
             "starts3":      starts3,
             "transitions2": trans2_count,
             "transitions3": trans3_count,
-            "transitions1": trans1_count,
             "volume2":      volume2,
             "volume3":      volume3,
-            "volume1":      volume1,
             "volume":       volume3 if volume3 > 0 else volume2,
         }
 
@@ -551,7 +526,6 @@ class Database:
             "starts3",
             "transitions",
             "transitions3",
-            "transitions1",
             "chat_model_volume",
             "chat_emoji_stats",
             "chat_hot_ngrams",

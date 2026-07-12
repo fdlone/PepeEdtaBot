@@ -125,30 +125,32 @@ class TestGenerateTextOnceCharacterization(_GenerationCharacterizationBase):
         self.assertEqual(attempt.markov_order_used, 3)
         self.assertEqual(attempt.start_source, "global")
 
-    async def test_global_start_backoff_to_order1_seed42(self) -> None:
+    async def test_global_start_stops_where_order1_used_to_continue_seed42(self) -> None:
+        # Pre-013 the walk spliced "до самого вечера" here via the order-1
+        # chain; with order 1 removed it ends cleanly at the order-2 dead end.
         attempt = await self.generator._generate_text_once(
             chat_id=CHAT_ID, max_chars=200, max_tokens=12,
             randomness_strength=0.0, rng=random.Random(42), emit_start=True,
         )
         self.assertEqual(
             attempt.text,
-            "папа чинил машину в гараже целый выходной день до самого вечера.",
+            "папа чинил машину в гараже целый выходной день.",
         )
-        self.assertEqual(attempt.markov_order_used, 1)
-        self.assertEqual(attempt.token_count, 12)
+        self.assertEqual(attempt.markov_order_used, 3)
+        self.assertEqual(attempt.token_count, 9)
         self.assertEqual(attempt.start_source, "global")
 
-    async def test_global_start_backoff_to_order1_seed123(self) -> None:
+    async def test_global_start_stops_where_order1_used_to_continue_seed123(self) -> None:
         attempt = await self.generator._generate_text_once(
             chat_id=CHAT_ID, max_chars=200, max_tokens=12,
             randomness_strength=0.0, rng=random.Random(123), emit_start=True,
         )
         self.assertEqual(
             attempt.text,
-            "кошка спала на диване весь длинный зимний день до самого вечера.",
+            "кошка спала на диване весь длинный зимний день.",
         )
-        self.assertEqual(attempt.markov_order_used, 1)
-        self.assertEqual(attempt.token_count, 12)
+        self.assertEqual(attempt.markov_order_used, 3)
+        self.assertEqual(attempt.token_count, 9)
 
     async def test_seed3_start_uses_seed_source(self) -> None:
         attempt = await self.generator._generate_text_once(
@@ -192,12 +194,12 @@ class TestGenerateTextOnceCharacterization(_GenerationCharacterizationBase):
             rng=random.Random(3), emit_start=True,
         )
         self.assertEqual(
-            attempt.text, "в гараже целый выходной день до самого вечера."
+            attempt.text, "в гараже целый выходной день."
         )
         self.assertEqual(attempt.start_source, "hidden_context")
         self.assertEqual(attempt.context_exact_matches, 1)
         self.assertEqual(attempt.context_casefold_matches, 0)
-        self.assertEqual(attempt.markov_order_used, 1)
+        self.assertEqual(attempt.markov_order_used, 3)
 
     async def test_contextual_start_casefold_match(self) -> None:
         attempt = await self.generator._generate_text_once(
@@ -207,7 +209,7 @@ class TestGenerateTextOnceCharacterization(_GenerationCharacterizationBase):
             fuzzy_context_casefold=True, rng=random.Random(3), emit_start=True,
         )
         self.assertEqual(
-            attempt.text, "в гараже целый выходной день до самого вечера."
+            attempt.text, "в гараже целый выходной день."
         )
         self.assertEqual(attempt.start_source, "hidden_context")
         self.assertEqual(attempt.context_exact_matches, 0)
@@ -245,10 +247,10 @@ class TestGenerateTextOnceCharacterization(_GenerationCharacterizationBase):
         )
         self.assertEqual(
             attempt.text,
-            "папа чинил машину в гараже целый выходной день до самого вечера.",
+            "папа чинил машину в гараже целый выходной день.",
         )
-        self.assertEqual(attempt.markov_order_used, 1)
-        self.assertEqual(attempt.token_count, 12)
+        self.assertEqual(attempt.markov_order_used, 2)
+        self.assertEqual(attempt.token_count, 9)
 
 
 class TestMidGenerationJump(_GenerationCharacterizationBase):

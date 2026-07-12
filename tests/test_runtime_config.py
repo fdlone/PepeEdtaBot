@@ -34,7 +34,6 @@ def make_state() -> SimpleNamespace:
         length_mode_weights=(0.25, 0.55, 0.2),
         markov_order=3,
         enable_backoff=True,
-        backoff_min_order=1,
         markov_jump_probability=0.04,
         hot_ngram_seed_chance=0.05,
         hot_ngram_min_count=3,
@@ -139,28 +138,6 @@ class TestRuntimeConfig(unittest.TestCase):
             apply_runtime_setting(state, "typing_min_ms", "1200")
 
         self.assertEqual(state.typing_min_ms, 350)
-
-    def test_apply_runtime_setting_rejects_backoff_min_order_equal_to_markov_order(
-        self,
-    ) -> None:
-        state = make_state()
-        state.markov_order = 2
-
-        with self.assertRaises(InvalidRuntimeSettingValueError):
-            apply_runtime_setting(state, "backoff_min_order", "2")
-
-        self.assertEqual(state.backoff_min_order, 1)
-
-    def test_apply_runtime_setting_rejects_markov_order_when_backoff_conflicts(
-        self,
-    ) -> None:
-        state = make_state()
-        state.backoff_min_order = 2
-
-        with self.assertRaises(InvalidRuntimeSettingValueError):
-            apply_runtime_setting(state, "markov_order", "2")
-
-        self.assertEqual(state.markov_order, 3)
 
     def test_apply_runtime_setting_rejects_reply_context_last_tokens_above_max(
         self,

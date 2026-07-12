@@ -27,7 +27,6 @@ def _runtime_state() -> MagicMock:
     state.repetition_penalty_strength = 1.0
     state.markov_order = 3
     state.enable_backoff = True
-    state.backoff_min_order = 1
     state.normalize_lower = False
     state.fuzzy_context_casefold = False
     state.fuzzy_context_prefix = False
@@ -135,17 +134,19 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(verbatim_calls[1], call(123, result))
 
     async def test_coherence_penalty_applies_regardless_of_start_source(self) -> None:
-        # An order-1 walk is word salad whatever anchored it: the coherence
-        # penalty must not be discounted for context-anchored candidates.
-        ctx_text = "context anchored reply text"
-        global_text = "global fluent reply text"
+        # A backed-off (order-2) walk is less coherent whatever anchored it:
+        # the penalty must not be discounted for context-anchored candidates.
+        # No overlap with the request's context tokens: the IDF fallback bonus
+        # must stay at zero on both sides so only the coherence gap decides.
+        ctx_text = "anchored walk backed off"
+        global_text = "fluent full order walk"
 
         state = _runtime_state()
         state.candidate_selection_temperature = 0.0  # argmax
         generator = AsyncMock()
         generator.generate_text_with_trace = AsyncMock(
             side_effect=[
-                (ctx_text, SimpleNamespace(markov_order_used=1, start_source="context")),
+                (ctx_text, SimpleNamespace(markov_order_used=2, start_source="context")),
                 (
                     global_text,
                     SimpleNamespace(markov_order_used=3, start_source="global"),
@@ -154,7 +155,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         )
         learning_service = _learning_service()
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        scores = {ctx_text: _score(1.1), global_text: _score(1.0)}
+        scores = {ctx_text: _score(1.05), global_text: _score(1.0)}
         scorer = MagicMock(side_effect=lambda text, tokens, context, mode: scores[text])
         response_generator = ResponseGenerator(
             generator=generator,
@@ -168,7 +169,7 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
                 _request(), rng=random.Random(1), candidate_target=2
             )
 
-        # ctx 1.1 - 0.70 (order-1 coherence) = 0.40 < global 1.0 -> global wins.
+        # ctx 1.05 - 0.10 (order-2 coherence) = 0.95 < global 1.0 -> global wins.
         self.assertEqual(selected, global_text)
 
     async def test_context_falls_back_after_context_attempt_budget(self) -> None:

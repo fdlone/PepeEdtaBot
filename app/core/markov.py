@@ -639,9 +639,6 @@ class MarkovGenerator:
     _cache2: OrderedDict[tuple[int, str, str], list[tuple[str, int]]] = field(
         default_factory=OrderedDict, init=False
     )
-    _cache1: OrderedDict[tuple[int, str], list[tuple[str, int]]] = field(
-        default_factory=OrderedDict, init=False
-    )
     _cache_starts3: OrderedDict[int, list[tuple[str, str, str, int]]] = field(
         default_factory=OrderedDict, init=False
     )
@@ -663,8 +660,6 @@ class MarkovGenerator:
             self._cache3.pop(key3, None)
         for key2 in [k for k in self._cache2 if k[0] == chat_id]:
             self._cache2.pop(key2, None)
-        for key1 in [k for k in self._cache1 if k[0] == chat_id]:
-            self._cache1.pop(key1, None)
         self._cache_starts3.pop(chat_id, None)
         self._cache_starts2.pop(chat_id, None)
         self._context_state_matcher.invalidate_chat_cache(chat_id)
@@ -712,15 +707,6 @@ class MarkovGenerator:
             return self._cache2[key]
         rows = await self.db.get_transitions(chat_id, w1, w2)
         self._touch_cache(self._cache2, key, rows)
-        return rows
-
-    async def _get1(self, chat_id: int, w1: str) -> list[tuple[str, int]]:
-        key = (chat_id, w1)
-        if key in self._cache1:
-            self._cache1.move_to_end(key)
-            return self._cache1[key]
-        rows = await self.db.get_transitions1(chat_id, w1)
-        self._touch_cache(self._cache1, key, rows)
         return rows
 
     async def _build_exact3_candidates(
@@ -986,7 +972,6 @@ class MarkovGenerator:
         repetition_penalty_strength: float = 1.0,
         markov_order: int = 3,
         enable_backoff: bool = True,
-        backoff_min_order: int = 1,
         fuzzy_context_casefold: bool = False,
         fuzzy_context_prefix: bool = False,
         context_emit_start: bool = False,
@@ -1007,7 +992,6 @@ class MarkovGenerator:
             repetition_penalty_strength=repetition_penalty_strength,
             markov_order=markov_order,
             enable_backoff=enable_backoff,
-            backoff_min_order=backoff_min_order,
             fuzzy_context_casefold=fuzzy_context_casefold,
             fuzzy_context_prefix=fuzzy_context_prefix,
             context_emit_start=context_emit_start,
@@ -1031,7 +1015,6 @@ class MarkovGenerator:
         repetition_penalty_strength: float = 1.0,
         markov_order: int = 3,
         enable_backoff: bool = True,
-        backoff_min_order: int = 1,
         fuzzy_context_casefold: bool = False,
         fuzzy_context_prefix: bool = False,
         context_emit_start: bool = False,
@@ -1061,7 +1044,6 @@ class MarkovGenerator:
                 repetition_penalty_strength=repetition_penalty_strength,
                 markov_order=markov_order,
                 enable_backoff=enable_backoff,
-                backoff_min_order=backoff_min_order,
                 fuzzy_context_casefold=fuzzy_context_casefold,
                 fuzzy_context_prefix=fuzzy_context_prefix,
                 context_emit_start=context_emit_start,
@@ -1377,7 +1359,6 @@ class MarkovGenerator:
         max_tokens: int,
         max_chars: int,
         enable_backoff: bool,
-        backoff_min_order: int,
         starts3: list[tuple[str, str, str, int]],
         context_token_set: set[str],
         context_pairs: set[tuple[str, ...]],
@@ -1397,9 +1378,8 @@ class MarkovGenerator:
         prefix actually written into the output (the full start for a global or
         seed start, a trimmed tail or nothing for a contextual start) while the
         chain always walks from the full ``start3`` state. Per-step transitions
-        fall back from order 3 to 2 to 1 when ``enable_backoff`` allows and
-        ``backoff_min_order`` permits; dedup state suppresses immediate triplet
-        repeats. Only local state is mutated.
+        fall back from order 3 to 2 when ``enable_backoff`` allows; dedup state
+        suppresses immediate triplet repeats. Only local state is mutated.
         """
         token_limit = max(1, max_tokens)
         w1, w2, w3 = start3
@@ -1525,26 +1505,7 @@ class MarkovGenerator:
                     )
                     order_used = min(order_used, 2)
                 else:
-                    if not enable_backoff or backoff_min_order > 1:
-                        break
-                    pool1 = await self._get1(chat_id, w3)
-                    if not pool1:
-                        break
-                    w4 = weighted_next_choice(
-                        pool1,
-                        next_explore,
-                        next_power,
-                        rng,
-                        context_token_set=context_token_set,
-                        context_pairs=context_pairs,
-                        current_state=(w3,),
-                        context_bias=context_bias,
-                        step_index=step_index,
-                        recent_tokens=recent_window,
-                        seen_pairs=seen_pairs,
-                        repetition_penalty_strength=repetition_penalty_strength,
-                    )
-                    order_used = 1
+                    break
 
             generated.append(w4)
             if has_degraded_recent_window(generated):
@@ -1584,7 +1545,6 @@ class MarkovGenerator:
         repetition_penalty_strength: float = 1.0,
         markov_order: int = 3,
         enable_backoff: bool = True,
-        backoff_min_order: int = 1,
         fuzzy_context_casefold: bool = False,
         fuzzy_context_prefix: bool = False,
         context_emit_start: bool = False,
@@ -1730,7 +1690,6 @@ class MarkovGenerator:
             max_tokens=max_tokens,
             max_chars=max_chars,
             enable_backoff=enable_backoff,
-            backoff_min_order=backoff_min_order,
             starts3=starts3,
             context_token_set=context_token_set,
             context_pairs=context_pairs,
