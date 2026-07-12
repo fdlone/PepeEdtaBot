@@ -23,8 +23,8 @@ prefix/stem-матчинга.
 | SIM-5 | Три staleness-гейта почти не стреляют | echo current: 0, short anti-repeat: 0, full repeat: 1 на ~4000 | Схлопнуть в `repeats_recent_chat_content` (PR #72); verbatim-гейт отдельно (ведёт к extension) |
 | SIM-6 | L1 hot-ngram и L3 rare events невидимы на дефолтных шансах | hot-ngram: 1–2 lookup на 900 сообщений; verdict/CAPS/double: ~1 на 200 ответов | Поднять шансы 0.05→0.25 / 0.005→0.03 / 0.03→0.05, кап 3/день без изменений (PR #71) |
 | SIM-7 | Рабочие лошадки скоринга — verbatim_penalty и IDF context_relevance | флипы 37% и 32% соответственно; verbatim-extension на 47% принятых кандидатов (малый корпус завышает) | Без изменений |
-| SIM-8 | `strip_leading_bot_vocative` не срезает обращение без разделителя | бот выучил и говорит «пепе сегодня был в банке...» (`learning.py`, `_LEADING_VOCATIVE_RE` требует `[,:;—–-]`) | **Open** — фикс не делался, ждёт решения |
-| SIM-9 | Hidden-context ветка (`reply_context_emit_start=false`) мертва по дефолту | влияет только на эмиссию хвоста; количество контекстных зацепок не меняет | **Open** — пользователь решение не озвучил |
+| SIM-8 | `strip_leading_bot_vocative` не срезает обращение без разделителя | бот выучил и говорит «пепе сегодня был в банке...» (`learning.py`, `_LEADING_VOCATIVE_RE` требует `[,:;—–-]`) | Closed — PR #75 |
+| SIM-9 | Hidden-context ветка (`reply_context_emit_start=false`) мертва по дефолту | влияет только на эмиссию хвоста; количество контекстных зацепок не меняет | Closed — PR #76 (ручка удалена, эмиссия всегда включена) |
 
 Не покрыто симуляцией (оговорки): heated-настроение (в пуле сообщений нет
 капса/восклицаний), casefold-матчи (пул в нижнем регистре), `/pivo`-механики.
