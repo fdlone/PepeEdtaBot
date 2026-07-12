@@ -198,7 +198,11 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # hot n-gram (a phrase the chat picked up in the last ~7 days). 0 disables
     # the whole channel (no recording, no reads) — same gate pattern as
     # emoji_append_chance. Mention replies are never seeded.
-    FieldSpec("hot_ngram_seed_chance", "HOT_NGRAM_SEED_CHANCE", "0.05",
+    # 0.25 (2026-07-12): at 0.05 the channel fired ~once a week in a live chat
+    # (dialogue-simulation audit: 1-2 lookups per 900 messages); ~every 4th
+    # unprompted reply now rolls for a seed, actual fires still gated by a hot
+    # n-gram existing in the window.
+    FieldSpec("hot_ngram_seed_chance", "HOT_NGRAM_SEED_CHANCE", "0.25",
               _float_in_range(0.0, 1.0)),
     # Minimum window occurrences before an n-gram can be considered hot.
     FieldSpec("hot_ngram_min_count", "HOT_NGRAM_MIN_COUNT", "3", _int_min(1)),
@@ -209,11 +213,15 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # L3 rare events: chance that a generated reply becomes a "shape break" —
     # one-word verdict, ALL-CAPS, or a double message. Uniform among the three.
     # 0 disables the roll. Capped per chat per day by rare_event_daily_cap.
-    FieldSpec("rare_event_chance", "RARE_EVENT_CHANCE", "0.005",
+    # 0.03 (2026-07-12): 0.005 meant one event per ~200 replies (once in 1-2
+    # weeks live); ~daily now, the daily cap still bounds the worst case.
+    FieldSpec("rare_event_chance", "RARE_EVENT_CHANCE", "0.03",
               _float_in_range(0.0, 1.0)),
     # L3 false starts: chance to send a short filler, keep "typing", then the
     # real reply as a second message. 0 disables. Shares the daily cap.
-    FieldSpec("false_start_chance", "FALSE_START_CHANCE", "0.03",
+    # 0.05 (2026-07-12): modest bump — false starts stay the most frequent
+    # event but must not eat the shared daily budget of the other three kinds.
+    FieldSpec("false_start_chance", "FALSE_START_CHANCE", "0.05",
               _float_in_range(0.0, 1.0)),
     # Combined per-chat daily budget for rare events + false starts.
     FieldSpec("rare_event_daily_cap", "RARE_EVENT_DAILY_CAP", "3", _int_min(0)),
