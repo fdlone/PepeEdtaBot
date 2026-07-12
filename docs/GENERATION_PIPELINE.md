@@ -11,11 +11,12 @@
 >    ≤2 токена без ведущих стоп-слов/пунктуации («кто гнойный пидор» →
 >    «гнойный пидор …»), ручка `reply_context_emit_start=true`
 >    (`context_emission_tokens`, markov.py).
-> 2. Скоринг: новые компоненты `verbatim_penalty` (= `verbatim_penalty_strength=1.0`
+> 2. Скоринг: новый компонент `verbatim_penalty` (= `verbatim_penalty_strength=1.0`
 >    × доля контент-4-грамм кандидата, найденных в корпусном индексе
->    `LearningService.get_verbatim_ngram_index`) и `coherence_penalty`
->    (order 2 → 0.10; order-1 цепь удалена миграцией 013 — трасса пробрасывается в ResponseGenerator
->    через `generate_text_with_trace`).
+>    `LearningService.get_verbatim_ngram_index`). `coherence_penalty` и
+>    `lexical_diversity` удалены 2026-07-12: первый стал шумом после удаления
+>    order-1 цепи, второй схлопнут в `repetition_penalty` (1 − diversity ==
+>    доля повторов токенов, слияние не меняет ранжирование).
 > 3. Дыры verbatim-гейта закрыты: сравнение без хвостовой пунктуации
 >    (`normalize_for_verbatim`), окно кэша 500 → 1000.
 > 4. Хаос: `candidate_selection_temperature` 0.7 → 1.3,
@@ -325,13 +326,11 @@ exact/casefold/prefix матчей и фолбэков. `context` = видимы
 ## 6. Скоринг и «вкусовые» слои
 
 ### 6.1 `score_candidate` (`core/candidate_scorer.py:222`)
-`total = completion_quality + lexical_diversity + natural_length +
-context_relevance − repetition_penalty − recent_penalty`:
+`total = completion_quality + natural_length +
+context_relevance − repetition_penalty − recent_penalty − verbatim_penalty`:
 - **completion_quality**: +0.35 за терминальную пунктуацию, ±0.25/−0.50 за
   (не)сбалансированные скобки/кавычки, −0.80 за плохое последнее слово
   (BAD_ENDING_WORDS) или открывающую скобку в конце;
-- **lexical_diversity**: uniq/len контент-токенов (короткие ≤3 токена:
-  0.40+0.40·div — не штрафуются);
 - **natural_length**: пик 1.0 в полосе режима — short (1,4), medium (5,14),
   long (15,24); ниже — линейный подъём от 0.4, выше — спад до 0.5 за 10 токенов;
 - **context_relevance**: заменяется в `response_generator` на
@@ -340,7 +339,8 @@ context_relevance − repetition_penalty − recent_penalty`:
   стемам (`stem_token`: «гнойному» ≡ «гнойный»), ×1.6, кап 1.6. Чистое эхо
   (стемы кандидата ⊆ стемов контекста) получает 0. Старая формула
   (overlap/|кандидат|) осталась фолбэком при пустом IDF (синтетический eval);
-- **repetition_penalty**: 0.6·повторы токенов + 1.0·повторы биграмм +
+- **repetition_penalty**: 1.6·повторы токенов (короткие ≤3 токена: 1.0·повторы
+  + фикс 0.20 — бывшая lexical_diversity вшита в веса) + 1.0·повторы биграмм +
   1.3·повторы триграмм (доли).
 
 ### 6.2 Поверхностные слои после выбора

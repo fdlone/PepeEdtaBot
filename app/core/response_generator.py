@@ -12,7 +12,6 @@ from app.core import gen_trace_log
 from app.core.candidate_scorer import (
     CandidateScore,
     build_recent_reply_trigrams,
-    coherence_penalty_for_order,
     idf_context_relevance,
     recent_reply_overlap,
     sample_length_mode,
@@ -64,6 +63,7 @@ SHORT_MODE_MAX_TOKENS = 8
 # connective + a fresh short walk appended, so the reply is "corpus base +
 # отсебятина" instead of a bare quote. This is the walk budget of the tail.
 VERBATIM_COPY_REASON = "Generated text is a training sample 1:1"
+STALE_REPLY_REASON = "Generated reply repeats recent chat content"
 EXTENSION_MAX_TOKENS = 10
 
 CandidateScorer = Callable[[str, list[str], list[str], str], CandidateScore]
@@ -126,17 +126,6 @@ def select_scored_candidate(
     return rng.choices(population=eligible, weights=weights, k=1)[0]
 
 
-def was_recent_short_reply(
-    runtime_state: RuntimeState,
-    chat_id: int,
-    candidate: str,
-) -> bool:
-    recent = runtime_state.recent_short_replies.get(chat_id)
-    if not recent:
-        return False
-    return sanitize_text(candidate).lower() in recent
-
-
 def normalize_reply_for_repeat(text: str) -> str:
     """Normalize a reply for full-text anti-repeat comparison.
 
@@ -161,11 +150,22 @@ def remember_recent_reply(
     recent.append(normalized)
 
 
-def was_recent_reply(
+def repeats_recent_chat_content(
     runtime_state: RuntimeState,
     chat_id: int,
     candidate: str,
+    candidate_normalized: str,
+    current_message_normalized: str,
+    is_short_candidate: bool,
 ) -> bool:
+    """Single staleness gate: echo of the current message, a short reply from
+    the recent-short window, or an exact repeat of a recently sent reply."""
+    if candidate_normalized == current_message_normalized:
+        return True
+    if is_short_candidate:
+        recent_short = runtime_state.recent_short_replies.get(chat_id)
+        if recent_short and sanitize_text(candidate).lower() in recent_short:
+            return True
     recent = runtime_state.recent_replies.get(chat_id)
     if not recent:
         return False
@@ -207,18 +207,19 @@ class ResponseGenerator:
     ) -> str | None:
         """Reason to discard a generated candidate, or None if it is usable.
 
-        Ordered gates: echo of the current message, short-reply anti-repeat,
-        full-reply anti-repeat, verbatim training-sample copy (long replies
-        only — short ones are governed by the short-reply anti-repeat).
+        Two gates: staleness (echo of the current message or repeat of a
+        recent reply) and verbatim training-sample copy (long replies only —
+        short ones are governed by the short-reply anti-repeat).
         """
-        if candidate_normalized == request.current_message_normalized:
-            return "Generated text copied the current message"
-        if is_short_candidate and was_recent_short_reply(
-            self.runtime_state, request.chat_id, candidate
+        if repeats_recent_chat_content(
+            self.runtime_state,
+            request.chat_id,
+            candidate,
+            candidate_normalized,
+            request.current_message_normalized,
+            is_short_candidate,
         ):
-            return "Generated short reply was used recently"
-        if was_recent_reply(self.runtime_state, request.chat_id, candidate):
-            return "Generated reply repeats a recently sent one"
+            return STALE_REPLY_REASON
         if not is_short_candidate and await self.learning_service.is_verbatim_copy(
             request.chat_id, candidate
         ):
@@ -455,9 +456,6 @@ class ResponseGenerator:
                     )
                     if candidate not in seen_candidates:
                         seen_candidates.add(candidate)
-                        coherence_penalty = coherence_penalty_for_order(
-                            candidate_trace.markov_order_used
-                        )
                         score = replace(
                             self.scorer(
                                 candidate,
@@ -478,7 +476,6 @@ class ResponseGenerator:
                                     candidate_tokens, corpus_ngrams
                                 )
                             ),
-                            coherence_penalty=coherence_penalty,
                         )
                         candidates.append(
                             _ScoredCandidate(text=candidate, score=score)
