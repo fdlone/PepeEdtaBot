@@ -11,7 +11,6 @@ from app.core.candidate_scorer import (
     completion_quality,
     context_relevance,
     idf_context_relevance,
-    lexical_diversity,
     natural_length,
     recent_reply_overlap,
     repetition_penalty,
@@ -125,12 +124,14 @@ class TestCandidateScorer(unittest.TestCase):
         self.assertEqual(echo_no_idf, 0.0)
         self.assertGreater(novel, 0.0)
 
-    def test_short_candidate_uses_separate_diversity_threshold(self) -> None:
-        short = lexical_diversity(tokenize("да да"))
-        long = lexical_diversity(tokenize("да да да да"))
+    def test_short_candidate_uses_softer_repeat_slope(self) -> None:
+        # The short weight (1.00) plus the flat 0.20 offset must stay gentler
+        # than the long weight (1.60) for the same repeated-token ratio.
+        short = repetition_penalty(tokenize("да да"))
+        long = repetition_penalty(tokenize("да да да да"))
 
         self.assertGreater(short, 0.0)
-        self.assertGreater(short, long)
+        self.assertLess(short, long)
 
     def test_natural_length_prefers_band_without_preferring_longest(self) -> None:
         short = natural_length(tokenize("один два"))
@@ -191,7 +192,6 @@ class TestCandidateScorer(unittest.TestCase):
         self.assertAlmostEqual(
             first.total,
             first.completion_quality
-            + first.lexical_diversity
             + first.natural_length
             + first.context_relevance
             - first.repetition_penalty

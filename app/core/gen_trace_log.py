@@ -79,13 +79,8 @@ def _route(trace: GenerationTrace) -> str:
         ctx = f"context=EXACTx{trace.context_exact_matches}"
     elif trace.context_casefold_matches:
         ctx = f"context=CASEFOLDx{trace.context_casefold_matches}"
-    elif trace.context_prefix_matches:
-        singleton = (
-            f" (singletonx{trace.context_prefix_singleton_matches})"
-            if trace.context_prefix_singleton_matches
-            else ""
-        )
-        ctx = f"context=PREFIXx{trace.context_prefix_matches}{singleton}"
+    elif trace.context_stem_matches:
+        ctx = f"context=STEMx{trace.context_stem_matches}"
     elif trace.hidden_context_fallbacks:
         ctx = f"context=HIDDEN_FALLBACKx{trace.hidden_context_fallbacks}"
     else:
@@ -172,10 +167,8 @@ def log_attempt_accepted(
         "        route: %s\n"
         "        text : %r\n"
         "        score: total=%+.3f = "
-        "completion=%+.3f + diversity=%+.3f + natural_len=%+.3f "
-        "+ context_rel=%+.3f\n"
-        "               - repetition=%.3f - recent=%.3f - verbatim=%.3f "
-        "- coherence=%.3f",
+        "completion=%+.3f + natural_len=%+.3f + context_rel=%+.3f\n"
+        "               - repetition=%.3f - recent=%.3f - verbatim=%.3f",
         attempt,
         "on" if context_used else "off",
         index,
@@ -183,13 +176,11 @@ def log_attempt_accepted(
         text,
         score.total,
         score.completion_quality,
-        score.lexical_diversity,
         score.natural_length,
         score.context_relevance,
         score.repetition_penalty,
         score.recent_penalty,
         score.verbatim_penalty,
-        score.coherence_penalty,
     )
 
 

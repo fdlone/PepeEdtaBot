@@ -41,7 +41,6 @@ class RuntimeState:
     length_mode_weights: tuple[float, float, float]
     markov_order: int
     enable_backoff: bool
-    backoff_min_order: int
     markov_jump_probability: float
     hot_ngram_seed_chance: float
     hot_ngram_min_count: int
@@ -51,14 +50,13 @@ class RuntimeState:
     rare_event_daily_cap: int
     use_reply_context: bool
     fuzzy_context_casefold: bool
-    fuzzy_context_prefix: bool
+    fuzzy_context_stem: bool
     reply_context_max_tokens: int
     reply_context_last_tokens: int
     reply_context_bias: float
     reply_context_start_bias: float
     context_start_affinity: float
     reply_context_only_for_replies: bool
-    reply_context_emit_start: bool
     reply_context_include_current_message: bool
     pivo_recent_pool_window: int
     pivo_temporal_flavor_chance: float

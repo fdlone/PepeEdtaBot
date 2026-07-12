@@ -40,9 +40,6 @@ BALANCED_DELIMITERS_BONUS = 0.25
 UNBALANCED_DELIMITERS_PENALTY = 0.50
 BAD_ENDING_PENALTY = 0.80
 
-LEXICAL_DIVERSITY_WEIGHT = 1.00
-SHORT_LEXICAL_DIVERSITY_BASE = 0.40
-SHORT_LEXICAL_DIVERSITY_WEIGHT = 0.40
 NATURAL_LENGTH_WEIGHT = 1.00
 # 1.6 (2026-07-09): at 0.80 the topic term could not outweigh the completion +
 # diversity + natural_length ceiling (2.35), so fluent off-topic candidates won.
@@ -54,40 +51,40 @@ NATURAL_LENGTH_WEIGHT = 1.00
 CONTEXT_RELEVANCE_WEIGHT = 1.60
 CONTEXT_RELEVANCE_CAP = 1.60
 
-REPEATED_TOKEN_WEIGHT = 0.60
+# Token-repeat weights fold in the former lexical_diversity reward: for a
+# reply the repeated-token ratio IS the diversity deficit (1 - unique/len), so
+# the old "+1.0 diversity - 0.60 repeats" pair collapses into a single 1.60
+# penalty slope (short replies had a 0.40 slope on a 0.40 base -> 1.00 slope
+# plus a flat 0.20 offset preserving the old short-vs-long score gap).
+REPEATED_TOKEN_WEIGHT = 1.60
+SHORT_REPEATED_TOKEN_WEIGHT = 1.00
+SHORT_REPLY_SCORE_OFFSET = 0.20
 REPEATED_BIGRAM_WEIGHT = 1.00
 REPEATED_TRIGRAM_WEIGHT = 1.30
 
-# Verbatim-quote penalty: content n-gram size shared with the corpus index and
-# the per-backoff-order coherence penalties. A candidate whose 4-grams all come
-# from one training message is a quote; one that fell back to the 1-gram chain
-# is word salad — both lose to recombined middle-path candidates in selection.
+# Verbatim-quote penalty: content n-gram size shared with the corpus index.
+# A candidate whose 4-grams all come from one training message is a quote and
+# loses to recombined candidates in selection.
 VERBATIM_NGRAM_SIZE = 4
-ORDER1_COHERENCE_PENALTY = 0.70
-ORDER2_COHERENCE_PENALTY = 0.10
 
 @dataclass(frozen=True, slots=True)
 class CandidateScore:
     completion_quality: float
-    lexical_diversity: float
     natural_length: float
     context_relevance: float
     repetition_penalty: float
     recent_penalty: float = 0.0
     verbatim_penalty: float = 0.0
-    coherence_penalty: float = 0.0
 
     @property
     def total(self) -> float:
         return (
             self.completion_quality
-            + self.lexical_diversity
             + self.natural_length
             + self.context_relevance
             - self.repetition_penalty
             - self.recent_penalty
             - self.verbatim_penalty
-            - self.coherence_penalty
         )
 
 
@@ -148,18 +145,6 @@ def completion_quality(text: str, tokens: list[str]) -> float:
     ):
         score -= BAD_ENDING_PENALTY
     return score
-
-
-def lexical_diversity(tokens: list[str]) -> float:
-    content = _normalized_content(tokens)
-    if not content:
-        return 0.0
-    diversity = len(set(content)) / len(content)
-    if len(content) <= SHORT_REPLY_MAX_TOKENS:
-        return SHORT_LEXICAL_DIVERSITY_BASE + (
-            diversity * SHORT_LEXICAL_DIVERSITY_WEIGHT
-        )
-    return diversity * LEXICAL_DIVERSITY_WEIGHT
 
 
 def natural_length(tokens: list[str], mode: str = "medium") -> float:
@@ -265,13 +250,22 @@ def _repeated_ngram_ratio(tokens: list[str], size: int) -> float:
 
 
 def repetition_penalty(tokens: list[str]) -> float:
+    """Internal-repetition penalty, diversity reward folded in (see weights).
+
+    The repeated-token term carries the former lexical_diversity component:
+    ranking-wise the merge only removes a constant (+1.0 long / +0.8 short)
+    from every total, which softmax selection and the margin band ignore.
+    """
     content = _normalized_content(tokens)
     if not content:
         return 0.0
+    is_short = len(content) <= SHORT_REPLY_MAX_TOKENS
+    token_weight = SHORT_REPEATED_TOKEN_WEIGHT if is_short else REPEATED_TOKEN_WEIGHT
     return (
-        _repeated_ratio(content) * REPEATED_TOKEN_WEIGHT
+        _repeated_ratio(content) * token_weight
         + _repeated_ngram_ratio(content, 2) * REPEATED_BIGRAM_WEIGHT
         + _repeated_ngram_ratio(content, 3) * REPEATED_TRIGRAM_WEIGHT
+        + (SHORT_REPLY_SCORE_OFFSET if is_short else 0.0)
     )
 
 
@@ -335,15 +329,6 @@ def verbatim_quote_severity(share: float) -> float:
     return (share - VERBATIM_TOLERATED_SHARE) / (1.0 - VERBATIM_TOLERATED_SHARE)
 
 
-def coherence_penalty_for_order(markov_order_used: int) -> float:
-    """Penalty for how far the walk had to back off (1-gram = word salad)."""
-    if markov_order_used <= 1:
-        return ORDER1_COHERENCE_PENALTY
-    if markov_order_used == 2:
-        return ORDER2_COHERENCE_PENALTY
-    return 0.0
-
-
 def score_candidate(
     text: str,
     tokens: list[str],
@@ -352,7 +337,6 @@ def score_candidate(
 ) -> CandidateScore:
     return CandidateScore(
         completion_quality=completion_quality(text, tokens),
-        lexical_diversity=lexical_diversity(tokens),
         natural_length=natural_length(tokens, length_mode),
         context_relevance=context_relevance(tokens, context_tokens),
         repetition_penalty=repetition_penalty(tokens),

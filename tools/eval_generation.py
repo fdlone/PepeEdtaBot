@@ -43,8 +43,8 @@ CORPUS_PATH = Path(__file__).with_name("fixtures") / "synthetic_generation_corpu
 CASE_CONTEXT_PATH = (
     Path(__file__).with_name("fixtures") / "synthetic_generation_case_context.txt"
 )
-PREFIX_CONTEXT_PATH = (
-    Path(__file__).with_name("fixtures") / "synthetic_generation_prefix_context.txt"
+STEM_CONTEXT_PATH = (
+    Path(__file__).with_name("fixtures") / "synthetic_generation_stem_context.txt"
 )
 
 
@@ -72,7 +72,7 @@ class _NoVerbatimCopies:
 def load_synthetic_corpus(
     *,
     normalize_lower: bool,
-    include_prefix_fixture: bool = False,
+    include_stem_fixture: bool = False,
 ) -> list[str]:
     corpus = [
         line.strip()
@@ -85,10 +85,10 @@ def load_synthetic_corpus(
             for line in CASE_CONTEXT_PATH.read_text(encoding="utf-8").splitlines()
             if line.strip()
         )
-    if include_prefix_fixture:
+    if include_stem_fixture:
         corpus.extend(
             line.strip()
-            for line in PREFIX_CONTEXT_PATH.read_text(encoding="utf-8").splitlines()
+            for line in STEM_CONTEXT_PATH.read_text(encoding="utf-8").splitlines()
             if line.strip()
         )
     return corpus
@@ -100,8 +100,7 @@ class _InstrumentedMarkovGenerator(MarkovGenerator):
         self.leading_punctuation_stripped = 0
         self.context_exact_matches = 0
         self.context_casefold_matches = 0
-        self.context_prefix_matches = 0
-        self.context_prefix_singleton_matches = 0
+        self.context_stem_matches = 0
         self.hidden_context_fallbacks = 0
 
     async def generate_text_with_trace(
@@ -111,10 +110,7 @@ class _InstrumentedMarkovGenerator(MarkovGenerator):
         self.leading_punctuation_stripped += trace.leading_punctuation_stripped
         self.context_exact_matches += trace.context_exact_matches
         self.context_casefold_matches += trace.context_casefold_matches
-        self.context_prefix_matches += trace.context_prefix_matches
-        self.context_prefix_singleton_matches += (
-            trace.context_prefix_singleton_matches
-        )
+        self.context_stem_matches += trace.context_stem_matches
         self.hidden_context_fallbacks += trace.hidden_context_fallbacks
         return text, trace
 
@@ -184,7 +180,7 @@ async def evaluate_generation(
     candidate_target: int = CANDIDATE_TARGET,
     normalize_lower: bool = True,
     fuzzy_context_casefold: bool = False,
-    fuzzy_context_prefix: bool = False,
+    fuzzy_context_stem: bool = False,
     recent_reply_penalty_strength: float = 0.5,
     length_mode_weights: tuple[float, float, float] = (0.25, 0.55, 0.2),
 ) -> dict[str, int | float]:
@@ -197,7 +193,7 @@ async def evaluate_generation(
 
     corpus = load_synthetic_corpus(
         normalize_lower=normalize_lower,
-        include_prefix_fixture=fuzzy_context_prefix,
+        include_stem_fixture=fuzzy_context_stem,
     )
     rng = random.Random(seed)
     outputs: list[list[str]] = []
@@ -240,15 +236,13 @@ async def evaluate_generation(
                 length_mode_weights=length_mode_weights,
                 markov_order=3,
                 enable_backoff=True,
-                backoff_min_order=1,
                 # Keep the M3/M4 channels off in eval so the baselines measure the
                 # word model alone (and no emoji-stats DB reads are attempted).
                 markov_jump_probability=0.0,
                 emoji_append_chance=0.0,
                 normalize_lower=normalize_lower,
                 fuzzy_context_casefold=fuzzy_context_casefold,
-                fuzzy_context_prefix=fuzzy_context_prefix,
-                reply_context_emit_start=True,
+                fuzzy_context_stem=fuzzy_context_stem,
                 auto_capitalize_replies=False,
                 recent_short_replies={},
                 recent_replies={},
@@ -273,7 +267,7 @@ async def evaluate_generation(
                         for token in context_tokens
                     ]
                 if (
-                    fuzzy_context_prefix
+                    fuzzy_context_stem
                     and not normalize_lower
                     and any(
                         any("а" <= char.casefold() <= "я" for char in token)
@@ -332,7 +326,7 @@ async def evaluate_generation(
     context_resolution_attempts = (
         generator.context_exact_matches
         + generator.context_casefold_matches
-        + generator.context_prefix_matches
+        + generator.context_stem_matches
         + generator.hidden_context_fallbacks
     )
     return {
@@ -342,7 +336,7 @@ async def evaluate_generation(
         "corpus_messages": len(corpus),
         "normalize_lower": normalize_lower,
         "fuzzy_context_casefold": fuzzy_context_casefold,
-        "fuzzy_context_prefix": fuzzy_context_prefix,
+        "fuzzy_context_stem": fuzzy_context_stem,
         "candidate_target": effective_candidate_target,
         "empty_result_rate": empty_count / generations,
         "distinct_1": distinct_ratio(outputs, 1),
@@ -368,15 +362,9 @@ async def evaluate_generation(
             if context_resolution_attempts
             else 0.0
         ),
-        "context_prefix_match_rate": (
-            generator.context_prefix_matches / context_resolution_attempts
+        "context_stem_match_rate": (
+            generator.context_stem_matches / context_resolution_attempts
             if context_resolution_attempts
-            else 0.0
-        ),
-        "context_prefix_singleton_rate": (
-            generator.context_prefix_singleton_matches
-            / generator.context_prefix_matches
-            if generator.context_prefix_matches
             else 0.0
         ),
         "hidden_context_fallback_to_global_rate": (
@@ -403,7 +391,7 @@ def parse_args() -> argparse.Namespace:
         default="normalize-lower",
     )
     parser.add_argument("--fuzzy-context-casefold", action="store_true")
-    parser.add_argument("--fuzzy-context-prefix", action="store_true")
+    parser.add_argument("--fuzzy-context-stem", action="store_true")
     parser.add_argument(
         "--recent-reply-penalty-strength", type=float, default=0.5
     )
@@ -419,7 +407,7 @@ def main() -> None:
             candidate_target=args.candidate_target,
             normalize_lower=args.profile == "normalize-lower",
             fuzzy_context_casefold=args.fuzzy_context_casefold,
-            fuzzy_context_prefix=args.fuzzy_context_prefix,
+            fuzzy_context_stem=args.fuzzy_context_stem,
             recent_reply_penalty_strength=args.recent_reply_penalty_strength,
         )
     )

@@ -557,7 +557,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
             rng=random.Random(42),
         )
         self.assertTrue(text)
@@ -578,13 +577,12 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
             rng=random.Random(42),
         )
 
         self.assertEqual(text, "Привет")
 
-    async def test_context_trigram_uses_hidden_transition_state(self) -> None:
+    async def test_context_trigram_emits_matched_tail(self) -> None:
         await self.db.save_message_and_update_model(
             chat_id=5555,
             raw_text="global lead Люблю кофе утром продолжается вполне безопасно",
@@ -609,14 +607,15 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
             rng=random.Random(11),
         )
 
         self.assertTrue(text)
+        # The full matched window is never replayed; the trimmed 2-token tail
+        # is emitted so the reply picks the context up out loud.
         self.assertFalse(text.startswith("Люблю кофе утром"))
-        self.assertTrue(text.startswith("продолжается вполне безопасно"))
-        self.assertEqual(trace.start_source, "hidden_context")
+        self.assertTrue(text.startswith("кофе утром продолжается вполне безопасно"))
+        self.assertEqual(trace.start_source, "context")
         self.assertEqual(trace.markov_order_used, 3)
         self.assertEqual(trace.context_exact_matches, 1)
         self.assertEqual(trace.context_casefold_matches, 0)
@@ -646,51 +645,52 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             rng=random.Random(11),
         )
 
-        self.assertTrue(text.startswith("continues safely"))
-        self.assertEqual(trace.start_source, "hidden_context")
+        self.assertTrue(text.startswith("Beta Gamma continues safely"))
+        self.assertEqual(trace.start_source, "context")
         self.assertEqual(trace.context_exact_matches, 0)
         self.assertEqual(trace.context_casefold_matches, 1)
 
-    async def test_context_prefix_prefers_frequent_coherent_state(self) -> None:
+    async def test_context_stem_matches_inflected_context(self) -> None:
+        # The context arrives inflected ("тренировки помогают"); exact and
+        # casefold lookups miss, the stem fold finds the learned state.
         chat_id = 5553
         for _ in range(10):
             await self.db.save_message_and_update_model(
                 chat_id=chat_id,
-                raw_text="хоссейн джаббар продолжает точно сейчас",
+                raw_text="тренировка помогает телу очень сильно",
                 tokens=[
-                    "хоссейн",
-                    "джаббар",
-                    "продолжает",
-                    "точно",
-                    "сейчас",
+                    "тренировка",
+                    "помогает",
+                    "телу",
+                    "очень",
+                    "сильно",
                 ],
             )
         await self.db.save_message_and_update_model(
             chat_id=chat_id,
-            raw_text="хоссейно джаббаров ошибается редко сейчас",
+            raw_text="жетон висит криво совсем редко",
             tokens=[
-                "хоссейно",
-                "джаббаров",
-                "ошибается",
+                "жетон",
+                "висит",
+                "криво",
+                "совсем",
                 "редко",
-                "сейчас",
             ],
         )
 
         text, trace = await self.generator.generate_text_with_trace(
             chat_id=chat_id,
             max_chars=100,
-            context_tokens=["хоссейном", "джаббаровичем"],
+            context_tokens=["тренировки", "помогают"],
             context_start_bias=4.0,
             randomness_strength=0.0,
-            fuzzy_context_prefix=True,
+            fuzzy_context_stem=True,
             rng=random.Random(11),
         )
 
-        self.assertTrue(text.startswith("точно сейчас"))
-        self.assertEqual(trace.start_source, "hidden_context")
-        self.assertEqual(trace.context_prefix_matches, 1)
-        self.assertEqual(trace.context_prefix_singleton_matches, 0)
+        self.assertTrue(text.startswith("помогает телу очень сильно"))
+        self.assertEqual(trace.start_source, "context")
+        self.assertEqual(trace.context_stem_matches, 1)
 
     async def test_context_start_bias_gates_contextual_start_path(self) -> None:
         chat_id = 5556
@@ -730,10 +730,10 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(without_contextual_start.startswith("context alpha beta"))
         self.assertTrue(with_contextual_start)
         self.assertFalse(with_contextual_start.startswith("context alpha beta"))
-        self.assertTrue(with_contextual_start.startswith("continues safely"))
-        self.assertEqual(contextual_trace.start_source, "hidden_context")
+        self.assertTrue(with_contextual_start.startswith("alpha beta continues safely"))
+        self.assertEqual(contextual_trace.start_source, "context")
 
-    async def test_context_pair_backoff_builds_hidden_state(self) -> None:
+    async def test_context_pair_backoff_builds_start_state(self) -> None:
         chat_id = 5557
         await self.db.save_message_and_update_model(
             chat_id=chat_id,
@@ -760,9 +760,11 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(text)
+        # The pair itself is not replayed in full: the emitted tail is the
+        # last two tokens of the assembled (pair + sampled w3) start state.
         self.assertFalse(text.startswith("alpha beta"))
-        self.assertTrue(text.startswith("output continues safely"))
-        self.assertEqual(trace.start_source, "hidden_context")
+        self.assertTrue(text.startswith("beta hidden output continues safely"))
+        self.assertEqual(trace.start_source, "context")
         self.assertEqual(trace.markov_order_used, 2)
 
     async def test_generate_text_falls_back_when_context_not_found(self) -> None:
@@ -791,7 +793,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
             rng=random.Random(5),
         )
 
@@ -819,7 +820,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
             rng=random.Random(13),
         )
 
@@ -974,7 +974,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             max_chars=100,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
             rng=random.Random(9),
         )
 
@@ -998,7 +997,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             randomness_strength=2.0,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
             rng=random.Random(3),
         )
 
@@ -1023,7 +1021,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
                 randomness_strength=2.0,
                 markov_order=3,
                 enable_backoff=True,
-                backoff_min_order=1,
                 rng=random.Random(4),
             )
 
@@ -1046,7 +1043,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             randomness_strength=0.0,
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
         )
 
         self.assertEqual(text, "fresh")

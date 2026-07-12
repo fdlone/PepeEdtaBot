@@ -27,16 +27,14 @@ def _runtime_state() -> MagicMock:
     state.repetition_penalty_strength = 1.0
     state.markov_order = 3
     state.enable_backoff = True
-    state.backoff_min_order = 1
     state.normalize_lower = False
     state.fuzzy_context_casefold = False
-    state.fuzzy_context_prefix = False
+    state.fuzzy_context_stem = False
     state.auto_capitalize_replies = False
     state.recent_short_replies = {}
     state.recent_replies = {}
     state.recent_reply_penalty_strength = 1.0
     state.verbatim_penalty_strength = 0.0
-    state.reply_context_emit_start = True
     state.length_mode_weights = (0.25, 0.55, 0.2)
     # Argmax selection and no ending transforms: existing tests assert the
     # best-scored candidate text verbatim.
@@ -133,43 +131,6 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             verbatim_calls[0], call(123, "training sample has four tokens")
         )
         self.assertEqual(verbatim_calls[1], call(123, result))
-
-    async def test_coherence_penalty_applies_regardless_of_start_source(self) -> None:
-        # An order-1 walk is word salad whatever anchored it: the coherence
-        # penalty must not be discounted for context-anchored candidates.
-        ctx_text = "context anchored reply text"
-        global_text = "global fluent reply text"
-
-        state = _runtime_state()
-        state.candidate_selection_temperature = 0.0  # argmax
-        generator = AsyncMock()
-        generator.generate_text_with_trace = AsyncMock(
-            side_effect=[
-                (ctx_text, SimpleNamespace(markov_order_used=1, start_source="context")),
-                (
-                    global_text,
-                    SimpleNamespace(markov_order_used=3, start_source="global"),
-                ),
-            ]
-        )
-        learning_service = _learning_service()
-        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        scores = {ctx_text: _score(1.1), global_text: _score(1.0)}
-        scorer = MagicMock(side_effect=lambda text, tokens, context, mode: scores[text])
-        response_generator = ResponseGenerator(
-            generator=generator,
-            learning_service=learning_service,
-            runtime_state=state,
-            scorer=scorer,
-        )
-
-        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
-            selected = await response_generator.generate(
-                _request(), rng=random.Random(1), candidate_target=2
-            )
-
-        # ctx 1.1 - 0.70 (order-1 coherence) = 0.40 < global 1.0 -> global wins.
-        self.assertEqual(selected, global_text)
 
     async def test_context_falls_back_after_context_attempt_budget(self) -> None:
         state = _runtime_state()

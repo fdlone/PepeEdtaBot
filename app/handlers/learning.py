@@ -64,14 +64,17 @@ MIN_LEARN_MESSAGE_TOKENS = 2
 RECENT_SHORT_REPLY_LIMIT = 5
 RECENT_FALLBACK_LIMIT = 3
 
-# Leading direct-address to the bot: "<alias><separator> ...". Only a leading
-# bot alias followed by a vocative separator is stripped, so the corpus does not
-# learn boilerplate openings like "Пепе, ...". A mid-sentence alias is preserved.
-_LEADING_VOCATIVE_RE = re.compile(r"^\s*([^\s,:;—–-]+)\s*[,:;—–-]+\s*")
+# Leading direct-address to the bot: "<alias><separator> ..." or a bare
+# "<alias> ...". Users address the bot without a comma at least as often as
+# with one ("пепе кто гнойный пидор"), and the unstripped form taught the
+# corpus the bot's own name — replies then opened with "пепе ..." (audit
+# SIM-8, 2026-07-12). A mid-sentence alias is preserved, and the lookahead
+# keeps a bare alias with nothing after it intact.
+_LEADING_VOCATIVE_RE = re.compile(r"^\s*([^\s,:;—–-]+)(?:\s*[,:;—–-]+\s*|\s+)(?=\S)")
 
 
 def strip_leading_bot_vocative(text: str, aliases: frozenset[str]) -> str:
-    """Remove a leading "<bot-alias><separator>" direct address, if present."""
+    """Remove a leading "<bot-alias>[<separator>]" direct address, if present."""
     if not aliases:
         return text
     match = _LEADING_VOCATIVE_RE.match(text)

@@ -9,13 +9,16 @@
 > 33% → 5.5%):
 > 1. Контекстный старт стал **видимым**: из матчнутого окна эмитятся последние
 >    ≤2 токена без ведущих стоп-слов/пунктуации («кто гнойный пидор» →
->    «гнойный пидор …»), ручка `reply_context_emit_start=true`
->    (`context_emission_tokens`, markov.py).
-> 2. Скоринг: новые компоненты `verbatim_penalty` (= `verbatim_penalty_strength=1.0`
+>    «гнойный пидор …») (`context_emission_tokens`, markov.py). Ручка
+>    `reply_context_emit_start` удалена 2026-07-12 (SIM-9): эмиссия всегда
+>    включена, скрытая ветка Phase 4.1d осталась только как случай пустого
+>    хвоста.
+> 2. Скоринг: новый компонент `verbatim_penalty` (= `verbatim_penalty_strength=1.0`
 >    × доля контент-4-грамм кандидата, найденных в корпусном индексе
->    `LearningService.get_verbatim_ngram_index`) и `coherence_penalty`
->    (order 1 → 0.70, order 2 → 0.10; трасса пробрасывается в ResponseGenerator
->    через `generate_text_with_trace`).
+>    `LearningService.get_verbatim_ngram_index`). `coherence_penalty` и
+>    `lexical_diversity` удалены 2026-07-12: первый стал шумом после удаления
+>    order-1 цепи, второй схлопнут в `repetition_penalty` (1 − diversity ==
+>    доля повторов токенов, слияние не меняет ранжирование).
 > 3. Дыры verbatim-гейта закрыты: сравнение без хвостовой пунктуации
 >    (`normalize_for_verbatim`), окно кэша 500 → 1000.
 > 4. Хаос: `candidate_selection_temperature` 0.7 → 1.3,
@@ -244,17 +247,19 @@ floor 0.02); выбор — через `rng.expovariate` (`exploration_weighted_
    - exact 2-граммные (+30% recency);
    - casefold 3/2-граммы (при `fuzzy_context_casefold=true`) через
      `ContextStateMatcher`;
-   - prefix-матчи (при `fuzzy_context_prefix=false` — выключено): кириллические
-     токены ≥5 симв., общий префикс ≥6, coverage ≥0.75, confidence =
-     0.65·string + 0.35·log-frequency ≥ 0.68, ≥2 переходов.
+   - stem-матчи (при `fuzzy_context_stem=true`, дефолт): состояния модели,
+     чей приблизительный стем (`stem_token`, тот же что в
+     `context_start_affinity` и IDF-релевантности) совпадает со стемом
+     контекстного окна («билеты стоят» ≡ «билет стоит»); сортировка по
+     частоте, дубли exact/casefold исключаются.
    Гейт: контекстный старт вообще пробуется лишь с вероятностью
    `context_start_probability(2.2)≈0.545` за попытку (`use_contextual_start`);
-   в остальных ~45% сразу глобальный старт. При совпадении и
-   `reply_context_emit_start=true` (дефолт) в текст эмитится **хвост** совпавшего
-   окна (`context_emission_tokens`) — ответ «подхватывает» контекст вслух,
-   `start_source="context"` (**видимый** старт). При `reply_context_emit_start=false`
-   тройка не эмитится (`start_source="hidden_context"`, «скрытый» контекст),
-   генерация продолжается из состояния. Если контекстный старт пробовался, но ни
+   в остальных ~45% сразу глобальный старт. При совпадении в текст эмитится
+   **хвост** совпавшего окна (`context_emission_tokens`) — ответ «подхватывает»
+   контекст вслух, `start_source="context"` (**видимый** старт). Если хвост
+   пуст (одни стоп-слова/пунктуация), старт остаётся скрытым
+   (`start_source="hidden_context"`), генерация продолжается из состояния.
+   Если контекстный старт пробовался, но ни
    одно окно не совпало — откат на глобальный старт со счётчиком
    `hidden_context_fallbacks` (в трейсе `context=HIDDEN_FALLBACK`).
 3. **Глобальный старт** (`_pick_global_start`, `markov.py:1148`): взвешенный
@@ -281,7 +286,8 @@ floor 0.02); выбор — через `rng.expovariate` (`exploration_weighted_
   повторяется и не заикается в первое слово нового старта.
 - **Переход**: пул 3-граммы; кандидаты, ведущие в уже посещённую тройку,
   фильтруются (окно 40). Пусто → бэкофф на 2-грамму (`enable_backoff=true`);
-  откат на 1-грамму запрещён дефолтом `backoff_min_order=2` (словесная каша).
+  order-1 цепи больше нет (удалена вместе с ручкой `backoff_min_order` и
+  таблицей `transitions1`, миграция 013): пустой order-2 пул завершает фразу.
 - **`weighted_next_choice`** (`markov.py:431`) — сердце сэмплинга. Вес токена:
   - `count^frequency_power`;
   - ×`step_bias`, если токен в контекст-множестве; step_bias =
@@ -315,22 +321,20 @@ floor 0.02); выбор — через `rng.expovariate` (`exploration_weighted_
 
 `GenerationTrace` пишется в debug-лог: attempts, order_used, jumps, rejection,
 start_source (**global / seed / context / hidden_context**), счётчики
-exact/casefold/prefix матчей и фолбэков. `context` = видимый контекстный старт
-(токены эмитятся, `reply_context_emit_start=true`); `hidden_context` = совпадение
-было, но старт не эмитился.
+exact/casefold/stem матчей и фолбэков. `context` = видимый контекстный старт
+(токены эмитятся); `hidden_context` = совпадение было, но хвост окна пуст
+(одни стоп-слова) и старт не эмитился.
 
 ---
 
 ## 6. Скоринг и «вкусовые» слои
 
 ### 6.1 `score_candidate` (`core/candidate_scorer.py:222`)
-`total = completion_quality + lexical_diversity + natural_length +
-context_relevance − repetition_penalty − recent_penalty`:
+`total = completion_quality + natural_length +
+context_relevance − repetition_penalty − recent_penalty − verbatim_penalty`:
 - **completion_quality**: +0.35 за терминальную пунктуацию, ±0.25/−0.50 за
   (не)сбалансированные скобки/кавычки, −0.80 за плохое последнее слово
   (BAD_ENDING_WORDS) или открывающую скобку в конце;
-- **lexical_diversity**: uniq/len контент-токенов (короткие ≤3 токена:
-  0.40+0.40·div — не штрафуются);
 - **natural_length**: пик 1.0 в полосе режима — short (1,4), medium (5,14),
   long (15,24); ниже — линейный подъём от 0.4, выше — спад до 0.5 за 10 токенов;
 - **context_relevance**: заменяется в `response_generator` на
@@ -339,7 +343,8 @@ context_relevance − repetition_penalty − recent_penalty`:
   стемам (`stem_token`: «гнойному» ≡ «гнойный»), ×1.6, кап 1.6. Чистое эхо
   (стемы кандидата ⊆ стемов контекста) получает 0. Старая формула
   (overlap/|кандидат|) осталась фолбэком при пустом IDF (синтетический eval);
-- **repetition_penalty**: 0.6·повторы токенов + 1.0·повторы биграмм +
+- **repetition_penalty**: 1.6·повторы токенов (короткие ≤3 токена: 1.0·повторы
+  + фикс 0.20 — бывшая lexical_diversity вшита в веса) + 1.0·повторы биграмм +
   1.3·повторы триграмм (доли).
 
 ### 6.2 Поверхностные слои после выбора
@@ -425,14 +430,14 @@ Fallback на обращение не считается в hourly cap.
 | recent_reply_penalty_strength | 0.5 | штраф пересечения с прошлыми ответами |
 | reply_flavor_strength | 1.0 | вариации концовки |
 | emoji_append_chance | 0.15 | M3 эмодзи-хвост |
-| markov_order / enable_backoff / backoff_min_order | 3 / true / 1 | порядок цепи |
+| markov_order / enable_backoff | 3 / true | порядок цепи |
 | markov_jump_probability | 0.12 | M4 прыжки темы |
 | use_reply_context | true | контекст из reply |
 | reply_context_max_tokens | 12 | окно контекста |
 | reply_context_bias / start_bias | 1.8 / 2.2 | сила контекста в шаге/старте |
 | reply_context_only_for_replies | true | контекст только для реплаев |
 | reply_context_include_current_message | true | + текущее сообщение |
-| fuzzy_context_casefold / prefix | true / false | нечёткий матчинг контекста |
+| fuzzy_context_casefold / stem | true / true | нечёткий матчинг контекста |
 | hot_ngram_seed_chance / min_count / recency_share | 0.25 / 3 / 0.5 | L1 running jokes |
 | rare_event_chance / false_start_chance / rare_event_daily_cap | 0.03 / 0.05 / 3 | L3 |
 | mood_enabled / mood_modulation_strength | true / 1.0 | M1 |
@@ -444,7 +449,7 @@ Fallback на обращение не считается в hourly cap.
 Константы, зашитые в код (не /set): бюджеты попыток/кандидатов и margin (§4),
 `SHORT_MODE_MAX_TOKENS=8`, `max_steps=90`, формулы explore/power, веса скоринга
 (§6.1), веса momentum (0.55/0.30/0.15), вероятности flavor-концовок,
-`EMOJI_SAMPLE_POWER=0.5`, пороги fuzzy-prefix (§5.2), окна анти-повторов
+`EMOJI_SAMPLE_POWER=0.5`, окна анти-повторов
 (5 коротких / 20 полных / 3 fallback), decay-окна эмодзи и n-грамм.
 
 ---

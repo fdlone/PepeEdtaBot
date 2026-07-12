@@ -62,7 +62,6 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.recent_replies = {}
     s.recent_reply_penalty_strength = 1.0
     s.verbatim_penalty_strength = 0.0
-    s.reply_context_emit_start = True
     s.length_mode_weights = (0.25, 0.55, 0.2)
     # Deterministic selection and untouched reply text so handler tests can
     # assert generated candidates verbatim.
@@ -138,8 +137,8 @@ class TestCommonHandlers(unittest.IsolatedAsyncioTestCase):
         db = AsyncMock()
         db.get_stats = AsyncMock(return_value={
             "messages": 5, "starts2": 1, "starts3": 1,
-            "transitions2": 2, "transitions3": 1, "transitions1": 3,
-            "volume2": 10, "volume3": 5, "volume1": 15, "volume": 5,
+            "transitions2": 2, "transitions3": 1,
+            "volume2": 10, "volume3": 5, "volume": 5,
         })
         state = _fake_state(min_tokens_for_model=50)
         await cmd_stats(msg, db, state)
@@ -719,11 +718,27 @@ class TestStripLeadingBotVocative(unittest.TestCase):
                     strip_leading_bot_vocative(text, self.aliases), expected
                 )
 
-    def test_preserves_alias_without_separator(self) -> None:
+    def test_strips_leading_alias_without_separator(self) -> None:
+        # SIM-8: a bare "<alias> ..." address is as common as the comma form;
+        # unstripped it taught the corpus the bot's own name.
         from app.handlers.learning import strip_leading_bot_vocative
 
-        text = "Пепе хороший бот"
-        self.assertEqual(strip_leading_bot_vocative(text, self.aliases), text)
+        for text, expected in (
+            ("Пепе хороший бот", "хороший бот"),
+            ("пепе кто гнойный пидор", "кто гнойный пидор"),
+            ("  pepe   what is up", "what is up"),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    strip_leading_bot_vocative(text, self.aliases), expected
+                )
+
+    def test_preserves_bare_alias_with_no_content(self) -> None:
+        from app.handlers.learning import strip_leading_bot_vocative
+
+        for text in ("Пепе", "пепе  ", " pepe"):
+            with self.subTest(text=text):
+                self.assertEqual(strip_leading_bot_vocative(text, self.aliases), text)
 
     def test_preserves_mid_sentence_alias_and_other_vocatives(self) -> None:
         from app.handlers.learning import strip_leading_bot_vocative
@@ -759,7 +774,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             "reply_probability": 0.0,
             "use_reply_context": False,
             "fuzzy_context_casefold": False,
-            "fuzzy_context_prefix": False,
+            "fuzzy_context_stem": False,
             "reply_context_last_tokens": 3,
             "reply_context_bias": 1.8,
             "reply_context_start_bias": 2.2,
@@ -772,7 +787,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             "length_mode_weights": (0.25, 0.55, 0.2),
             "markov_order": 3,
             "enable_backoff": True,
-            "backoff_min_order": 1,
         }
         values.update(overrides)
         return _fake_state(**values)
@@ -876,14 +890,16 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
     async def test_current_incoming_message_copy_is_rejected(self) -> None:
         from app.handlers.learning import on_text_message
 
-        msg = _fake_message(text="pepe ответь")
+        # SIM-8: the leading alias is stripped before learning, so the echo
+        # gate compares against the stripped text ("ответь мне").
+        msg = _fake_message(text="pepe ответь мне")
         learning_service = AsyncMock()
         learning_service.get_token_volume = AsyncMock(return_value=100)
         learning_service.record_message = AsyncMock(return_value=102)
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
         generator = _traced_generator()
         generator.generate_text = AsyncMock(
-            side_effect=["pepe ответь", "Нормально"] + [""] * 8
+            side_effect=["ответь мне", "Нормально"] + [""] * 8
         )
         state = self._reply_state()
 
@@ -1018,7 +1034,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             reply_probability=0.0,
             use_reply_context=False,
             fuzzy_context_casefold=False,
-            fuzzy_context_prefix=False,
+            fuzzy_context_stem=False,
             reply_context_last_tokens=3,
             reply_context_bias=1.8,
             reply_context_start_bias=2.2,
@@ -1031,7 +1047,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             length_mode_weights=(0.25, 0.55, 0.2),
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
         )
 
         with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
@@ -1069,7 +1084,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             reply_probability=0.0,
             use_reply_context=False,
             fuzzy_context_casefold=False,
-            fuzzy_context_prefix=False,
+            fuzzy_context_stem=False,
             reply_context_last_tokens=3,
             reply_context_bias=1.8,
             reply_context_start_bias=2.2,
@@ -1082,7 +1097,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             length_mode_weights=(0.25, 0.55, 0.2),
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
         )
 
         with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
@@ -1122,7 +1136,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             reply_probability=0.0,
             use_reply_context=False,
             fuzzy_context_casefold=False,
-            fuzzy_context_prefix=False,
+            fuzzy_context_stem=False,
             reply_context_last_tokens=3,
             reply_context_bias=1.8,
             reply_context_start_bias=2.2,
@@ -1135,7 +1149,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             length_mode_weights=(0.25, 0.55, 0.2),
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
         )
 
         with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
@@ -1675,7 +1688,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             reply_probability=0.0,
             use_reply_context=False,
             fuzzy_context_casefold=False,
-            fuzzy_context_prefix=False,
+            fuzzy_context_stem=False,
             reply_context_last_tokens=3,
             reply_context_bias=1.8,
             reply_context_start_bias=2.2,
@@ -1688,7 +1701,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             length_mode_weights=(0.25, 0.55, 0.2),
             markov_order=3,
             enable_backoff=True,
-            backoff_min_order=1,
         )
 
         with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
@@ -1738,7 +1750,7 @@ class TestMentionCooldownGate(unittest.IsolatedAsyncioTestCase):
             "reply_probability": 0.0,
             "use_reply_context": False,
             "fuzzy_context_casefold": False,
-            "fuzzy_context_prefix": False,
+            "fuzzy_context_stem": False,
             "reply_context_last_tokens": 3,
             "reply_context_bias": 1.8,
             "reply_context_start_bias": 2.2,
@@ -1751,7 +1763,6 @@ class TestMentionCooldownGate(unittest.IsolatedAsyncioTestCase):
             "length_mode_weights": (0.25, 0.55, 0.2),
             "markov_order": 3,
             "enable_backoff": True,
-            "backoff_min_order": 1,
             "mention_cooldown_sec": 30,
         }
         values.update(overrides)

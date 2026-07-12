@@ -11,8 +11,9 @@ class ChatHotNgramsRepo(DecayableCountsRepo):
 
     Keyed by raw ``chat_id`` to match the Markov model tables; per-chat
     aggregate only (no author). Bigrams are stored with ``w3 = ''``. Hotness
-    is the window count's share of the all-time count in ``transitions`` /
-    ``transitions1``: a spike means the chat picked the phrase up recently.
+    is the window count's share of the all-time count in ``transitions``
+    (bigrams aggregate over its ``w3``): a spike means the chat picked the
+    phrase up recently.
     """
 
     async def bump(self, chat_id: int, ngrams: Iterable[tuple[str, ...]]) -> None:
@@ -61,7 +62,12 @@ class ChatHotNgramsRepo(DecayableCountsRepo):
             UNION ALL
             SELECT h.w1, h.w2, h.w3, h.cnt
             FROM chat_hot_ngrams h
-            LEFT JOIN transitions1 t1
+            LEFT JOIN (
+                SELECT chat_id, w1, w2, SUM(cnt) AS cnt
+                FROM transitions
+                WHERE chat_id = ?
+                GROUP BY chat_id, w1, w2
+            ) t1
               ON t1.chat_id = h.chat_id AND t1.w1 = h.w1 AND t1.w2 = h.w2
             WHERE h.chat_id = ? AND h.w3 = '' AND h.cnt >= ?
               AND h.cnt * 1.0 / MAX(COALESCE(t1.cnt, h.cnt), h.cnt) >= ?
@@ -72,6 +78,7 @@ class ChatHotNgramsRepo(DecayableCountsRepo):
             chat_id,
             min_count,
             recency_share,
+            chat_id,
             chat_id,
             min_count,
             recency_share,

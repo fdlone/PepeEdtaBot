@@ -181,13 +181,10 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("length_mode_weights", "LENGTH_MODE_WEIGHTS", "0.25,0.55,0.2",
               _length_weights()),
     FieldSpec("markov_order", "MARKOV_ORDER", "3", _int_in_set({2, 3})),
+    # Backoff bottoms out at order 2: the order-1 chain was removed entirely
+    # (2026-07-12) after eval_prod showed order-1 walks are word salad — the
+    # 2026-07-09 default already forbade them and nothing regressed.
     FieldSpec("enable_backoff", "ENABLE_BACKOFF", "true", _bool()),
-    # 2 (2026-07-09): order-1 walks are word salad that the coherence penalty
-    # only discounts rather than blocks. Forbidding the 1-gram backoff nearly
-    # doubled the coherent (order>=2) context-anchored wins in eval_prod (16 ->
-    # 29 of 200) and cut verbatim_run_ratio 0.090 -> 0.064, with no rise in
-    # empty_result_rate: the attempt budget refills the candidate pool.
-    FieldSpec("backoff_min_order", "BACKOFF_MIN_ORDER", "2", _int_in_set({1, 2})),
     # M4 topic drift: probability per generation step (only after the reply has
     # >8 tokens, order 3) of jumping to a new learned sentence start, splicing a
     # connective ("..., кстати ...") so the shift reads as a deliberate aside.
@@ -235,10 +232,15 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
         "true",
         _bool(),
     ),
+    # Morphology-folding context matching: when exact and casefold lookups
+    # miss, states are matched by the approximate Russian stem (stem_token) —
+    # the same fold context_start_affinity and IDF relevance already use. This
+    # replaced the prefix heuristic (2026-07-12), which was off by default and
+    # duplicated the stemmer with its own thresholds.
     FieldSpec(
-        "fuzzy_context_prefix",
-        "FUZZY_CONTEXT_PREFIX",
-        "false",
+        "fuzzy_context_stem",
+        "FUZZY_CONTEXT_STEM",
+        "true",
         _bool(),
     ),
     FieldSpec("reply_context_max_tokens", "REPLY_CONTEXT_MAX_TOKENS", "12",
@@ -263,12 +265,6 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("context_start_affinity", "CONTEXT_START_AFFINITY", "6.0",
               _float_in_range(1.0, 10.0)),
     FieldSpec("reply_context_only_for_replies", "REPLY_CONTEXT_ONLY_FOR_REPLIES",
-              "true", _bool()),
-    # Visible contextual start: emit the trimmed tail (last <=2 tokens minus
-    # leading stopwords/punctuation) of the matched context window into the
-    # reply, so «кто гнойный пидор» может дать «гнойный пидор <продолжение>».
-    # false возвращает скрытое поведение Phase 4.1d.
-    FieldSpec("reply_context_emit_start", "REPLY_CONTEXT_EMIT_START",
               "true", _bool()),
     FieldSpec("reply_context_include_current_message",
               "REPLY_CONTEXT_INCLUDE_CURRENT_MESSAGE", "true", _bool()),
@@ -362,8 +358,6 @@ def validate_cross_fields(obj: Any) -> None:
     """
     if obj.typing_min_ms > obj.typing_max_ms:
         raise ValueError("TYPING_MIN_MS must be <= TYPING_MAX_MS")
-    if obj.backoff_min_order >= obj.markov_order:
-        raise ValueError("BACKOFF_MIN_ORDER must be lower than MARKOV_ORDER")
     if obj.reply_context_last_tokens > obj.reply_context_max_tokens:
         raise ValueError(
             "REPLY_CONTEXT_LAST_TOKENS must be <= REPLY_CONTEXT_MAX_TOKENS"
