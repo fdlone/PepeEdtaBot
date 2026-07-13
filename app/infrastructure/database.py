@@ -30,6 +30,9 @@ from app.repositories import (
 PIVO_DAILY_USAGE_RETENTION_DAYS = 7
 CHAT_EMOJI_DECAY_DAYS = 7
 CHAT_HOT_NGRAM_DECAY_DAYS = 7
+# L2: окно «завсегдатая» намеренно медленнее мемных (7d) — недельный отпуск
+# не должен разжаловать постоянного собеседника.
+CHAT_USER_INTERACTION_DECAY_DAYS = 30
 # Минимальный интервал между прогонами decay эмодзи/n-грамм. Планировщика в
 # проекте нет, поэтому decay перезапускается лениво с learn-пути (см.
 # decay_flavor_stats_if_due): при аптайме в недели окно «горячести» продолжает
@@ -116,6 +119,7 @@ class Database:
         await self.cleanup_pivo_daily_usage()
         await self.decay_chat_emoji_stats()
         await self.decay_chat_hot_ngrams()
+        await self.decay_chat_user_interactions()
         self._last_flavor_decay_monotonic = time.monotonic()
 
     async def close(self) -> None:
@@ -445,6 +449,34 @@ class Database:
         cutoff = self._decay_cutoff(decay_days, now)
         return await self._require(self.chat_hot_ngrams).decay_stale(cutoff)
 
+    # --- Делегаты к ChatUserInteractionsRepo (L2 user quirks) ---
+
+    async def record_user_interaction(self, chat_id: int, user_hash: str) -> None:
+        await self._require(self.chat_user_interactions).bump(chat_id, user_hash)
+
+    async def get_user_interaction_count(
+        self, chat_id: int, user_hash: str
+    ) -> int:
+        return await self._require(self.chat_user_interactions).get_count(
+            chat_id, user_hash
+        )
+
+    async def decay_chat_user_interactions(
+        self,
+        *,
+        decay_days: int = CHAT_USER_INTERACTION_DECAY_DAYS,
+        now: datetime | None = None,
+    ) -> int:
+        """Halve interaction counts of users quiet for ``decay_days``.
+
+        Same cadence and contract as the other flavor decays (init + lazy
+        daily re-run via ``decay_flavor_stats_if_due``), but a slower window:
+        regular status should outlive a vacation, not just a meme cycle.
+        Returns the number of purged rows.
+        """
+        cutoff = self._decay_cutoff(decay_days, now)
+        return await self._require(self.chat_user_interactions).decay_stale(cutoff)
+
     @staticmethod
     def _decay_cutoff(decay_days: int, now: datetime | None) -> str:
         """Cutoff timestamp for decay_stale, in SQLite's datetime('now') text
@@ -472,6 +504,7 @@ class Database:
         self._last_flavor_decay_monotonic = now
         await self.decay_chat_emoji_stats()
         await self.decay_chat_hot_ngrams()
+        await self.decay_chat_user_interactions()
         return True
 
     async def cleanup_pivo_daily_usage(
@@ -535,6 +568,7 @@ class Database:
             "chat_model_volume",
             "chat_emoji_stats",
             "chat_hot_ngrams",
+            "chat_user_interactions",
         )
         async with self._lock:
             db = await self._get_conn()

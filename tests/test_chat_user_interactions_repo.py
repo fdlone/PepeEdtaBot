@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import time
 import unittest
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from app.infrastructure.database import Database
+from app.infrastructure.database import (
+    CHAT_USER_INTERACTION_DECAY_DAYS,
+    FLAVOR_DECAY_INTERVAL_SEC,
+    Database,
+)
 from app.repositories import ChatUserInteractionsRepo
 
 CHAT = 4242
@@ -75,3 +80,77 @@ class TestChatUserInteractionsRepo(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(await self.repo.get_count(CHAT, USER_HASH), 4)
         self.assertEqual(deleted, 0)
+
+
+class TestDatabaseUserInteractionDelegates(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.db_path = Path(f"test_interactions_{uuid.uuid4().hex}.sqlite")
+        self.db = Database(str(self.db_path))
+        await self.db.init()
+
+    async def asyncTearDown(self) -> None:
+        await self.db.close()
+        self.db_path.unlink(missing_ok=True)
+
+    async def test_record_and_get_roundtrip(self) -> None:
+        await self.db.record_user_interaction(CHAT, USER_HASH)
+        await self.db.record_user_interaction(CHAT, USER_HASH)
+
+        self.assertEqual(
+            await self.db.get_user_interaction_count(CHAT, USER_HASH), 2
+        )
+        self.assertEqual(
+            await self.db.get_user_interaction_count(CHAT, OTHER_HASH), 0
+        )
+
+    async def test_decay_window_is_30_days(self) -> None:
+        self.assertEqual(CHAT_USER_INTERACTION_DECAY_DAYS, 30)
+        await self.db.record_user_interaction(CHAT, USER_HASH)
+        await self.db.record_user_interaction(CHAT, USER_HASH)
+
+        # 29 days later the row is still fresh; at 31 days it halves.
+        fresh = datetime.now(UTC) + timedelta(days=29)
+        self.assertEqual(await self.db.decay_chat_user_interactions(now=fresh), 0)
+        self.assertEqual(
+            await self.db.get_user_interaction_count(CHAT, USER_HASH), 2
+        )
+
+        stale = datetime.now(UTC) + timedelta(days=31)
+        await self.db.decay_chat_user_interactions(now=stale)
+        self.assertEqual(
+            await self.db.get_user_interaction_count(CHAT, USER_HASH), 1
+        )
+
+    async def test_clear_chat_removes_interactions(self) -> None:
+        await self.db.record_user_interaction(CHAT, USER_HASH)
+        await self.db.record_user_interaction(OTHER_CHAT, USER_HASH)
+
+        await self.db.clear_chat(CHAT)
+
+        self.assertEqual(
+            await self.db.get_user_interaction_count(CHAT, USER_HASH), 0
+        )
+        self.assertEqual(
+            await self.db.get_user_interaction_count(OTHER_CHAT, USER_HASH), 1
+        )
+
+    async def test_lazy_decay_covers_interactions(self) -> None:
+        # decay_flavor_stats_if_due must run the interactions decay too: with
+        # the monotonic stamp aged past the interval and rows made stale via
+        # a rewound updated_at, one lazy call halves them.
+        await self.db.record_user_interaction(CHAT, USER_HASH)
+        await self.db.record_user_interaction(CHAT, USER_HASH)
+        assert self.db._conn is not None
+        await self.db._conn.execute(
+            "UPDATE chat_user_interactions SET updated_at = ?",
+            ((datetime.now(UTC) - timedelta(days=45)).strftime("%Y-%m-%d %H:%M:%S"),),
+        )
+        await self.db._conn.commit()
+        self.db._last_flavor_decay_monotonic = (
+            time.monotonic() - FLAVOR_DECAY_INTERVAL_SEC - 1.0
+        )
+
+        self.assertTrue(await self.db.decay_flavor_stats_if_due())
+        self.assertEqual(
+            await self.db.get_user_interaction_count(CHAT, USER_HASH), 1
+        )
