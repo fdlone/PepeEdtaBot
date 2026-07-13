@@ -46,6 +46,8 @@ def _make_runtime_state() -> RuntimeState:
         rare_event_chance=0.005,
         false_start_chance=0.03,
         rare_event_daily_cap=3,
+        user_quirk_chance=0.1,
+        user_quirk_min_interactions=25,
         use_reply_context=True,
         fuzzy_context_casefold=True,
         fuzzy_context_stem=False,
@@ -85,6 +87,33 @@ class TestFallbackPools(unittest.TestCase):
             self.assertGreaterEqual(len(pool), 10)
             self.assertEqual(len(pool), len(set(pool)))
             self.assertTrue(all(phrase.strip() for phrase in pool))
+
+
+class TestUserQuirkVocatives(unittest.TestCase):
+    def test_pool_is_non_trivial_unique_and_placeholder_free(self) -> None:
+        from app.presentation.fallback_phrases import USER_QUIRK_VOCATIVES
+
+        self.assertGreaterEqual(len(USER_QUIRK_VOCATIVES), 8)
+        self.assertEqual(len(USER_QUIRK_VOCATIVES), len(set(USER_QUIRK_VOCATIVES)))
+        for phrase in USER_QUIRK_VOCATIVES:
+            self.assertTrue(phrase.strip())
+            # Privacy by construction: nothing about the user is interpolated.
+            self.assertNotIn("{", phrase)
+            self.assertNotIn("%", phrase)
+
+    def test_next_quirk_vocative_picks_from_pool_deterministically(self) -> None:
+        from app.presentation.fallback_phrases import (
+            USER_QUIRK_VOCATIVES,
+            next_quirk_vocative,
+        )
+
+        picks = {next_quirk_vocative(random.Random(seed)) for seed in range(30)}
+        self.assertTrue(picks.issubset(set(USER_QUIRK_VOCATIVES)))
+        self.assertGreater(len(picks), 1)
+        self.assertEqual(
+            next_quirk_vocative(random.Random(7)),
+            next_quirk_vocative(random.Random(7)),
+        )
 
 
 class TestPickFallbackPhrase(unittest.TestCase):

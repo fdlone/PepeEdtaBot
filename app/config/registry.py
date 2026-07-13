@@ -229,6 +229,17 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _float_in_range(0.0, 1.0)),
     # Combined per-chat daily budget for rare events + false starts.
     FieldSpec("rare_event_daily_cap", "RARE_EVENT_DAILY_CAP", "3", _int_min(0)),
+    # L2 user quirks: chance to precede a generated answer to a "regular"'s
+    # direct address with a short vocative message ("опять ты"). 0 disables
+    # the whole channel — no interaction-counter writes, no reads (same gate
+    # pattern as emoji_append_chance / hot_ngram_seed_chance). Additionally
+    # capped in code at one quirk per (chat, user) per UTC day.
+    FieldSpec("user_quirk_chance", "USER_QUIRK_CHANCE", "0.1",
+              _float_in_range(0.0, 1.0)),
+    # Answered-mention count (decayed over ~30 days, see
+    # CHAT_USER_INTERACTION_DECAY_DAYS) at which a user counts as a regular.
+    FieldSpec("user_quirk_min_interactions", "USER_QUIRK_MIN_INTERACTIONS",
+              "25", _int_min(1)),
     FieldSpec("use_reply_context", "USE_REPLY_CONTEXT", "true", _bool()),
     FieldSpec(
         "fuzzy_context_casefold",

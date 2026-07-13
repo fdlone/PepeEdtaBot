@@ -62,6 +62,29 @@ HEATED_FALLBACK_PHRASES: tuple[str, ...] = (
 )
 
 
+# L2 user quirks: short second-person addressives sent as a separate message
+# right before a generated answer to a "regular". No placeholders, no names —
+# nothing about the user is interpolated, so nothing about them is stored or
+# revealed. Picked uniformly: at once-a-day-per-user frequency an anti-repeat
+# window would be dead weight.
+USER_QUIRK_VOCATIVES: tuple[str, ...] = (
+    "опять ты",
+    "а, снова ты",
+    "ну кто ж ещё",
+    "как всегда, ты",
+    "ты, конечно",
+    "кто бы сомневался, что это ты",
+    "о, старый знакомый",
+    "ну конечно, ты",
+    "снова здорово",
+)
+
+
+def next_quirk_vocative(rng: random.Random) -> str:
+    """Pick a vocative for a regular's quirk (uniform, no anti-repeat)."""
+    return rng.choice(USER_QUIRK_VOCATIVES)
+
+
 def is_late_night(now: datetime) -> bool:
     """True for the small hours (00:00–05:59) where late-night flavor applies."""
     return 0 <= now.hour < 6

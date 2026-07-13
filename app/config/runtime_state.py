@@ -48,6 +48,8 @@ class RuntimeState:
     rare_event_chance: float
     false_start_chance: float
     rare_event_daily_cap: int
+    user_quirk_chance: float
+    user_quirk_min_interactions: int
     use_reply_context: bool
     fuzzy_context_casefold: bool
     fuzzy_context_stem: bool
@@ -93,6 +95,11 @@ class RuntimeState:
     # L3: (ISO day, fired count) per chat for the combined daily budget of
     # rare events + false starts.
     rare_events_today: dict[int, tuple[str, int]] = field(default_factory=dict)
+    # L2: (chat_id, user_id) -> ISO UTC day of the last vocative quirk. The
+    # once-a-day-per-user cap is fixed in code, not a knob — rarity is the
+    # point. Raw user_id stays in memory only (never persisted; the DB side
+    # is keyed by HMAC).
+    last_user_quirk_day: dict[tuple[int, int], str] = field(default_factory=dict)
     _last_chat_activity: dict[int, float] = field(default_factory=dict)
     _cleanup_tick: int = 0
 
@@ -145,6 +152,15 @@ class RuntimeState:
     def note_mention_reply(self, chat_id: int, user_id: int, now: float) -> None:
         self.last_mention_reply_ts[(chat_id, user_id)] = now
 
+    def can_fire_user_quirk(
+        self, chat_id: int, user_id: int, today_iso: str
+    ) -> bool:
+        """True while the user has not received a quirk today (UTC day)."""
+        return self.last_user_quirk_day.get((chat_id, user_id)) != today_iso
+
+    def note_user_quirk(self, chat_id: int, user_id: int, today_iso: str) -> None:
+        self.last_user_quirk_day[(chat_id, user_id)] = today_iso
+
     def note_chat_activity(self, chat_id: int, now: float) -> None:
         self._last_chat_activity[chat_id] = now
         self._cleanup_tick += 1
@@ -165,6 +181,8 @@ class RuntimeState:
         self.rare_events_today.pop(chat_id, None)
         for key in [k for k in self.last_mention_reply_ts if k[0] == chat_id]:
             self.last_mention_reply_ts.pop(key, None)
+        for key in [k for k in self.last_user_quirk_day if k[0] == chat_id]:
+            self.last_user_quirk_day.pop(key, None)
         self._last_chat_activity.pop(chat_id, None)
 
     def prune_inactive(self, now: float) -> None:

@@ -85,6 +85,8 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.rare_event_chance = 0.0
     s.false_start_chance = 0.0
     s.rare_event_daily_cap = 3
+    s.user_quirk_chance = 0.0
+    s.user_quirk_min_interactions = 25
     s.rare_events_today = {}
     # Bind the real cap methods so handler tests exercise actual budget logic.
     from app.config.runtime_state import RuntimeState
@@ -1587,6 +1589,8 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 msg.chat.id: (datetime.now(UTC).date().isoformat(), 3)
             },
             rare_event_daily_cap=3,
+            user_quirk_chance=0.1,
+            user_quirk_min_interactions=25,
         )
 
         with patch("app.handlers.learning.mask_chat_id", return_value="chat"):

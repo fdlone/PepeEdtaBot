@@ -41,6 +41,8 @@ def make_state() -> SimpleNamespace:
         rare_event_chance=0.005,
         false_start_chance=0.03,
         rare_event_daily_cap=3,
+        user_quirk_chance=0.1,
+        user_quirk_min_interactions=25,
         use_reply_context=True,
         fuzzy_context_casefold=False,
         fuzzy_context_stem=False,
@@ -107,6 +109,25 @@ class TestRuntimeConfig(unittest.TestCase):
         apply_runtime_setting(state, "fuzzy_context_stem", "true")
 
         self.assertTrue(state.fuzzy_context_stem)
+
+    def test_apply_runtime_setting_updates_user_quirk_knobs(self) -> None:
+        state = make_state()
+        apply_runtime_setting(state, "user_quirk_chance", "0.5")
+        apply_runtime_setting(state, "user_quirk_min_interactions", "10")
+
+        self.assertEqual(state.user_quirk_chance, 0.5)
+        self.assertEqual(state.user_quirk_min_interactions, 10)
+
+    def test_apply_runtime_setting_rejects_bad_user_quirk_values(self) -> None:
+        state = make_state()
+
+        with self.assertRaises(InvalidRuntimeSettingValueError):
+            apply_runtime_setting(state, "user_quirk_chance", "1.5")
+        with self.assertRaises(InvalidRuntimeSettingValueError):
+            apply_runtime_setting(state, "user_quirk_min_interactions", "0")
+
+        self.assertEqual(state.user_quirk_chance, 0.1)
+        self.assertEqual(state.user_quirk_min_interactions, 25)
 
     def test_apply_runtime_setting_rejects_probability_out_of_range(self) -> None:
         state = make_state()

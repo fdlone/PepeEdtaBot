@@ -53,6 +53,8 @@ class Settings:
     rare_event_chance: float
     false_start_chance: float
     rare_event_daily_cap: int
+    user_quirk_chance: float
+    user_quirk_min_interactions: int
     use_reply_context: bool
     fuzzy_context_casefold: bool
     fuzzy_context_stem: bool
