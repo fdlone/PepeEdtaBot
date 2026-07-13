@@ -1,10 +1,31 @@
 from __future__ import annotations
 
 import os
+import re
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
+from app.config.registry import RUNTIME_FIELDS
 from app.config.settings import load_settings
+
+# Env vars parsed directly in load_settings (not via the registry), excluding
+# deployment identity (BOT_TOKEN, OWNER_ID, DB_PATH, secrets, aliases). Their
+# .env.example values must match the code defaults just like registry fields.
+SETTINGS_ONLY_ENV_VARS: tuple[str, ...] = (
+    "GEN_TRACE_LOG",
+    "LOG_LEVEL",
+    "MESSAGES_RETENTION_PER_CHAT",
+    "SQLITE_BUSY_TIMEOUT_MS",
+    "SQLITE_WAL_AUTOCHECKPOINT_PAGES",
+    "PIVO_EXPLICIT_MENTIONS_LIMIT",
+    "PIVO_SUBSCRIBER_FANOUT_LIMIT",
+    "RUNTIME_STATE_TTL_SEC",
+    "RUNTIME_STATE_MAX_CHATS",
+    "THROTTLE_STATE_TTL_SEC",
+    "THROTTLE_STATE_MAX_KEYS",
+    "TEXT_CACHE_MAX_MESSAGES",
+)
 
 
 def minimal_env(db_path: str = "test_settings.db") -> dict[str, str]:
@@ -14,6 +35,14 @@ def minimal_env(db_path: str = "test_settings.db") -> dict[str, str]:
         "PIVO_HMAC_SECRET": "test-pivo-hmac-secret",
         "PIVO_ENCRYPTION_SECRET": "test-pivo-encryption-secret",
     }
+
+
+def env_example_values() -> dict[str, str]:
+    """KEY=value pairs from .env.example (last occurrence wins, like dotenv)."""
+    env_text = (Path(__file__).parents[1] / ".env.example").read_text(
+        encoding="utf-8"
+    )
+    return dict(re.findall(r"^([A-Z_0-9]+)=(.*)$", env_text, re.MULTILINE))
 
 
 class TestSettings(unittest.TestCase):
@@ -41,17 +70,7 @@ class TestSettings(unittest.TestCase):
         # "git clone and go": a fresh deployment copies .env.example, so every
         # runtime knob must be present there and its value must match the
         # registry default -- otherwise prod silently runs a stale config.
-        import re
-        from pathlib import Path
-
-        from app.config.registry import RUNTIME_FIELDS
-
-        env_text = (Path(__file__).parents[1] / ".env.example").read_text(
-            encoding="utf-8"
-        )
-        env_values = dict(
-            re.findall(r"^([A-Z_0-9]+)=(.*)$", env_text, re.MULTILINE)
-        )
+        env_values = env_example_values()
 
         missing = [
             spec.env_var for spec in RUNTIME_FIELDS
@@ -70,6 +89,38 @@ class TestSettings(unittest.TestCase):
             f".env.example drifted from registry (env, registry): {drifted}",
         )
 
+    def test_env_example_matches_code_defaults_for_settings_only_knobs(self) -> None:
+        # The registry drift check above cannot see knobs parsed directly in
+        # load_settings (GEN_TRACE_LOG, LOG_LEVEL, retention/SQLite/state
+        # limits). Guard them by loading settings twice -- with bare defaults
+        # and with the .env.example values -- and comparing the results.
+        env_values = env_example_values()
+
+        missing = [
+            var for var in SETTINGS_ONLY_ENV_VARS if var not in env_values
+        ]
+        self.assertEqual(missing, [], f".env.example misses: {missing}")
+
+        with patch.dict(os.environ, minimal_env(), clear=True):
+            from_defaults = load_settings(load_env=False)
+        overrides = {var: env_values[var] for var in SETTINGS_ONLY_ENV_VARS}
+        with patch.dict(os.environ, minimal_env() | overrides, clear=True):
+            from_example = load_settings(load_env=False)
+
+        drifted = {
+            var: (
+                getattr(from_example, var.lower()),
+                getattr(from_defaults, var.lower()),
+            )
+            for var in SETTINGS_ONLY_ENV_VARS
+            if getattr(from_example, var.lower())
+            != getattr(from_defaults, var.lower())
+        }
+        self.assertEqual(
+            drifted, {},
+            f".env.example drifted from code defaults (env, code): {drifted}",
+        )
+
     def test_gen_trace_log_defaults_off(self) -> None:
         with patch.dict(os.environ, minimal_env(), clear=True):
             settings = load_settings(load_env=False)
@@ -80,6 +131,13 @@ class TestSettings(unittest.TestCase):
         ):
             settings = load_settings(load_env=False)
         self.assertTrue(settings.gen_trace_log)
+
+    def test_load_settings_rejects_invalid_gen_trace_log(self) -> None:
+        env = minimal_env()
+        env["GEN_TRACE_LOG"] = "enabled"
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "GEN_TRACE_LOG"):
+                load_settings(load_env=False)
 
     def test_load_settings_rejects_missing_bot_token(self) -> None:
         env = minimal_env()
