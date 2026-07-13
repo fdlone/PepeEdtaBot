@@ -1,6 +1,32 @@
 # PepeEdtaBot
 
-Telegram-бот для группового чата. Учится на сообщениях чата и генерирует ответы на цепях Маркова без внешней LLM.
+[![CI](https://github.com/fdlone/PepeEdtaBot/actions/workflows/ci.yml/badge.svg)](https://github.com/fdlone/PepeEdtaBot/actions/workflows/ci.yml)
+
+Telegram-бот для группового чата. Учится на сообщениях чата и генерирует
+ответы на цепях Маркова — полностью алгоритмически, без внешней LLM.
+
+## Что умеет
+
+- **Генерация ответов** — пер-чатовая цепь Маркова 3-го порядка с бэкоффом до
+  2-го; best-of-N конвейер: до 5 кандидатов, скоринг (завершённость, длина по
+  режимам short/medium/long, IDF-релевантность контексту со стеммингом русской
+  морфологии, штрафы за повторы и дословное цитирование), softmax-отбор.
+- **Ответы «в тему»** — сообщение, на которое отвечают, задаёт контекст:
+  якорение стартовых состояний (exact/casefold/stem-матчинг), биас по стемам,
+  дословные цитаты корпуса достраиваются «отсебятиной» вместо отбраковки.
+- **Настроение чата** — sleepy/calm/lively/heated из темпа сообщений и
+  эмфатики; модулирует вероятность ответа, вариативность, длину и flavor.
+- **AI-директор ответов** — вероятность самостоятельного ответа следует за
+  моментумом беседы (бёрсты после ответа, суточные капы, анти-флуд обращений).
+- **Слой «личности»** — эмодзи из словаря конкретного чата, «локальные мемы»
+  (горячие n-граммы последних дней сидируют ответы), редкие сломы формы
+  (вердикт/КАПС/двойное сообщение/фальстарт), причуды для завсегдатаев
+  («опять ты» — отдельным сообщением перед ответом).
+- **`/pivo`** — шуточный созыв в Discord по opt-in подписке с анти-повтором
+  шаблонов и временными вариациями (ночь/пятница/понедельник).
+- **Privacy-first** — сырые тексты не хранятся дольше retention-окна, авторы
+  анонимизированы, идентификаторы — только HMAC-хэши, `chat_id` в логах
+  маскируется; всё стирается `/clear confirm`.
 
 ## Стек
 - Python 3.12+ (CI прогоняет матрицу 3.12 / 3.13 / 3.14)
@@ -200,8 +226,8 @@ python -m tools.seed_diverse --db markov.db
 
 - `main.py` — compose root: загрузка `Settings`, инициализация БД, сервисов,
   middleware и роутеров.
-- `app/handlers/` — четыре `aiogram.Router`'а (`common`, `admin`, `pivo`,
-  `learning`); зависят только от сервисов.
+- `app/handlers/` — пять `aiogram.Router`'ов (`common`, `admin`, `pivo`,
+  `learning`, `errors`); зависят только от сервисов.
 - `app/services/` — бизнес-логика (`LearningService`, `PivoService`).
 - `app/config/` — настройки, runtime-state и реестр изменяемых параметров.
 - `app/core/` — генерация ответов: цепь Маркова, конвейер best-of-N (отбор и
@@ -210,7 +236,8 @@ python -m tools.seed_diverse --db markov.db
 - `app/domain/` — доменная логика и шаблоны `/pivo`.
 - `app/presentation/` — пользовательские тексты и форматирование ответов.
 - `app/repositories/` — SQL по доменам (`markov`, `messages`, `chat_members`,
-  `pivo_usage`).
+  `pivo_usage`, `pivo_pool_usage`, `chat_emoji_stats`, `chat_hot_ngrams`,
+  `chat_user_interactions`).
 - `app/filters/` и `app/middlewares/` — `GroupOnly`, `AdminOrOwner`,
   `ThrottlingMiddleware`.
 - `app/infrastructure/` — фасад БД и migrator, который однократно прогоняет
@@ -222,8 +249,10 @@ python -m tools.seed_diverse --db markov.db
 
 ## Разработка и тесты
 Проект использует стандартный `unittest` (без pytest), `ruff` и `mypy strict`
-для `app/` (legacy-модули вынесены в `ignore_errors`). Dev-зависимости ставят
-закреплённый `requirements.lock` плюс инструменты, совпадающие с CI:
+для `app/`. Источник истины по зависимостям — `requirements*.txt`/`.lock`
+(pip); `uv` можно использовать как локальный раннер (`uv run ...`), но lock он
+не ведёт (`[tool.uv] managed = false`). Dev-зависимости ставят закреплённый
+`requirements.lock` плюс инструменты, совпадающие с CI:
 
 ```bash
 pip install -r requirements-dev.txt
@@ -240,6 +269,23 @@ python -m unittest discover tests -v
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) прогоняет эти
 проверки на матрице Python 3.12 / 3.13 / 3.14, добавляет security-сканы
 (`bandit`, `pip-audit`) и отдельным job собирает Docker-образ без запуска бота.
+
+Для отладки генерации есть подробный лайв-трейс отбора кандидатов:
+`GEN_TRACE_LOG=true` включает его независимо от `LOG_LEVEL` (см.
+[`docs/GENERATION_PIPELINE.md`](docs/GENERATION_PIPELINE.md), §10), а
+`tools/eval_generation.py` / `tools/eval_prod.py` дают синтетический и
+продовый eval конвейера.
+
+## Документация
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — слои, DI, схема БД, миграции.
+- [`docs/GENERATION_PIPELINE.md`](docs/GENERATION_PIPELINE.md) — полный путь
+  сообщения от хендлера до ответа: скоринг, гейты, ручки.
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — операционный runbook: логи,
+  WAL checkpoint, backup/restore, retention.
+- [`docs/audits/`](docs/audits/README.md) — история аудитов и ревью проекта.
+- [`docs/DIALOGUE_GENERATION_ACTION_PLAN.md`](docs/DIALOGUE_GENERATION_ACTION_PLAN.md)
+  — план и прогресс трека «живости» диалога (Stage 1–4, все пункты реализованы).
 
 ## Безопасность
 - не коммитьте `.env` и не храните реальные токены в репозитории;
