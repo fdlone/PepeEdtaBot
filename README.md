@@ -1,6 +1,15 @@
 # PepeEdtaBot
 
 [![CI](https://github.com/fdlone/PepeEdtaBot/actions/workflows/ci.yml/badge.svg)](https://github.com/fdlone/PepeEdtaBot/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+> **EN:** A Telegram group-chat bot that learns from the chat's own messages
+> and replies via a per-chat Markov chain — fully algorithmic, no LLM. Chat
+> mood tracking, context-aware candidate scoring with Russian stemming, a
+> "personality" layer (chat-local memes, emoji, rare form breaks, regulars'
+> quirks) and privacy-first storage (HMAC-hashed ids, no raw texts kept).
+> Python 3.12+, aiogram 3, SQLite. Docs are in Russian — start with
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 Telegram-бот для группового чата. Учится на сообщениях чата и генерирует
 ответы на цепях Маркова — полностью алгоритмически, без внешней LLM.
