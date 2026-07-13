@@ -41,6 +41,8 @@ def make_state() -> SimpleNamespace:
         rare_event_chance=0.005,
         false_start_chance=0.03,
         rare_event_daily_cap=3,
+        user_quirk_chance=0.1,
+        user_quirk_min_interactions=25,
         use_reply_context=True,
         fuzzy_context_casefold=False,
         fuzzy_context_stem=False,

@@ -1,6 +1,41 @@
 # PepeEdtaBot
 
-Telegram-бот для группового чата. Учится на сообщениях чата и генерирует ответы на цепях Маркова без внешней LLM.
+[![CI](https://github.com/fdlone/PepeEdtaBot/actions/workflows/ci.yml/badge.svg)](https://github.com/fdlone/PepeEdtaBot/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+> **EN:** A Telegram group-chat bot that learns from the chat's own messages
+> and replies via a per-chat Markov chain — fully algorithmic, no LLM. Chat
+> mood tracking, context-aware candidate scoring with Russian stemming, a
+> "personality" layer (chat-local memes, emoji, rare form breaks, regulars'
+> quirks) and privacy-first storage (HMAC-hashed ids, no raw texts kept).
+> Python 3.12+, aiogram 3, SQLite. Docs are in Russian — start with
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+Telegram-бот для группового чата. Учится на сообщениях чата и генерирует
+ответы на цепях Маркова — полностью алгоритмически, без внешней LLM.
+
+## Что умеет
+
+- **Генерация ответов** — пер-чатовая цепь Маркова 3-го порядка с бэкоффом до
+  2-го; best-of-N конвейер: до 5 кандидатов, скоринг (завершённость, длина по
+  режимам short/medium/long, IDF-релевантность контексту со стеммингом русской
+  морфологии, штрафы за повторы и дословное цитирование), softmax-отбор.
+- **Ответы «в тему»** — сообщение, на которое отвечают, задаёт контекст:
+  якорение стартовых состояний (exact/casefold/stem-матчинг), биас по стемам,
+  дословные цитаты корпуса достраиваются «отсебятиной» вместо отбраковки.
+- **Настроение чата** — sleepy/calm/lively/heated из темпа сообщений и
+  эмфатики; модулирует вероятность ответа, вариативность, длину и flavor.
+- **AI-директор ответов** — вероятность самостоятельного ответа следует за
+  моментумом беседы (бёрсты после ответа, суточные капы, анти-флуд обращений).
+- **Слой «личности»** — эмодзи из словаря конкретного чата, «локальные мемы»
+  (горячие n-граммы последних дней сидируют ответы), редкие сломы формы
+  (вердикт/КАПС/двойное сообщение/фальстарт), причуды для завсегдатаев
+  («опять ты» — отдельным сообщением перед ответом).
+- **`/pivo`** — шуточный созыв в Discord по opt-in подписке с анти-повтором
+  шаблонов и временными вариациями (ночь/пятница/понедельник).
+- **Privacy-first** — сырые тексты не хранятся дольше retention-окна, авторы
+  анонимизированы, идентификаторы — только HMAC-хэши, `chat_id` в логах
+  маскируется; всё стирается `/clear confirm`.
 
 ## Стек
 - Python 3.12+ (CI прогоняет матрицу 3.12 / 3.13 / 3.14)
@@ -85,6 +120,11 @@ docker compose down            # остановка
   фальстарты «филлер → печатает… → ответ» (`FALSE_START_CHANCE`); общий
   суточный бюджет на чат — `RARE_EVENT_DAILY_CAP`; 0 отключает
   соответствующий канал.
+- `USER_QUIRK_CHANCE` — причуды для завсегдатаев (L2): шанс предварить ответ
+  на обращение «постоянного» пользователя коротким вокативом («опять ты»)
+  отдельным сообщением; порог «постоянности» — `USER_QUIRK_MIN_INTERACTIONS`
+  отвеченных обращений (с ~30-дневным затуханием); не чаще раза в сутки (UTC)
+  на пользователя; 0 полностью выключает канал (включая учёт счётчиков).
 - `AUTO_CAPITALIZE_REPLIES` — капитализация начала предложений в ответе
   (output-side постобработка, по умолчанию выключено).
 - `MESSAGES_RETENTION_PER_CHAT` — число последних нормализованных сообщений,
@@ -110,7 +150,8 @@ docker compose down            # остановка
   ключам); доступно `OWNER_ID` или админам чата.
 - `/setprob 0.2` — быстрый setter вероятности ответа.
 - `/clear confirm` — очистить данные текущего чата (модель, сообщения,
-  эмодзи-статистику, горячие n-граммы, а также подписки `/pivo` и их квоты).
+  эмодзи-статистику, горячие n-граммы, счётчики взаимодействий, а также
+  подписки `/pivo` и их квоты).
 
 Изменения через `/set` действуют только до перезапуска процесса.
 
@@ -179,6 +220,12 @@ python -m tools.seed_diverse --db markov.db
   хэши `chat_hash`/`user_hash` (HMAC-SHA256 под `PIVO_HMAC_SECRET`), payload
   зашифрован Fernet'ом (ключ — SHA-256 от `PIVO_ENCRYPTION_SECRET`).
   `/pivo_privacy` показывает пользователю, что именно хранится.
+- Для L2-причуд («опять ты» завсегдатаям) бот хранит только анонимный счётчик
+  взаимодействий per chat: `user_hash` (HMAC-SHA256 под `PIVO_HMAC_SECRET`,
+  та же схема, что `/pivo`) и число отвеченных обращений — без имён,
+  username и обратимых идентификаторов. Счётчик затухает после ~30 дней
+  тишины и стирается `/clear confirm`; `USER_QUIRK_CHANCE=0` отключает и
+  запись, и чтение.
 - В learning-логах `chat_id` маскируется HKDF-SHA256-derived ключом и коротким
   HMAC-mask; не добавляйте raw `chat_id` в новые log-сообщения.
 
@@ -188,8 +235,8 @@ python -m tools.seed_diverse --db markov.db
 
 - `main.py` — compose root: загрузка `Settings`, инициализация БД, сервисов,
   middleware и роутеров.
-- `app/handlers/` — четыре `aiogram.Router`'а (`common`, `admin`, `pivo`,
-  `learning`); зависят только от сервисов.
+- `app/handlers/` — пять `aiogram.Router`'ов (`common`, `admin`, `pivo`,
+  `learning`, `errors`); зависят только от сервисов.
 - `app/services/` — бизнес-логика (`LearningService`, `PivoService`).
 - `app/config/` — настройки, runtime-state и реестр изменяемых параметров.
 - `app/core/` — генерация ответов: цепь Маркова, конвейер best-of-N (отбор и
@@ -198,7 +245,8 @@ python -m tools.seed_diverse --db markov.db
 - `app/domain/` — доменная логика и шаблоны `/pivo`.
 - `app/presentation/` — пользовательские тексты и форматирование ответов.
 - `app/repositories/` — SQL по доменам (`markov`, `messages`, `chat_members`,
-  `pivo_usage`).
+  `pivo_usage`, `pivo_pool_usage`, `chat_emoji_stats`, `chat_hot_ngrams`,
+  `chat_user_interactions`).
 - `app/filters/` и `app/middlewares/` — `GroupOnly`, `AdminOrOwner`,
   `ThrottlingMiddleware`.
 - `app/infrastructure/` — фасад БД и migrator, который однократно прогоняет
@@ -210,8 +258,10 @@ python -m tools.seed_diverse --db markov.db
 
 ## Разработка и тесты
 Проект использует стандартный `unittest` (без pytest), `ruff` и `mypy strict`
-для `app/` (legacy-модули вынесены в `ignore_errors`). Dev-зависимости ставят
-закреплённый `requirements.lock` плюс инструменты, совпадающие с CI:
+для `app/`. Источник истины по зависимостям — `requirements*.txt`/`.lock`
+(pip); `uv` можно использовать как локальный раннер (`uv run ...`), но lock он
+не ведёт (`[tool.uv] managed = false`). Dev-зависимости ставят закреплённый
+`requirements.lock` плюс инструменты, совпадающие с CI:
 
 ```bash
 pip install -r requirements-dev.txt
@@ -229,6 +279,26 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) прогоняет �
 проверки на матрице Python 3.12 / 3.13 / 3.14, добавляет security-сканы
 (`bandit`, `pip-audit`) и отдельным job собирает Docker-образ без запуска бота.
 
+Для отладки генерации есть подробный лайв-трейс отбора кандидатов:
+`GEN_TRACE_LOG=true` включает его независимо от `LOG_LEVEL` (см.
+[`docs/GENERATION_PIPELINE.md`](docs/GENERATION_PIPELINE.md), §10), а
+`tools/eval_generation.py` / `tools/eval_prod.py` дают синтетический и
+продовый eval конвейера.
+
+## Документация
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — слои, DI, схема БД, миграции.
+- [`docs/GENERATION_PIPELINE.md`](docs/GENERATION_PIPELINE.md) — полный путь
+  сообщения от хендлера до ответа: скоринг, гейты, ручки.
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — операционный runbook: логи,
+  WAL checkpoint, backup/restore, retention.
+- [`docs/audits/`](docs/audits/README.md) — история аудитов и ревью проекта.
+- [`docs/DIALOGUE_GENERATION_ACTION_PLAN.md`](docs/DIALOGUE_GENERATION_ACTION_PLAN.md)
+  — план и прогресс трека «живости» диалога (Stage 1–4, все пункты реализованы).
+
 ## Безопасность
 - не коммитьте `.env` и не храните реальные токены в репозитории;
 - при утечке токена перевыпустите его в BotFather.
+
+## Лицензия
+[MIT](LICENSE).

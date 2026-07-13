@@ -51,6 +51,7 @@ from app.presentation.fallback_phrases import (
     NOT_ENOUGH_DATA_PHRASES,
     late_night_pool,
     mood_fallback_pool,
+    next_quirk_vocative,
     pick_fallback_phrase,
 )
 from app.services import LearningService
@@ -279,10 +280,20 @@ async def on_text_message(
             per_char=True,
         )
 
+    async def count_answered_mention(user_id: int) -> None:
+        # L2: an answered address counts as an interaction, fallback answers
+        # included (the user did interact); gated on the knob so a zero
+        # chance keeps the mention path write-free (L1 pattern).
+        if runtime_state.user_quirk_chance > 0.0:
+            await learning_service.record_user_interaction(
+                message.chat.id, user_id
+            )
+
     try:
         if address_reply and not enough_data:
             await send_fallback_reply(NOT_ENOUGH_DATA_PHRASES)
             runtime_state.note_mention_reply(message.chat.id, message.from_user.id, now)
+            await count_answered_mention(message.from_user.id)
             return
 
         if not enough_data:
@@ -438,6 +449,7 @@ async def on_text_message(
                 runtime_state.note_mention_reply(
                     message.chat.id, message.from_user.id, now
                 )
+                await count_answered_mention(message.from_user.id)
             logger.debug(
                 "Generation failed: chat=%s mentioned=%s",
                 mask_chat_id(message.chat.id),
@@ -456,14 +468,48 @@ async def on_text_message(
             runtime_state.note_mention_reply(
                 message.chat.id, message.from_user.id, now
             )
-        # L3 rare events: a generated reply may break shape (verdict/CAPS/
-        # double message) or false-start (filler → typing → real reply).
-        # Bounded by a per-chat daily budget; fallback phrases never event.
+            await count_answered_mention(message.from_user.id)
         reply_parts = [reply_text]
         # UTC, как и остальные суточные механики (decay, /pivo-квоты): кап
         # сбрасывается в одну и ту же полночь независимо от TZ контейнера.
         today_iso = datetime.now(UTC).date().isoformat()
-        if runtime_state.can_fire_rare_event(message.chat.id, today_iso):
+        # L2 user quirks: a regular's answered address occasionally gets a
+        # short vocative as a separate first message. The chance is rolled
+        # before the DB read so the common path stays read-free; the reply
+        # text itself is untouched, so anti-repeat bookkeeping below keeps
+        # working on reply_text by construction. At most one quirk per
+        # (chat, user) per UTC day.
+        quirked = False
+        if (
+            address_reply
+            and runtime_state.user_quirk_chance > 0.0
+            and runtime_state.can_fire_user_quirk(
+                message.chat.id, message.from_user.id, today_iso
+            )
+            and random.random() < runtime_state.user_quirk_chance
+        ):
+            interactions = await learning_service.get_user_interaction_count(
+                message.chat.id, message.from_user.id
+            )
+            if interactions >= runtime_state.user_quirk_min_interactions:
+                reply_parts = [next_quirk_vocative(random.Random()), reply_text]
+                runtime_state.note_user_quirk(
+                    message.chat.id, message.from_user.id, today_iso
+                )
+                quirked = True
+                # Event kind only: no user id, no count, no vocative text in
+                # logs (project log-masking policy).
+                logger.debug(
+                    "User quirk fired: chat=%s", mask_chat_id(message.chat.id)
+                )
+        # L3 rare events: a generated reply may break shape (verdict/CAPS/
+        # double message) or false-start (filler → typing → real reply).
+        # Bounded by a per-chat daily budget; fallback phrases never event.
+        # A quirked reply already broke shape — skip the roll and spend no
+        # budget (one shape break per reply).
+        if not quirked and runtime_state.can_fire_rare_event(
+            message.chat.id, today_iso
+        ):
             event_kind = roll_rare_event(
                 random.Random(),
                 event_chance=runtime_state.rare_event_chance,

@@ -157,12 +157,14 @@ chat. The configured cap must be at least `TEXT_CACHE_MAX_MESSAGES`, otherwise
 startup fails to protect verbatim-copy detection.
 
 The aggregated Markov tables (`starts`, `starts3`, `transitions`,
-`transitions3`, `transitions1`) are not pruned and continue to represent all
-learned history. `pivo_daily_usage` is cleaned up automatically on bot startup
-via `cleanup_pivo_daily_usage`. The dialogue-flavor tables `chat_emoji_stats`
-and `chat_hot_ngrams` decay on startup and then lazily about once a day from
-the learning path (counts not bumped within 7 days are halved, rows reaching
-zero are deleted), so their sliding windows keep moving without restarts.
+`transitions3`; the order-1 `transitions1` was dropped by migration 013) are
+not pruned and continue to represent all learned history. `pivo_daily_usage`
+is cleaned up automatically on bot startup via `cleanup_pivo_daily_usage`. The
+dialogue-flavor tables `chat_emoji_stats`, `chat_hot_ngrams` and
+`chat_user_interactions` decay on startup and then lazily about once a day
+from the learning path (counts not bumped within the window — 7 days for the
+first two, 30 for interactions — are halved, rows reaching zero are deleted),
+so their sliding windows keep moving without restarts.
 
 Deleting rows does not shrink the main SQLite file by itself. Run `VACUUM`
 during a maintenance window to return unused pages to the filesystem. A manual
@@ -181,7 +183,7 @@ conn.close()
 "
 ```
 
-Note: `starts`, `starts3`, `transitions`, `transitions3`, `transitions1` tables
+Note: `starts`, `starts3`, `transitions`, `transitions3` tables
 store aggregated counts derived from message text — they are not tied to
 individual `messages` rows. To reset all Markov data for a chat, use the `/clear`
 command inside the group (admin-only). The bot will rebuild its model naturally

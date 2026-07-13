@@ -35,6 +35,8 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
         "rare_event_chance": 0.005,
         "false_start_chance": 0.03,
         "rare_event_daily_cap": 3,
+        "user_quirk_chance": 0.1,
+        "user_quirk_min_interactions": 25,
         "use_reply_context": True,
         "fuzzy_context_casefold": False,
         "fuzzy_context_stem": False,
@@ -120,6 +122,8 @@ class TestRuntimeState(unittest.TestCase):
         state.recent_replies[100] = deque(["длинный недавний ответ"], maxlen=20)
         state.recent_reply_times[100] = deque([1.0])
         state.note_rare_event(100, "2026-07-04")
+        state.note_user_quirk(100, 1001, "2026-07-04")
+        state.note_user_quirk(200, 1001, "2026-07-04")
         state.note_chat_activity(100, now=10.0)
 
         state.forget_chat(100)
@@ -130,6 +134,8 @@ class TestRuntimeState(unittest.TestCase):
         self.assertEqual(state.recent_replies, {})
         self.assertEqual(state.recent_reply_times, {})
         self.assertEqual(state.rare_events_today, {})
+        # Only the forgotten chat's quirk stamps are swept.
+        self.assertEqual(state.last_user_quirk_day, {(200, 1001): "2026-07-04"})
 
     def test_rare_event_cap_counts_per_day(self) -> None:
         state = make_runtime_state()
@@ -146,6 +152,19 @@ class TestRuntimeState(unittest.TestCase):
         state = make_runtime_state(rare_event_daily_cap=0)
         self.assertFalse(state.can_fire_rare_event(1, "2026-07-04"))
         self.assertFalse(state.can_fire_rare_event(1, "2026-07-05"))
+
+    def test_user_quirk_gate_is_per_user_per_utc_day(self) -> None:
+        state = make_runtime_state()
+        self.assertTrue(state.can_fire_user_quirk(1, 1001, "2026-07-13"))
+
+        state.note_user_quirk(1, 1001, "2026-07-13")
+
+        # Same user, same day: suppressed. Other user / other chat: allowed.
+        self.assertFalse(state.can_fire_user_quirk(1, 1001, "2026-07-13"))
+        self.assertTrue(state.can_fire_user_quirk(1, 2002, "2026-07-13"))
+        self.assertTrue(state.can_fire_user_quirk(2, 1001, "2026-07-13"))
+        # Next day: allowed again.
+        self.assertTrue(state.can_fire_user_quirk(1, 1001, "2026-07-14"))
 
     def test_note_reply_sent_updates_last_ts_and_history(self) -> None:
         state = make_runtime_state()

@@ -315,6 +315,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
                 "chat_hot_ngrams",
                 "chat_members",
                 "chat_model_volume",
+                "chat_user_interactions",
                 "messages",
                 "pivo_daily_usage",
                 "pivo_pool_usage",

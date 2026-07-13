@@ -367,6 +367,16 @@ context_relevance − repetition_penalty − recent_penalty − verbatim_penalty
 - иначе `false_start_chance=0.05` → **false_start**: филлер («ну как бы...»,
   «щас», …) + настоящий ответ вторым сообщением.
 
+### 7.1a Причуды для завсегдатаев (L2): `learning.py` + `next_quirk_vocative`
+Только для сгенерированных ответов на прямое обращение. Бот считает отвеченные
+обращения per user (анонимный HMAC-счётчик `chat_user_interactions`, затухание
+~30 дней); «постоянный» (`user_quirk_min_interactions=25`) с шансом
+`user_quirk_chance=0.1` получает короткий вокатив из `USER_QUIRK_VOCATIVES`
+(«опять ты») **отдельным первым сообщением** — текст ответа не меняется, так
+что анти-повтор не затронут. Не чаще раза в сутки (UTC) на пользователя (кап
+зашит в коде); квиркнутый ответ пропускает ролл редких событий (один слом
+формы на ответ). 0 выключает канал целиком, включая запись счётчиков.
+
 ### 7.2 Fallback-фразы (`presentation/fallback_phrases.py`)
 Два пула по 12 фраз: `NOT_ENOUGH_DATA_PHRASES` (мало данных + обращение) и
 `GENERATION_FAILED_PHRASES` (генерация не удалась + обращение). Аддитивные
@@ -440,6 +450,7 @@ Fallback на обращение не считается в hourly cap.
 | fuzzy_context_casefold / stem | true / true | нечёткий матчинг контекста |
 | hot_ngram_seed_chance / min_count / recency_share | 0.25 / 3 / 0.5 | L1 running jokes |
 | rare_event_chance / false_start_chance / rare_event_daily_cap | 0.03 / 0.05 / 3 | L3 |
+| user_quirk_chance / user_quirk_min_interactions | 0.1 / 25 | L2 |
 | mood_enabled / mood_modulation_strength | true / 1.0 | M1 |
 | mood_ewma_alpha | 0.3 | сглаживание сигналов |
 | mood_lively/sleepy_rate_per_min | 12 / 2 | пороги темпа |

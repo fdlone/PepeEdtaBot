@@ -24,7 +24,7 @@
                   │                                │
                   ▼                                ▼
         ┌────────────────────────────────────────────────────────┐
-        │  handlers/  (aiogram.Router × 4)                       │
+        │  handlers/  (aiogram.Router × 5)                       │
         │   common  /ping /help /stats                           │
         │   admin   /config /set /setprob /clear  + denied-fallback │
         │   pivo    /pivo /pivo_on /pivo_off /pivo_privacy       │
@@ -74,25 +74,27 @@
 | Подпакет | Содержимое |
 |---|---|
 | `config/` | `registry.py`, `settings.py`, `runtime_config.py`, `runtime_state.py`, `defaults.py` |
-| `core/` | `markov.py`, `response_generator.py`, `candidate_scorer.py`, `context_state_matcher.py`, `reply_flavor.py`, `emoji.py`, `hot_ngrams.py`, `mood.py`, `lexicon.py`, `privacy_filter.py`, `reply_policy.py`, `text.py` |
+| `core/` | `markov.py`, `response_generator.py`, `candidate_scorer.py`, `context_state_matcher.py`, `morphology.py`, `gen_trace_log.py`, `reply_flavor.py`, `emoji.py`, `hot_ngrams.py`, `mood.py`, `lexicon.py`, `privacy_filter.py`, `reply_policy.py`, `text.py` |
 | `domain/` | `pivo.py`, `pivo_templates.py` |
 | `presentation/` | `bot_messages.py`, `fallback_phrases.py` |
-| `handlers/` | `common.py`, `admin.py`, `pivo.py`, `learning.py` — `aiogram.Router` per file. `_helpers.py` — `reply_humanized`, `reply_humanized_sequence`. |
+| `handlers/` | `common.py`, `admin.py`, `pivo.py`, `learning.py`, `errors.py` — `aiogram.Router` per file. `_helpers.py` — `reply_humanized`, `reply_humanized_sequence`. |
 | `services/` | `learning_service.py`, `pivo_service.py`, `pivo_message_builder.py`, `pivo_parser.py` |
-| `repositories/` | `markov_repo.py`, `messages_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py`, `pivo_pool_usage_repo.py`, `chat_emoji_stats_repo.py`, `chat_hot_ngrams_repo.py` |
+| `repositories/` | `markov_repo.py`, `messages_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py`, `pivo_pool_usage_repo.py`, `chat_emoji_stats_repo.py`, `chat_hot_ngrams_repo.py`, `chat_user_interactions_repo.py` |
 | `filters/` | `group_only.py` (только `GROUP`/`SUPERGROUP`), `admin_or_owner.py` (`OWNER_ID` или админ чата, fail-closed при ошибке Telegram API) |
 | `middlewares/` | `throttling.py` — per-user-per-command cooldown, `clear`=3600 сек; команды из `notify_on_throttle` получают явный ответ при throttle вместо silent drop |
 | `infrastructure/` | `database.py` — фасад БД; `migrator.py` — пробегает `app/migrations/NNN_*` ровно один раз. `.sql`-файлы оборачиваются в `BEGIN; ... COMMIT;` и проходят через `executescript`; на исключении вызывается `conn.rollback()` и схема не остаётся в полу-применённом состоянии |
-| `migrations/` | `001_initial.sql` … `012_chat_hot_ngrams.sql` |
+| `migrations/` | `001_initial.sql` … `014_chat_user_interactions.sql` |
 
 ### Внутренние модули пакета
 
 | Файл | Назначение |
 |---|---|
 | `app/infrastructure/database.py` | Фасад над репозиториями: соединение `aiosqlite`, кросс-доменные транзакции (`save_message_and_update_model`, `clear_chat`, `get_stats`), retention `pivo_daily_usage`. |
-| `app/core/markov.py` | Variable-order генератор (3 → 2 → 1). |
+| `app/core/markov.py` | Variable-order генератор (3 → 2; цепь порядка 1 удалена миграцией 013 — order-1 блуждания были словесным салатом). Контекстно-аффинные старты, topic-drift jumps (M4). |
+| `app/core/morphology.py` | Приближённый русский стеммер (`stem_token`) — единый fold-ключ для контекст-матчинга, IDF-релевантности и аффинности стартов. |
+| `app/core/gen_trace_log.py` | Пошаговый лайв-трейс отбора кандидатов (логгер `chat_markov.gen`), включается env-флагом `GEN_TRACE_LOG`; поведения не меняет. |
 | `app/core/response_generator.py` | Конвейер best-of-N: генерация кандидатов, фильтры (verbatim, echo, анти-повтор), softmax-отбор по скорингу, reply flavor. |
-| `app/core/candidate_scorer.py` | Скоринг кандидатов (качество завершения, разнообразие, длина по режимам short/medium/long, контекст, штрафы повторов). |
+| `app/core/candidate_scorer.py` | Скоринг кандидатов: качество завершения, длина по режимам short/medium/long, IDF-релевантность контексту (по стемам, с echo-гардом), штрафы повторов (включая бывший diversity-компонент) и дословного цитирования (рамп от 60% корпусных 4-грамм). |
 | `app/core/mood.py` | Пер-чатовое настроение (sleepy/calm/lively/heated) из EWMA-сигналов; модулирует поведение генерации (M1). |
 | `app/core/reply_flavor.py` | Вариации финальной пунктуации ответа (QW5); редкие события и фальстарты (L3): ролл и трансформация ответа в последовательность сообщений (вердикт/КАПС/двойное сообщение/филлер). |
 | `app/core/emoji.py` | Эмодзи-канал (M3): извлечение эмодзи из текста (без tone-модификаторов, флаги собираются из пары региональных индикаторов) и частотный сэмплинг для добавления в конец ответа; `strip_trailing_emojis` снимает добавленное эмодзи перед анти-повторным сравнением. |
@@ -180,6 +182,7 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
 | `pivo_pool_usage` | Анти-повтор шаблонов `/pivo`: последние использованные индексы top/body/bottom per chat per pool (`chat_hash`, `pool_name`, `recent_indices`). Миграция 010. |
 | `chat_emoji_stats` | Частоты эмодзи per chat для эмодзи-канала (`chat_id`, `emoji`, `cnt`, `updated_at`); ключ — сырой `chat_id`, как у таблиц модели; чистится в `clear_chat`, стареющие строки затухают. Миграция 011 (M3). |
 | `chat_hot_ngrams` | Скользящее окно контентных n-грамм per chat (`chat_id`, `w1`, `w2`, `w3` (`''` для биграмм), `cnt`, `updated_at`); «горячесть» = доля оконного счётчика от всевременного в `transitions` (для биграмм — SUM по `w3`). Ключ — сырой `chat_id`; чистится в `clear_chat`, затухает при старте. Миграция 012 (L1). |
+| `chat_user_interactions` | Счётчик отвеченных обращений per user per chat для L2-причуд (`chat_id`, `user_hash`, `cnt`, `updated_at`); `user_hash` — HMAC-SHA256 под `PIVO_HMAC_SECRET` (как у `/pivo`), никаких имён/username. Ключ — сырой `chat_id`; чистится в `clear_chat`, затухает за ~30 дней тишины (медленнее мемных таблиц). Миграция 014 (L2). |
 | `schema_migrations` | Учёт применённых миграций. |
 
 ## Миграции

@@ -23,11 +23,12 @@ This document turns the audit findings into concrete, ordered work items.
 | M4 topic-drift jumps | **done** (2026-07-03), merged via PR #55 | re-enabled the mid-generation jump in `app/core/markov.py` (was hard-disabled): on jump it splices a connective (`", кстати"`, `", короче"`, …) + the new learned sentence-start triplet so the drift reads as an aside instead of dropping mid-chain. Threaded a `jump_probability` param through `generate_text`/`generate_text_with_trace`/`_generate_text_once` (default 0.0 keeps old callers exact); knob `MARKOV_JUMP_PROBABILITY` (default 0.04), only fires after 8 tokens at order 3. Baselines unchanged (eval runs with jump off) |
 | L1 running jokes / hot n-grams | **done** (2026-07-04), merged via PR #57 | new pure `app/core/hot_ngrams.py` (`extract_content_ngrams`: adjacent content bigrams/trigrams, stopword-only and punctuation n-grams excluded, casefolded stopword check for the case-preserved profile, position-major cap 24/message), migration `012_chat_hot_ngrams` + `ChatHotNgramsRepo` keyed by raw `chat_id` (bigrams store `w3=''`; wiped in `clear_chat`; decay-halved at init on the M3 cadence). Hot = window count ≥ `HOT_NGRAM_MIN_COUNT` and window/all-time share ≥ `HOT_NGRAM_RECENCY_SHARE` (SQL join to `transitions`/`transitions1`, PK-only lookups, EXPLAIN-guarded by test). Handler records n-grams next to `record_message` and, on unprompted replies only, seeds generation from a hot n-gram with chance `HOT_NGRAM_SEED_CHANCE` (0.05; 0 disables the whole channel; mentions never seeded; n-gram text never logged). Planted-spike e2e test; eval baseline byte-identical (channel off in eval) |
 | L3 rare events & false starts | **done** (2026-07-04), merged via PR #58 | `app/core/reply_flavor.py` gains `roll_rare_event` (event roll verdict/caps/double uniform at `RARE_EVENT_CHANCE`, then false-start roll at `FALSE_START_CHANCE`) and `apply_rare_event` (reply → message sequence; non-applicable input degrades to a plain single reply). `reply_humanized_sequence` in `_helpers.py` sends part-by-part (reply → answer) with a typing pause each — send-then-send, never edit; `reply_humanized` delegates to it. Handler applies events only to generated replies (fallback phrases never event), bounded by a per-chat daily budget `RARE_EVENT_DAILY_CAP` in `RuntimeState.rare_events_today` (reset on day change, pruned in `forget_chat`); the budget is spent only when the shape actually changed. Anti-repeat bookkeeping intentionally keeps the original candidate text. Eval untouched (bypasses the handler) |
+| L2 per-user quirks | **done** (2026-07-13), branch `feat/dialogue-gen-stage4-l2` | Privacy-light redesign (plan: `docs/superpowers/plans/2026-07-06-l2-user-quirks.md`): the original «extend `chat_members` + first-name address» sketch was rejected (presence in `chat_members` ≡ `/pivo` opt-in, and names would be new PII on the learning path). Instead: migration `014_chat_user_interactions` stores only `(chat_id, HMAC(user_id), cnt, updated_at)` — same HMAC as `/pivo`, decayed over 30 days, wiped in `clear_chat`. Handler bumps the counter on answered mentions (fallbacks count, demoted mentions and unprompted replies never) and, for regulars (`USER_QUIRK_MIN_INTERACTIONS`, default 25) with chance `USER_QUIRK_CHANCE` (0.1; 0 disables the channel including writes), sends a vocative from `USER_QUIRK_VOCATIVES` (no names, no placeholders) as a *separate first message* via `reply_humanized_sequence` — the reply text is untouched, so anti-repeat is unaffected by construction. At most one quirk per (chat, user) per UTC day (in code); a quirked reply skips the L3 rare-event roll. Baselines byte-identical (handler-level feature, eval bypasses it) |
 
 Status (2026-07-06): Stage 1 (PR #50), Stage 2 (PRs #51, #52), Stage 3
 (M1 — PR #53, M2 — PR #54, M3+M4 — PR #55) and Stage 4 L1 (PR #57) / L3
 (PR #58) are all merged into `main` (audit follow-up fixes N1–N6 rode in as
-PR #56). **The only remaining item is L2 (per-user quirks).** Differential
+PR #56). **L2 (per-user quirks) landed 2026-07-13 — the track is feature-complete;** live-chat observation remains before closing it. Differential
 review of PRs #55–58: `docs/audits/2026-07-06-pr55-58-differential-review.md`
 (no findings). Each item below lists what to do, where, how to verify, and what
 can go wrong. No LLMs anywhere — everything stays algorithmic and lightweight.
@@ -346,6 +347,11 @@ reference it at roughly the configured rate.
 
 ### L2. Per-user quirks (privacy-sensitive)
 
+> **Done 2026-07-13** — implemented per the privacy-light redesign in
+> `docs/superpowers/plans/2026-07-06-l2-user-quirks.md`, NOT this original
+> sketch: no `chat_members` writes, no first-name address (see the Progress
+> table row for what actually shipped and why).
+
 **Goal:** frequent interlocutors get rare personalized touches.
 
 **Do:**
@@ -387,8 +393,8 @@ PR #51, S2 + S4 as PR #52, M1 as PR #53, M2 + the Stage 1–3 review fixes as
 PR #54, M3 + M4 as PR #55, audit follow-up fixes N1–N6 as PR #56, L1 as
 PR #57, L3 as PR #58 (the #55–#58 stack merged 2026-07-06). Remaining:
 
-1. **L2** (last by design: needs the privacy review and benefits from the
-   flavor/sequence plumbing built earlier).
+1. ~~**L2**~~ done 2026-07-13 (privacy-light redesign). Nothing remains in
+   the plan; the track closes after the live-chat observation window.
 
 After each stage: run the full test suite + `tools/eval_generation.py`, and let the
 bot run in the live chat for a few days before starting the next stage — perceived

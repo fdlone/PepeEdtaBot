@@ -155,3 +155,36 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         await self.svc.is_verbatim_copy(self.chat, "кофе утром бодрит")
         self.svc._invalidate_text_cache(self.chat)
         self.assertNotIn(self.chat, self.svc._text_cache)
+
+    # --- user-interaction passthroughs (L2) ---
+
+    async def test_user_interaction_methods_require_hasher(self) -> None:
+        # The default service (no user_hasher) must fail loudly, not silently
+        # store raw ids.
+        with self.assertRaises(RuntimeError):
+            await self.svc.record_user_interaction(self.chat, 1001)
+        with self.assertRaises(RuntimeError):
+            await self.svc.get_user_interaction_count(self.chat, 1001)
+
+    async def test_user_interactions_are_hashed_and_isolated(self) -> None:
+        from app.services.learning_service import LearningService
+
+        hashed: list[int] = []
+
+        def hasher(user_id: int) -> str:
+            hashed.append(user_id)
+            return f"hash-{user_id}"
+
+        svc = LearningService(self.db, _make_generator(), user_hasher=hasher)
+
+        await svc.record_user_interaction(self.chat, 1001)
+        await svc.record_user_interaction(self.chat, 1001)
+        await svc.record_user_interaction(self.chat, 2002)
+
+        self.assertEqual(await svc.get_user_interaction_count(self.chat, 1001), 2)
+        self.assertEqual(await svc.get_user_interaction_count(self.chat, 2002), 1)
+        # Every DB touch went through the hasher — raw ids never reach the DB.
+        self.assertEqual(hashed, [1001, 1001, 2002, 1001, 2002])
+        self.assertEqual(
+            await self.db.get_user_interaction_count(self.chat, "hash-1001"), 2
+        )
