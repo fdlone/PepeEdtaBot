@@ -38,11 +38,16 @@ def minimal_env(db_path: str = "test_settings.db") -> dict[str, str]:
 
 
 def env_example_values() -> dict[str, str]:
-    """KEY=value pairs from .env.example (last occurrence wins, like dotenv)."""
+    """KEY=value pairs from .env.example; a duplicated key is a bug there."""
     env_text = (Path(__file__).parents[1] / ".env.example").read_text(
         encoding="utf-8"
     )
-    return dict(re.findall(r"^([A-Z_0-9]+)=(.*)$", env_text, re.MULTILINE))
+    pairs = re.findall(r"^([A-Z_0-9]+)=(.*)$", env_text, re.MULTILINE)
+    keys = [key for key, _ in pairs]
+    duplicates = sorted({key for key in keys if keys.count(key) > 1})
+    if duplicates:
+        raise AssertionError(f".env.example defines keys twice: {duplicates}")
+    return dict(pairs)
 
 
 class TestSettings(unittest.TestCase):
@@ -78,12 +83,17 @@ class TestSettings(unittest.TestCase):
         ]
         self.assertEqual(missing, [], f".env.example misses: {missing}")
 
-        drifted = {
-            spec.env_var: (env_values[spec.env_var].strip(), spec.default)
-            for spec in RUNTIME_FIELDS
-            if spec.parse(env_values[spec.env_var].strip())
-            != spec.parse(spec.default)
-        }
+        drifted = {}
+        for spec in RUNTIME_FIELDS:
+            raw = env_values[spec.env_var].strip()
+            try:
+                parsed = spec.parse(raw)
+            except ValueError as error:
+                self.fail(
+                    f".env.example {spec.env_var}={raw!r} is unparseable: {error}"
+                )
+            if parsed != spec.parse(spec.default):
+                drifted[spec.env_var] = (raw, spec.default)
         self.assertEqual(
             drifted, {},
             f".env.example drifted from registry (env, registry): {drifted}",

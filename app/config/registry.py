@@ -168,8 +168,11 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("recent_reply_penalty_strength", "RECENT_REPLY_PENALTY_STRENGTH",
               "0.5", _float_in_range(0.0, 3.0)),
     # Score penalty for candidates that replay training messages verbatim:
-    # strength × share of the candidate's content 4-grams found in the corpus
-    # index. 0 disables (and skips the index read). Замена бинарного гейта,
+    # strength × severity, where severity ramps linearly from 0 at a corpus
+    # 4-gram share of VERBATIM_TOLERATED_SHARE (0.6, candidate_scorer.py) to 1
+    # at share 1.0 — shares below the threshold are free (recombination is the
+    # point of the generator). 0 disables (and skips the index read). Замена
+    # бинарного гейта,
     # который цитаты с добавленной точкой раньше проходили насквозь.
     # 1.5 (2026-07-09): raising the context weight makes on-topic continuations
     # win, and continuing from an exact context state retraces the original
@@ -186,7 +189,8 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # 2026-07-09 default already forbade them and nothing regressed.
     FieldSpec("enable_backoff", "ENABLE_BACKOFF", "true", _bool()),
     # M4 topic drift: probability per generation step (only after the reply has
-    # >8 tokens, order 3) of jumping to a new learned sentence start, splicing a
+    # ≥5 tokens — JUMP_MIN_GENERATED_TOKENS, markov.py — and only on the
+    # order-3 walk) of jumping to a new learned sentence start, splicing a
     # connective ("..., кстати ...") so the shift reads as a deliberate aside.
     # 0 disables (the pre-M4 behaviour).
     # 0.12 (2026-07-06): tripled from 0.04 and the in-code minimum reply length

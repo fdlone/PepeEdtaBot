@@ -9,6 +9,7 @@ from aiogram.types import BotCommand
 from app import log_masking
 from app.config.runtime_state import runtime_state_from_settings
 from app.config.settings import Settings, load_settings
+from app.core import gen_trace_log
 from app.core.markov import MarkovGenerator
 from app.domain.pivo import PivoSecurity
 from app.handlers import admin as admin_handlers
@@ -72,13 +73,7 @@ async def run_bot() -> None:
     )
     logger = logging.getLogger("chat_markov")
     logging.getLogger("aiogram").setLevel(logging.WARNING)
-    # Per-candidate generation trace is a debugging tool: without the
-    # GEN_TRACE_LOG flag prod must not dump candidate texts into the log,
-    # and with the flag the trace must appear even when LOG_LEVEL silences
-    # the rest of the app (the logger must not inherit the root level).
-    logging.getLogger("chat_markov.gen").setLevel(
-        logging.INFO if settings.gen_trace_log else logging.WARNING
-    )
+    gen_trace_log.configure(settings.gen_trace_log)
 
     db = Database(
         settings.db_path,
