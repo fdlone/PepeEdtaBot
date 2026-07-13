@@ -96,6 +96,9 @@ async def run_bot() -> None:
         db=db,
         generator=generator,
         text_cache_max_messages=settings.text_cache_max_messages,
+        # L2 user quirks: interaction counters are keyed by the same HMAC as
+        # /pivo subscriptions — no reversible identity ever reaches the DB.
+        user_hasher=pivo_security.hmac_value,
     )
     runtime_state = runtime_state_from_settings(settings)
 

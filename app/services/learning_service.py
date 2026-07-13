@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 
 from app.core.candidate_scorer import VERBATIM_NGRAM_SIZE, build_token_idf
 from app.core.markov import MarkovGenerator, build_windows, content_tokens, tokenize
@@ -36,10 +36,16 @@ class LearningService:
         generator: MarkovGenerator,
         *,
         text_cache_max_messages: int = 1000,
+        user_hasher: Callable[[int], str] | None = None,
     ) -> None:
         self._db = db
         self._generator = generator
         self._text_cache_max_messages = text_cache_max_messages
+        # L2: анонимизация user_id для счётчика взаимодействий — main.py
+        # внедряет PivoSecurity.hmac_value (та же схема, что /pivo). None
+        # оставляет прежних вызывающих нетронутыми: quirk-методы достижимы
+        # только при включённом канале, а main всегда передаёт хешер.
+        self._user_hasher = user_hasher
         # Кэш нормализованных текстов: chat_id → set строк в нижнем регистре.
         # Строится при первой проверке из последних N сообщений чата и
         # сбрасывается при каждом новом сообщении.
@@ -91,6 +97,24 @@ class LearningService:
         """Currently-hot n-grams for unprompted-reply seeding (L1)."""
         return await self._db.get_hot_chat_ngrams(
             chat_id, min_count=min_count, recency_share=recency_share
+        )
+
+    def _hash_user(self, user_id: int) -> str:
+        if self._user_hasher is None:
+            raise RuntimeError(
+                "LearningService has no user_hasher: user-interaction methods "
+                "require one (main.py injects PivoSecurity.hmac_value)"
+            )
+        return self._user_hasher(user_id)
+
+    async def record_user_interaction(self, chat_id: int, user_id: int) -> None:
+        """Count one answered mention for the user (L2, anonymized)."""
+        await self._db.record_user_interaction(chat_id, self._hash_user(user_id))
+
+    async def get_user_interaction_count(self, chat_id: int, user_id: int) -> int:
+        """Answered-mention count for the user in the chat (L2, anonymized)."""
+        return await self._db.get_user_interaction_count(
+            chat_id, self._hash_user(user_id)
         )
 
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool:
