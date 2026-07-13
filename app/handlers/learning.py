@@ -280,17 +280,20 @@ async def on_text_message(
             per_char=True,
         )
 
+    async def count_answered_mention(user_id: int) -> None:
+        # L2: an answered address counts as an interaction, fallback answers
+        # included (the user did interact); gated on the knob so a zero
+        # chance keeps the mention path write-free (L1 pattern).
+        if runtime_state.user_quirk_chance > 0.0:
+            await learning_service.record_user_interaction(
+                message.chat.id, user_id
+            )
+
     try:
         if address_reply and not enough_data:
             await send_fallback_reply(NOT_ENOUGH_DATA_PHRASES)
             runtime_state.note_mention_reply(message.chat.id, message.from_user.id, now)
-            # L2: an answered address counts as an interaction even when the
-            # answer is a fallback (the user did interact); gated on the knob
-            # so a zero chance keeps the mention path write-free (L1 pattern).
-            if runtime_state.user_quirk_chance > 0.0:
-                await learning_service.record_user_interaction(
-                    message.chat.id, message.from_user.id
-                )
+            await count_answered_mention(message.from_user.id)
             return
 
         if not enough_data:
@@ -446,10 +449,7 @@ async def on_text_message(
                 runtime_state.note_mention_reply(
                     message.chat.id, message.from_user.id, now
                 )
-                if runtime_state.user_quirk_chance > 0.0:
-                    await learning_service.record_user_interaction(
-                        message.chat.id, message.from_user.id
-                    )
+                await count_answered_mention(message.from_user.id)
             logger.debug(
                 "Generation failed: chat=%s mentioned=%s",
                 mask_chat_id(message.chat.id),
@@ -468,10 +468,7 @@ async def on_text_message(
             runtime_state.note_mention_reply(
                 message.chat.id, message.from_user.id, now
             )
-            if runtime_state.user_quirk_chance > 0.0:
-                await learning_service.record_user_interaction(
-                    message.chat.id, message.from_user.id
-                )
+            await count_answered_mention(message.from_user.id)
         reply_parts = [reply_text]
         # UTC, как и остальные суточные механики (decay, /pivo-квоты): кап
         # сбрасывается в одну и ту же полночь независимо от TZ контейнера.
