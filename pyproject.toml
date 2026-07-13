@@ -1,3 +1,15 @@
+# Not a distributable package: [project] exists to pin the supported Python
+# floor (CI matrix 3.12-3.14). Dependencies live in requirements*.txt (pip is
+# the source of truth for CI and Docker); uv is only a local runner, so
+# project management (lock/sync) is disabled below.
+[project]
+name = "pepe-edta-bot"
+version = "0.0.0"
+requires-python = ">=3.12"
+
+[tool.uv]
+managed = false
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

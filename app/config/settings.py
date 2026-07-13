@@ -10,7 +10,11 @@ from app.config.defaults import (
     SQLITE_BUSY_TIMEOUT_MS,
     SQLITE_WAL_AUTOCHECKPOINT_PAGES,
 )
-from app.config.registry import RUNTIME_FIELDS, validate_cross_fields
+from app.config.registry import (
+    RUNTIME_FIELDS,
+    _parse_bool,
+    validate_cross_fields,
+)
 from app.core.reply_policy import DEFAULT_BOT_TEXT_ALIASES
 
 
@@ -203,9 +207,10 @@ def load_settings(load_env: bool = True) -> Settings:
     # Verbose per-candidate generation trace (chat_markov.gen). Off by default:
     # it dumps candidate texts into the log on every reply -- a debugging tool,
     # not something a prod deployment should have to remember to switch off.
-    gen_trace_log = os.getenv("GEN_TRACE_LOG", "false").strip().lower() in {
-        "1", "true", "yes", "on"
-    }
+    try:
+        gen_trace_log = _parse_bool(os.getenv("GEN_TRACE_LOG", "false"))
+    except ValueError as exc:
+        raise ValueError(f"GEN_TRACE_LOG: {exc}") from exc
 
     # BOT_TEXT_ALIASES: comma-separated. Empty / unset → built-in defaults
     # so deployments without .env access keep working.

@@ -4,8 +4,10 @@ Test-time instrumentation for understanding how a reply is chosen from up to
 ``CANDIDATE_TARGET`` candidates: it traces the route each generation attempt
 took (Markov order, start source, context-match kind, jumps), the full score
 breakdown of every accepted candidate, and the softmax weights of the final
-pick. Everything is emitted on the ``chat_markov.gen`` logger at INFO so it can
-be followed live without turning the whole app to DEBUG.
+pick. Everything is emitted on the ``chat_markov.gen`` logger at INFO, gated
+by the ``GEN_TRACE_LOG`` env flag (see ``configure``): without the flag the
+trace stays silent whatever ``LOG_LEVEL`` says, with it the trace appears
+even when the rest of the app is quieter than INFO.
 
 This module has no behavioural effect; deleting it (and its call sites in
 ``response_generator``) restores the silent pipeline.
@@ -25,6 +27,17 @@ if TYPE_CHECKING:
     from app.core.markov import GenerationTrace
 
 gen_logger = logging.getLogger("chat_markov.gen")
+
+
+def configure(enabled: bool) -> None:
+    """Two-way GEN_TRACE_LOG gate, called once at startup.
+
+    INFO turns the trace on even when the root logger is quieter; WARNING
+    keeps candidate texts out of prod logs even at a verbose LOG_LEVEL. Owning
+    the logger name here keeps it a single literal (renaming it elsewhere
+    would silently fail open).
+    """
+    gen_logger.setLevel(logging.INFO if enabled else logging.WARNING)
 
 
 class _HasScore(Protocol):
