@@ -97,6 +97,18 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.note_rare_event = (
         lambda chat_id, today: RuntimeState.note_rare_event(s, chat_id, today)
     )
+    # L2 quirk gate: real once-a-day logic for the same reason as the caps.
+    s.last_user_quirk_day = {}
+    s.can_fire_user_quirk = (
+        lambda chat_id, user_id, today: RuntimeState.can_fire_user_quirk(
+            s, chat_id, user_id, today
+        )
+    )
+    s.note_user_quirk = (
+        lambda chat_id, user_id, today: RuntimeState.note_user_quirk(
+            s, chat_id, user_id, today
+        )
+    )
     # Mood off by default so the existing behavioural assertions see the
     # unmodulated path; dedicated mood tests enable it explicitly.
     s.mood_enabled = False
@@ -1589,8 +1601,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 msg.chat.id: (datetime.now(UTC).date().isoformat(), 3)
             },
             rare_event_daily_cap=3,
-            user_quirk_chance=0.1,
-            user_quirk_min_interactions=25,
         )
 
         with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
@@ -1853,3 +1863,234 @@ class TestMentionCooldownGate(unittest.IsolatedAsyncioTestCase):
         await self._dispatch(msg, learning_service, generator, state)
 
         msg.reply.assert_awaited_once()
+
+
+class TestUserQuirks(unittest.IsolatedAsyncioTestCase):
+    """L2: vocative quirks for regulars whose direct address got answered."""
+
+    def setUp(self) -> None:
+        mask_patcher = patch(
+            "app.core.response_generator.mask_chat_id", return_value="chat"
+        )
+        mask_patcher.start()
+        self.addCleanup(mask_patcher.stop)
+
+    def _state(self, **overrides: object) -> MagicMock:
+        values: dict[str, object] = {
+            "normalize_lower": False,
+            "learned_messages": {},
+            "recent_short_replies": {},
+            "min_tokens_for_model": 10,
+            "min_cooldown_sec": 0,
+            "last_reply_ts": {},
+            "reply_probability": 0.0,
+            "use_reply_context": False,
+            "fuzzy_context_casefold": False,
+            "fuzzy_context_stem": False,
+            "reply_context_last_tokens": 3,
+            "reply_context_bias": 1.8,
+            "reply_context_start_bias": 2.2,
+            "context_start_affinity": 3.0,
+            "max_reply_chars": 280,
+            "max_reply_tokens": 45,
+            "randomness_strength": 0.0,
+            "repetition_penalty_strength": 1.0,
+            "recent_reply_penalty_strength": 1.0,
+            "length_mode_weights": (0.25, 0.55, 0.2),
+            "markov_order": 3,
+            "enable_backoff": True,
+            "recent_replies": {},
+            # Chance 1.0 keeps the roll deterministic (random() < 1.0 always).
+            "user_quirk_chance": 1.0,
+            "user_quirk_min_interactions": 25,
+        }
+        values.update(overrides)
+        return _fake_state(**values)
+
+    def _services(
+        self, *, interactions: int = 25
+    ) -> tuple[AsyncMock, AsyncMock]:
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=102)
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        learning_service.get_user_interaction_count = AsyncMock(
+            return_value=interactions
+        )
+        generator = _traced_generator()
+        generator.generate_text = AsyncMock(return_value="сгенерированный ответ бота")
+        return learning_service, generator
+
+    async def _dispatch(self, msg: MagicMock, learning_service: AsyncMock,
+                        generator: AsyncMock, state: MagicMock) -> None:
+        from app.handlers.learning import on_text_message
+
+        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+            )
+
+    @staticmethod
+    def _today_iso() -> str:
+        from datetime import UTC, datetime
+
+        # UTC, как в хендлере: локальная дата около полуночи дала бы флаки.
+        return datetime.now(UTC).date().isoformat()
+
+    async def test_regular_gets_vocative_as_separate_first_message(self) -> None:
+        from app.presentation.fallback_phrases import USER_QUIRK_VOCATIVES
+
+        learning_service, generator = self._services(interactions=25)
+        state = self._state()
+        msg = _fake_message(text="pepe расскажи что-нибудь")
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        msg.reply.assert_awaited_once()
+        self.assertIn(msg.reply.await_args.args[0], USER_QUIRK_VOCATIVES)
+        msg.answer.assert_awaited_once_with("сгенерированный ответ бота")
+        self.assertEqual(
+            state.last_user_quirk_day,
+            {(msg.chat.id, msg.from_user.id): self._today_iso()},
+        )
+        learning_service.record_user_interaction.assert_awaited_once_with(
+            msg.chat.id, msg.from_user.id
+        )
+
+    async def test_below_threshold_sends_plain_reply(self) -> None:
+        learning_service, generator = self._services(interactions=24)
+        state = self._state()
+        msg = _fake_message(text="pepe расскажи что-нибудь")
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        msg.reply.assert_awaited_once_with("сгенерированный ответ бота")
+        msg.answer.assert_not_awaited()
+        # Below threshold: no daily stamp, so a later regular can still quirk.
+        self.assertEqual(state.last_user_quirk_day, {})
+
+    async def test_same_user_same_day_is_suppressed(self) -> None:
+        learning_service, generator = self._services(interactions=100)
+        state = self._state()
+        msg = _fake_message(text="pepe расскажи что-нибудь")
+        state.last_user_quirk_day = {
+            (msg.chat.id, msg.from_user.id): self._today_iso()
+        }
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        msg.reply.assert_awaited_once_with("сгенерированный ответ бота")
+        msg.answer.assert_not_awaited()
+        # The daily gate is checked before the chance roll and the DB read.
+        learning_service.get_user_interaction_count.assert_not_awaited()
+
+    async def test_unprompted_reply_is_never_quirked(self) -> None:
+        learning_service, generator = self._services(interactions=100)
+        state = self._state(reply_probability=1.0)
+        msg = _fake_message(text="просто сообщение в чат без обращения")
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        msg.reply.assert_awaited_once_with("сгенерированный ответ бота")
+        msg.answer.assert_not_awaited()
+        learning_service.record_user_interaction.assert_not_awaited()
+        learning_service.get_user_interaction_count.assert_not_awaited()
+
+    async def test_not_enough_data_fallback_counts_but_never_quirks(self) -> None:
+        learning_service, generator = self._services(interactions=100)
+        learning_service.get_token_volume = AsyncMock(return_value=5)
+        state = self._state()
+        msg = _fake_message(text="pepe расскажи что-нибудь")
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        # The user did interact -> counter bumped; but a fallback answer never
+        # carries a vocative.
+        learning_service.record_user_interaction.assert_awaited_once_with(
+            msg.chat.id, msg.from_user.id
+        )
+        learning_service.get_user_interaction_count.assert_not_awaited()
+        msg.reply.assert_awaited_once()
+        msg.answer.assert_not_awaited()
+        self.assertEqual(state.last_user_quirk_day, {})
+
+    async def test_generation_failed_fallback_counts_but_never_quirks(self) -> None:
+        learning_service, generator = self._services(interactions=100)
+        generator.generate_text = AsyncMock(return_value="")
+        state = self._state()
+        msg = _fake_message(text="pepe расскажи что-нибудь")
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        learning_service.record_user_interaction.assert_awaited_once_with(
+            msg.chat.id, msg.from_user.id
+        )
+        learning_service.get_user_interaction_count.assert_not_awaited()
+        msg.reply.assert_awaited_once()
+        msg.answer.assert_not_awaited()
+        self.assertEqual(state.last_user_quirk_day, {})
+
+    async def test_demoted_mention_neither_counts_nor_quirks(self) -> None:
+        import time as time_module
+
+        learning_service, generator = self._services(interactions=100)
+        state = self._state(mention_cooldown_sec=30)
+        msg = _fake_message(text="pepe расскажи ещё")
+        state.last_mention_reply_ts = {
+            (msg.chat.id, msg.from_user.id): time_module.monotonic()
+        }
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        # Demoted to the unprompted path (reply_probability 0.0 -> silence):
+        # regular status cannot be farmed faster than the mention cooldown.
+        learning_service.record_user_interaction.assert_not_awaited()
+        learning_service.get_user_interaction_count.assert_not_awaited()
+        msg.reply.assert_not_awaited()
+
+    async def test_quirked_reply_skips_rare_event_roll(self) -> None:
+        from app.presentation.fallback_phrases import USER_QUIRK_VOCATIVES
+
+        learning_service, generator = self._services(interactions=25)
+        # false_start_chance 1.0 would otherwise always fire a filler.
+        state = self._state(false_start_chance=1.0, rare_events_today={})
+        msg = _fake_message(text="pepe расскажи что-нибудь")
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        # One shape break per reply: vocative + reply, no filler, and the
+        # rare-event daily budget is untouched.
+        msg.reply.assert_awaited_once()
+        self.assertIn(msg.reply.await_args.args[0], USER_QUIRK_VOCATIVES)
+        msg.answer.assert_awaited_once_with("сгенерированный ответ бота")
+        self.assertEqual(state.rare_events_today, {})
+
+    async def test_zero_chance_disables_channel_entirely(self) -> None:
+        learning_service, generator = self._services(interactions=100)
+        state = self._state(user_quirk_chance=0.0)
+        msg = _fake_message(text="pepe расскажи что-нибудь")
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        # Master gate: no counter writes, no reads at all.
+        learning_service.record_user_interaction.assert_not_awaited()
+        learning_service.get_user_interaction_count.assert_not_awaited()
+        msg.reply.assert_awaited_once_with("сгенерированный ответ бота")
+
+    async def test_bot_senders_never_feed_counters(self) -> None:
+        # Anonymous admins post as GroupAnonymousBot (a bot account): the
+        # handler's early is_bot return must keep them out of the counters.
+        learning_service, generator = self._services(interactions=100)
+        state = self._state()
+        msg = _fake_message(text="pepe расскажи что-нибудь", is_bot=True)
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        learning_service.record_user_interaction.assert_not_awaited()
+        msg.reply.assert_not_awaited()
