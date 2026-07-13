@@ -20,6 +20,7 @@ from app.repositories import (
     ChatEmojiStatsRepo,
     ChatHotNgramsRepo,
     ChatMembersRepo,
+    ChatUserInteractionsRepo,
     MarkovRepo,
     MessagesRepo,
     PivoPoolUsageRepo,
@@ -68,6 +69,7 @@ class Database:
         self.pivo_pool_usage: PivoPoolUsageRepo | None = None
         self.chat_emoji_stats: ChatEmojiStatsRepo | None = None
         self.chat_hot_ngrams: ChatHotNgramsRepo | None = None
+        self.chat_user_interactions: ChatUserInteractionsRepo | None = None
         # Monotonic-время последнего decay эмодзи/n-грамм (None до init()).
         self._last_flavor_decay_monotonic: float | None = None
 
@@ -108,6 +110,9 @@ class Database:
         self.pivo_pool_usage = PivoPoolUsageRepo(self._get_conn, self._lock)
         self.chat_emoji_stats = ChatEmojiStatsRepo(self._get_conn, self._lock)
         self.chat_hot_ngrams = ChatHotNgramsRepo(self._get_conn, self._lock)
+        self.chat_user_interactions = ChatUserInteractionsRepo(
+            self._get_conn, self._lock
+        )
         await self.cleanup_pivo_daily_usage()
         await self.decay_chat_emoji_stats()
         await self.decay_chat_hot_ngrams()
@@ -124,6 +129,7 @@ class Database:
         self.pivo_pool_usage = None
         self.chat_emoji_stats = None
         self.chat_hot_ngrams = None
+        self.chat_user_interactions = None
 
     async def save_message_and_update_model(
         self, chat_id: int, raw_text: str, tokens: list[str]

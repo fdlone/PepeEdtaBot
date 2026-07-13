@@ -26,6 +26,7 @@ EXPECTED_MIGRATIONS = [
     "011_chat_emoji_stats",
     "012_chat_hot_ngrams",
     "013_drop_transitions1",
+    "014_chat_user_interactions",
 ]
 
 EXPECTED_TABLES = {
@@ -40,6 +41,7 @@ EXPECTED_TABLES = {
     "chat_model_volume",
     "chat_emoji_stats",
     "chat_hot_ngrams",
+    "chat_user_interactions",
     "schema_migrations",
 }
 
