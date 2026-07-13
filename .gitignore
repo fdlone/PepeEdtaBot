@@ -7,7 +7,9 @@ __pycache__/
 .venv/
 venv/
 
-# uv (not used; pip + requirements files are the source of truth)
+# uv is a local runner only ([tool.uv] managed = false in pyproject.toml);
+# pip + requirements files stay the source of truth for CI and Docker, so an
+# accidentally generated lock must not be committed.
 uv.lock
 
 # Environment
