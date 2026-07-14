@@ -3,10 +3,9 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass
 
-from app.core.morphology import stem_token
 from app.infrastructure.database import Database
 
-_MATCH_KIND_PRIORITY = {"exact": 0, "casefold": 1, "stem": 2}
+_MATCH_KIND_PRIORITY = {"exact": 0, "casefold": 1}
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,19 +16,10 @@ class ContextStateMatch:
     transition_count: int
 
 
-def _stem_key(tokens: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(stem_token(token.casefold()) for token in tokens)
-
-
 @dataclass(slots=True)
 class _StateIndex:
     exact: dict[tuple[str, ...], int]
     casefolded: dict[tuple[str, ...], tuple[tuple[tuple[str, ...], int], ...]]
-    # Lazy: keyed by the stemmed casefolded window, built on first stem lookup
-    # so the exact/casefold path pays nothing for it.
-    stemmed: dict[tuple[str, ...], tuple[tuple[tuple[str, ...], int], ...]] | None = (
-        None
-    )
 
 
 class ContextStateMatcher:
@@ -47,7 +37,6 @@ class ContextStateMatcher:
         chat_id: int,
         context_window: tuple[str, ...],
         order: int,
-        include_stem: bool = False,
     ) -> list[ContextStateMatch]:
         if order not in {2, 3}:
             raise ValueError("order must be 2 or 3")
@@ -80,9 +69,6 @@ class ContextStateMatcher:
                 )
             )
 
-        if include_stem:
-            matches.extend(self._stem_matches(context_window, folded_window, index))
-
         return sorted(
             matches,
             key=lambda match: (
@@ -92,57 +78,6 @@ class ContextStateMatcher:
                 match.state,
             ),
         )
-
-    def _stem_matches(
-        self,
-        context_window: tuple[str, ...],
-        folded_window: tuple[str, ...],
-        index: _StateIndex,
-    ) -> list[ContextStateMatch]:
-        """Model states whose stemmed form equals the stemmed context window.
-
-        Folds Russian inflection ("билеты стоят" matches the learned "билет
-        стоит") through the same approximate stemmer that context-affine start
-        sampling and IDF relevance already use, so morphology handling stays a
-        single mechanism. States already reported as exact/casefold matches are
-        skipped.
-        """
-        if index.stemmed is None:
-            index.stemmed = self._build_stem_index(index.exact)
-
-        matches: list[ContextStateMatch] = []
-        for state, transition_count in index.stemmed.get(
-            _stem_key(context_window), ()
-        ):
-            if state == context_window:
-                continue
-            if tuple(token.casefold() for token in state) == folded_window:
-                continue
-            matches.append(
-                ContextStateMatch(
-                    state=state,
-                    match_kind="stem",
-                    similarity=1.0,
-                    transition_count=transition_count,
-                )
-            )
-        return matches
-
-    @staticmethod
-    def _build_stem_index(
-        exact: dict[tuple[str, ...], int],
-    ) -> dict[tuple[str, ...], tuple[tuple[tuple[str, ...], int], ...]]:
-        grouped: dict[tuple[str, ...], list[tuple[tuple[str, ...], int]]] = {}
-        for state, transition_count in exact.items():
-            grouped.setdefault(_stem_key(state), []).append(
-                (state, transition_count)
-            )
-        return {
-            stem: tuple(
-                sorted(states, key=lambda item: (-item[1], item[0]))
-            )
-            for stem, states in sorted(grouped.items())
-        }
 
     async def _get_index(self, chat_id: int, order: int) -> _StateIndex:
         key = (chat_id, order)

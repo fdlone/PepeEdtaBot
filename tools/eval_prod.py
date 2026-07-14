@@ -118,7 +118,6 @@ class _TraceCapturingGenerator(MarkovGenerator):
         self.rejections: Counter[str] = Counter()
         self.context_exact = 0
         self.context_casefold = 0
-        self.context_stem = 0
         self.hidden_context_fallbacks = 0
         self.attempt_sources: dict[str, str] = {}
         self.attempt_orders: dict[str, int] = {}
@@ -142,7 +141,6 @@ class _TraceCapturingGenerator(MarkovGenerator):
             self.rejections[trace.rejection_reason] += 1
         self.context_exact += trace.context_exact_matches
         self.context_casefold += trace.context_casefold_matches
-        self.context_stem += trace.context_stem_matches
         self.hidden_context_fallbacks += trace.hidden_context_fallbacks
         return text, trace
 
@@ -443,7 +441,6 @@ async def evaluate(
     total_context = (
         generator.context_exact
         + generator.context_casefold
-        + generator.context_stem
         + generator.hidden_context_fallbacks
     )
     return {
@@ -532,7 +529,6 @@ async def evaluate(
         "rejections": dict(generator.rejections.most_common()),
         "context_exact": generator.context_exact,
         "context_casefold": generator.context_casefold,
-        "context_stem": generator.context_stem,
         "hidden_context_fallbacks": generator.hidden_context_fallbacks,
         "hidden_context_fallback_rate": round(
             generator.hidden_context_fallbacks / total_context, 4
