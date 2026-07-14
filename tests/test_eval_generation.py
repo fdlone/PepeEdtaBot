@@ -76,14 +76,3 @@ class TestGenerationEvaluation(unittest.IsolatedAsyncioTestCase):
 
         self.assertGreater(actual["context_casefold_match_rate"], 0.0)
         self.assertEqual(actual["leading_punctuation_rate"], 0.0)
-
-    async def test_stem_profile_records_stem_resolution(self) -> None:
-        actual = await evaluate_generation(
-            seed=20260620,
-            generations=100,
-            normalize_lower=False,
-            fuzzy_context_stem=True,
-        )
-
-        self.assertGreater(actual["context_stem_match_rate"], 0.0)
-        self.assertEqual(actual["leading_punctuation_rate"], 0.0)

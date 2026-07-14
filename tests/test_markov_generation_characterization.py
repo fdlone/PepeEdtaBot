@@ -471,13 +471,10 @@ class TestContextualMatchCounts(unittest.TestCase):
         return MarkovGenerator._contextual_match_counts(selection)
 
     def test_exact(self) -> None:
-        self.assertEqual(self._counts("exact"), (1, 0, 0))
+        self.assertEqual(self._counts("exact"), (1, 0))
 
     def test_casefold(self) -> None:
-        self.assertEqual(self._counts("casefold"), (0, 1, 0))
-
-    def test_stem(self) -> None:
-        self.assertEqual(self._counts("stem"), (0, 0, 1))
+        self.assertEqual(self._counts("casefold"), (0, 1))
 
 
 class TestFinalizeAttempt(unittest.TestCase):
@@ -499,7 +496,6 @@ class TestFinalizeAttempt(unittest.TestCase):
             start_source="seed",
             context_exact_matches=3,
             context_casefold_matches=4,
-            context_stem_matches=5,
             hidden_context_fallbacks=7,
         )
 
@@ -514,7 +510,6 @@ class TestFinalizeAttempt(unittest.TestCase):
         self.assertEqual(attempt.start_source, "seed")
         self.assertEqual(attempt.context_exact_matches, 3)
         self.assertEqual(attempt.context_casefold_matches, 4)
-        self.assertEqual(attempt.context_stem_matches, 5)
         self.assertEqual(attempt.hidden_context_fallbacks, 7)
 
     def test_success_returns_text_and_token_count(self) -> None:
@@ -528,8 +523,8 @@ class TestFinalizeAttempt(unittest.TestCase):
         self.assertEqual(attempt.markov_order_used, 2)
 
 
-class TestFuzzyCandidateBuilders(unittest.IsolatedAsyncioTestCase):
-    """Mocked-matcher tests for the fuzzy candidate builders (audit R8):
+class TestCasefoldCandidateBuilders(unittest.IsolatedAsyncioTestCase):
+    """Mocked-matcher tests for the casefold candidate builders (audit R8):
     filtering by match kind and count/recency weighting."""
 
     def _generator(self, matches: list[ContextStateMatch]) -> MarkovGenerator:
@@ -538,55 +533,41 @@ class TestFuzzyCandidateBuilders(unittest.IsolatedAsyncioTestCase):
         generator._context_state_matcher.match = AsyncMock(return_value=matches)
         return generator
 
-    async def test_fuzzy3_keeps_only_requested_kind_and_weights_by_count(self) -> None:
+    async def test_casefold3_skips_exact_and_weights_by_count(self) -> None:
         matches = [
-            ContextStateMatch(("a", "b", "c"), "stem", similarity=1.0, transition_count=4),
-            ContextStateMatch(("d", "e", "f"), "casefold", similarity=1.0, transition_count=9),
+            ContextStateMatch(("a", "b", "c"), "exact", similarity=1.0, transition_count=9),
+            ContextStateMatch(("d", "e", "f"), "casefold", similarity=1.0, transition_count=4),
         ]
         generator = self._generator(matches)
-        out = await generator._build_fuzzy3_candidates(
-            1, [("x", "y", "z")], 1, 1.0, match_kind="stem", include_stem=True,
-        )
-        # Only the stem match is kept; weight = 4 * (1 + 1*0.35).
+        out = await generator._build_casefold3_candidates(1, [("x", "y", "z")], 1, 1.0)
+        # The exact match belongs to the caller's own tier; weight = 4 * (1 + 1*0.35).
         self.assertEqual(len(out), 1)
         state, weight, count = out[0]
-        self.assertEqual(state, ("a", "b", "c"))
+        self.assertEqual(state, ("d", "e", "f"))
         self.assertEqual(count, 4)
         self.assertAlmostEqual(weight, 4 * 1.35)
-        generator._context_state_matcher.match.assert_awaited_with(
-            1, ("x", "y", "z"), 3, include_stem=True
-        )
+        generator._context_state_matcher.match.assert_awaited_with(1, ("x", "y", "z"), 3)
 
-    async def test_fuzzy3_casefold_weights_by_count_and_recency(self) -> None:
+    async def test_casefold2_returns_states_with_transitions(self) -> None:
         matches = [
-            ContextStateMatch(("a", "b", "c"), "casefold", similarity=1.0, transition_count=4),
-        ]
-        generator = self._generator(matches)
-        out = await generator._build_fuzzy3_candidates(
-            1, [("x", "y", "z")], 1, 1.0, match_kind="casefold", include_stem=False,
-        )
-        self.assertAlmostEqual(out[0][1], 4 * 1.35)
-
-    async def test_fuzzy2_returns_states_with_transitions(self) -> None:
-        matches = [
-            ContextStateMatch(("a", "b"), "stem", similarity=1.0, transition_count=1),
+            ContextStateMatch(("a", "b"), "casefold", similarity=1.0, transition_count=1),
         ]
         generator = self._generator(matches)
         with patch.object(MarkovGenerator, "_get2", AsyncMock(return_value=[("c", 2)])):
-            additions = await generator._build_fuzzy2_candidates(
-                1, [("x", "y")], 1, 1.0, match_kind="stem", include_stem=True,
+            additions = await generator._build_casefold2_candidates(
+                1, [("x", "y")], 1, 1.0
             )
         self.assertEqual(len(additions), 1)
         self.assertEqual(additions[0][0], ("a", "b"))
 
-    async def test_fuzzy2_skips_states_without_transitions(self) -> None:
+    async def test_casefold2_skips_states_without_transitions(self) -> None:
         matches = [
-            ContextStateMatch(("a", "b"), "stem", similarity=1.0, transition_count=3),
+            ContextStateMatch(("a", "b"), "casefold", similarity=1.0, transition_count=3),
         ]
         generator = self._generator(matches)
         with patch.object(MarkovGenerator, "_get2", AsyncMock(return_value=[])):
-            additions = await generator._build_fuzzy2_candidates(
-                1, [("x", "y")], 1, 1.0, match_kind="stem", include_stem=True,
+            additions = await generator._build_casefold2_candidates(
+                1, [("x", "y")], 1, 1.0
             )
         self.assertEqual(additions, [])
 

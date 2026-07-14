@@ -83,99 +83,14 @@ class TestContextStateMatcher(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "length"):
             await self.matcher.match(1, ("alpha",), 2)
 
-    async def test_stem_matches_inflected_variants_ordered_by_count(self) -> None:
-        # "тренировки помогают" folds to the same stems as both learned forms;
-        # the more frequent state must come first.
-        self.db.get_markov_states.return_value = [
-            (("тренировка", "помогает"), 10),
-            (("тренировку", "помогает"), 1),
-        ]
-
-        matches = await self.matcher.match(
-            5,
-            ("тренировки", "помогают"),
-            2,
-            include_stem=True,
-        )
-
-        stem_matches = [
-            match for match in matches if match.match_kind == "stem"
-        ]
-        self.assertEqual(
-            [match.state for match in stem_matches],
-            [("тренировка", "помогает"), ("тренировку", "помогает")],
-        )
-        self.assertEqual(stem_matches[0].transition_count, 10)
-
-    async def test_stem_requires_every_token_to_fold(self) -> None:
+    async def test_inflected_variants_do_not_match(self) -> None:
+        # The stem tier was removed 2026-07-14: it produced no starts on prod
+        # data (see docs/CLOSED.md). Matching folds case, never morphology --
+        # that fold lives in context_start_affinity and IDF relevance instead.
         self.db.get_markov_states.return_value = [
             (("тренировка", "помогает"), 10),
         ]
 
-        matches = await self.matcher.match(
-            6,
-            ("тренировку", "висит"),
-            2,
-            include_stem=True,
-        )
+        matches = await self.matcher.match(5, ("тренировки", "помогают"), 2)
 
-        self.assertFalse(any(match.match_kind == "stem" for match in matches))
-
-    async def test_stem_folds_short_tokens_prefix_matching_could_not(self) -> None:
-        # The retired prefix heuristic required a 6-char common prefix, so
-        # "котика" never matched "котик"; the stemmer folds it.
-        self.db.get_markov_states.return_value = [
-            (("котик", "спит"), 3),
-        ]
-
-        matches = await self.matcher.match(
-            7,
-            ("котика", "спит"),
-            2,
-            include_stem=True,
-        )
-
-        self.assertEqual(
-            [(match.state, match.match_kind) for match in matches],
-            [(("котик", "спит"), "stem")],
-        )
-
-    async def test_exact_and_casefold_precede_stem_without_duplicates(self) -> None:
-        self.db.get_markov_states.return_value = [
-            (("Тренировка", "Помогает"), 8),
-            (("тренировка", "помогает"), 10),
-            (("тренировку", "помогает"), 10),
-        ]
-
-        matches = await self.matcher.match(
-            8,
-            ("Тренировка", "Помогает"),
-            2,
-            include_stem=True,
-        )
-
-        self.assertEqual(
-            [(match.state, match.match_kind) for match in matches],
-            [
-                (("Тренировка", "Помогает"), "exact"),
-                (("тренировка", "помогает"), "casefold"),
-                (("тренировку", "помогает"), "stem"),
-            ],
-        )
-
-    async def test_stem_index_is_built_only_when_requested(self) -> None:
-        self.db.get_markov_states.return_value = [
-            (("тренировка", "помогает"), 10),
-        ]
-
-        await self.matcher.match(9, ("ТРЕНИРОВКА", "ПОМОГАЕТ"), 2)
-        index = self.matcher._cache[(9, 2)]
-        self.assertIsNone(index.stemmed)
-
-        await self.matcher.match(
-            9,
-            ("тренировки", "помогают"),
-            2,
-            include_stem=True,
-        )
-        self.assertIsNotNone(index.stemmed)
+        self.assertEqual(matches, [])

@@ -30,7 +30,6 @@ def _runtime_state() -> MagicMock:
     state.enable_backoff = True
     state.normalize_lower = False
     state.fuzzy_context_casefold = False
-    state.fuzzy_context_stem = False
     state.auto_capitalize_replies = False
     state.recent_short_replies = {}
     state.recent_replies = {}

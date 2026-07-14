@@ -223,12 +223,10 @@ floor 0.02); выбор — через `rng.expovariate` (`exploration_weighted_
      recency-бонус до +35% для хвостовых окон);
    - exact 2-граммные (+30% recency);
    - casefold 3/2-граммы (при `fuzzy_context_casefold=true`) через
-     `ContextStateMatcher`;
-   - stem-матчи (при `fuzzy_context_stem=true`, дефолт): состояния модели,
-     чей приблизительный стем (`stem_token`, тот же что в
-     `context_start_affinity` и IDF-релевантности) совпадает со стемом
-     контекстного окна («билеты стоят» ≡ «билет стоит»); сортировка по
-     частоте, дубли exact/casefold исключаются.
+     `ContextStateMatcher`.
+   Стем-тир здесь был третьим уровнем каскада и удалён 2026-07-14: на проде он
+   не давал ни одного старта (замер — в [CLOSED.md](CLOSED.md)). Морфология
+   осталась там, где работает: `context_start_affinity` и IDF-релевантность.
    Гейт: контекстный старт вообще пробуется лишь с вероятностью
    `context_start_probability(2.2)≈0.545` за попытку (`use_contextual_start`);
    в остальных ~45% сразу глобальный старт. При совпадении в текст эмитится

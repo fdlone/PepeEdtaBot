@@ -261,17 +261,6 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
         "true",
         _bool(),
     ),
-    # Morphology-folding context matching: when exact and casefold lookups
-    # miss, states are matched by the approximate Russian stem (stem_token) —
-    # the same fold context_start_affinity and IDF relevance already use. This
-    # replaced the prefix heuristic (2026-07-12), which was off by default and
-    # duplicated the stemmer with its own thresholds.
-    FieldSpec(
-        "fuzzy_context_stem",
-        "FUZZY_CONTEXT_STEM",
-        "true",
-        _bool(),
-    ),
     FieldSpec("reply_context_max_tokens", "REPLY_CONTEXT_MAX_TOKENS", "12",
               _int_min(2)),
     FieldSpec("reply_context_last_tokens", "REPLY_CONTEXT_LAST_TOKENS", "3",

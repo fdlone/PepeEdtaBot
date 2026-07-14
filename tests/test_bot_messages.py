@@ -46,7 +46,6 @@ def make_state() -> SimpleNamespace:
         user_quirk_min_interactions=25,
         use_reply_context=True,
         fuzzy_context_casefold=False,
-        fuzzy_context_stem=False,
         reply_context_max_tokens=12,
         reply_context_last_tokens=3,
         reply_context_bias=1.8,
