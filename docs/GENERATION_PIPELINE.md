@@ -296,7 +296,7 @@ floor 0.02); выбор — через `rng.expovariate` (`exploration_weighted_
 
 `GenerationTrace` пишется в debug-лог: attempts, order_used, jumps, rejection,
 start_source (**global / seed / context / hidden_context**), счётчики
-exact/casefold/stem матчей и фолбэков. `context` = видимый контекстный старт
+exact/casefold матчей и фолбэков. `context` = видимый контекстный старт
 (токены эмитятся); `hidden_context` = совпадение было, но хвост окна пуст
 (одни стоп-слова) и старт не эмитился.
 
@@ -428,7 +428,7 @@ Fallback на обращение не считается в hourly cap.
 | reply_context_bias / start_bias | 1.8 / 2.2 | сила контекста в шаге/старте |
 | reply_context_only_for_replies | true | контекст только для реплаев |
 | reply_context_include_current_message | true | + текущее сообщение |
-| fuzzy_context_casefold / stem | true / true | нечёткий матчинг контекста |
+| fuzzy_context_casefold | true | нечёткий матчинг контекста по регистру |
 | hot_ngram_seed_chance / min_count / recency_share | 0.25 / 3 / 0.5 | L1 running jokes |
 | rare_event_chance / false_start_chance / rare_event_daily_cap | 0.03 / 0.05 / 3 | L3 |
 | user_quirk_chance / user_quirk_min_interactions | 0.1 / 25 | L2 |

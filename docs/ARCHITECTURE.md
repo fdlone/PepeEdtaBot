@@ -90,7 +90,7 @@
 |---|---|
 | `app/infrastructure/database.py` | Фасад над репозиториями: соединение `aiosqlite`, кросс-доменные транзакции (`save_message_and_update_model`, `clear_chat`, `get_stats`), retention `pivo_daily_usage`. |
 | `app/core/markov.py` | Variable-order генератор (3 → 2; порядка 1 нет — его блуждания были словесным салатом). Контекстно-аффинные старты, topic-drift jumps. |
-| `app/core/morphology.py` | Приближённый русский стеммер (`stem_token`) — единый fold-ключ для контекст-матчинга, IDF-релевантности и аффинности стартов. |
+| `app/core/morphology.py` | Приближённый русский стеммер (`stem_token`) — единый fold-ключ для IDF-релевантности и аффинности стартов. Контекст-матчинг стемы не использует: этот тир удалён 2026-07-14 (см. [CLOSED.md](CLOSED.md)). |
 | `app/core/gen_trace_log.py` | Пошаговый лайв-трейс отбора кандидатов (логгер `chat_markov.gen`), включается env-флагом `GEN_TRACE_LOG`; поведения не меняет. |
 | `app/core/response_generator.py` | Конвейер best-of-N: генерация кандидатов, фильтры (verbatim, echo, анти-повтор), softmax-отбор по скорингу, reply flavor. |
 | `app/core/candidate_scorer.py` | Скоринг кандидатов: качество завершения, длина по режимам short/medium/long, IDF-релевантность контексту (по стемам, с echo-гардом), штрафы повторов (включая бывший diversity-компонент) и дословного цитирования (рамп от 60% корпусных 4-грамм). |
