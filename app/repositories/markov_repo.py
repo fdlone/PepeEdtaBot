@@ -97,6 +97,7 @@ class MarkovRepo(BaseRepo):
         table, columns = (
             ("transitions3", "w1, w2, w3") if order == 3 else ("transitions", "w1, w2")
         )
+        # table/columns are picked from the two literals above, never from a caller.
         rows = await self._fetch_all(
             f"""
             SELECT {columns}, SUM(cnt)
@@ -104,7 +105,7 @@ class MarkovRepo(BaseRepo):
             WHERE chat_id = ?
             GROUP BY {columns}
             ORDER BY {columns}
-            """,  # nosec B608 - table/columns picked from two literals above
+            """,  # nosec B608
             (chat_id,),
         )
         return [
@@ -128,8 +129,9 @@ class MarkovRepo(BaseRepo):
     async def _sum_cnt(
         db: aiosqlite.Connection, table: str, chat_id: int
     ) -> int:
+        # table is a hardcoded caller constant, never user input.
         cursor = await db.execute(
-            f"SELECT COALESCE(SUM(cnt), 0) FROM {table} WHERE chat_id = ?",  # nosec B608 - table is a hardcoded caller constant
+            f"SELECT COALESCE(SUM(cnt), 0) FROM {table} WHERE chat_id = ?",  # nosec B608
             (chat_id,),
         )
         row = await cursor.fetchone()

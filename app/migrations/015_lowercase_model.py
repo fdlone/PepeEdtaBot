@@ -38,20 +38,22 @@ async def apply(conn: aiosqlite.Connection) -> None:
         keys = ", ".join(f"py_lower({column}) AS {column}" for column in key_columns)
         group_by = ", ".join(f"py_lower({column})" for column in key_columns)
         columns = ", ".join(key_columns)
+        # Table and column names come from the _MODEL_TABLES literal above, never
+        # from a caller: the B608 hits below are interpolated identifiers, not data.
         await conn.execute(
             f"""
             CREATE TEMP TABLE _lc_{table} AS
             SELECT chat_id, {keys}, SUM(cnt) AS cnt
             FROM {table}
             GROUP BY chat_id, {group_by}
-            """  # nosec B608 - table/columns come from the _MODEL_TABLES literal
+            """  # nosec B608
         )
-        await conn.execute(f"DELETE FROM {table}")  # nosec B608 - literal table name
+        await conn.execute(f"DELETE FROM {table}")  # nosec B608
         await conn.execute(
             f"""
             INSERT INTO {table}(chat_id, {columns}, cnt)
             SELECT chat_id, {columns}, cnt FROM _lc_{table}
-            """  # nosec B608 - table/columns come from the _MODEL_TABLES literal
+            """  # nosec B608
         )
         await conn.execute(f"DROP TABLE _lc_{table}")
 
