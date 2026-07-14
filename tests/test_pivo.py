@@ -556,3 +556,65 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPivoMemberRefresh(unittest.IsolatedAsyncioTestCase):
+    """/pivo mentions must follow username changes, without a write per message."""
+
+    def _make_service(self, db: AsyncMock, security: PivoSecurity):
+        from app.services.pivo_service import PivoService
+
+        return PivoService(db=db, security=security)
+
+    def _user(self, username: str) -> SimpleNamespace:
+        return SimpleNamespace(id=200, username=username, full_name="Вася")
+
+    async def test_refresh_stores_the_current_username(self) -> None:
+        security = make_security()
+        db = AsyncMock()
+        service = self._make_service(db, security)
+
+        await service.refresh_member(100, self._user("new_nick"), today=date(2026, 7, 14))
+
+        kwargs = db.refresh_chat_member.await_args.kwargs
+        self.assertEqual(kwargs["chat_hash"], security.hmac_value(100))
+        self.assertEqual(kwargs["user_hash"], security.hmac_value(200))
+        self.assertEqual(
+            security.decrypt_value(kwargs["encrypted_username"]), "new_nick"
+        )
+        self.assertEqual(
+            security.decrypt_value(kwargs["encrypted_display_name"]), "Вася"
+        )
+
+    async def test_second_message_same_day_does_not_write(self) -> None:
+        db = AsyncMock()
+        service = self._make_service(db, make_security())
+        user = self._user("nick")
+
+        await service.refresh_member(100, user, today=date(2026, 7, 14))
+        await service.refresh_member(100, user, today=date(2026, 7, 14))
+
+        db.refresh_chat_member.assert_awaited_once()
+
+    async def test_next_day_writes_again(self) -> None:
+        db = AsyncMock()
+        service = self._make_service(db, make_security())
+        user = self._user("nick")
+
+        await service.refresh_member(100, user, today=date(2026, 7, 14))
+        await service.refresh_member(100, user, today=date(2026, 7, 15))
+
+        self.assertEqual(db.refresh_chat_member.await_count, 2)
+
+    async def test_throttle_is_per_user_and_chat(self) -> None:
+        db = AsyncMock()
+        service = self._make_service(db, make_security())
+        today = date(2026, 7, 14)
+
+        await service.refresh_member(100, self._user("nick"), today=today)
+        await service.refresh_member(
+            100, SimpleNamespace(id=201, username="other", full_name="Петя"), today=today
+        )
+        await service.refresh_member(101, self._user("nick"), today=today)
+
+        self.assertEqual(db.refresh_chat_member.await_count, 3)

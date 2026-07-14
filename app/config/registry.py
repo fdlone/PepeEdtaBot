@@ -133,7 +133,7 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _int_in_range(20, 4000)),
     FieldSpec("max_reply_tokens", "MAX_REPLY_TOKENS", "45",
               _int_in_range(1, 300)),
-    FieldSpec("normalize_lower", "NORMALIZE_LOWER", "false", _bool()),
+    FieldSpec("normalize_lower", "NORMALIZE_LOWER", "true", _bool()),
     FieldSpec(
         "auto_capitalize_replies",
         "AUTO_CAPITALIZE_REPLIES",

@@ -295,6 +295,38 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         await self.db.remove_chat_member("chat-hash", "user-hash")
         self.assertEqual(await self.db.get_chat_members("chat-hash"), [])
 
+    async def test_refresh_chat_member_updates_profile_only(self) -> None:
+        await self.db.upsert_chat_member(
+            chat_hash="chat-hash",
+            user_hash="user-hash",
+            encrypted_user_id="encrypted-user-id",
+            encrypted_username="old-username",
+            encrypted_display_name="old-display-name",
+        )
+
+        await self.db.refresh_chat_member(
+            chat_hash="chat-hash",
+            user_hash="user-hash",
+            encrypted_username="new-username",
+            encrypted_display_name="new-display-name",
+        )
+
+        members = await self.db.get_chat_members("chat-hash")
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0]["encrypted_username"], "new-username")
+        self.assertEqual(members[0]["encrypted_display_name"], "new-display-name")
+        self.assertEqual(members[0]["encrypted_user_id"], "encrypted-user-id")
+
+    async def test_refresh_chat_member_does_not_subscribe_anyone(self) -> None:
+        await self.db.refresh_chat_member(
+            chat_hash="chat-hash",
+            user_hash="stranger-hash",
+            encrypted_username="username",
+            encrypted_display_name="display-name",
+        )
+
+        self.assertEqual(await self.db.get_chat_members("chat-hash"), [])
+
     async def test_schema_contains_expected_tables(self) -> None:
         await self.db.close()
         async with aiosqlite.connect(str(self.db_path)) as conn:

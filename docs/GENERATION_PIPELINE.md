@@ -120,8 +120,11 @@ Telegram message (F.text)
 - `sanitize_text` (`core/text.py:64`): удаление ссылок → редакция PII
   (`privacy_filter.redact_sensitive_data`) → удаление @mentions → сжатие
   повторов символов (3+ → 2) → нормализация пробелов.
-- `tokenize` (`markov.py:97`): `\w+|[.,!?;:]`, lowercase только при
-  `normalize_lower=true` (по умолчанию **false** — регистр сохраняется).
+- `tokenize` (`markov.py:97`): `\w+|[.,!?;:]`, lowercase при
+  `normalize_lower=true` (по умолчанию **true**: иначе «Пиво» и «пиво» — разные
+  состояния цепи, счётчики дробятся, а заглавные буквы утекают в ответы).
+  Флаг работает только на входе; уже накопленную модель разово приводит к
+  нижнему регистру миграция `015_lowercase_model`.
 - Обучаемость: длина ≤ 500 символов **и** ≥ 2 токена.
 
 ### 1.6 Гейты объёма модели
@@ -431,7 +434,7 @@ Fallback на обращение не считается в hourly cap.
 | mention_cooldown_sec | 5 | анти-флуд обращений (per user) |
 | min_tokens_for_model | 200 | порог «модель готова» |
 | max_reply_chars / tokens | 280 / 45 | пределы длины |
-| normalize_lower | false | lowercase-токенизация |
+| normalize_lower | true | lowercase-токенизация |
 | auto_capitalize_replies | false | капитализация предложений |
 | randomness_strength | 2.0 | база explore/power (§5.1) |
 | candidate_selection_temperature | 1.3 | softmax выбора кандидата |

@@ -46,6 +46,32 @@ class ChatMembersRepo(BaseRepo):
             ),
         )
 
+    async def refresh_profile(
+        self,
+        *,
+        chat_hash: str,
+        user_hash: str,
+        encrypted_username: str,
+        encrypted_display_name: str,
+    ) -> None:
+        """Обновляет профиль уже подписанного участника (без вставки новых строк).
+
+        Username/display name — снимок на момент подписки, а Telegram позволяет
+        менять и то, и другое: устаревший «@ник» в /pivo превращается в мёртвый
+        текст, который никого не тегает. UPDATE без ON CONFLICT намеренный —
+        участники, не нажавшие /pivo_on, в таблицу не попадают.
+        """
+        await self._execute(
+            """
+            UPDATE chat_members
+            SET encrypted_username = ?,
+                encrypted_display_name = ?,
+                updated_at = datetime('now')
+            WHERE chat_hash = ? AND user_hash = ?
+            """,
+            (encrypted_username, encrypted_display_name, chat_hash, user_hash),
+        )
+
     async def remove_chat(self, chat_hash: str) -> None:
         """Удаляет всех участников чата (используется /clear)."""
         await self._execute(

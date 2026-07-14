@@ -54,7 +54,7 @@ from app.presentation.fallback_phrases import (
     next_quirk_vocative,
     pick_fallback_phrase,
 )
-from app.services import LearningService
+from app.services import LearningService, PivoService
 
 router = Router(name="learning")
 logger = logging.getLogger("chat_markov")
@@ -168,6 +168,7 @@ async def on_text_message(
     bot_username: str,
     bot_id: int,
     bot_text_aliases: frozenset[str],
+    pivo_service: PivoService,
 ) -> None:
     if not is_group_message(message):
         return
@@ -175,6 +176,11 @@ async def on_text_message(
         return
     if message.from_user.is_bot:
         return
+
+    # Каждое сообщение — свежий снимок профиля отправителя: /pivo упоминает по
+    # @username, а он мог смениться после /pivo_on. No-op для неподписанных.
+    await pivo_service.refresh_member(message.chat.id, message.from_user)
+
     raw_text = message.text or ""
     if raw_text.startswith("/"):
         return
