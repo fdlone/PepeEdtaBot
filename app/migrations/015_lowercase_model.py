@@ -44,14 +44,14 @@ async def apply(conn: aiosqlite.Connection) -> None:
             SELECT chat_id, {keys}, SUM(cnt) AS cnt
             FROM {table}
             GROUP BY chat_id, {group_by}
-            """
+            """  # nosec B608 - table/columns come from the _MODEL_TABLES literal
         )
-        await conn.execute(f"DELETE FROM {table}")
+        await conn.execute(f"DELETE FROM {table}")  # nosec B608 - literal table name
         await conn.execute(
             f"""
             INSERT INTO {table}(chat_id, {columns}, cnt)
             SELECT chat_id, {columns}, cnt FROM _lc_{table}
-            """
+            """  # nosec B608 - table/columns come from the _MODEL_TABLES literal
         )
         await conn.execute(f"DROP TABLE _lc_{table}")
 
