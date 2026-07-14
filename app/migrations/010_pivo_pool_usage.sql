@@ -1,6 +1,6 @@
 -- 010_pivo_pool_usage
 --
--- Dialogue-generation improvement S2 ([DIALOGUE_GENERATION_ACTION_PLAN] Stage 2):
+-- Dialogue-generation improvement S2 (dialogue-liveliness track, stage 2; see docs/CLOSED.md):
 -- /pivo weighted anti-repeat. The message builder picks top/body/bottom parts
 -- uniformly, so the same intros become recognizable within a few calls. To avoid
 -- that, remember the last N indices used per pool per chat and exclude them from

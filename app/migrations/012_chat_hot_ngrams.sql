@@ -1,6 +1,6 @@
 -- 012_chat_hot_ngrams
 --
--- Dialogue-generation improvement L1 ([DIALOGUE_GENERATION_ACTION_PLAN] Stage 4):
+-- Dialogue-generation improvement L1 (dialogue-liveliness track, stage 4; see docs/CLOSED.md):
 -- running jokes. Counts content bigrams/trigrams per chat over a sliding window
 -- (rows decay/expire at startup, see Database.decay_chat_hot_ngrams). An n-gram
 -- is "hot" when its window count is a large share of its all-time count in

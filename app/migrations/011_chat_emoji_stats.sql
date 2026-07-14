@@ -1,6 +1,6 @@
 -- 011_chat_emoji_stats
 --
--- Dialogue-generation improvement M3 ([DIALOGUE_GENERATION_ACTION_PLAN] Stage 3):
+-- Dialogue-generation improvement M3 (dialogue-liveliness track, stage 3; see docs/CLOSED.md):
 -- emoji channel. The Markov model drops emojis (TOKEN_RE keeps only \w+ and a few
 -- punctuation marks), so the bot never speaks the chat's emoji vocabulary. This
 -- table records a per-chat emoji frequency so replies can occasionally end with an

@@ -1,35 +1,20 @@
-# Operations Runbook
+# Операционный runbook
 
-This document covers the minimum operational procedures for a long-running
-`PepeEdtaBot` deployment.
+Минимально необходимые процедуры для долгоживущего деплоя `PepeEdtaBot`.
 
-## Scope
+Бот работает через long polling к Telegram Bot API, хранит данные в SQLite (WAL),
+пишет логи в stdout, разворачивается через Docker/Compose. HTTP-эндпоинта,
+эндпоинта метрик и встроенного планировщика бэкапов нет.
 
-The bot uses:
+## Логи
 
-- long polling to the Telegram Bot API;
-- SQLite in WAL mode;
-- stdout logging;
-- Docker / Compose as the primary deployment shape in this repository.
+Приложение пишет в stdout. Ротацию настраивает окружение вокруг контейнера.
 
-There is no HTTP admin endpoint, no built-in metrics endpoint, and no
-application-level backup scheduler.
+Минимум: хранить хотя бы 3 ротированных файла, ограничить размер одного файла,
+следить за счётчиком рестартов и всплесками ошибок отдельно от файлов логов.
 
-## Logging
-
-The application writes plain logs to stdout. Rotation must be configured by the
-runtime around the container or process.
-
-Recommended minimum:
-
-- keep at least 3 rotated log files;
-- cap one log file at a finite size;
-- monitor container restart count and error bursts separately from log files.
-
-### Docker daemon `json-file` rotation
-
-If the host uses Docker's default `json-file` log driver, configure daemon
-rotation on the host, for example:
+Для стандартного docker-драйвера `json-file` ротация задаётся на хосте (это
+настройка демона, не файл репозитория):
 
 ```json
 {
@@ -41,136 +26,89 @@ rotation on the host, for example:
 }
 ```
 
-This is a host-level setting, not a repository file.
+Если платформа ротирует stdout сама (journald и подобные) — проверьте, что
+retention конечен, логи ищутся по имени контейнера, а события рестарта и stderr
+хранятся вместе со stdout.
 
-### Journald / platform-managed logs
+## Обслуживание WAL
 
-If the container platform already rotates stdout logs, verify:
+Включён `PRAGMA journal_mode=WAL`, поэтому одна логическая база — это три файла:
+`data/markov.db`, `data/markov.db-wal`, `data/markov.db-shm`.
 
-- retention is finite;
-- logs are searchable by container name;
-- restart events and stderr are retained together with stdout.
-
-## SQLite WAL Maintenance
-
-The bot enables `PRAGMA journal_mode=WAL`. During normal operation this creates
-the main database plus optional `-wal` and `-shm` side files.
-
-Files to treat as one logical database:
-
-- `data/markov.db`
-- `data/markov.db-wal`
-- `data/markov.db-shm`
-
-### When to run a checkpoint
-
-Run a manual checkpoint when:
-
-- the `-wal` file grows unexpectedly;
-- you want a cleaner cold backup;
-- the bot was restarted after a crash and WAL size stays high.
-
-### Manual checkpoint command
-
-Run on the deployment host from the repository root:
+Ручной checkpoint нужен, когда `-wal` неожиданно вырос, перед «холодным» бэкапом
+или если после падения размер WAL остаётся большим:
 
 ```bash
 python -c "import sqlite3; conn = sqlite3.connect('data/markov.db'); print(conn.execute('PRAGMA wal_checkpoint(TRUNCATE);').fetchall()); conn.close()"
 ```
 
-Expected result shape: one SQLite row from `wal_checkpoint`. After a successful
-truncate checkpoint, the WAL file should shrink substantially or disappear when
-idle.
+Ожидаемый результат — одна строка от `wal_checkpoint`; после успешного truncate
+WAL заметно сжимается или исчезает на простое. Для самого консервативного
+сценария остановите бота перед командой.
 
-For the most conservative maintenance window, stop the bot before the command.
+## Бэкапы
 
-## Backups
+**Холодная копия** (когда бота можно остановить): остановить → скопировать
+`data/markov.db` и, если есть, `-wal`/`-shm` → запустить снова. После чистой
+остановки с checkpoint'ом обычно остаётся только `markov.db`, но процедура
+должна переживать и наличие WAL/SHM.
 
-Two safe backup modes are supported here.
-
-### Option A: cold file copy
-
-Use when you can stop the bot briefly.
-
-1. Stop the bot container or process.
-2. Copy `data/markov.db`, `data/markov.db-wal`, and `data/markov.db-shm` if
-   they exist.
-3. Start the bot again.
-
-If you stop the bot cleanly and run a checkpoint first, usually only
-`data/markov.db` remains, but the procedure should still tolerate WAL/SHM
-files.
-
-### Option B: online SQLite backup
-
-Use when you need a backup without stopping the bot.
+**Онлайн-бэкап** (без остановки):
 
 ```bash
 python -c "import sqlite3; src = sqlite3.connect('data/markov.db'); dst = sqlite3.connect('data/markov.backup.sqlite'); src.backup(dst); dst.close(); src.close()"
 ```
 
-After the online backup finishes, optionally run a WAL checkpoint to reduce WAL
-growth on the live database.
+После онлайн-бэкапа полезно прогнать checkpoint, чтобы WAL не рос.
 
-### Backup verification
-
-A backup is not complete until it is verified.
-
-Minimum verification:
+**Бэкап не считается сделанным, пока не проверен:**
 
 ```bash
 python -c "import sqlite3; conn = sqlite3.connect('data/markov.backup.sqlite'); print(conn.execute('PRAGMA integrity_check;').fetchone()); conn.close()"
 ```
 
-Expected result: `('ok',)`.
+Ожидаемый результат: `('ok',)`.
 
-## Restore
+## Восстановление
 
-Restore only with the bot stopped.
+Только при остановленном боте:
 
-1. Stop the bot container or process.
-2. Move the current live files out of the way:
-   `data/markov.db`, `data/markov.db-wal`, `data/markov.db-shm`.
-3. Copy the chosen backup into place as `data/markov.db`.
-4. Ensure file ownership matches the runtime user.
-5. Start the bot.
-6. Review startup logs and run a quick smoke check with `/ping` and `/stats`.
+1. Остановить контейнер/процесс.
+2. Убрать текущие `data/markov.db`, `data/markov.db-wal`, `data/markov.db-shm`.
+3. Положить выбранный бэкап как `data/markov.db`.
+4. Проверить, что владелец файла — рантайм-пользователь.
+5. Запустить бота.
+6. Посмотреть логи старта, проверить `/ping` и `/stats`.
 
-If the backup was created as a single SQLite file, do not restore stale `-wal`
-or `-shm` files next to it.
+Если бэкап — одиночный SQLite-файл, не кладите рядом устаревшие `-wal`/`-shm`.
 
-## Minimal Post-Restart Checks
+## Проверки после рестарта
 
-After restart or restore, verify:
+Контейнер/процесс запущен; в логах нормальный старт без ошибок миграций;
+`/ping` отвечает; `/stats` работает в группе; `data/markov.db` доступен на запись
+рантайм-пользователю.
 
-- container/process is running;
-- logs show normal startup without migration failure;
-- `/ping` responds;
-- `/stats` works in a group chat;
-- `data/markov.db` is writable by the runtime user.
+## Retention данных
 
-## Database Retention
+Таблица `messages` ограничена автоматически: после каждой вставки бот атомарно
+оставляет только последние `MESSAGES_RETENTION_PER_CHAT` строк чата. Значение
+должно быть не меньше `TEXT_CACHE_MAX_MESSAGES`, иначе старт падает — иначе
+сломается детект дословных копий.
 
-The `messages` table is bounded automatically per chat. After each insert, the
-bot atomically keeps only the newest `MESSAGES_RETENTION_PER_CHAT` rows for that
-chat. The configured cap must be at least `TEXT_CACHE_MAX_MESSAGES`, otherwise
-startup fails to protect verbatim-copy detection.
+Агрегированные таблицы Маркова (`starts`, `starts3`, `transitions`,
+`transitions3`) не чистятся и представляют всю выученную историю.
+`pivo_daily_usage` подчищается на старте (`cleanup_pivo_daily_usage`).
+Таблицы «личности» — `chat_emoji_stats`, `chat_hot_ngrams`,
+`chat_user_interactions` — затухают на старте и потом лениво примерно раз в
+сутки с learning-пути: счётчики, не обновлявшиеся в окне (7 дней для первых
+двух, 30 — для взаимодействий), делятся пополам, обнулившиеся строки удаляются.
+Скользящее окно едет и без рестартов.
 
-The aggregated Markov tables (`starts`, `starts3`, `transitions`,
-`transitions3`; the order-1 `transitions1` was dropped by migration 013) are
-not pruned and continue to represent all learned history. `pivo_daily_usage`
-is cleaned up automatically on bot startup via `cleanup_pivo_daily_usage`. The
-dialogue-flavor tables `chat_emoji_stats`, `chat_hot_ngrams` and
-`chat_user_interactions` decay on startup and then lazily about once a day
-from the learning path (counts not bumped within the window — 7 days for the
-first two, 30 for interactions — are halved, rows reaching zero are deleted),
-so their sliding windows keep moving without restarts.
+Удаление строк само по себе не уменьшает файл БД. Чтобы вернуть страницы
+файловой системе, прогоните `VACUUM` в окно обслуживания; для сжатия WAL может
+дополнительно потребоваться `PRAGMA wal_checkpoint(TRUNCATE)`.
 
-Deleting rows does not shrink the main SQLite file by itself. Run `VACUUM`
-during a maintenance window to return unused pages to the filesystem. A manual
-`PRAGMA wal_checkpoint(TRUNCATE)` may still be needed to shrink the WAL file.
-
-### Checking per-table disk usage
+Размер по таблицам:
 
 ```bash
 python -c "
@@ -183,27 +121,17 @@ conn.close()
 "
 ```
 
-Note: `starts`, `starts3`, `transitions`, `transitions3` tables
-store aggregated counts derived from message text — they are not tied to
-individual `messages` rows. To reset all Markov data for a chat, use the `/clear`
-command inside the group (admin-only). The bot will rebuild its model naturally
-as new messages arrive.
+Таблицы модели хранят агрегированные счётчики, выведенные из текстов, и не
+привязаны к конкретным строкам `messages`. Чтобы сбросить модель чата целиком,
+используйте `/clear confirm` в группе (только админ) — модель отстроится заново
+по новым сообщениям.
 
-### Recommended maintenance schedule
+**Расписание для небольшой активной группы** (до ~10 человек): ежемесячно —
+проверить размер файла БД и при необходимости сделать checkpoint; ежеквартально —
+посмотреть размер по таблицам и запланировать `VACUUM`.
 
-For a small active group (up to ~10 users, continuous use):
+## Что на самом деле проверяет HEALTHCHECK
 
-- Monthly: check database file size; checkpoint WAL if needed.
-- Quarterly: review per-table size and schedule `VACUUM` if deleted pages should
-  be returned to the filesystem.
-
-## Healthcheck Reality
-
-The Docker `HEALTHCHECK` verifies that Python starts and that the SQLite
-database file exists and is readable. It does not prove:
-
-- Telegram polling is healthy;
-- SQLite writes succeed;
-- the event loop is making progress.
-
-Treat the healthcheck as a minimal smoke probe, not a strong readiness signal.
+Docker `HEALTHCHECK` проверяет, что Python стартует и файл БД читается. Он **не**
+доказывает, что polling жив, что записи в SQLite проходят и что event loop
+двигается. Это минимальная smoke-проба, а не сигнал готовности.

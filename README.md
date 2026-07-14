@@ -104,6 +104,9 @@ docker compose down            # остановка
   совпадения отбрасываются всегда).
 - `LENGTH_MODE_WEIGHTS` — веса режимов целевой длины ответа
   (short/medium/long), выбираемых на каждый ответ.
+- `LENGTH_CONTEXT_ADAPTATION` — насколько длина сообщения, на которое отвечают,
+  наклоняет выбор режима: короткое тянет к short, длинное — к long; `0`
+  отключает наклон.
 - `MOOD_ENABLED` / `MOOD_MODULATION_STRENGTH` — скрытое настроение чата
   (sleepy/calm/lively/heated) из темпа сообщений, эмфатики и частоты обращений;
   плавно меняет вероятность ответа, вариативность, длину и flavor. Пороги и
@@ -292,9 +295,8 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) прогоняет �
   сообщения от хендлера до ответа: скоринг, гейты, ручки.
 - [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — операционный runbook: логи,
   WAL checkpoint, backup/restore, retention.
-- [`docs/audits/`](docs/audits/README.md) — история аудитов и ревью проекта.
-- [`docs/DIALOGUE_GENERATION_ACTION_PLAN.md`](docs/DIALOGUE_GENERATION_ACTION_PLAN.md)
-  — план и прогресс трека «живости» диалога (Stage 1–4, все пункты реализованы).
+- [`docs/OPEN.md`](docs/OPEN.md) — открытые вопросы и бэклог.
+- [`docs/CLOSED.md`](docs/CLOSED.md) — журнал закрытого: аудиты, ревью, фичи.
 
 ## Безопасность
 - не коммитьте `.env` и не храните реальные токены в репозитории;

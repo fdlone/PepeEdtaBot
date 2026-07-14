@@ -1,9 +1,8 @@
 # Архитектура проекта
 
-Документ описывает текущую слоистую архитектуру `PepeEdtaBot` (после
-рефакторинга `refactor/structure`, фазы 1–6). Если вы трогаете код впервые —
-читайте этот файл вместе с историей аудитов в `docs/audits/`
-(индекс и статусы — в `docs/audits/README.md`).
+Документ описывает текущую слоистую архитектуру `PepeEdtaBot`. Если вы трогаете
+код впервые — читайте его вместе с [GENERATION_PIPELINE.md](GENERATION_PIPELINE.md)
+(конвейер ответа) и [OPEN.md](OPEN.md) (что не закрыто).
 
 ## Слои
 
@@ -83,14 +82,14 @@
 | `filters/` | `group_only.py` (только `GROUP`/`SUPERGROUP`), `admin_or_owner.py` (`OWNER_ID` или админ чата, fail-closed при ошибке Telegram API) |
 | `middlewares/` | `throttling.py` — per-user-per-command cooldown, `clear`=3600 сек; команды из `notify_on_throttle` получают явный ответ при throttle вместо silent drop |
 | `infrastructure/` | `database.py` — фасад БД; `migrator.py` — пробегает `app/migrations/NNN_*` ровно один раз. `.sql`-файлы оборачиваются в `BEGIN; ... COMMIT;` и проходят через `executescript`; на исключении вызывается `conn.rollback()` и схема не остаётся в полу-применённом состоянии |
-| `migrations/` | `001_initial.sql` … `014_chat_user_interactions.sql` |
+| `migrations/` | `001_initial.sql` … `015_lowercase_model.py` |
 
 ### Внутренние модули пакета
 
 | Файл | Назначение |
 |---|---|
 | `app/infrastructure/database.py` | Фасад над репозиториями: соединение `aiosqlite`, кросс-доменные транзакции (`save_message_and_update_model`, `clear_chat`, `get_stats`), retention `pivo_daily_usage`. |
-| `app/core/markov.py` | Variable-order генератор (3 → 2; цепь порядка 1 удалена миграцией 013 — order-1 блуждания были словесным салатом). Контекстно-аффинные старты, topic-drift jumps (M4). |
+| `app/core/markov.py` | Variable-order генератор (3 → 2; порядка 1 нет — его блуждания были словесным салатом). Контекстно-аффинные старты, topic-drift jumps. |
 | `app/core/morphology.py` | Приближённый русский стеммер (`stem_token`) — единый fold-ключ для контекст-матчинга, IDF-релевантности и аффинности стартов. |
 | `app/core/gen_trace_log.py` | Пошаговый лайв-трейс отбора кандидатов (логгер `chat_markov.gen`), включается env-флагом `GEN_TRACE_LOG`; поведения не меняет. |
 | `app/core/response_generator.py` | Конвейер best-of-N: генерация кандидатов, фильтры (verbatim, echo, анти-повтор), softmax-отбор по скорингу, reply flavor. |
@@ -175,8 +174,8 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
 | Таблица | Назначение |
 |---|---|
 | `messages` | `chat_id`, `author_id` (анонимизирован), `normalized_text`, `created_at`. Сырой `text` удалён миграцией 005. |
-| `starts3` / `transitions3` | Основная триграммная модель (`(w1, w2) → w3`). |
-| `starts` / `transitions` | Биграммный fallback (`w1 → w2`). Униграммная `transitions1` удалена миграцией 013. |
+| `starts3` / `transitions3` | Основная цепь порядка 3: состояние `(w1, w2, w3)` → `w4`. Токены в нижнем регистре (`NORMALIZE_LOWER=true`); накопленную модель разово привела к нему миграция 015. |
+| `starts` / `transitions` | Бэкофф порядка 2: состояние `(w1, w2)` → `w3`. Цепь порядка 1 (`transitions1`) удалена миграцией 013. |
 | `chat_members` | Каноническая таблица участников чата. PK `(chat_hash, user_hash)`, payload зашифрован Fernet. Сейчас единственный потребитель — `/pivo` (присутствие в таблице ≡ подписка); будущие фичи, которым нужно персистентное состояние участника, ходят сюда же. Профиль (`@username`, имя) освежается по сообщениям подписчика, но не чаще раза в сутки (`PivoService.refresh_member`) — иначе устаревший ник в упоминании никого не тегает. |
 | `pivo_daily_usage` | Суточная квота `/pivo` (`chat_hash`, `user_hash`, `usage_day`, `used_count`). Retention 7 дней. |
 | `pivo_pool_usage` | Анти-повтор шаблонов `/pivo`: последние использованные индексы top/body/bottom per chat per pool (`chat_hash`, `pool_name`, `recent_indices`). Миграция 010. |
