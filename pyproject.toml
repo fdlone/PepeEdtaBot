@@ -22,6 +22,15 @@ select = ["E", "F", "I", "UP"]
 "tools/seed_db.py" = ["E402", "E501"]
 "tools/seed_diverse.py" = ["E402", "E501"]
 
+[tool.bandit]
+# B311 (non-crypto `random`) fires on every dice roll in the generation path and
+# in the dev seeding/eval scripts — 23 hits, all benign. The crypto in this
+# project never touches `random`: the /pivo HMAC and Fernet keys are derived from
+# the .env secrets, and Fernet draws its own IV from os.urandom. Skipping the
+# check keeps a future *real* low finding (a swallowed exception, say) visible
+# instead of buried. If randomness is ever needed for a secret, use `secrets`.
+skips = ["B311"]
+
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true

@@ -587,9 +587,10 @@ class Database:
         )
         async with self._lock:
             db = await self._get_conn()
+            # `tables` is the literal tuple above, never user input.
             for table in tables:
                 await db.execute(
-                    f"DELETE FROM {table} WHERE chat_id = ?",  # nosec B608 - tables is a literal tuple
+                    f"DELETE FROM {table} WHERE chat_id = ?",  # nosec B608
                     (chat_id,),
                 )
             await db.commit()
