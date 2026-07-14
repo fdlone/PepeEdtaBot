@@ -188,7 +188,14 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # The weights alone are blind to the interlocutor, so a short answer to a
     # short question kept landing in a long mode and losing natural_length for
     # being right. 0 disables (weights stay as configured).
-    FieldSpec("length_context_adaptation", "LENGTH_CONTEXT_ADAPTATION", "0.0",
+    # 1.0 (2026-07-14): 5-seed x 200-gen prod-copy sweep of 0/0.5/1/2/3 —
+    # length_mirror_gap (long-in mean minus short-in mean) 2.0 -> 4.7 -> 5.3 ->
+    # 5.9 -> 7.0, with context_anchored_win_rate, distinct_2 and the empty rate
+    # flat throughout and verbatim_run_ratio drifting down (0.186 -> 0.175).
+    # 1.0 takes most of the gain (replies to a short message 10.0 -> 8.6 tokens,
+    # to a long one 12.0 -> 13.9) while the medium band stays put; past it the
+    # ramp starts shortening mid-length replies too for little extra spread.
+    FieldSpec("length_context_adaptation", "LENGTH_CONTEXT_ADAPTATION", "1.0",
               _float_in_range(0.0, 3.0)),
     FieldSpec("markov_order", "MARKOV_ORDER", "3", _int_in_set({2, 3})),
     # Backoff bottoms out at order 2: the order-1 chain was removed entirely

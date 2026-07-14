@@ -187,7 +187,12 @@ Telegram message (F.text)
 
 Порядок:
 1. **Режим длины**: `sample_length_mode` по весам `length_mode_weights=0.25,0.55,0.2`
-   × mood-мультипликаторы. Режим short дополнительно ограничивает саму
+   × mood-мультипликаторы × наклон под длину входящего сообщения
+   (`context_length_weights`, `LENGTH_CONTEXT_ADAPTATION=1.0`): контентные
+   токены текущего сообщения считаются из `current_message_normalized` (не из
+   `context_tokens` — там ещё и цитируемое сообщение), ≤4 токенов наклоняют
+   выбор к short, ≥14 — к long, между ними линейно; medium — точка опоры и не
+   двигается, 0 отключает наклон. Режим short дополнительно ограничивает саму
    генерацию: `max_tokens = min(45, 8)`.
 2. **Randomness**: `randomness_strength=2.0 + mood.randomness_delta`, floor 0.
 3. **До 10 попыток**, каждая — один вызов `MarkovGenerator.generate_text`
@@ -439,6 +444,7 @@ Fallback на обращение не считается в hourly cap.
 | randomness_strength | 2.0 | база explore/power (§5.1) |
 | candidate_selection_temperature | 1.3 | softmax выбора кандидата |
 | length_mode_weights | 0.25,0.55,0.2 | веса short/medium/long |
+| length_context_adaptation | 1.0 | наклон весов длины под длину входящего |
 | repetition_penalty_strength | 1.0 | локальные анти-повторы шага |
 | recent_reply_penalty_strength | 0.5 | штраф пересечения с прошлыми ответами |
 | reply_flavor_strength | 1.0 | вариации концовки |
