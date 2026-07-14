@@ -1,6 +1,6 @@
 -- 014_chat_user_interactions
 --
--- Dialogue-generation improvement L2 ([DIALOGUE_GENERATION_ACTION_PLAN] Stage 4):
+-- Dialogue-generation improvement L2 (dialogue-liveliness track, stage 4; see docs/CLOSED.md):
 -- per-user quirks. Counts how many times the bot answered a given user's
 -- direct address, so "regulars" can occasionally get a short vocative message
 -- before the reply. Rows decay on the flavor-decay cadence (see

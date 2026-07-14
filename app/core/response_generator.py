@@ -12,6 +12,7 @@ from app.core import gen_trace_log
 from app.core.candidate_scorer import (
     CandidateScore,
     build_recent_reply_trigrams,
+    context_length_weights,
     idf_context_relevance,
     recent_reply_overlap,
     sample_length_mode,
@@ -24,6 +25,7 @@ from app.core.markov import (
     JUMP_CONNECTIVE_TOKENS,
     PUNCT_SET,
     MarkovGenerator,
+    content_tokens,
     detokenize,
     escalated_randomness_strength,
     finalize_reply_ending,
@@ -326,7 +328,19 @@ class ResponseGenerator:
             base_weights[1] * modifiers.length_weight_mult[1],
             base_weights[2] * modifiers.length_weight_mult[2],
         )
-        length_mode = sample_length_mode(mood_weights, generation_rng)
+        # The message we are answering gets a say in how long the answer is:
+        # people mirror each other's length, and the fixed weights did not.
+        # Counted on the current message alone -- request.context_tokens also
+        # carries the replied-to message, whose length is not what we mirror.
+        incoming_tokens = len(
+            content_tokens(tokenize(request.current_message_normalized))
+        )
+        conditioned_weights = context_length_weights(
+            mood_weights,
+            incoming_tokens,
+            self.runtime_state.length_context_adaptation,
+        )
+        length_mode = sample_length_mode(conditioned_weights, generation_rng)
         effective_randomness = max(
             0.0, self.runtime_state.randomness_strength + modifiers.randomness_delta
         )

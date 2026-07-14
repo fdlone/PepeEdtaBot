@@ -249,6 +249,20 @@ def longest_verbatim_run(
     return 0
 
 
+def incoming_length_bucket(incoming_tokens: int) -> str:
+    """Bucket the answered message by length, matching the scorer's own bands.
+
+    The cut points are the short/long thresholds the length conditioning uses
+    (candidate_scorer.CONTEXT_LENGTH_SHORT/LONG_TOKENS), so the buckets show
+    exactly the populations the knob is supposed to pull apart.
+    """
+    if incoming_tokens <= _cs.CONTEXT_LENGTH_SHORT_TOKENS:
+        return "short_in"
+    if incoming_tokens >= _cs.CONTEXT_LENGTH_LONG_TOKENS:
+        return "long_in"
+    return "mid_in"
+
+
 async def evaluate(
     *,
     db_source: Path,
@@ -357,6 +371,10 @@ async def evaluate(
         extension_wins = 0
         length_by_jumps: dict[int, list[int]] = {}
         verbatim_by_jumps: dict[int, list[float]] = {}
+        # Reply length sliced by the length of the message being answered: a
+        # bot that mirrors its interlocutor answers a two-word question with a
+        # short reply. Without conditioning, every bucket has the same mean.
+        length_by_incoming: dict[str, list[int]] = {}
         try:
             for _ in range(generations):
                 generator.reset_generation()
@@ -402,8 +420,12 @@ async def evaluate(
                 winner_jumps[jumps] += 1
                 length_by_jumps.setdefault(jumps, []).append(len(reply_content))
                 verbatim_by_jumps.setdefault(jumps, []).append(verbatim_ratios[-1])
+                incoming_content = content_tokens(context_tokens)
+                length_by_incoming.setdefault(
+                    incoming_length_bucket(len(incoming_content)), []
+                ).append(len(reply_content))
                 context_overlaps.append(
-                    context_token_overlap(reply_content, content_tokens(context_tokens))
+                    context_token_overlap(reply_content, incoming_content)
                 )
         finally:
             await db.close()
@@ -490,6 +512,21 @@ async def evaluate(
         "repeated_trigram_ratio": round(repeated_ngram_ratio(outputs, 3), 4),
         "avg_length_tokens": round(mean(lengths), 2) if lengths else 0.0,
         "median_length_tokens": median(lengths) if lengths else 0,
+        # Length mirroring: reply length per bucket of the answered message.
+        # length_mirror_gap (long bucket mean - short bucket mean) is the
+        # headline -- it is ~0 when the length mode ignores the interlocutor.
+        "length_by_incoming": {
+            bucket: {
+                "n": len(length_by_incoming[bucket]),
+                "avg_len": round(mean(length_by_incoming[bucket]), 2),
+            }
+            for bucket in sorted(length_by_incoming)
+        },
+        "length_mirror_gap": round(
+            mean(length_by_incoming["long_in"]) - mean(length_by_incoming["short_in"]),
+            2,
+        ) if length_by_incoming.get("long_in") and length_by_incoming.get("short_in")
+        else 0.0,
         "context_token_overlap_mean": round(mean(context_overlaps), 4) if context_overlaps else 0.0,
         "order_used": dict(sorted(generator.order_used.items())),
         "rejections": dict(generator.rejections.most_common()),
