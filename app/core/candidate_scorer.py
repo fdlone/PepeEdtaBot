@@ -35,6 +35,40 @@ def sample_length_mode(
     """Pick a target length mode using short/medium/long weights."""
     return rng.choices(population=LENGTH_MODES, weights=weights, k=1)[0]
 
+
+# Length mirroring: the mode was sampled from fixed weights, so the message
+# being answered had no say in it -- a three-token answer to a three-token
+# question landed in "long" mode 20% of the time and paid ~0.4 natural_length
+# for being the right length. These are the ends of the ramp: an incoming
+# message at or below SHORT gets the full tilt toward short, at or above LONG
+# the full tilt toward long, and everything between interpolates.
+CONTEXT_LENGTH_SHORT_TOKENS = 4
+CONTEXT_LENGTH_LONG_TOKENS = 14
+
+
+def context_length_weights(
+    weights: tuple[float, float, float],
+    incoming_tokens: int,
+    strength: float,
+) -> tuple[float, float, float]:
+    """Tilt short/medium/long weights toward the answered message's own length.
+
+    ``strength`` is the tilt at the ends of the ramp: the short and long
+    weights are divided/multiplied by ``1 + strength``, so 0.0 returns the
+    weights untouched (the pre-conditioning behaviour) and 1.0 doubles the
+    long weight for a long incoming message while halving the short one.
+    The medium weight is the pivot and never moves.
+    """
+    if strength <= 0.0 or incoming_tokens <= 0:
+        return weights
+    span = CONTEXT_LENGTH_LONG_TOKENS - CONTEXT_LENGTH_SHORT_TOKENS
+    ramp = (incoming_tokens - CONTEXT_LENGTH_SHORT_TOKENS) / span
+    # -1.0 at the short end of the ramp, +1.0 at the long end.
+    position = min(1.0, max(0.0, ramp)) * 2.0 - 1.0
+    tilt = (1.0 + strength) ** position
+    short_weight, medium_weight, long_weight = weights
+    return (short_weight / tilt, medium_weight, long_weight * tilt)
+
 CLEAN_END_BONUS = 0.35
 BALANCED_DELIMITERS_BONUS = 0.25
 UNBALANCED_DELIMITERS_PENALTY = 0.50

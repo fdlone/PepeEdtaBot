@@ -4,11 +4,14 @@ import random
 import unittest
 
 from app.core.candidate_scorer import (
+    CONTEXT_LENGTH_LONG_TOKENS,
+    CONTEXT_LENGTH_SHORT_TOKENS,
     CONTEXT_RELEVANCE_CAP,
     LENGTH_MODES,
     build_recent_reply_trigrams,
     build_token_idf,
     completion_quality,
+    context_length_weights,
     context_relevance,
     idf_context_relevance,
     natural_length,
@@ -173,6 +176,44 @@ class TestCandidateScorer(unittest.TestCase):
             sample_length_mode((0.25, 0.55, 0.2), rng) for _ in range(300)
         }
         self.assertEqual(picked, set(LENGTH_MODES))
+
+    def test_context_length_weights_off_by_default(self) -> None:
+        weights = (0.25, 0.55, 0.2)
+        for incoming in (1, 8, 40):
+            self.assertEqual(
+                context_length_weights(weights, incoming, 0.0), weights
+            )
+
+    def test_context_length_weights_tilt_short_for_a_short_message(self) -> None:
+        short, medium, long_ = context_length_weights((0.25, 0.55, 0.2), 2, 1.0)
+        # At the short end the tilt is the full 1 + strength: short doubles,
+        # long halves, medium is the pivot and does not move.
+        self.assertAlmostEqual(short, 0.5)
+        self.assertAlmostEqual(medium, 0.55)
+        self.assertAlmostEqual(long_, 0.1)
+
+    def test_context_length_weights_tilt_long_for_a_long_message(self) -> None:
+        short, medium, long_ = context_length_weights((0.25, 0.55, 0.2), 30, 1.0)
+        self.assertAlmostEqual(short, 0.125)
+        self.assertAlmostEqual(medium, 0.55)
+        self.assertAlmostEqual(long_, 0.4)
+
+    def test_context_length_weights_are_neutral_midway(self) -> None:
+        midpoint = (CONTEXT_LENGTH_SHORT_TOKENS + CONTEXT_LENGTH_LONG_TOKENS) // 2
+        weights = context_length_weights((0.25, 0.55, 0.2), midpoint, 1.0)
+        for actual, expected in zip(weights, (0.25, 0.55, 0.2), strict=True):
+            self.assertAlmostEqual(actual, expected)
+
+    def test_context_length_weights_ramp_is_monotonic(self) -> None:
+        long_weights = [
+            context_length_weights((0.25, 0.55, 0.2), incoming, 1.0)[2]
+            for incoming in range(1, 25)
+        ]
+        self.assertEqual(long_weights, sorted(long_weights))
+
+    def test_context_length_weights_ignore_an_empty_message(self) -> None:
+        weights = (0.25, 0.55, 0.2)
+        self.assertEqual(context_length_weights(weights, 0, 1.0), weights)
 
     def test_repetition_penalty_counts_tokens_bigrams_and_trigrams(self) -> None:
         clean = repetition_penalty(tokenize("один два три четыре пять"))
