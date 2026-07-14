@@ -27,6 +27,7 @@ EXPECTED_MIGRATIONS = [
     "012_chat_hot_ngrams",
     "013_drop_transitions1",
     "014_chat_user_interactions",
+    "015_lowercase_model",
 ]
 
 EXPECTED_TABLES = {
@@ -639,3 +640,107 @@ class TestMigratorAtomicity(unittest.IsolatedAsyncioTestCase):
         await migrator._apply(self.conn, path)
         # _apply commits via the embedded COMMIT inside the wrapped script.
         self.assertTrue(await self._table_exists("persisted"))
+
+
+class TestLowercaseModelMigration(unittest.IsolatedAsyncioTestCase):
+    """015: legacy mixed-case tokens are casefolded and their counts merged.
+
+    The migration is re-applied by hand on an already-migrated database so the
+    fixture can seed the pre-NORMALIZE_LOWER rows the runner would have found.
+    """
+
+    async def asyncSetUp(self) -> None:
+        self.conn = await aiosqlite.connect(":memory:")
+        await migrator.run(self.conn)
+
+    async def asyncTearDown(self) -> None:
+        await self.conn.close()
+
+    async def _apply_015(self) -> None:
+        await migrator._apply(
+            self.conn,
+            Path(migrator._MIGRATIONS_DIR) / "015_lowercase_model.py",
+        )
+
+    async def test_cyrillic_tokens_are_lowercased_and_merged(self) -> None:
+        await self.conn.executemany(
+            "INSERT INTO starts3(chat_id, w1, w2, w3, cnt) VALUES (?,?,?,?,?)",
+            [(7, "Пиво", "это", "жизнь", 2), (7, "пиво", "это", "жизнь", 3)],
+        )
+        await self.conn.commit()
+
+        await self._apply_015()
+
+        cursor = await self.conn.execute(
+            "SELECT w1, w2, w3, cnt FROM starts3 WHERE chat_id = 7"
+        )
+        self.assertEqual(
+            list(await cursor.fetchall()), [("пиво", "это", "жизнь", 5)]
+        )
+
+    async def test_transitions_of_every_order_are_lowercased(self) -> None:
+        await self.conn.execute(
+            "INSERT INTO starts(chat_id, w1, w2, cnt) VALUES (8, 'Кофе', 'Утром', 1)"
+        )
+        await self.conn.execute(
+            "INSERT INTO transitions(chat_id, w1, w2, w3, cnt)"
+            " VALUES (8, 'Кофе', 'Утром', 'Бодрит', 1)"
+        )
+        await self.conn.execute(
+            "INSERT INTO transitions3(chat_id, w1, w2, w3, w4, cnt)"
+            " VALUES (8, 'Кофе', 'Утром', 'Бодрит', 'Сильно', 1)"
+        )
+        await self.conn.commit()
+
+        await self._apply_015()
+
+        cursor = await self.conn.execute(
+            "SELECT w1, w2 FROM starts WHERE chat_id = 8"
+        )
+        self.assertEqual(list(await cursor.fetchall()), [("кофе", "утром")])
+        cursor = await self.conn.execute(
+            "SELECT w1, w2, w3 FROM transitions WHERE chat_id = 8"
+        )
+        self.assertEqual(list(await cursor.fetchall()), [("кофе", "утром", "бодрит")])
+        cursor = await self.conn.execute(
+            "SELECT w1, w2, w3, w4 FROM transitions3 WHERE chat_id = 8"
+        )
+        self.assertEqual(
+            list(await cursor.fetchall()), [("кофе", "утром", "бодрит", "сильно")]
+        )
+
+    async def test_hot_ngrams_merge_keeps_latest_timestamp(self) -> None:
+        await self.conn.executemany(
+            "INSERT INTO chat_hot_ngrams(chat_id, w1, w2, w3, cnt, updated_at)"
+            " VALUES (?,?,?,?,?,?)",
+            [
+                (9, "Белый", "колодец", "", 2, "2026-07-01 10:00:00"),
+                (9, "белый", "колодец", "", 4, "2026-07-13 10:00:00"),
+            ],
+        )
+        await self.conn.commit()
+
+        await self._apply_015()
+
+        cursor = await self.conn.execute(
+            "SELECT w1, w2, cnt, updated_at FROM chat_hot_ngrams WHERE chat_id = 9"
+        )
+        self.assertEqual(
+            list(await cursor.fetchall()),
+            [("белый", "колодец", 6, "2026-07-13 10:00:00")],
+        )
+
+    async def test_corpus_texts_keep_their_case(self) -> None:
+        await self.conn.execute(
+            "INSERT INTO messages(chat_id, author_id, normalized_text)"
+            " VALUES (10, 0, 'Пиво Это Жизнь')"
+        )
+        await self.conn.commit()
+
+        await self._apply_015()
+
+        cursor = await self.conn.execute(
+            "SELECT normalized_text FROM messages WHERE chat_id = 10"
+        )
+        row = await cursor.fetchone()
+        self.assertEqual(row[0], "Пиво Это Жизнь")

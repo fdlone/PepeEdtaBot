@@ -117,6 +117,11 @@ better global default — that is a data migration question (existing per-chat m
 were learned case-sensitive), so keep it as a follow-up decision, not part of this
 change.
 
+**Follow-up (2026-07-14, closed):** `normalize_lower` теперь `true` по умолчанию, а
+миграция `015_lowercase_model` разово приводит уже накопленные `starts*`,
+`transitions*` и `chat_hot_ngrams` к нижнему регистру (счётчики дублей суммируются).
+`auto_capitalize_replies` осознанно остаётся `false`.
+
 **Files:** `app/config/registry.py`, `.env.example`, `tests/test_settings.py`.
 **Risk:** low; slightly more DB work on context matching (index is cached per chat).
 

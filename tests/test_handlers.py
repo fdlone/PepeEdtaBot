@@ -30,6 +30,13 @@ def _traced_generator() -> AsyncMock:
     return generator
 
 
+def _pivo_stub() -> AsyncMock:
+    """PivoService mock: on_text_message refreshes the sender's /pivo profile."""
+    service = AsyncMock()
+    service.refresh_member = AsyncMock()
+    return service
+
+
 def _fake_message(
     *,
     text: str = "",
@@ -825,6 +832,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         learning_service.record_message.assert_not_called()
@@ -854,6 +862,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         learning_service.record_message.assert_awaited_once()
@@ -882,6 +891,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         learning_service.get_token_volume.assert_awaited_once_with(msg.chat.id)
@@ -926,6 +936,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         self.assertEqual(generator.generate_text.await_count, 10)
@@ -955,6 +966,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         learning_service.record_message.assert_awaited_once()
@@ -982,6 +994,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         learning_service.record_message.assert_awaited_once()
@@ -1072,6 +1085,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         # 10 attempt walks + 4 failed extension walks after each verbatim hit.
@@ -1122,6 +1136,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         learning_service.is_verbatim_copy.assert_not_awaited()
@@ -1174,6 +1189,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         self.assertEqual(generator.generate_text.await_count, 10)
@@ -1206,6 +1222,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         msg.reply.assert_awaited_once_with("новый развёрнутый ответ бота.")
@@ -1251,6 +1268,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         # Mood was tracked for the chat...
@@ -1325,6 +1343,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         generator.generate_text.assert_not_awaited()
@@ -1357,6 +1376,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         msg.reply.assert_awaited_once_with("ответ бота готов")
@@ -1379,6 +1399,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         learning_service.record_emojis.assert_awaited_once_with(
@@ -1404,6 +1425,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         msg.reply.assert_awaited_once_with("ответ бота готов 🍺")
@@ -1426,6 +1448,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         expected = extract_content_ngrams(
@@ -1451,6 +1474,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         learning_service.record_hot_ngrams.assert_not_awaited()
@@ -1483,6 +1507,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         learning_service.get_hot_ngrams.assert_awaited_once_with(
@@ -1516,6 +1541,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         learning_service.get_hot_ngrams.assert_not_awaited()
@@ -1547,6 +1573,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         first_call = generator.generate_text.await_args_list[0]
@@ -1574,6 +1601,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         msg.reply.assert_awaited_once()
@@ -1607,6 +1635,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         msg.reply.assert_awaited_once_with("настоящий ответ бота")
@@ -1628,6 +1657,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         msg.reply.assert_awaited_once_with("настоящий ответ бота")
@@ -1666,6 +1696,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         msg.reply.assert_awaited_once_with("совсем свежий полный ответ")
@@ -1726,6 +1757,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
         strengths = [
@@ -1804,6 +1836,7 @@ class TestMentionCooldownGate(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
     async def test_first_mention_replies_and_records_timestamp(self) -> None:
@@ -1934,6 +1967,7 @@ class TestUserQuirks(unittest.IsolatedAsyncioTestCase):
                 "PepeEdtaBot",
                 777,
                 frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
             )
 
     @staticmethod

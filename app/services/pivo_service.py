@@ -45,6 +45,9 @@ class PivoService:
         self._security = security
         self._explicit_mentions_limit = PIVO_DEFAULT_EXPLICIT_MENTIONS_LIMIT
         self._subscriber_fanout_limit = PIVO_DEFAULT_SUBSCRIBER_FANOUT_LIMIT
+        # Дроссель refresh_member: (chat_hash, user_hash) → день последней
+        # записи профиля. Ключи — те же хеши, что и в БД, сырых id в памяти нет.
+        self._refreshed_on: dict[tuple[str, str], str] = {}
 
     def configure_call_limits(
         self,
@@ -60,6 +63,34 @@ class PivoService:
             chat_hash=self._security.hmac_value(chat_id),
             user_hash=self._security.hmac_value(user.id),
             encrypted_user_id=self._security.encrypt_value(user.id),
+            encrypted_username=self._security.encrypt_value(user.username or ""),
+            encrypted_display_name=self._security.encrypt_value(
+                display_name_from_user(user)
+            ),
+        )
+
+    async def refresh_member(
+        self, chat_id: int, user: User, *, today: date | None = None
+    ) -> None:
+        """Обновляет @username и имя подписчика по свежему сообщению из чата.
+
+        Без этого в /pivo уходит снимок, снятый при /pivo_on: сменивший ник
+        участник получает в упоминании мёртвый «@старый_ник» — не подсвеченный
+        и без уведомления. Не подписанных не трогает (UPDATE не найдёт строку).
+
+        Вызывается на каждом сообщении, поэтому запись дросселируется: не чаще
+        одного раза в сутки на пользователя в чате. Кэш живёт в памяти — после
+        рестарта первое сообщение каждого участника снова обновит профиль.
+        """
+        chat_hash = self._security.hmac_value(chat_id)
+        user_hash = self._security.hmac_value(user.id)
+        usage_day = (today or datetime.now(UTC).date()).isoformat()
+        if self._refreshed_on.get((chat_hash, user_hash)) == usage_day:
+            return
+        self._refreshed_on[(chat_hash, user_hash)] = usage_day
+        await self._db.refresh_chat_member(
+            chat_hash=chat_hash,
+            user_hash=user_hash,
             encrypted_username=self._security.encrypt_value(user.username or ""),
             encrypted_display_name=self._security.encrypt_value(
                 display_name_from_user(user)

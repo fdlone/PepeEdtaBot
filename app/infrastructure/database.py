@@ -342,6 +342,21 @@ class Database:
             encrypted_display_name=encrypted_display_name,
         )
 
+    async def refresh_chat_member(
+        self,
+        *,
+        chat_hash: str,
+        user_hash: str,
+        encrypted_username: str,
+        encrypted_display_name: str,
+    ) -> None:
+        await self._require(self.chat_members).refresh_profile(
+            chat_hash=chat_hash,
+            user_hash=user_hash,
+            encrypted_username=encrypted_username,
+            encrypted_display_name=encrypted_display_name,
+        )
+
     async def remove_chat_member(self, chat_hash: str, user_hash: str) -> None:
         await self._require(self.chat_members).remove(chat_hash, user_hash)
 
