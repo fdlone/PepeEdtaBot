@@ -39,6 +39,7 @@ class RuntimeState:
     recent_reply_penalty_strength: float
     verbatim_penalty_strength: float
     length_mode_weights: tuple[float, float, float]
+    length_context_adaptation: float
     markov_order: int
     enable_backoff: bool
     markov_jump_probability: float

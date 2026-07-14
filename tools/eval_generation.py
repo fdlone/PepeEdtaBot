@@ -234,6 +234,10 @@ async def evaluate_generation(
                 # the baselines measure the word model alone.
                 verbatim_penalty_strength=0.0,
                 length_mode_weights=length_mode_weights,
+                # 0.0 keeps the committed baselines byte-identical: the
+                # synthetic context is a fixed placeholder string, so its length
+                # carries no signal. Mirroring is measured on the prod-copy eval.
+                length_context_adaptation=0.0,
                 markov_order=3,
                 enable_backoff=True,
                 # Keep the M3/M4 channels off in eval so the baselines measure the

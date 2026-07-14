@@ -70,6 +70,7 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.recent_reply_penalty_strength = 1.0
     s.verbatim_penalty_strength = 0.0
     s.length_mode_weights = (0.25, 0.55, 0.2)
+    s.length_context_adaptation = 0.0
     # Deterministic selection and untouched reply text so handler tests can
     # assert generated candidates verbatim.
     s.candidate_selection_temperature = 0.0
@@ -806,6 +807,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             "repetition_penalty_strength": 1.0,
             "recent_reply_penalty_strength": 1.0,
             "length_mode_weights": (0.25, 0.55, 0.2),
+            "length_context_adaptation": 0.0,
             "markov_order": 3,
             "enable_backoff": True,
         }
@@ -1072,6 +1074,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             repetition_penalty_strength=1.0,
             recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
+            length_context_adaptation=0.0,
             markov_order=3,
             enable_backoff=True,
         )
@@ -1123,6 +1126,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             repetition_penalty_strength=1.0,
             recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
+            length_context_adaptation=0.0,
             markov_order=3,
             enable_backoff=True,
         )
@@ -1176,6 +1180,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             repetition_penalty_strength=1.0,
             recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
+            length_context_adaptation=0.0,
             markov_order=3,
             enable_backoff=True,
         )
@@ -1744,6 +1749,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             repetition_penalty_strength=1.0,
             recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
+            length_context_adaptation=0.0,
             markov_order=3,
             enable_backoff=True,
         )
@@ -1807,6 +1813,7 @@ class TestMentionCooldownGate(unittest.IsolatedAsyncioTestCase):
             "repetition_penalty_strength": 1.0,
             "recent_reply_penalty_strength": 1.0,
             "length_mode_weights": (0.25, 0.55, 0.2),
+            "length_context_adaptation": 0.0,
             "markov_order": 3,
             "enable_backoff": True,
             "mention_cooldown_sec": 30,
@@ -1930,6 +1937,7 @@ class TestUserQuirks(unittest.IsolatedAsyncioTestCase):
             "repetition_penalty_strength": 1.0,
             "recent_reply_penalty_strength": 1.0,
             "length_mode_weights": (0.25, 0.55, 0.2),
+            "length_context_adaptation": 0.0,
             "markov_order": 3,
             "enable_backoff": True,
             "recent_replies": {},

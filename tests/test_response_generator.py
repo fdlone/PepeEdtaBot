@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import random
 import unittest
-from collections import deque
+from collections import Counter, deque
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -36,6 +37,7 @@ def _runtime_state() -> MagicMock:
     state.recent_reply_penalty_strength = 1.0
     state.verbatim_penalty_strength = 0.0
     state.length_mode_weights = (0.25, 0.55, 0.2)
+    state.length_context_adaptation = 0.0
     # Argmax selection and no ending transforms: existing tests assert the
     # best-scored candidate text verbatim.
     state.candidate_selection_temperature = 0.0
@@ -72,6 +74,10 @@ def _traced_generator() -> AsyncMock:
 
     generator.generate_text_with_trace = AsyncMock(side_effect=_delegate)
     return generator
+
+
+_SHORT_INCOMING = "а что?"
+_LONG_INCOMING = " ".join(f"слово{index}" for index in range(20))
 
 
 def _request() -> GenerationRequest:
@@ -438,6 +444,60 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             SHORT_MODE_MAX_TOKENS,
         )
         self.assertEqual(scorer.call_args.args[3], "short")
+
+    async def _length_mode_for_incoming(
+        self, message: str, adaptation: float, seed: int
+    ) -> str:
+        state = _runtime_state()
+        # Equal weights: whatever mode comes out was chosen by the tilt alone.
+        state.length_mode_weights = (1.0, 1.0, 1.0)
+        state.length_context_adaptation = adaptation
+        generator = _traced_generator()
+        generator.generate_text = AsyncMock(return_value="какой-то ответ")
+        scorer = MagicMock(return_value=_score(1.0))
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=_learning_service(),
+            runtime_state=state,
+            scorer=scorer,
+        )
+        request = replace(_request(), current_message_normalized=message)
+
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            await response_generator.generate(
+                request,
+                rng=random.Random(seed),
+                candidate_target=1,
+            )
+
+        return str(scorer.call_args.args[3])
+
+    async def _length_modes_over_seeds(
+        self, message: str, adaptation: float
+    ) -> Counter[str]:
+        modes: Counter[str] = Counter()
+        for seed in range(20):
+            modes[await self._length_mode_for_incoming(message, adaptation, seed)] += 1
+        return modes
+
+    async def test_short_incoming_message_tilts_the_length_mode_short(self) -> None:
+        modes = await self._length_modes_over_seeds(_SHORT_INCOMING, 3.0)
+        self.assertGreater(modes["short"], modes["long"])
+        self.assertEqual(modes.most_common(1)[0][0], "short")
+
+    async def test_long_incoming_message_tilts_the_length_mode_long(self) -> None:
+        modes = await self._length_modes_over_seeds(_LONG_INCOMING, 3.0)
+        self.assertGreater(modes["long"], modes["short"])
+        self.assertEqual(modes.most_common(1)[0][0], "long")
+
+    async def test_length_adaptation_off_ignores_the_incoming_message(self) -> None:
+        # Same seeds, same weights: with the knob off a two-word question and a
+        # twenty-word rant must draw the same modes -- the incoming length is
+        # not consulted at all.
+        self.assertEqual(
+            await self._length_modes_over_seeds(_SHORT_INCOMING, 0.0),
+            await self._length_modes_over_seeds(_LONG_INCOMING, 0.0),
+        )
 
     async def test_long_length_mode_keeps_max_tokens_and_reaches_scorer(
         self,

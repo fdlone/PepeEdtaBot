@@ -183,6 +183,13 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               "1.5", _float_in_range(0.0, 3.0)),
     FieldSpec("length_mode_weights", "LENGTH_MODE_WEIGHTS", "0.25,0.55,0.2",
               _length_weights()),
+    # Length mirroring: tilt of the short/long weights above toward the length
+    # of the message being answered (candidate_scorer.context_length_weights).
+    # The weights alone are blind to the interlocutor, so a short answer to a
+    # short question kept landing in a long mode and losing natural_length for
+    # being right. 0 disables (weights stay as configured).
+    FieldSpec("length_context_adaptation", "LENGTH_CONTEXT_ADAPTATION", "0.0",
+              _float_in_range(0.0, 3.0)),
     FieldSpec("markov_order", "MARKOV_ORDER", "3", _int_in_set({2, 3})),
     # Backoff bottoms out at order 2: the order-1 chain was removed entirely
     # (2026-07-12) after eval_prod showed order-1 walks are word salad — the
