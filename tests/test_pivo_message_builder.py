@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from collections.abc import Iterable
 from datetime import datetime
@@ -57,7 +58,6 @@ class TestPivoMessageBuilder(unittest.TestCase):
         choices = iter(
             [
                 PIVO_DEFAULT_TARGET_INTROS[0],
-                "местные дегенераты",
                 "Пинги для тех, кто сам подписался на этот цирк: {mentions}.",
                 PIVO_DEFAULT_TOP_PARTS[0],
                 PIVO_DEFAULT_BODY_PARTS[0],
@@ -67,7 +67,9 @@ class TestPivoMessageBuilder(unittest.TestCase):
         with patch(RANDOM_CHOICE_PATH, side_effect=lambda _: next(choices)):
             text = build_pivo_message("@friend")
 
-        self.assertIn("местные дегенераты", text)
+        # Subscribers (no explicit mentions) are pinged by the notification line
+        # only; the top line keeps the template's own vocative and stays clean.
+        self.assertIn("Заслуженные дегенераты диванного фронта, общий сбор", text)
         self.assertIn("долго выбирать игру", text)
         self.assertIn("Пинги", text)
         self.assertIn("@friend", text)
@@ -76,7 +78,6 @@ class TestPivoMessageBuilder(unittest.TestCase):
         choices = iter(
             [
                 PIVO_TARGET_INTROS[0],
-                "местные дегенераты",
                 PIVO_TARGET_TOP_PARTS[0],
                 PIVO_TARGET_BODY_PARTS[0],
                 PIVO_TARGET_BOTTOM_PARTS[0],
@@ -94,7 +95,6 @@ class TestPivoMessageBuilder(unittest.TestCase):
         choices = iter(
             [
                 PIVO_DEFAULT_TARGET_INTROS[0],
-                "конченый состав чата",
                 PIVO_DEFAULT_TOP_PARTS[0],
                 PIVO_DEFAULT_BODY_PARTS[1],
                 PIVO_DEFAULT_BOTTOM_PARTS[0],
@@ -110,7 +110,6 @@ class TestPivoMessageBuilder(unittest.TestCase):
         choices = iter(
             [
                 PIVO_TARGET_INTROS[0],
-                "подозрительные личности",
                 PIVO_TARGET_TOP_PARTS[2],
                 PIVO_TARGET_BODY_PARTS[1],
                 PIVO_TARGET_BOTTOM_PARTS[2],
@@ -131,7 +130,6 @@ class TestPivoMessageBuilder(unittest.TestCase):
         choices = iter(
             [
                 PIVO_TARGET_INTROS[0],
-                "подозрительные личности",
                 PIVO_TARGET_TOP_PARTS[2],
                 PIVO_TARGET_BODY_PARTS[1],
                 PIVO_TARGET_BOTTOM_PARTS[2],
@@ -172,7 +170,6 @@ class TestPivoMessageBuilder(unittest.TestCase):
         choices = iter(
             [
                 PIVO_TARGET_INTROS[0],
-                "местные дегенераты",
                 PIVO_TARGET_TOP_PARTS[1],
                 PIVO_TARGET_BODY_PARTS[2],
                 PIVO_TARGET_BOTTOM_PARTS[0],
@@ -203,7 +200,6 @@ class TestPivoMessageBuilder(unittest.TestCase):
             "time_phrase",
             "target_phrase",
             "target_bullet",
-            "target_context",
         )
 
         for kwargs in combinations:
@@ -241,7 +237,6 @@ class TestPivoMessageBuilder(unittest.TestCase):
         choices = iter(
             [
                 PIVO_TARGET_INTROS[0],
-                "местные дегенераты",
                 PIVO_TARGET_TOP_PARTS[0],
                 PIVO_TARGET_BODY_PARTS[2],
                 PIVO_TARGET_BOTTOM_PARTS[0],
@@ -276,6 +271,98 @@ class TestPivoMessageBuilder(unittest.TestCase):
         with patch(RANDOM_CHOICE_PATH, side_effect=AssertionError("module random used")):
             text = build_pivo_message("@friend", rng=random.Random(7))
         self.assertTrue(text)
+
+
+class TestPivoTemplateGrammarInvariants(unittest.TestCase):
+    """Slot-placement rules that keep the rendered Russian grammatical.
+
+    The rules are documented in app/domain/pivo_templates.py; each one below
+    corresponds to a class of broken output the old templates could produce.
+    """
+
+    def test_mentions_slot_carries_its_own_space(self) -> None:
+        # The value is either "" or " @a @b", so a space written in front of the
+        # slot would leave "Так, конченые , собираемся" when mentions are absent.
+        for template in (*PIVO_DEFAULT_TOP_PARTS, *PIVO_TARGET_TOP_PARTS):
+            with self.subTest(template=template):
+                self.assertIn("{mentions_inline}", template)
+                self.assertNotIn(" {mentions_inline}", template)
+                self.assertFalse(template.startswith("{mentions_inline}"))
+
+    def test_soft_time_slot_is_sentence_final(self) -> None:
+        # Without a planned time the value expands to a comma-carrying clause
+        # ("ближе к вечеру, как только ..."), which only works before the dot.
+        for template in (*PIVO_DEFAULT_TOP_PARTS, *PIVO_TARGET_TOP_PARTS):
+            if "{time_phrase_soft}" in template:
+                with self.subTest(template=template):
+                    self.assertTrue(template.endswith("{time_phrase_soft}."))
+
+    def test_target_slot_is_never_case_governed(self) -> None:
+        # The target is raw user text of unknown grammatical form ("фильмы" vs
+        # "посмотреть фильм"), so it may only stand in a free position: a line
+        # start, or right after a dash, a colon or "у нас".
+        free_markers = ("— ", ": ", "у нас ")
+        for template in (*PIVO_TARGET_INTROS, *PIVO_TARGET_BODY_PARTS):
+            for match in re.finditer(re.escape("{target_phrase}"), template):
+                prefix = template[: match.start()]
+                with self.subTest(template=template):
+                    self.assertTrue(
+                        prefix == ""
+                        or prefix.endswith("\n")
+                        or prefix.endswith(free_markers),
+                        f"target phrase is governed by {prefix[-24:]!r}",
+                    )
+
+    def test_target_bullet_stands_alone_in_its_list_item(self) -> None:
+        for template in (*PIVO_DEFAULT_BODY_PARTS, *PIVO_TARGET_BODY_PARTS):
+            for match in re.finditer(re.escape("{target_bullet}"), template):
+                with self.subTest(template=template):
+                    self.assertTrue(template[: match.start()].endswith("\n"))
+                    self.assertTrue(template[match.end() :].startswith(";"))
+
+
+class TestPivoRenderedTextIsWellFormed(unittest.TestCase):
+    def test_no_punctuation_artifacts_in_any_combination(self) -> None:
+        combinations = (
+            {},
+            {"planned_time": "20:00"},
+            {"target": "посмотреть фильм"},
+            {"target": "фильмы", "planned_time": "завтра вечером"},
+        )
+        artifacts = ("  ", " ,", " .", " :", " ;", ",,", "..", "!.", "?.")
+        for kwargs in combinations:
+            for has_explicit_mentions in (False, True):
+                for _ in range(40):
+                    text = build_pivo_message(
+                        "@one @two",
+                        has_explicit_mentions=has_explicit_mentions,
+                        **kwargs,
+                    )
+                    for artifact in artifacts:
+                        with self.subTest(kwargs=kwargs, artifact=artifact, text=text):
+                            self.assertNotIn(artifact, text)
+
+    def test_absent_mentions_never_duplicate_the_template_vocative(self) -> None:
+        # Regression: the empty slot used to be filled with a noun phrase, which
+        # doubled the vocative a template already had ("Так, конченые конченый
+        # состав чата") and ignored the case the sentence governed ("Дорогой
+        # конченый коллектив подозрительные личности" — nominative for genitive).
+        for _ in range(200):
+            text = build_pivo_message("Господа дегенераты")
+            with self.subTest(text=text):
+                self.assertIsNone(re.search(r"конченые\s+конченый", text))
+                self.assertNotIn("подозрительные личности", text)
+                self.assertNotIn("местные дегенераты", text)
+                self.assertNotIn("морально уставшие участники", text)
+
+    def test_target_keeps_its_own_trailing_punctuation_out_of_the_template(self) -> None:
+        for _ in range(40):
+            text = build_pivo_message(
+                "@one", target="го в дотку!!!", has_explicit_mentions=True
+            )
+            with self.subTest(text=text):
+                self.assertIn("го в дотку", text)
+                self.assertNotIn("!", text)
 
 
 class TestPivoAntiRepeat(unittest.TestCase):

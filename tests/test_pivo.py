@@ -358,7 +358,6 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         choices = iter(
             [
                 PIVO_TARGET_INTROS[0],
-                "местные дегенераты",
                 PIVO_TARGET_TOP_PARTS[1],
                 PIVO_TARGET_BODY_PARTS[2],
                 PIVO_TARGET_BOTTOM_PARTS[0],

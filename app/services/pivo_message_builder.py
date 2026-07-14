@@ -22,27 +22,21 @@ from app.domain.pivo_templates import (
     PIVO_TARGET_TOP_PARTS,
 )
 
-MENTIONS_INLINE_FALLBACKS: tuple[str, ...] = (
-    "местные дегенераты",
-    "подозрительные личности",
-    "конченый состав чата",
-    "морально уставшие участники",
-)
-
 PIVO_FALLBACK_MENTIONS_TEXT = "Господа дегенераты"
 DEFAULT_TARGET_PHRASE = "пиво, игры и коллективная деградация"
-DEFAULT_TARGET_CONTEXT = "по классической программе: пиво, игры, споры и Discord"
 
 
 @dataclass(frozen=True, slots=True)
 class PivoMessageContext:
+    # Optional mention block glued to the vocative a top template already has:
+    # either "" or a mention list carrying its own leading space (" @a @b").
+    # See the invariants documented in app/domain/pivo_templates.py.
     mentions_inline: str
     notification_line: str
     time_phrase: str
     time_phrase_soft: str
     target_phrase: str
     target_bullet: str
-    target_context: str
     has_explicit_target: bool
 
     def template_values(self) -> dict[str, object]:
@@ -75,7 +69,7 @@ def build_pivo_message_context(
     has_explicit_mentions: bool,
     rng: random.Random | None = None,
 ) -> PivoMessageContext:
-    raw_target = target.strip() if target is not None else ""
+    raw_target = _normalize_target(target)
     has_explicit_target = bool(raw_target)
     target_phrase = html.escape(raw_target, quote=False) if has_explicit_target else ""
     target_bullet = _build_target_bullet(
@@ -88,7 +82,6 @@ def build_pivo_message_context(
         mentions_inline=_build_mentions_inline(
             mentions,
             has_explicit_mentions=has_explicit_mentions,
-            rng=rng,
         ),
         notification_line=_build_notification_line(
             mentions,
@@ -99,9 +92,6 @@ def build_pivo_message_context(
         time_phrase_soft=_format_time_phrase_soft(planned_time),
         target_phrase=target_phrase or DEFAULT_TARGET_PHRASE,
         target_bullet=target_bullet,
-        target_context=(
-            f"по теме {target_phrase}" if has_explicit_target else DEFAULT_TARGET_CONTEXT
-        ),
         has_explicit_target=has_explicit_target,
     )
 
@@ -241,6 +231,23 @@ class PivoMessageGenerator:
         return bottom_text
 
 
+_TARGET_TRAILING_PUNCTUATION = " .,;:!?…"
+
+
+def _normalize_target(target: str | None) -> str:
+    """Collapse whitespace and strip trailing sentence punctuation off the target.
+
+    The templates bring their own punctuation around the slot ("Цель заявлена
+    так: {target_phrase}.", "{target_bullet};"), so a target typed as "го в
+    дотку!" would otherwise come out as "го в дотку!.". A target made of nothing
+    but punctuation collapses to "" and the message falls back to default mode.
+    """
+    if target is None:
+        return ""
+    collapsed = re.sub(r"\s+", " ", target).strip()
+    return collapsed.rstrip(_TARGET_TRAILING_PUNCTUATION)
+
+
 def _build_target_bullet(
     *, target_phrase: str, has_explicit_target: bool, rng: random.Random | None = None
 ) -> str:
@@ -249,12 +256,24 @@ def _build_target_bullet(
     return _choice(PIVO_DEFAULT_TARGET_INTROS, rng)
 
 
-def _build_mentions_inline(
-    mentions: str, *, has_explicit_mentions: bool, rng: random.Random | None = None
-) -> str:
-    if has_explicit_mentions:
-        return mentions.strip()
-    return _choice(MENTIONS_INLINE_FALLBACKS, rng)
+def _build_mentions_inline(mentions: str, *, has_explicit_mentions: bool) -> str:
+    """Render the inline mention block: " @a @b", or nothing at all.
+
+    Only explicitly mentioned users go inline; subscribers are pinged by the
+    separate notification line. Without explicit mentions the slot collapses to
+    an empty string and the top template falls back to its own vocative.
+
+    The slot used to be filled with a noun phrase ("подозрительные личности")
+    whenever mentions were absent, but the surrounding sentence governs that
+    slot — as apposition, accusative or dative — so a noun phrase came out in
+    the wrong case ("Дорогой конченый коллектив подозрительные личности") or
+    doubled the template's own vocative ("Так, конченые конченый состав чата").
+    A mention list is grammatically opaque and has no such problem.
+    """
+    if not has_explicit_mentions:
+        return ""
+    value = mentions.strip()
+    return f" {value}" if value else ""
 
 
 def _build_notification_line(
@@ -277,11 +296,17 @@ def _format_time_phrase(planned_time: str | None) -> str:
 
 
 def _format_time_phrase_soft(planned_time: str | None) -> str:
+    """Vague arrival time. Templates place it sentence-final, so the no-time
+    default must open with an adverbial ("ближе к вечеру") rather than with the
+    bare subordinate clause it used to be: "сбор в Discord когда коллектив ..."
+    was missing the comma its "когда" required."""
     if not planned_time:
-        return "когда коллектив перестанет изображать занятых людей"
+        return "ближе к вечеру, как только все перестанут изображать занятых людей"
     value = _format_time_value(planned_time)
+    # A day word already reads as an approximation ("где-то завтра вечером");
+    # only a bare clock time takes "примерно в".
     if _time_value_has_own_preposition(value):
-        return f"примерно {value}"
+        return f"где-то {value}"
     return f"примерно в {value}"
 
 
