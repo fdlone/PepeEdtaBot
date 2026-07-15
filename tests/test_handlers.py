@@ -83,6 +83,9 @@ def _fake_state(**kwargs: object) -> MagicMock:
     # M4 jump off by default so generation tests stay deterministic; the markov
     # characterization tests drive jump_probability directly.
     s.markov_jump_probability = 0.0
+    s.context_jump_boost = 1.0
+    s.verbatim_extension_share = 0.0
+    s.order_mix_probability = 0.0
     # L1 hot-ngram channel off by default so learn/reply tests stay
     # deterministic; dedicated hot-ngram tests enable it explicitly.
     s.hot_ngram_seed_chance = 0.0

@@ -386,6 +386,8 @@ class ResponseGenerator:
                 enable_backoff=self.runtime_state.enable_backoff,
                 fuzzy_context_casefold=self.runtime_state.fuzzy_context_casefold,
                 jump_probability=self.runtime_state.markov_jump_probability,
+                context_jump_boost=self.runtime_state.context_jump_boost,
+                order_mix_probability=self.runtime_state.order_mix_probability,
                 rng=generation_rng,
                 attempt_budget=1,
             )
@@ -415,6 +417,7 @@ class ResponseGenerator:
                     candidate_normalized,
                     is_short_candidate,
                 )
+                was_extended = False
                 if reject_reason == VERBATIM_COPY_REASON:
                     # Corpus replies are welcome — bare quotes are not: extend
                     # the copy with отсебятина and re-run the gates on the
@@ -429,6 +432,7 @@ class ResponseGenerator:
                             original=candidate,
                             extended=extended,
                         )
+                        was_extended = True
                         candidate = extended
                         candidate_normalized = sanitize_text(candidate).lower()
                         candidate_tokens = tokenize(
@@ -444,6 +448,45 @@ class ResponseGenerator:
                             candidate_normalized,
                             is_short_candidate,
                         )
+                if (
+                    reject_reason is None
+                    and not was_extended
+                    and not is_short_candidate
+                    and self.runtime_state.verbatim_extension_share > 0.0
+                    and corpus_ngrams
+                    and verbatim_ngram_overlap(candidate_tokens, corpus_ngrams)
+                    >= self.runtime_state.verbatim_extension_share
+                ):
+                    # Near-quote (a training message with a word or two
+                    # changed): passes the exact-copy gate but still reads as
+                    # a replay. Splice отсебятина the same way full copies
+                    # get; keep the original candidate when the combined text
+                    # fails the gates (the original already passed them).
+                    extended = await self._extend_verbatim_candidate(
+                        request, candidate, generation_rng
+                    )
+                    if extended is not None:
+                        extended_normalized = sanitize_text(extended).lower()
+                        extended_tokens = tokenize(
+                            extended,
+                            normalize_lower=self.runtime_state.normalize_lower,
+                        )
+                        extended_short = is_short_generated_reply(extended_tokens)
+                        extended_reject = await self._candidate_reject_reason(
+                            request,
+                            extended,
+                            extended_normalized,
+                            extended_short,
+                        )
+                        if extended_reject is None:
+                            gen_trace_log.log_attempt_extended(
+                                request.chat_id,
+                                attempt + 1,
+                                original=candidate,
+                                extended=extended,
+                            )
+                            candidate = extended
+                            candidate_tokens = extended_tokens
                 if reject_reason is not None:
                     logger.debug(
                         "%s, retrying: chat=%s attempt=%s",

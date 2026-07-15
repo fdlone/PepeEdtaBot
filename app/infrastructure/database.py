@@ -39,6 +39,31 @@ CHAT_USER_INTERACTION_DECAY_DAYS = 30
 # скользить, а не замирает до рестарта.
 FLAVOR_DECAY_INTERVAL_SEC = 86400.0
 
+# Mirrors app.core.markov.PUNCT_SET (importing it would cycle: markov imports
+# Database). Single-char punctuation tokens produced by TOKEN_RE.
+_PUNCT_TOKENS = frozenset({".", ",", "!", "?", ";", ":"})
+# Mirrors app.core.candidate_scorer.VERBATIM_NGRAM_SIZE (same cycle).
+_VERBATIM_NGRAM_SIZE = 4
+
+
+def _content_ngram_windows(
+    tokens: list[str],
+) -> list[tuple[str, str, str, str]]:
+    """Casefolded content-token 4-grams of one learned message.
+
+    Matches ``learning_service.content_ngram_windows`` output for the same
+    message so the cumulative index and the scorer agree on window identity.
+    """
+    content = [
+        token.casefold() for token in tokens if token not in _PUNCT_TOKENS
+    ]
+    size = _VERBATIM_NGRAM_SIZE
+    return [
+        (content[i], content[i + 1], content[i + 2], content[i + 3])
+        for i in range(len(content) - size + 1)
+    ]
+
+
 _RepoT = TypeVar("_RepoT")
 
 
@@ -238,6 +263,22 @@ class Database:
                         (chat_id, w1, w2, w3, w4, cnt)
                         for (w1, w2, w3, w4), cnt in trans3_counter.items()
                     ],
+                )
+
+            # Cumulative verbatim index (O4): distinct casefolded content
+            # 4-grams, same lifecycle as the transition tables (message
+            # retention never trims it) so the quote penalty and the
+            # near-quote extension see the chain's whole memory, not the
+            # last-1000-messages window.
+            verbatim_windows = _content_ngram_windows(tokens)
+            if verbatim_windows:
+                await db.executemany(
+                    """
+                    INSERT OR IGNORE INTO chat_verbatim_ngrams
+                        (chat_id, w1, w2, w3, w4)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    [(chat_id, *window) for window in verbatim_windows],
                 )
 
             # Maintain the per-chat model volume incrementally instead of
@@ -573,6 +614,20 @@ class Database:
             "volume":       volume3 if volume3 > 0 else volume2,
         }
 
+    async def get_verbatim_ngrams(
+        self, chat_id: int
+    ) -> list[tuple[str, str, str, str]]:
+        """All distinct content 4-grams the chat has ever learned (O4 index)."""
+        async with self._lock:
+            db = await self._get_conn()
+            cursor = await db.execute(
+                "SELECT w1, w2, w3, w4 FROM chat_verbatim_ngrams "
+                "WHERE chat_id = ?",
+                (chat_id,),
+            )
+            rows = await cursor.fetchall()
+        return [(row[0], row[1], row[2], row[3]) for row in rows]
+
     async def clear_chat(self, chat_id: int) -> None:
         tables = (
             "messages",
@@ -584,6 +639,7 @@ class Database:
             "chat_emoji_stats",
             "chat_hot_ngrams",
             "chat_user_interactions",
+            "chat_verbatim_ngrams",
         )
         async with self._lock:
             db = await self._get_conn()

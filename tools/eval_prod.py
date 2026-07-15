@@ -73,11 +73,20 @@ _CONTEXT_START_SOURCES = frozenset({"context", "hidden_context"})
 
 
 class _ProdVerbatimChecker:
-    """Mirrors LearningService: verbatim gate + corpus 4-gram index."""
+    """Mirrors LearningService: verbatim gate + corpus 4-gram index.
 
-    def __init__(self, messages: list[str]) -> None:
+    ``ngram_index`` mirrors the cumulative ``chat_verbatim_ngrams`` table (O4)
+    when provided; the message-window fallback exists only for callers without
+    a migrated database at hand.
+    """
+
+    def __init__(
+        self,
+        messages: list[str],
+        ngram_index: frozenset[tuple[str, ...]] | None = None,
+    ) -> None:
         self._texts = {normalize_for_verbatim(m) for m in messages}
-        self._ngram_index = frozenset(
+        self._ngram_index = ngram_index if ngram_index is not None else frozenset(
             window
             for message in messages
             for window in content_ngram_windows(message)
@@ -231,6 +240,32 @@ def build_verbatim_index(
     return index
 
 
+def novel_ngram_share(
+    content_tokens_cf: list[str],
+    index: dict[int, set[tuple[str, ...]]],
+    size: int = VERBATIM_MIN_N,
+) -> float | None:
+    """Share of the reply's content ``size``-grams NOT found in the corpus.
+
+    The direct measure of «отсебятина»: 0.0 means every window of the reply
+    exists verbatim in some training message (pure corpus recombination at
+    best), 1.0 means no window does. ``verbatim_run_ratio`` cannot see this —
+    it measures the single longest run, so a reply spliced from two long
+    quotes scores the same as one quote half its length. Replies shorter than
+    ``size`` content tokens return None and must be excluded from means (they
+    are governed by the short-reply anti-repeat, not by novelty).
+    """
+    grams = index[size]
+    windows = [
+        tuple(content_tokens_cf[start : start + size])
+        for start in range(len(content_tokens_cf) - size + 1)
+    ]
+    if not windows:
+        return None
+    hits = sum(1 for window in windows if window in grams)
+    return 1.0 - hits / len(windows)
+
+
 def longest_verbatim_run(
     content_tokens_cf: list[str],
     index: dict[int, set[tuple[str, ...]]],
@@ -306,6 +341,13 @@ async def evaluate(
 
         db = Database(str(db_copy))
         await db.init()
+        # db.init() ran migration 016 on the copy, so the cumulative all-time
+        # index is available; both the runtime checker and the metric index
+        # below use it — the message-window index understated verbatim ~3x.
+        alltime_ngrams = frozenset(
+            tuple(row) for row in await db.get_verbatim_ngrams(resolved_chat)
+        )
+        verbatim_index[VERBATIM_MIN_N] |= set(alltime_ngrams)
         generator = _TraceCapturingGenerator(db)
         pool = _PoolCollector(generator.attempt_sources)
         gen_trace_log.log_selection = (  # type: ignore[assignment]
@@ -345,7 +387,9 @@ async def evaluate(
             setattr(runtime_state, key, value)
         response_generator = ResponseGenerator(
             generator=generator,
-            learning_service=_ProdVerbatimChecker(messages),
+            learning_service=_ProdVerbatimChecker(
+                messages, ngram_index=alltime_ngrams
+            ),
             runtime_state=runtime_state,
         )
 
@@ -353,6 +397,7 @@ async def evaluate(
         outputs: list[list[str]] = []
         verbatim_ratios: list[float] = []
         verbatim_runs: list[int] = []
+        novel_shares: list[float] = []
         context_overlaps: list[float] = []
         latencies_ms: list[float] = []
         empty = 0
@@ -412,6 +457,9 @@ async def evaluate(
                 run = longest_verbatim_run(content_cf, verbatim_index)
                 verbatim_runs.append(run)
                 verbatim_ratios.append(run / len(content_cf) if content_cf else 0.0)
+                novelty = novel_ngram_share(content_cf, verbatim_index)
+                if novelty is not None:
+                    novel_shares.append(novelty)
                 jumps = generator.attempt_jumps.get(result.text, -1)
                 if result.text in extended_texts:
                     extension_wins += 1
@@ -497,6 +545,17 @@ async def evaluate(
         "verbatim_extension_count": extension_count,
         "verbatim_extension_win_rate": round(extension_wins / produced, 4) if produced else 0.0,
         "rg_rejections": dict(rg_rejections.most_common()),
+        # Отсебятина: share of the reply's content 4-grams absent from the
+        # corpus, averaged over replies long enough to have 4-gram windows.
+        # pure_corpus_reply_rate is its tail: replies where EVERY window is a
+        # known corpus 4-gram (novelty exactly 0) — recombination indistin-
+        # guishable from quoting at this n-gram size.
+        "novel_ngram_share_mean": round(mean(novel_shares), 4) if novel_shares else 0.0,
+        "novel_ngram_share_median": round(median(novel_shares), 4) if novel_shares else 0.0,
+        "novel_evaluable_n": len(novel_shares),
+        "pure_corpus_reply_rate": round(
+            sum(1 for share in novel_shares if share == 0.0) / len(novel_shares), 4
+        ) if novel_shares else 0.0,
         "verbatim_run_ratio_mean": round(mean(verbatim_ratios), 4) if verbatim_ratios else 0.0,
         "verbatim_run_ratio_median": round(median(verbatim_ratios), 4) if verbatim_ratios else 0.0,
         "verbatim_run_len_median": median(verbatim_runs) if verbatim_runs else 0,

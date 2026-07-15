@@ -28,6 +28,7 @@ EXPECTED_MIGRATIONS = [
     "013_drop_transitions1",
     "014_chat_user_interactions",
     "015_lowercase_model",
+    "016_verbatim_ngrams",
 ]
 
 EXPECTED_TABLES = {
