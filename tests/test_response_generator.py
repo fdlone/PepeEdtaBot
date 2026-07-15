@@ -128,7 +128,9 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             )
 
         assert result is not None
-        self.assertTrue(result.startswith("training sample has four tokens,"))
+        # Splice marker may be a wordy connective or the silent sentence
+        # break — only the quote + continuation shape is pinned.
+        self.assertTrue(result.startswith("training sample has four tokens"))
         self.assertIn("fresh continuation has four tokens", result)
         self.assertEqual(generator.generate_text.await_count, 4)
         scorer.assert_called_once()

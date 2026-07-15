@@ -30,7 +30,8 @@ from app.core.markov import (
     escalated_randomness_strength,
     finalize_reply_ending,
     is_short_generated_reply,
-    pick_jump_connective,
+    pick_splice_connective,
+    splice_marker_tokens,
     tokenize,
     trim_splice_tail,
 )
@@ -269,7 +270,7 @@ class ResponseGenerator:
         # Same stutter guard as the M4 splice: never pick a connective that
         # contains the continuation's first word (", ну и" + "ну как..." read
         # as "ну и ну" in live samples).
-        connective = pick_jump_connective(
+        connective = pick_splice_connective(
             rng,
             exclude=[
                 phrase
@@ -278,7 +279,9 @@ class ResponseGenerator:
             ],
         )
         combined = finalize_reply_ending(
-            base_tokens + list(connective) + tail_tokens
+            base_tokens
+            + splice_marker_tokens(base_tokens, connective)
+            + tail_tokens
         )
         extended = detokenize(combined, max_chars=state.max_reply_chars)
         if not extended or extended == candidate:
