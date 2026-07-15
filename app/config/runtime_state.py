@@ -43,6 +43,9 @@ class RuntimeState:
     markov_order: int
     enable_backoff: bool
     markov_jump_probability: float
+    context_jump_boost: float
+    verbatim_extension_share: float
+    order_mix_probability: float
     hot_ngram_seed_chance: float
     hot_ngram_min_count: int
     hot_ngram_recency_share: float

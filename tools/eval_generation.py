@@ -224,6 +224,9 @@ async def evaluate_generation(
                 # Keep the M3/M4 channels off in eval so the baselines measure the
                 # word model alone (and no emoji-stats DB reads are attempted).
                 markov_jump_probability=0.0,
+                context_jump_boost=1.0,
+                verbatim_extension_share=0.0,
+                order_mix_probability=0.0,
                 emoji_append_chance=0.0,
                 normalize_lower=normalize_lower,
                 fuzzy_context_casefold=fuzzy_context_casefold,

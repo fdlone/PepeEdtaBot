@@ -45,6 +45,9 @@ def _runtime_state() -> MagicMock:
     # must not consult the learning service's emoji stats.
     state.emoji_append_chance = 0.0
     state.markov_jump_probability = 0.0
+    state.context_jump_boost = 1.0
+    state.verbatim_extension_share = 0.0
+    state.order_mix_probability = 0.0
     return state
 
 

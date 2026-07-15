@@ -212,6 +212,35 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # («кстати», «короче») сохраняют читабельность сдвига темы.
     FieldSpec("markov_jump_probability", "MARKOV_JUMP_PROBABILITY", "0.12",
               _float_in_range(0.0, 1.0)),
+    # Context+chaos: multiplier on markov_jump_probability applied only to
+    # walks that started from a contextual anchor (start_source context /
+    # hidden_context). The anchor voices the topic; without a jump the chain
+    # then retraces what followed the matched window in the corpus — which is
+    # why context anchoring and verbatim quoting rise and fall together. The
+    # boost breaks exactly that retrace while global walks keep the base
+    # probability. 1.0 keeps jumps uniform (pre-knob behaviour).
+    FieldSpec("context_jump_boost", "CONTEXT_JUMP_BOOST", "1.0",
+              _float_in_range(1.0, 10.0)),
+    # Context+chaos: corpus 4-gram share at/above which a *passing* candidate
+    # is treated as a near-quote and gets the отсебятина extension (connective
+    # + fresh global walk) — the same splice that full verbatim copies already
+    # receive. Generalizes that channel from "exact copy of a training
+    # message" to "quote with a word changed". The extension only replaces the
+    # candidate when the combined text passes the same gates again. 0 disables
+    # (legacy behaviour: only exact copies are extended).
+    FieldSpec("verbatim_extension_share", "VERBATIM_EXTENSION_SHARE", "0",
+              _float_in_range(0.0, 1.0)),
+    # Artificial branching valve: probability per generation step of taking
+    # the transition from the wider order-2 pool even though the order-3 pool
+    # has a continuation. ~98% of order-3 states on the prod corpus have
+    # exactly one continuation (the walk replays the source message), while
+    # order-2 states average 1.27 options (8.7 on frequent states) — this
+    # knob buys per-step divergence at a bounded coherence cost (order 2 is
+    # the established quality floor; order 1 was removed as word salad).
+    # Diverts only when order-2 actually offers more options than order-3,
+    # and only when backoff is enabled. 0 disables (pre-knob behaviour).
+    FieldSpec("order_mix_probability", "ORDER_MIX_PROBABILITY", "0",
+              _float_in_range(0.0, 1.0)),
     # L1 running jokes: chance to seed an *unprompted* reply from a currently
     # hot n-gram (a phrase the chat picked up in the last ~7 days). 0 disables
     # the whole channel (no recording, no reads) — same gate pattern as

@@ -905,6 +905,8 @@ class MarkovGenerator:
         enable_backoff: bool = True,
         fuzzy_context_casefold: bool = False,
         jump_probability: float = 0.0,
+        context_jump_boost: float = 1.0,
+        order_mix_probability: float = 0.0,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> str:
@@ -923,6 +925,8 @@ class MarkovGenerator:
             enable_backoff=enable_backoff,
             fuzzy_context_casefold=fuzzy_context_casefold,
             jump_probability=jump_probability,
+            context_jump_boost=context_jump_boost,
+            order_mix_probability=order_mix_probability,
             rng=rng,
             attempt_budget=attempt_budget,
         )
@@ -944,6 +948,8 @@ class MarkovGenerator:
         enable_backoff: bool = True,
         fuzzy_context_casefold: bool = False,
         jump_probability: float = 0.0,
+        context_jump_boost: float = 1.0,
+        order_mix_probability: float = 0.0,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> tuple[str, GenerationTrace]:
@@ -971,6 +977,8 @@ class MarkovGenerator:
                 enable_backoff=enable_backoff,
                 fuzzy_context_casefold=fuzzy_context_casefold,
                 jump_probability=jump_probability,
+                context_jump_boost=context_jump_boost,
+                order_mix_probability=order_mix_probability,
                 rng=generation_rng,
                 emit_start=True,
             )
@@ -1273,6 +1281,7 @@ class MarkovGenerator:
         context_bias: float,
         repetition_penalty_strength: float,
         jump_probability: float,
+        order_mix_probability: float,
         rng: random.Random,
     ) -> tuple[list[str], int, int]:
         """Walk the Markov chain from ``start3`` until a stop condition.
@@ -1361,6 +1370,21 @@ class MarkovGenerator:
 
             recent_window = generated[-10:]
             pool3 = await self._get3(chat_id, w1, w2, w3) if order >= 3 else []
+            # Order-mix branching valve: with probability order_mix_probability
+            # take this step from the order-2 pool even though order-3 has a
+            # continuation — ~98% of order-3 states carry exactly one option,
+            # so the order-3 walk replays its source message. Divert only when
+            # order-2 genuinely widens the choice; emptying pool3 reuses the
+            # regular backoff path below (hence the enable_backoff guard).
+            if (
+                pool3
+                and enable_backoff
+                and order_mix_probability > 0.0
+                and rng.random() < order_mix_probability
+            ):
+                mix_pool2 = await self._get2(chat_id, w2, w3)
+                if len(mix_pool2) > len(pool3):
+                    pool3 = []
             if pool3 and order >= 3:
                 candidates = [
                     (cand, cnt)
@@ -1450,6 +1474,8 @@ class MarkovGenerator:
         enable_backoff: bool = True,
         fuzzy_context_casefold: bool = False,
         jump_probability: float = 0.0,
+        context_jump_boost: float = 1.0,
+        order_mix_probability: float = 0.0,
         rng: random.Random | None = None,
         emit_start: bool = True,
     ) -> _GenerationAttempt:
@@ -1574,6 +1600,13 @@ class MarkovGenerator:
             start3, order_used = global_start
 
         emit_tokens = list(start3) if emit_start else contextual_emit_tokens
+        # Context+chaos: a contextual anchor's continuation is a corpus
+        # retrace, so only those walks get the boosted drift probability.
+        effective_jump_probability = jump_probability
+        if start_source in ("context", "hidden_context"):
+            effective_jump_probability = min(
+                1.0, jump_probability * max(1.0, context_jump_boost)
+            )
         generated, order_used, jump_count = await self._run_generation_loop(
             chat_id,
             start3,
@@ -1593,7 +1626,8 @@ class MarkovGenerator:
             next_power=next_power,
             context_bias=context_bias,
             repetition_penalty_strength=repetition_penalty_strength,
-            jump_probability=jump_probability,
+            jump_probability=effective_jump_probability,
+            order_mix_probability=order_mix_probability,
             rng=generation_rng,
         )
 

@@ -133,20 +133,18 @@ class LearningService:
     async def get_verbatim_ngram_index(
         self, chat_id: int
     ) -> frozenset[tuple[str, ...]]:
-        """Content 4-grams of the chat's recent training messages.
+        """Every content 4-gram the chat has ever learned (cumulative, O4).
 
         Used by the response generator to penalize candidates whose windows all
-        come verbatim from the corpus (quote detection, not a hard gate).
+        come verbatim from the corpus (quote detection, not a hard gate) and to
+        trigger the near-quote extension. Reads the cumulative
+        ``chat_verbatim_ngrams`` table — the message-window variant was blind
+        to ~75% of what the chain can replay (quotes older than retention).
         """
         cached = self._ngram_index.get(chat_id)
         if cached is not None:
             return cached
-        recent_texts = await self._get_recent_texts(chat_id)
-        index = frozenset(
-            window
-            for text in recent_texts
-            for window in content_ngram_windows(text)
-        )
+        index = frozenset(await self._db.get_verbatim_ngrams(chat_id))
         self._ngram_index[chat_id] = index
         return index
 
