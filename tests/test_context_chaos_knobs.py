@@ -188,7 +188,7 @@ class TestNearQuoteExtension(unittest.IsolatedAsyncioTestCase):
             share=0.8,
         )
         assert result is not None
-        self.assertTrue(result.startswith("почти цитата из пяти слов ровно,"))
+        self.assertTrue(result.startswith("почти цитата из пяти слов ровно"))
         self.assertIn("свежий хвост из четырёх слов", result)
 
     async def test_original_kept_when_extension_fails(self) -> None:
@@ -206,6 +206,47 @@ class TestNearQuoteExtension(unittest.IsolatedAsyncioTestCase):
         )
         assert result is not None
         self.assertEqual(result.rstrip("."), "почти цитата из пяти слов ровно")
+
+
+class TestSpliceMarkers(unittest.TestCase):
+    def test_silent_splice_share_matches_constant(self) -> None:
+        from app.core.markov import (
+            SILENT_SPLICE,
+            SILENT_SPLICE_PROBABILITY,
+            pick_splice_connective,
+        )
+
+        rng = random.Random(1)
+        picks = [pick_splice_connective(rng) for _ in range(2000)]
+        silent_share = sum(1 for p in picks if p == SILENT_SPLICE) / len(picks)
+        self.assertAlmostEqual(
+            silent_share, SILENT_SPLICE_PROBABILITY, delta=0.04
+        )
+
+    def test_wordy_picks_respect_exclusion(self) -> None:
+        from app.core.markov import (
+            JUMP_CONNECTIVE_TOKENS,
+            SILENT_SPLICE,
+            pick_splice_connective,
+        )
+
+        exclude = list(JUMP_CONNECTIVE_TOKENS[1:])
+        rng = random.Random(2)
+        for _ in range(200):
+            picked = pick_splice_connective(rng, exclude=exclude)
+            self.assertIn(picked, (SILENT_SPLICE, JUMP_CONNECTIVE_TOKENS[0]))
+
+    def test_silent_marker_skipped_after_terminal_punctuation(self) -> None:
+        from app.core.markov import SILENT_SPLICE, splice_marker_tokens
+
+        self.assertEqual(splice_marker_tokens(["слово", "!"], SILENT_SPLICE), [])
+        self.assertEqual(
+            splice_marker_tokens(["слово"], SILENT_SPLICE), ["."]
+        )
+        self.assertEqual(
+            splice_marker_tokens(["слово", "!"], (",", "кстати")),
+            [",", "кстати"],
+        )
 
 
 if __name__ == "__main__":

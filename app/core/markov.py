@@ -43,7 +43,21 @@ JUMP_CONNECTIVE_TOKENS: tuple[tuple[str, ...], ...] = (
     (",", "хотя"),
     (",", "а", "вообще"),
     (",", "ну", "и"),
+    (",", "да", "и"),
+    (",", "а", "ещё"),
+    (",", "причём"),
+    (",", "ладно"),
+    (",", "но", "вообще-то"),
+    (",", "и", "да"),
 )
+
+# Silent splice: the aside starts a new sentence instead of hanging off a
+# connective. Reads as a plain topic change («... . новая мысль») and is
+# invisible to connective-frequency detection — the whole point: with the
+# boosted context jumps 82% of winners carried a connective phrase from a
+# six-item pool, a recognisable tic in a live chat (2026-07-15 measurement).
+SILENT_SPLICE: tuple[str, ...] = (".",)
+SILENT_SPLICE_PROBABILITY = 0.35
 
 # One aside per reply reads as deliberate topic drift; two or more read as
 # salad. Uncapped, the 0.12/step hazard gave 18% of selection winners >=2
@@ -91,6 +105,33 @@ def pick_jump_connective(
         phrase for phrase in JUMP_CONNECTIVE_TOKENS if phrase not in excluded
     ]
     return rng.choice(fresh or list(JUMP_CONNECTIVE_TOKENS))
+
+
+def pick_splice_connective(
+    rng: random.Random,
+    exclude: Iterable[tuple[str, ...]] = (),
+) -> tuple[str, ...]:
+    """A splice marker: the silent sentence break with a fixed share, else a
+    wordy connective outside ``exclude``. Both splice paths (M4 drift and the
+    verbatim extension) draw from here so the connective tic dilutes evenly."""
+    if rng.random() < SILENT_SPLICE_PROBABILITY:
+        return SILENT_SPLICE
+    return pick_jump_connective(rng, exclude=exclude)
+
+
+def splice_marker_tokens(
+    generated: list[str], connective: tuple[str, ...]
+) -> list[str]:
+    """Tokens to actually splice: the silent «.» is dropped when the tail
+    already ends the sentence (trim_splice_tail removes commas but keeps
+    terminal punctuation — «слово!.» must not happen)."""
+    if (
+        connective == SILENT_SPLICE
+        and generated
+        and generated[-1] in PUNCT_SET
+    ):
+        return []
+    return list(connective)
 
 
 def context_emission_tokens(state: tuple[str, str, str]) -> list[str]:
@@ -1346,7 +1387,7 @@ class MarkovGenerator:
                 # Exclude connectives containing the jump target's first word
                 # anywhere, not just as the last token: ", ну и" + "ну ..."
                 # stuttered into "ну и ну" when only phrase[-1] was checked.
-                connective = pick_jump_connective(
+                connective = pick_splice_connective(
                     rng,
                     exclude=used_connectives
                     + [
@@ -1356,7 +1397,7 @@ class MarkovGenerator:
                     ],
                 )
                 used_connectives.append(connective)
-                generated.extend(connective)
+                generated.extend(splice_marker_tokens(generated, connective))
                 generated.extend((nw1, nw2, nw3))
                 last_jump_end = len(generated)
                 w1, w2, w3 = nw1, nw2, nw3

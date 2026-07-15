@@ -42,6 +42,8 @@ from app.core import gen_trace_log  # noqa: E402
 from app.core import response_generator as _rg  # noqa: E402
 from app.core.candidate_scorer import build_token_idf  # noqa: E402
 from app.core.markov import (  # noqa: E402
+    JUMP_CONNECTIVE_TOKENS,
+    PUNCT_SET,
     MarkovGenerator,
     content_tokens,
     tokenize,
@@ -240,6 +242,32 @@ def build_verbatim_index(
     return index
 
 
+# Connective phrases that contain at least one word: the silent «.» splice is
+# invisible by design and must not count as a connective.
+_WORDY_CONNECTIVES: tuple[tuple[str, ...], ...] = tuple(
+    phrase
+    for phrase in JUMP_CONNECTIVE_TOKENS
+    if any(token not in PUNCT_SET for token in phrase)
+)
+
+
+def contains_splice_connective(tokens: list[str]) -> bool:
+    """True if the reply contains a splice connective phrase as a contiguous
+    token run.
+
+    Slight overcount by design: the connective words also occur naturally in
+    chat speech. The bias is identical on both sides of any comparison, and
+    the metric exists to compare configurations, not to report an absolute.
+    """
+    lowered = [token.casefold() for token in tokens]
+    for phrase in _WORDY_CONNECTIVES:
+        size = len(phrase)
+        for start in range(len(lowered) - size + 1):
+            if tuple(lowered[start : start + size]) == phrase:
+                return True
+    return False
+
+
 def novel_ngram_share(
     content_tokens_cf: list[str],
     index: dict[int, set[tuple[str, ...]]],
@@ -398,6 +426,7 @@ async def evaluate(
         verbatim_ratios: list[float] = []
         verbatim_runs: list[int] = []
         novel_shares: list[float] = []
+        connective_replies = 0
         context_overlaps: list[float] = []
         latencies_ms: list[float] = []
         empty = 0
@@ -460,6 +489,8 @@ async def evaluate(
                 novelty = novel_ngram_share(content_cf, verbatim_index)
                 if novelty is not None:
                     novel_shares.append(novelty)
+                if contains_splice_connective(tokenize(result.text)):
+                    connective_replies += 1
                 jumps = generator.attempt_jumps.get(result.text, -1)
                 if result.text in extended_texts:
                     extension_wins += 1
@@ -550,6 +581,11 @@ async def evaluate(
         # pure_corpus_reply_rate is its tail: replies where EVERY window is a
         # known corpus 4-gram (novelty exactly 0) — recombination indistin-
         # guishable from quoting at this n-gram size.
+        # Formularity of splices: share of replies carrying a wordy connective
+        # phrase («, кстати» ...). The six-phrase pool at 82% saturation is the
+        # documented perceptual risk this metric was added to track.
+        "connective_reply_rate": round(connective_replies / produced, 4)
+        if produced else 0.0,
         "novel_ngram_share_mean": round(mean(novel_shares), 4) if novel_shares else 0.0,
         "novel_ngram_share_median": round(median(novel_shares), 4) if novel_shares else 0.0,
         "novel_evaluable_n": len(novel_shares),
