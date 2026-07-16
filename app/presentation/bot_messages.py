@@ -107,7 +107,6 @@ def format_config_message(state: RuntimeState, full: bool = False) -> str:
                 f"markov_order={state.markov_order}",
                 f"enable_backoff={state.enable_backoff}",
                 f"reply_context_max_tokens={state.reply_context_max_tokens}",
-                f"reply_context_last_tokens={state.reply_context_last_tokens}",
                 f"reply_context_bias={state.reply_context_bias}",
                 f"reply_context_start_bias={state.reply_context_start_bias}",
                 f"reply_context_only_for_replies={state.reply_context_only_for_replies}",
