@@ -71,6 +71,7 @@ class RuntimeState:
     mood_lively_rate_per_min: float
     mood_sleepy_rate_per_min: float
     mood_heated_intensity: float
+    mood_mention_heated_share: float
     mood_max_rate_per_min: float
     reply_director_enabled: bool
     reply_probability_min: float
@@ -113,6 +114,7 @@ class RuntimeState:
             sleepy_rate_per_min=self.mood_sleepy_rate_per_min,
             heated_intensity=self.mood_heated_intensity,
             max_rate_per_min=self.mood_max_rate_per_min,
+            mention_heated_share=self.mood_mention_heated_share,
         )
 
     def note_reply_sent(

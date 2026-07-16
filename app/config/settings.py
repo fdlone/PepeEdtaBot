@@ -76,6 +76,7 @@ class Settings:
     mood_lively_rate_per_min: float
     mood_sleepy_rate_per_min: float
     mood_heated_intensity: float
+    mood_mention_heated_share: float
     mood_max_rate_per_min: float
     reply_director_enabled: bool
     reply_probability_min: float

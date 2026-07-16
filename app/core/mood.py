@@ -33,6 +33,11 @@ class MoodConfig:
     sleepy_rate_per_min: float
     heated_intensity: float
     max_rate_per_min: float
+    # Escalation chains: smoothed share of bot-addressed messages at/above
+    # which the chat reads as heated — a series of direct mentions "winds the
+    # bot up" even when pace and punctuation stay modest. 0 disables (the
+    # default keeps this dataclass source-compatible with older callers).
+    mention_heated_share: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,14 +154,21 @@ def classify_mood(
     *,
     rate_ewma: float,
     intensity_ewma: float,
+    mention_ewma: float = 0.0,
     config: MoodConfig,
 ) -> str:
     """Map smoothed signals to a mood label.
 
     Intensity wins first (a heated argument reads as heated even at a modest
-    pace); otherwise pace decides between sleepy / lively / calm.
+    pace); a mention series escalates next (see ``mention_heated_share``);
+    otherwise pace decides between sleepy / lively / calm.
     """
     if intensity_ewma >= config.heated_intensity:
+        return HEATED
+    if (
+        config.mention_heated_share > 0.0
+        and mention_ewma >= config.mention_heated_share
+    ):
         return HEATED
     if rate_ewma <= config.sleepy_rate_per_min:
         return SLEEPY
@@ -215,6 +227,7 @@ def update_mood_state(
     mood = classify_mood(
         rate_ewma=rate_ewma,
         intensity_ewma=intensity_ewma,
+        mention_ewma=mention_ewma,
         config=config,
     )
     return ChatMoodState(

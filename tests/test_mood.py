@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from app.core.mood import (
     CALM,
@@ -65,6 +66,34 @@ class TestClassifyMood(unittest.TestCase):
             classify_mood(rate_ewma=6.0, intensity_ewma=0.0, config=CONFIG), CALM
         )
 
+    def test_mention_series_escalates_to_heated(self) -> None:
+        config = replace(CONFIG, mention_heated_share=0.6)
+        self.assertEqual(
+            classify_mood(
+                rate_ewma=6.0, intensity_ewma=0.0, mention_ewma=0.7, config=config
+            ),
+            HEATED,
+        )
+
+    def test_mention_share_below_threshold_stays_calm(self) -> None:
+        config = replace(CONFIG, mention_heated_share=0.6)
+        self.assertEqual(
+            classify_mood(
+                rate_ewma=6.0, intensity_ewma=0.0, mention_ewma=0.5, config=config
+            ),
+            CALM,
+        )
+
+    def test_mention_escalation_disabled_at_zero(self) -> None:
+        # mention_heated_share=0 must not turn every chat heated (the >= 0
+        # comparison would otherwise always fire).
+        self.assertEqual(
+            classify_mood(
+                rate_ewma=6.0, intensity_ewma=0.0, mention_ewma=1.0, config=CONFIG
+            ),
+            CALM,
+        )
+
 
 class TestUpdateMoodState(unittest.TestCase):
     def test_first_message_seeds_calm(self) -> None:
@@ -122,6 +151,20 @@ class TestUpdateMoodState(unittest.TestCase):
             state, now=0.0, text="спам", mentioned=False, config=CONFIG
         )
         self.assertLessEqual(state.rate_ewma, CONFIG.max_rate_per_min)
+
+    def test_mention_series_winds_the_bot_up(self) -> None:
+        # Plain text at a modest pace: neither intensity nor rate is heated,
+        # only the run of direct mentions escalates the mood.
+        config = replace(CONFIG, mention_heated_share=0.6)
+        state: ChatMoodState | None = None
+        now = 0.0
+        for _ in range(5):
+            state = update_mood_state(
+                state, now=now, text="бот ну скажи уже", mentioned=True, config=config
+            )
+            now += 30.0
+        assert state is not None
+        self.assertEqual(state.mood, HEATED)
 
     def test_mention_ewma_tracks_addressing(self) -> None:
         state: ChatMoodState | None = None
