@@ -11,6 +11,12 @@ URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 MENTION_RE = re.compile(r"(?<!\w)@\w+", re.UNICODE)
 SPACE_RE = re.compile(r"\s+")
 REPEAT_RE = re.compile(r"(.)\1{2,}", re.UNICODE)
+# Numbered-list markers at line starts: once whitespace normalization folds
+# newlines, "5. хоссейн" leaves a bare "<digits> ." pair in the corpus and the
+# model learns enumerator corridors (replies opening with "5."). Only
+# line-leading markers are stripped: inline "приду в 5." is real text, and
+# decimals ("0.5") never sit at a line start with a trailing separator.
+LIST_MARKER_RE = re.compile(r"^[ \t]*\d{1,3}[.)](?=\s)", re.MULTILINE)
 SENTENCE_ENDINGS = frozenset(".!?")
 
 
@@ -24,6 +30,10 @@ def remove_mentions(text: str) -> str:
 
 def normalize_repeats(text: str) -> str:
     return REPEAT_RE.sub(r"\1\1", text)
+
+
+def remove_list_markers(text: str) -> str:
+    return LIST_MARKER_RE.sub("", text)
 
 
 def capitalize_reply_sentences(text: str) -> str:
@@ -69,6 +79,9 @@ def sanitize_text(text: str) -> str:
     # final whitespace normalization collapses.
     text = redact_sensitive_data(text)
     text = remove_mentions(text)
+    # Before whitespace collapse: the marker pattern anchors on line starts,
+    # which the final normalization erases.
+    text = remove_list_markers(text)
     text = normalize_repeats(text)
     text = SPACE_RE.sub(" ", text).strip()
     return text
