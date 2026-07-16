@@ -256,6 +256,16 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         clean = sanitize_text("@PepeEdta_Bot привет")
         self.assertEqual(clean, "привет")
 
+    def test_sanitize_strips_numbered_list_markers(self) -> None:
+        # Line-leading enumerators would otherwise survive newline collapse as
+        # bare "<digits> ." tokens and teach the model "5. хоссейн" corridors.
+        clean = sanitize_text("список:\n1. первый\n2) второй\n10. десятый")
+        self.assertEqual(clean, "список: первый второй десятый")
+
+    def test_sanitize_keeps_inline_numbers_and_decimals(self) -> None:
+        clean = sanitize_text("приду в 5. возьму 0.5 пива")
+        self.assertEqual(clean, "приду в 5. возьму 0.5 пива")
+
     def test_detokenize(self) -> None:
         text = detokenize(
             ["Привет", ",", "мир", "!", "Как", "дела", "?"], max_chars=100
