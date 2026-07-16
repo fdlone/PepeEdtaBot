@@ -61,7 +61,10 @@ Telegram message (F.text)
 - `mention_ewma` — сглаженная доля обращений к боту.
 
 Сглаживание `mood_ewma_alpha=0.3`. Классификация `classify_mood`:
-интенсивность ≥ `mood_heated_intensity=0.4` → **heated**; иначе по темпу:
+интенсивность ≥ `mood_heated_intensity=0.4` → **heated**; затем эскалационные
+цепочки: `mention_ewma` ≥ `mood_mention_heated_share` → **heated** (серия
+обращений «заводит» бота даже при спокойном темпе; при alpha 0.3 три обращения
+подряд дают ~0.66; 0 выключает, дефолт); иначе по темпу:
 ≤ `mood_sleepy_rate_per_min=2` → **sleepy**, ≥ `mood_lively_rate_per_min=12` →
 **lively**, иначе **calm**. Первое сообщение чата → calm с baseline-темпом
 (среднее sleepy/lively порогов).
@@ -485,6 +488,7 @@ Fallback на обращение не считается в hourly cap.
 | mood_ewma_alpha | 0.3 | сглаживание сигналов |
 | mood_lively/sleepy_rate_per_min | 12 / 2 | пороги темпа |
 | mood_heated_intensity / mood_max_rate_per_min | 0.4 / 120 | heated-порог, кламп темпа |
+| mood_mention_heated_share | 0 | эскалационные цепочки: серия обращений → heated (§1.3) |
 | typing_min/max/per_char_ms | 350 / 1100 / 12 | имитация набора |
 
 Константы, зашитые в код (не /set): бюджеты попыток/кандидатов и margin (§4),

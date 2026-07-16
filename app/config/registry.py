@@ -352,6 +352,15 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # Smoothed emphatic-intensity (!/?/caps) at/above which a chat reads as heated.
     FieldSpec("mood_heated_intensity", "MOOD_HEATED_INTENSITY", "0.4",
               _float_in_range(0.0, 1.0)),
+    # Escalation chains: smoothed share of bot-addressed messages
+    # (mention_ewma) at/above which the chat reads as heated — a series of
+    # direct mentions "winds the bot up" (randomness/flavor up, punchier
+    # length mix via the heated modifiers) even at modest pace and
+    # punctuation. At alpha 0.3 three back-to-back mentions reach ~0.66, so
+    # 0.6 ≈ "three in a row". 0 disables (mentions keep feeding only the M2
+    # momentum, pre-knob behaviour).
+    FieldSpec("mood_mention_heated_share", "MOOD_MENTION_HEATED_SHARE", "0",
+              _float_in_range(0.0, 1.0)),
     # Clamp for the instantaneous message rate so bursts cannot spike the EWMA.
     FieldSpec("mood_max_rate_per_min", "MOOD_MAX_RATE_PER_MIN", "120.0",
               _float_in_range(1.0, 6000.0)),

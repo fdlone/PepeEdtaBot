@@ -58,6 +58,7 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
         "mood_lively_rate_per_min": 12.0,
         "mood_sleepy_rate_per_min": 2.0,
         "mood_heated_intensity": 0.4,
+        "mood_mention_heated_share": 0.0,
         "mood_max_rate_per_min": 120.0,
         "reply_director_enabled": True,
         "reply_probability_min": 0.02,
