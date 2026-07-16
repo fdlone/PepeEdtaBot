@@ -71,7 +71,9 @@ VERBATIM_MIN_N = 4
 VERBATIM_MAX_N = 12
 # Trace ``start_source`` values meaning the walk was anchored on the reply
 # context (visible emission or hidden). Only the eval needs to know these.
-_CONTEXT_START_SOURCES = frozenset({"context", "hidden_context"})
+_CONTEXT_START_SOURCES = frozenset(
+    {"context", "hidden_context", "context_spliced"}
+)
 
 
 class _ProdVerbatimChecker:
