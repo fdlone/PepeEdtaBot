@@ -2,12 +2,14 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
-# A branch with an open PR triggers both push and pull_request runs — the
-# price of seeing breakage on PR-less branches (a red bandit gate from #80
-# lived in main for half a day because branch pushes weren't built). Rapid
-# re-pushes to the same ref cancel the stale run; pushes to main never cancel.
+# One run per commit: pushes build only main, feature branches build through
+# their PR (2026-07-16, owner decision — the unfiltered-push variant doubled
+# every PR's CI and was rolled back). The known cost is that a branch without
+# an open PR is not built; open the PR early if that matters. Rapid re-pushes
+# to the same ref cancel the stale run; pushes to main never cancel.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
