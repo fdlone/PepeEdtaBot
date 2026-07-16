@@ -309,6 +309,19 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # get re-picked). 6.0 is the knee: the gain is real, the cost is not yet.
     FieldSpec("context_start_affinity", "CONTEXT_START_AFFINITY", "6.0",
               _float_in_range(1.0, 10.0)),
+    # Anchor segmentation («прыжок наоборот»): share of visible contextual
+    # starts whose anchor is deferred — the walk begins from a GLOBAL start and
+    # the anchor's emission tokens are spliced in later (connective + chain
+    # continues from the anchor state), so the context surfaces mid- or
+    # end-reply instead of always opening it. The splice position is uniform
+    # over the token budget; if the global walk dead-ends first, the anchor is
+    # spliced at the dead end. Shares the one-jump-per-reply budget with M4
+    # drift: a pending anchor suppresses global jumps and its splice consumes
+    # the jump slot. 0 disables (anchor always opens the reply, pre-knob
+    # behaviour).
+    FieldSpec("context_anchor_splice_probability",
+              "CONTEXT_ANCHOR_SPLICE_PROBABILITY", "0",
+              _float_in_range(0.0, 1.0)),
     FieldSpec("reply_context_only_for_replies", "REPLY_CONTEXT_ONLY_FOR_REPLIES",
               "true", _bool()),
     FieldSpec("reply_context_include_current_message",

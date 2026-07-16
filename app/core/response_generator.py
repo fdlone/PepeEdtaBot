@@ -391,6 +391,9 @@ class ResponseGenerator:
                 jump_probability=self.runtime_state.markov_jump_probability,
                 context_jump_boost=self.runtime_state.context_jump_boost,
                 order_mix_probability=self.runtime_state.order_mix_probability,
+                context_anchor_splice_probability=(
+                    self.runtime_state.context_anchor_splice_probability
+                ),
                 rng=generation_rng,
                 attempt_budget=1,
             )

@@ -948,6 +948,7 @@ class MarkovGenerator:
         jump_probability: float = 0.0,
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
+        context_anchor_splice_probability: float = 0.0,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> str:
@@ -968,6 +969,7 @@ class MarkovGenerator:
             jump_probability=jump_probability,
             context_jump_boost=context_jump_boost,
             order_mix_probability=order_mix_probability,
+            context_anchor_splice_probability=context_anchor_splice_probability,
             rng=rng,
             attempt_budget=attempt_budget,
         )
@@ -991,6 +993,7 @@ class MarkovGenerator:
         jump_probability: float = 0.0,
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
+        context_anchor_splice_probability: float = 0.0,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> tuple[str, GenerationTrace]:
@@ -1020,6 +1023,7 @@ class MarkovGenerator:
                 jump_probability=jump_probability,
                 context_jump_boost=context_jump_boost,
                 order_mix_probability=order_mix_probability,
+                context_anchor_splice_probability=context_anchor_splice_probability,
                 rng=generation_rng,
                 emit_start=True,
             )
@@ -1323,16 +1327,27 @@ class MarkovGenerator:
         repetition_penalty_strength: float,
         jump_probability: float,
         order_mix_probability: float,
+        anchor_state: tuple[str, str, str] | None = None,
+        anchor_emit_tokens: list[str] | None = None,
+        anchor_target_tokens: int = 0,
         rng: random.Random,
-    ) -> tuple[list[str], int, int]:
+    ) -> tuple[list[str], int, int, bool]:
         """Walk the Markov chain from ``start3`` until a stop condition.
 
-        Returns ``(generated, order_used, jump_count)``. ``emit_tokens`` is the
-        prefix actually written into the output (the full start for a global or
-        seed start, a trimmed tail or nothing for a contextual start) while the
-        chain always walks from the full ``start3`` state. Per-step transitions
-        fall back from order 3 to 2 when ``enable_backoff`` allows; dedup state
-        suppresses immediate triplet repeats. Only local state is mutated.
+        Returns ``(generated, order_used, jump_count, anchor_spliced)``.
+        ``emit_tokens`` is the prefix actually written into the output (the
+        full start for a global or seed start, a trimmed tail or nothing for a
+        contextual start) while the chain always walks from the full ``start3``
+        state. Per-step transitions fall back from order 3 to 2 when
+        ``enable_backoff`` allows; dedup state suppresses immediate triplet
+        repeats. Only local state is mutated.
+
+        A non-``None`` ``anchor_state`` is a deferred contextual anchor: once
+        the reply reaches ``anchor_target_tokens`` tokens (or the walk
+        dead-ends), ``anchor_emit_tokens`` are spliced in behind a connective
+        and the chain continues from the anchor state. A pending anchor
+        suppresses global jumps and its splice counts as the reply's jump, so
+        both channels share the one-aside-per-reply budget.
         """
         token_limit = max(1, max_tokens)
         w1, w2, w3 = start3
@@ -1351,12 +1366,55 @@ class MarkovGenerator:
         jump_count = 0
         last_jump_end = 0
         used_connectives: list[tuple[str, ...]] = []
+        anchor_pending = anchor_state is not None
+
+        def splice_anchor() -> None:
+            """Voice the deferred anchor: connective + emission tokens, then
+            continue the chain from the anchor state. Consumes the jump slot.
+
+            Always a wordy connective, never the silent «.» splice: the
+            finalize pass trims the reply to the last sentence end, so a
+            silent marker whose tail earns no own terminal punctuation would
+            cut the anchor right back out while the trace still claims it."""
+            nonlocal w1, w2, w3, jump_count, last_jump_end, anchor_pending
+            assert anchor_state is not None
+            emit = anchor_emit_tokens or []
+            trim_splice_tail(generated)
+            connective = pick_jump_connective(
+                rng,
+                exclude=used_connectives
+                + [
+                    phrase
+                    for phrase in JUMP_CONNECTIVE_TOKENS
+                    if emit and emit[0].casefold() in phrase
+                ],
+            )
+            used_connectives.append(connective)
+            generated.extend(splice_marker_tokens(generated, connective))
+            generated.extend(emit)
+            last_jump_end = len(generated)
+            w1, w2, w3 = anchor_state
+            remember_bounded(visited_triplets, (w1, w2, w3), 40)
+            if len(generated) >= 2:
+                remember_bounded(seen_pairs, (generated[-2], generated[-1]), 80)
+            if len(generated) >= 3:
+                remember_bounded(
+                    seen_triplets,
+                    (generated[-3], generated[-2], generated[-1]),
+                    80,
+                )
+            jump_count += 1
+            anchor_pending = False
 
         for step_index in range(self.max_steps):
             if len(generated) >= token_limit:
                 break
+            if anchor_pending and len(generated) >= anchor_target_tokens:
+                splice_anchor()
+                continue
             if (
-                len(generated) >= JUMP_MIN_GENERATED_TOKENS
+                not anchor_pending
+                and len(generated) >= JUMP_MIN_GENERATED_TOKENS
                 and jump_count < JUMP_MAX_PER_REPLY
                 and (
                     jump_count == 0
@@ -1451,6 +1509,9 @@ class MarkovGenerator:
                 )
             else:
                 if not enable_backoff and order >= 3:
+                    if anchor_pending:
+                        splice_anchor()
+                        continue
                     break
 
                 pool2 = await self._get2(chat_id, w2, w3)
@@ -1473,6 +1534,9 @@ class MarkovGenerator:
                     )
                     order_used = min(order_used, 2)
                 else:
+                    if anchor_pending:
+                        splice_anchor()
+                        continue
                     break
 
             generated.append(w4)
@@ -1497,7 +1561,8 @@ class MarkovGenerator:
                     80,
                 )
 
-        return generated, order_used, jump_count
+        anchor_spliced = anchor_state is not None and not anchor_pending
+        return generated, order_used, jump_count, anchor_spliced
 
     async def _generate_text_once(
         self,
@@ -1517,6 +1582,7 @@ class MarkovGenerator:
         jump_probability: float = 0.0,
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
+        context_anchor_splice_probability: float = 0.0,
         rng: random.Random | None = None,
         emit_start: bool = True,
     ) -> _GenerationAttempt:
@@ -1547,6 +1613,8 @@ class MarkovGenerator:
         start3: tuple[str, str, str] | None = None
         start_source = "global"
         contextual_emit_tokens: list[str] = []
+        deferred_anchor: _ContextualStateSelection | None = None
+        deferred_anchor_emit: list[str] = []
         context_exact_matches = 0
         context_casefold_matches = 0
         hidden_context_fallbacks = 0
@@ -1588,17 +1656,36 @@ class MarkovGenerator:
                 rng=generation_rng,
             )
             if contextual_state is not None:
-                start3 = contextual_state.state
-                order_used = contextual_state.order
-                # Visible contextual start: emit the trimmed tail of the matched
-                # window so the reply picks the context up out loud instead of
-                # only continuing after it. An empty tail (all stopwords) keeps
-                # the start hidden.
-                contextual_emit_tokens = context_emission_tokens(start3)
-                emit_start = False
-                start_source = (
-                    "context" if contextual_emit_tokens else "hidden_context"
-                )
+                emission = context_emission_tokens(contextual_state.state)
+                # The probability is checked before the roll so a disabled
+                # knob consumes no RNG draw and the sequence (and the eval
+                # baselines) stays byte-identical to the pre-knob pipeline.
+                if (
+                    emission
+                    and context_anchor_splice_probability > 0.0
+                    and generation_rng.random()
+                    < context_anchor_splice_probability
+                ):
+                    # Anchor segmentation: defer the (visible) anchor — the
+                    # walk starts globally and the anchor is spliced in later
+                    # by the generation loop, so the context surfaces mid- or
+                    # end-reply. Hidden anchors (empty emission) are never
+                    # deferred: a silent splice would drop into mid-chain,
+                    # which is exactly what voiced jumps exist to avoid.
+                    deferred_anchor = contextual_state
+                    deferred_anchor_emit = emission
+                else:
+                    start3 = contextual_state.state
+                    order_used = contextual_state.order
+                    # Visible contextual start: emit the trimmed tail of the
+                    # matched window so the reply picks the context up out loud
+                    # instead of only continuing after it. An empty tail (all
+                    # stopwords) keeps the start hidden.
+                    contextual_emit_tokens = emission
+                    emit_start = False
+                    start_source = (
+                        "context" if contextual_emit_tokens else "hidden_context"
+                    )
                 (
                     context_exact_matches,
                     context_casefold_matches,
@@ -1643,34 +1730,62 @@ class MarkovGenerator:
         emit_tokens = list(start3) if emit_start else contextual_emit_tokens
         # Context+chaos: a contextual anchor's continuation is a corpus
         # retrace, so only those walks get the boosted drift probability.
+        # Deferred-anchor walks keep the base value: their jump budget is
+        # reserved for the anchor splice anyway.
         effective_jump_probability = jump_probability
         if start_source in ("context", "hidden_context"):
             effective_jump_probability = min(
                 1.0, jump_probability * max(1.0, context_jump_boost)
             )
-        generated, order_used, jump_count = await self._run_generation_loop(
-            chat_id,
-            start3,
-            emit_tokens=emit_tokens,
-            order=order,
-            order_used=order_used,
-            max_tokens=max_tokens,
-            max_chars=max_chars,
-            enable_backoff=enable_backoff,
-            starts3=starts3,
-            context_token_set=context_token_set,
-            context_pairs=context_pairs,
-            context_triplets=context_triplets,
-            start_explore=start_explore,
-            start_power=start_power,
-            next_explore=next_explore,
-            next_power=next_power,
-            context_bias=context_bias,
-            repetition_penalty_strength=repetition_penalty_strength,
-            jump_probability=effective_jump_probability,
-            order_mix_probability=order_mix_probability,
-            rng=generation_rng,
+        # The anchor lands at a uniformly rolled token position, so its place
+        # in the reply varies from just-past-the-start to the tail; the walk
+        # dead-ending earlier moves the splice to the dead end instead.
+        anchor_target_tokens = 0
+        if deferred_anchor is not None:
+            latest = max(
+                JUMP_MIN_GENERATED_TOKENS,
+                max(1, max_tokens) - len(deferred_anchor_emit) - 3,
+            )
+            anchor_target_tokens = generation_rng.randint(
+                JUMP_MIN_GENERATED_TOKENS, latest
+            )
+        generated, order_used, jump_count, anchor_spliced = (
+            await self._run_generation_loop(
+                chat_id,
+                start3,
+                emit_tokens=emit_tokens,
+                order=order,
+                order_used=order_used,
+                max_tokens=max_tokens,
+                max_chars=max_chars,
+                enable_backoff=enable_backoff,
+                starts3=starts3,
+                context_token_set=context_token_set,
+                context_pairs=context_pairs,
+                context_triplets=context_triplets,
+                start_explore=start_explore,
+                start_power=start_power,
+                next_explore=next_explore,
+                next_power=next_power,
+                context_bias=context_bias,
+                repetition_penalty_strength=repetition_penalty_strength,
+                jump_probability=effective_jump_probability,
+                order_mix_probability=order_mix_probability,
+                anchor_state=(
+                    deferred_anchor.state if deferred_anchor is not None else None
+                ),
+                anchor_emit_tokens=deferred_anchor_emit,
+                anchor_target_tokens=anchor_target_tokens,
+                rng=generation_rng,
+            )
         )
+        if deferred_anchor is not None:
+            # An unspliced anchor (walk hit a limit first) leaves a plain
+            # global reply — the trace must not claim context anchoring.
+            start_source = "context_spliced" if anchor_spliced else "global"
+            if not anchor_spliced:
+                context_exact_matches = 0
+                context_casefold_matches = 0
 
         return self._finalize_attempt(
             generated,

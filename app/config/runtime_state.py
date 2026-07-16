@@ -60,6 +60,7 @@ class RuntimeState:
     reply_context_bias: float
     reply_context_start_bias: float
     context_start_affinity: float
+    context_anchor_splice_probability: float
     reply_context_only_for_replies: bool
     reply_context_include_current_message: bool
     pivo_recent_pool_window: int
