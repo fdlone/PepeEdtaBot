@@ -50,7 +50,6 @@ def make_state() -> SimpleNamespace:
         use_reply_context=True,
         fuzzy_context_casefold=False,
         reply_context_max_tokens=12,
-        reply_context_last_tokens=3,
         reply_context_bias=1.8,
         reply_context_start_bias=2.2,
         reply_context_only_for_replies=True,
@@ -155,17 +154,6 @@ class TestRuntimeConfig(unittest.TestCase):
             apply_runtime_setting(state, "typing_min_ms", "1200")
 
         self.assertEqual(state.typing_min_ms, 350)
-
-    def test_apply_runtime_setting_rejects_reply_context_last_tokens_above_max(
-        self,
-    ) -> None:
-        state = make_state()
-        state.reply_context_max_tokens = 2
-
-        with self.assertRaises(InvalidRuntimeSettingValueError):
-            apply_runtime_setting(state, "reply_context_last_tokens", "3")
-
-        self.assertEqual(state.reply_context_last_tokens, 3)
 
     def test_apply_runtime_setting_rejects_unknown_key(self) -> None:
         state = make_state()

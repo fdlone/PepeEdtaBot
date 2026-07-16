@@ -26,7 +26,6 @@ def _make_state(**overrides: object) -> SimpleNamespace:
         "typing_min_ms": 350,
         "typing_max_ms": 1100,
         "markov_order": 3,
-        "reply_context_last_tokens": 3,
         "reply_context_max_tokens": 12,
         "mood_sleepy_rate_per_min": 2.0,
         "mood_lively_rate_per_min": 12.0,
@@ -113,12 +112,6 @@ class TestValidateCrossFields(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_cross_fields(_make_state(typing_min_ms=2000))
 
-    def test_reply_context_last_must_not_exceed_max(self) -> None:
-        with self.assertRaises(ValueError):
-            validate_cross_fields(
-                _make_state(reply_context_last_tokens=3, reply_context_max_tokens=2)
-            )
-
 
 class TestTryApply(unittest.TestCase):
     def test_unknown_key_raises_keyerror(self) -> None:
@@ -132,12 +125,12 @@ class TestTryApply(unittest.TestCase):
         self.assertEqual(state.markov_order, 3)
 
     def test_cross_field_violation_does_not_mutate_state(self) -> None:
-        # reply_context_last_tokens=3 with max=12 is valid, but lowering the
-        # max below last_tokens must be rejected without touching the state.
-        state = _make_state(reply_context_last_tokens=3, reply_context_max_tokens=12)
+        # typing_min_ms=500 with max=1500 is valid, but lowering the max below
+        # the min must be rejected without touching the state.
+        state = _make_state(typing_min_ms=500, typing_max_ms=1500)
         with self.assertRaises(ValueError):
-            try_apply(state, "reply_context_max_tokens", "2")
-        self.assertEqual(state.reply_context_max_tokens, 12)
+            try_apply(state, "typing_max_ms", "300")
+        self.assertEqual(state.typing_max_ms, 1500)
 
     def test_valid_apply_mutates_state(self) -> None:
         state = _make_state(markov_order=3)

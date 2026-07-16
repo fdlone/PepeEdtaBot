@@ -292,8 +292,6 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec("reply_context_max_tokens", "REPLY_CONTEXT_MAX_TOKENS", "12",
               _int_min(2)),
-    FieldSpec("reply_context_last_tokens", "REPLY_CONTEXT_LAST_TOKENS", "3",
-              _int_in_set({2, 3})),
     FieldSpec("reply_context_bias", "REPLY_CONTEXT_BIAS", "1.8",
               _float_in_range(1.0, 4.0)),
     FieldSpec("reply_context_start_bias", "REPLY_CONTEXT_START_BIAS", "2.2",
@@ -405,10 +403,6 @@ def validate_cross_fields(obj: Any) -> None:
     """
     if obj.typing_min_ms > obj.typing_max_ms:
         raise ValueError("TYPING_MIN_MS must be <= TYPING_MAX_MS")
-    if obj.reply_context_last_tokens > obj.reply_context_max_tokens:
-        raise ValueError(
-            "REPLY_CONTEXT_LAST_TOKENS must be <= REPLY_CONTEXT_MAX_TOKENS"
-        )
     if obj.mood_sleepy_rate_per_min >= obj.mood_lively_rate_per_min:
         raise ValueError(
             "MOOD_SLEEPY_RATE_PER_MIN must be lower than MOOD_LIVELY_RATE_PER_MIN"

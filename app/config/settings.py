@@ -62,7 +62,6 @@ class Settings:
     use_reply_context: bool
     fuzzy_context_casefold: bool
     reply_context_max_tokens: int
-    reply_context_last_tokens: int
     reply_context_bias: float
     reply_context_start_bias: float
     context_start_affinity: float

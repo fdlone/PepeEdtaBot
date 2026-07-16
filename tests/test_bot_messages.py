@@ -50,7 +50,6 @@ def make_state() -> SimpleNamespace:
         use_reply_context=True,
         fuzzy_context_casefold=False,
         reply_context_max_tokens=12,
-        reply_context_last_tokens=3,
         reply_context_bias=1.8,
         reply_context_start_bias=2.2,
         reply_context_only_for_replies=True,
