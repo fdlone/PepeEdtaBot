@@ -29,6 +29,7 @@ EXPECTED_MIGRATIONS = [
     "014_chat_user_interactions",
     "015_lowercase_model",
     "016_verbatim_ngrams",
+    "017_strip_list_enumerators",
 ]
 
 EXPECTED_TABLES = {
@@ -745,3 +746,131 @@ class TestLowercaseModelMigration(unittest.IsolatedAsyncioTestCase):
         )
         row = await cursor.fetchone()
         self.assertEqual(row[0], "Пиво Это Жизнь")
+
+
+class Test017StripListEnumerators(unittest.IsolatedAsyncioTestCase):
+    """Migration 017: numbered-list enumerator corridors leave the model.
+
+    The migration is re-applied by hand on an already-migrated database so the
+    fixture can seed the pre-remove_list_markers rows the runner would have
+    found.
+    """
+
+    async def asyncSetUp(self) -> None:
+        self.conn = await aiosqlite.connect(":memory:")
+        await migrator.run(self.conn)
+
+    async def asyncTearDown(self) -> None:
+        await self.conn.close()
+
+    async def _apply_017(self) -> None:
+        await migrator._apply(
+            self.conn,
+            Path(migrator._MIGRATIONS_DIR) / "017_strip_list_enumerators.sql",
+        )
+
+    async def test_enumerator_rows_deleted_everywhere(self) -> None:
+        await self.conn.execute(
+            "INSERT INTO starts3(chat_id, w1, w2, w3, cnt) VALUES (7, '5', '.', 'хоссейн', 4)"
+        )
+        await self.conn.execute(
+            "INSERT INTO starts(chat_id, w1, w2, cnt) VALUES (7, '5', '.', 4)"
+        )
+        await self.conn.execute(
+            "INSERT INTO transitions(chat_id, w1, w2, w3, cnt)"
+            " VALUES (7, '12', '.', 'пункт', 1)"
+        )
+        await self.conn.executemany(
+            "INSERT INTO transitions3(chat_id, w1, w2, w3, w4, cnt)"
+            " VALUES (?,?,?,?,?,?)",
+            [
+                (7, "5", ".", "хоссейн", "мем", 4),
+                (7, "списка", "5", ".", "хоссейн", 2),
+            ],
+        )
+        await self.conn.execute(
+            "INSERT INTO chat_hot_ngrams(chat_id, w1, w2, w3, cnt, updated_at)"
+            " VALUES (7, '5', '.', 'хоссейн', 3, '2026-07-15 10:00:00')"
+        )
+        await self.conn.commit()
+
+        await self._apply_017()
+
+        for table in ("starts3", "starts", "transitions", "transitions3",
+                      "chat_hot_ngrams"):
+            cursor = await self.conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE chat_id = 7"  # noqa: S608
+            )
+            self.assertEqual(
+                (await cursor.fetchone())[0], 0, f"{table}: enumerator row kept"
+            )
+
+    async def test_decimals_survive(self) -> None:
+        # "выпил 0.5 пива" tokenizes into "... 0 . 5 ..." — the digit after
+        # the dot is what tells a decimal from an enumerator.
+        await self.conn.execute(
+            "INSERT INTO starts3(chat_id, w1, w2, w3, cnt) VALUES (8, '0', '.', '5', 2)"
+        )
+        await self.conn.execute(
+            "INSERT INTO starts(chat_id, w1, w2, cnt) VALUES (8, '0', '.', 2)"
+        )
+        await self.conn.execute(
+            "INSERT INTO transitions(chat_id, w1, w2, w3, cnt)"
+            " VALUES (8, '0', '.', '5', 2)"
+        )
+        await self.conn.execute(
+            "INSERT INTO transitions3(chat_id, w1, w2, w3, w4, cnt)"
+            " VALUES (8, 'выпил', '0', '.', '5', 2)"
+        )
+        await self.conn.commit()
+
+        await self._apply_017()
+
+        for table, expected in (
+            ("starts3", 1),
+            ("starts", 1),
+            ("transitions", 1),
+            ("transitions3", 1),
+        ):
+            cursor = await self.conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE chat_id = 8"  # noqa: S608
+            )
+            self.assertEqual(
+                (await cursor.fetchone())[0], expected, f"{table}: decimal deleted"
+            )
+
+    async def test_order2_start_without_decimal_evidence_deleted(self) -> None:
+        # (5, .) with no starts3 continuation at all — enumerator, goes away.
+        await self.conn.execute(
+            "INSERT INTO starts(chat_id, w1, w2, cnt) VALUES (9, '5', '.', 1)"
+        )
+        await self.conn.commit()
+
+        await self._apply_017()
+
+        cursor = await self.conn.execute(
+            "SELECT COUNT(*) FROM starts WHERE chat_id = 9"
+        )
+        self.assertEqual((await cursor.fetchone())[0], 0)
+
+    async def test_ordinary_words_untouched(self) -> None:
+        await self.conn.execute(
+            "INSERT INTO starts3(chat_id, w1, w2, w3, cnt)"
+            " VALUES (11, 'пиво', '.', 'жизнь', 1)"
+        )
+        await self.conn.execute(
+            "INSERT INTO transitions3(chat_id, w1, w2, w3, w4, cnt)"
+            " VALUES (11, 'приду', 'позже', '.', 'ладно', 1)"
+        )
+        await self.conn.commit()
+
+        await self._apply_017()
+
+        cursor = await self.conn.execute(
+            "SELECT COUNT(*) FROM starts3 WHERE chat_id = 11"
+        )
+        self.assertEqual((await cursor.fetchone())[0], 1)
+        cursor = await self.conn.execute(
+            "SELECT COUNT(*) FROM transitions3 WHERE chat_id = 11"
+        )
+        self.assertEqual((await cursor.fetchone())[0], 1)
