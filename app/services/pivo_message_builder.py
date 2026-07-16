@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 
 from app.domain.pivo_templates import (
+    PIVO_AUTUMN_BOTTOM_PARTS,
     PIVO_DEFAULT_BODY_PARTS,
     PIVO_DEFAULT_BOTTOM_PARTS,
     PIVO_DEFAULT_TARGET_INTROS,
@@ -16,10 +17,14 @@ from app.domain.pivo_templates import (
     PIVO_LATE_NIGHT_BOTTOM_PARTS,
     PIVO_MONDAY_BOTTOM_PARTS,
     PIVO_NOTIFICATION_LINES,
+    PIVO_SPRING_BOTTOM_PARTS,
+    PIVO_SUB_POOLS,
+    PIVO_SUMMER_BOTTOM_PARTS,
     PIVO_TARGET_BODY_PARTS,
     PIVO_TARGET_BOTTOM_PARTS,
     PIVO_TARGET_INTROS,
     PIVO_TARGET_TOP_PARTS,
+    PIVO_WINTER_BOTTOM_PARTS,
 )
 
 PIVO_FALLBACK_MENTIONS_TEXT = "Господа дегенераты"
@@ -131,8 +136,68 @@ def _pick(
     return pool.index(chosen), chosen
 
 
+_SUB_SLOT_RE = re.compile(r"\{([a-z_]+)\}")
+# Two levels are used today (chaos_bullet -> dispute_topic -> literal); the
+# third is headroom. The cap only matters if someone writes a reference cycle.
+_SUB_SLOT_MAX_DEPTH = 3
+
+
+def _expand_sub_slots(text: str, rng: random.Random | None) -> str:
+    """Expand ``{sub_pool}`` slots recursively, leaving context slots alone.
+
+    Runs BEFORE the final ``str.format`` with context values, so user-supplied
+    text (target_phrase and friends) is never rescanned for slots — braces
+    typed by a user stay literal. Only names present in PIVO_SUB_POOLS are
+    touched; anything else ("{target_bullet}") passes through untouched for the
+    context substitution. Each replacement may itself contain sub-pool slots;
+    expansion is depth-capped, and any slot still unresolved at the cap (an
+    authoring mistake: a reference cycle) is dropped rather than leaked into
+    the message or the final format call.
+    """
+
+    replaced = False
+
+    def _substitute(match: re.Match[str]) -> str:
+        nonlocal replaced
+        pool = PIVO_SUB_POOLS.get(match.group(1))
+        if pool is None:
+            return match.group(0)
+        replaced = True
+        return _choice(pool, rng)
+
+    for _ in range(_SUB_SLOT_MAX_DEPTH):
+        replaced = False
+        text = _SUB_SLOT_RE.sub(_substitute, text)
+        # Comparing texts instead would exit early on a self-cycle ("{a}" ->
+        # "{a}" reads as "nothing changed") and leak the slot past the cap.
+        if not replaced:
+            return text
+    return _SUB_SLOT_RE.sub(
+        lambda m: "" if m.group(1) in PIVO_SUB_POOLS else m.group(0), text
+    )
+
+
+# Meteorological seasons: month -> seasonal closing-line pool.
+_SEASON_BOTTOM_POOLS: dict[int, tuple[str, ...]] = {
+    12: PIVO_WINTER_BOTTOM_PARTS, 1: PIVO_WINTER_BOTTOM_PARTS,
+    2: PIVO_WINTER_BOTTOM_PARTS,
+    3: PIVO_SPRING_BOTTOM_PARTS, 4: PIVO_SPRING_BOTTOM_PARTS,
+    5: PIVO_SPRING_BOTTOM_PARTS,
+    6: PIVO_SUMMER_BOTTOM_PARTS, 7: PIVO_SUMMER_BOTTOM_PARTS,
+    8: PIVO_SUMMER_BOTTOM_PARTS,
+    9: PIVO_AUTUMN_BOTTOM_PARTS, 10: PIVO_AUTUMN_BOTTOM_PARTS,
+    11: PIVO_AUTUMN_BOTTOM_PARTS,
+}
+
+
 def _temporal_bottoms(now: datetime) -> tuple[str, ...]:
-    """Collect the time-aware closing lines that apply at ``now`` (may be empty)."""
+    """Collect the time-aware closing lines that apply at ``now``.
+
+    Day/hour buckets may be empty; the seasonal pool never is, so with a
+    positive flavor chance there is always at least one temporal candidate.
+    Rarer buckets (night, friday/monday) stay ahead of the season only by
+    contributing their own entries to the same draw.
+    """
     pools: list[str] = []
     if 0 <= now.hour < 6:
         pools.extend(PIVO_LATE_NIGHT_BOTTOM_PARTS)
@@ -141,6 +206,7 @@ def _temporal_bottoms(now: datetime) -> tuple[str, ...]:
         pools.extend(PIVO_FRIDAY_BOTTOM_PARTS)
     elif weekday == 0:
         pools.extend(PIVO_MONDAY_BOTTOM_PARTS)
+    pools.extend(_SEASON_BOTTOM_POOLS[now.month])
     return tuple(pools)
 
 
@@ -199,6 +265,7 @@ class PivoMessageGenerator:
         if context.notification_line:
             parts.append("{notification_line}")
         template = "\n\n".join(part.strip() for part in parts if part.strip())
+        template = _expand_sub_slots(template, rng)
         return PivoBuildResult(text=template.format(**values).strip(), picks=picks)
 
     def _pick_bottom(

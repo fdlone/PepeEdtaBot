@@ -22,6 +22,14 @@ from __future__ import annotations
 # {time_phrase_soft}
 #   May expand to a clause with a comma inside ("ближе к вечеру, как только
 #   ..."), so it is only ever sentence-final, right before the closing dot.
+#
+# Sub-pool slots (PIVO_SUB_POOLS)
+#   A template may also carry a slot named after a key of PIVO_SUB_POOLS
+#   ("{dispute_topic}"); the builder expands it to a random pool entry BEFORE
+#   the final context substitution, and an entry may itself contain sub-pool
+#   slots (depth-capped). Sub-pool entries are author-controlled literals in a
+#   fixed grammatical shape per pool — mind the case the surrounding sentence
+#   governs, same as with the slots above.
 
 PIVO_DEFAULT_TARGET_INTROS: tuple[str, ...] = (
     "долго выбирать игру",
@@ -231,6 +239,21 @@ Codenames для мастеров непонятных ассоциаций;
 споры ни о чём с полной самоотдачей;
 и коллективное «ну в целом неплохо посидели».
 """,
+    """
+Прогноз на вечер:
+{target_bullet};
+пиво;
+{chaos_bullet};
+и вывод, что всё прошло по классике.
+""",
+    """
+Ожидаемое расписание:
+{target_bullet};
+пиво;
+{chaos_bullet};
+{chaos_bullet};
+и торжественное «давайте уже играть».
+""",
 )
 
 PIVO_DEFAULT_BOTTOM_PARTS: tuple[str, ...] = (
@@ -420,6 +443,21 @@ PIVO_TARGET_BODY_PARTS: tuple[str, ...] = (
 через двадцать — о том, кто испортил настрой;
 а пиво останется единственным, в чём мы единодушны.
 """,
+    """
+В плане значится:
+{target_bullet};
+пиво;
+{chaos_bullet};
+и вечная рубрика «мы же собирались по делу».
+""",
+    """
+Расклад вечера:
+{target_bullet};
+пиво;
+{chaos_bullet};
+{chaos_bullet};
+и финальное «в следующий раз точно по плану».
+""",
 )
 
 PIVO_TARGET_BOTTOM_PARTS: tuple[str, ...] = (
@@ -471,6 +509,72 @@ PIVO_MONDAY_BOTTOM_PARTS: tuple[str, ...] = (
     "Понедельник тяжёлый, значит лечим его проверенным способом.",
     "Начнём неделю правильно — то есть совсем не по плану.",
 )
+
+# Seasonal closing lines: same mechanics as the day/hour buckets above —
+# they compete for the neutral bottom slot behind the same flavor roll and the
+# neutral pools stay the fallback. Buckets are meteorological seasons by month.
+PIVO_WINTER_BOTTOM_PARTS: tuple[str, ...] = (
+    "На улице всё равно мрак и минус — дома с пивом вы хотя бы в тепле.",
+    "Зима. Мёрзнуть на улице необязательно, деградировать можно и из дома.",
+    "Погода шепчет «никуда не ходи» — и Discord с ней полностью согласен.",
+    "Зимний сезон: свитер, пиво, микрофон. Всё необходимое у вас уже есть.",
+    "Холода — не повод отменять. Повод у нас вообще никогда не нужен.",
+)
+
+PIVO_SPRING_BOTTOM_PARTS: tuple[str, ...] = (
+    "Весна, всё оживает. Даже этот чат — и тот подаёт признаки жизни.",
+    "Весеннее обострение официально признано уважительной причиной явки.",
+    "Птицы поют, а вы будете кричать в микрофон. Круговорот природы.",
+    "Весна — время планов. Наших — особенно неосуществимых.",
+    "Организм требует витаминов, а коллектив — жертв. Совместим приятное.",
+)
+
+PIVO_SUMMER_BOTTOM_PARTS: tuple[str, ...] = (
+    "Лето, все нормальные люди на улице. К счастью, это не про нас.",
+    "Жара — идеальное оправдание сидеть дома с холодным пивом.",
+    "Лето короткое, а позориться надо успевать круглый год.",
+    "На улице плюс тридцать, в Discord — комнатная температура и пиво.",
+    "Сезон отпусков: кто не уехал, тот сегодня в основном составе.",
+)
+
+PIVO_AUTUMN_BOTTOM_PARTS: tuple[str, ...] = (
+    "Осень, депрессия по расписанию — заходите, у нас она коллективная.",
+    "Дождь за окном отлично сочетается с криками в микрофоне.",
+    "Осенняя хандра лечится пивом и спорами. Проверено этим же чатом.",
+    "Темнеет рано, значит и вечер начинается раньше. Логика железная.",
+    "Осень — время сбора урожая. Наш урожай сегодня собирается в Discord.",
+)
+
+# Sub-pools for recursive slots: a template (or another sub-pool entry) may
+# reference these by name — "{dispute_topic}" — and the builder expands them
+# before the final context substitution. Each pool fixes one grammatical shape
+# so any entry fits every referencing sentence:
+#   dispute_topic — "о + предложный падеж", completes "спор ..." / "спорим ...";
+#   chaos_bullet  — nominative clause for a bullet-list line ("...;").
+# chaos_bullet entries may themselves reference {dispute_topic} (depth 2).
+PIVO_SUB_POOLS: dict[str, tuple[str, ...]] = {
+    # Shared by default AND target bodies: entries must not name the
+    # default-mode agenda (games, ведущий, правила) — target mode bans those
+    # terms (see FORBIDDEN_TARGET_MODE_TERMS in the builder tests).
+    "dispute_topic": (
+        "о Цое",
+        "о смысле происходящего",
+        "о том, кто первый начал",
+        "о вкусах, о которых договорились не спорить",
+        "о том, чья очередь быть виноватым",
+        "о вещах, в которых никто из присутствующих не разбирается",
+        "об ударении в слове «звонит»",
+        "о том, культурно ли мы сидим",
+    ),
+    "chaos_bullet": (
+        "спор {dispute_topic}",
+        "внезапный спор {dispute_topic}",
+        "минута тишины, переходящая в спор {dispute_topic}",
+        "чья-то попытка сменить тему на спор {dispute_topic}",
+        "громкий монолог без слушателей",
+        "коллективный вздох и продолжение",
+    ),
+}
 
 PIVO_NOTIFICATION_LINES: tuple[str, ...] = (
     "Пинги для тех, кто сам подписался на этот цирк: {mentions}.",

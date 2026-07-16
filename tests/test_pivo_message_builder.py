@@ -446,20 +446,29 @@ class TestPivoTemporalModifiers(unittest.TestCase):
     def test_friday_line_used_when_roll_passes(self) -> None:
         import random
 
-        from app.domain.pivo_templates import PIVO_FRIDAY_BOTTOM_PARTS
+        from app.domain.pivo_templates import (
+            PIVO_FRIDAY_BOTTOM_PARTS,
+            PIVO_SUMMER_BOTTOM_PARTS,
+        )
 
-        friday = datetime(2026, 7, 3, 18, 0)  # a Friday evening
-        result = PivoMessageGenerator().build(
-            self._context(),
-            rng=random.Random(0),
-            now=friday,
-            temporal_flavor_chance=1.0,
-        )
-        self.assertTrue(
-            any(line.strip() in result.text for line in PIVO_FRIDAY_BOTTOM_PARTS)
-        )
-        # Temporal bottom is not tracked by anti-repeat.
-        self.assertNotIn("default_bottom", result.picks)
+        friday = datetime(2026, 7, 3, 18, 0)  # a Friday evening in summer
+        combined = set(PIVO_FRIDAY_BOTTOM_PARTS) | set(PIVO_SUMMER_BOTTOM_PARTS)
+        seen = set()
+        for seed in range(40):
+            result = PivoMessageGenerator().build(
+                self._context(),
+                rng=random.Random(seed),
+                now=friday,
+                temporal_flavor_chance=1.0,
+            )
+            # Temporal bottom is not tracked by anti-repeat.
+            self.assertNotIn("default_bottom", result.picks)
+            for line in combined:
+                if line.strip() in result.text:
+                    seen.add(line)
+        # Both buckets contribute to the same draw.
+        self.assertTrue(seen & set(PIVO_FRIDAY_BOTTOM_PARTS))
+        self.assertTrue(seen & set(PIVO_SUMMER_BOTTOM_PARTS))
 
     def test_late_night_and_monday_lines_available(self) -> None:
         import random
@@ -497,10 +506,13 @@ class TestPivoTemporalModifiers(unittest.TestCase):
         )
         self.assertIn("default_bottom", result.picks)
 
-    def test_no_temporal_bucket_keeps_neutral_bottom(self) -> None:
+    def test_season_bucket_applies_on_plain_weekday(self) -> None:
         import random
 
-        # Wednesday afternoon: no late-night / Friday / Monday bucket applies.
+        from app.domain.pivo_templates import PIVO_SUMMER_BOTTOM_PARTS
+
+        # Wednesday afternoon: no late-night / Friday / Monday bucket, but the
+        # seasonal pool always applies, so the flavor roll still has candidates.
         wednesday = datetime(2026, 7, 1, 15, 0)
         result = PivoMessageGenerator().build(
             self._context(),
@@ -508,7 +520,99 @@ class TestPivoTemporalModifiers(unittest.TestCase):
             now=wednesday,
             temporal_flavor_chance=1.0,
         )
-        self.assertIn("default_bottom", result.picks)
+        self.assertNotIn("default_bottom", result.picks)
+        self.assertTrue(
+            any(line.strip() in result.text for line in PIVO_SUMMER_BOTTOM_PARTS)
+        )
+
+    def test_each_month_maps_to_its_season_pool(self) -> None:
+        from app.domain.pivo_templates import (
+            PIVO_AUTUMN_BOTTOM_PARTS,
+            PIVO_SPRING_BOTTOM_PARTS,
+            PIVO_SUMMER_BOTTOM_PARTS,
+            PIVO_WINTER_BOTTOM_PARTS,
+        )
+        from app.services.pivo_message_builder import _temporal_bottoms
+
+        by_month = {
+            1: PIVO_WINTER_BOTTOM_PARTS, 2: PIVO_WINTER_BOTTOM_PARTS,
+            3: PIVO_SPRING_BOTTOM_PARTS, 4: PIVO_SPRING_BOTTOM_PARTS,
+            5: PIVO_SPRING_BOTTOM_PARTS, 6: PIVO_SUMMER_BOTTOM_PARTS,
+            7: PIVO_SUMMER_BOTTOM_PARTS, 8: PIVO_SUMMER_BOTTOM_PARTS,
+            9: PIVO_AUTUMN_BOTTOM_PARTS, 10: PIVO_AUTUMN_BOTTOM_PARTS,
+            11: PIVO_AUTUMN_BOTTOM_PARTS, 12: PIVO_WINTER_BOTTOM_PARTS,
+        }
+        for month, pool in by_month.items():
+            # Tue 2026-09-01 etc.: pick a mid-month Tuesday noon to isolate the
+            # season bucket from day/hour ones.
+            bottoms = _temporal_bottoms(datetime(2026, month, 15, 12, 0))
+            for line in pool:
+                self.assertIn(line, bottoms, f"month {month}")
+
+
+class TestPivoSubSlots(unittest.TestCase):
+    """Recursive sub-pool slots: {chaos_bullet} -> "спор {dispute_topic}" -> text."""
+
+    def test_sub_slots_fully_resolve_in_built_message(self) -> None:
+        import random
+
+        from app.domain.pivo_templates import PIVO_SUB_POOLS
+
+        context = build_pivo_message_context(
+            "@friend",
+            planned_time=None,
+            target=None,
+            has_explicit_mentions=True,
+        )
+        for seed in range(60):
+            result = PivoMessageGenerator().build(context, rng=random.Random(seed))
+            for name in PIVO_SUB_POOLS:
+                self.assertNotIn("{" + name + "}", result.text, f"seed {seed}")
+            self.assertNotIn("{chaos_bullet}", result.text)
+
+    def test_expander_resolves_nested_slots(self) -> None:
+        import random
+
+        from app.services.pivo_message_builder import _expand_sub_slots
+
+        expanded = _expand_sub_slots("итог: {chaos_bullet};", random.Random(1))
+        self.assertNotIn("{chaos_bullet}", expanded)
+        self.assertNotIn("{dispute_topic}", expanded)
+        self.assertTrue(expanded.startswith("итог: "))
+
+    def test_expander_leaves_context_slots_alone(self) -> None:
+        import random
+
+        from app.services.pivo_message_builder import _expand_sub_slots
+
+        text = "{target_bullet}; {time_phrase_soft}"
+        self.assertEqual(_expand_sub_slots(text, random.Random(1)), text)
+
+    def test_reference_cycle_is_dropped_not_looped(self) -> None:
+        import random
+        from unittest.mock import patch as mock_patch
+
+        from app.domain import pivo_templates
+        from app.services.pivo_message_builder import _expand_sub_slots
+
+        with mock_patch.dict(
+            pivo_templates.PIVO_SUB_POOLS, {"loop_slot": ("{loop_slot}",)}
+        ):
+            expanded = _expand_sub_slots("до {loop_slot} после", random.Random(1))
+        self.assertEqual(expanded, "до  после")
+
+    def test_user_braces_stay_literal(self) -> None:
+        import random
+
+        # A user typing a sub-pool slot name must not trigger expansion: user
+        # values are substituted after the expander has already run.
+        text = build_pivo_message(
+            "@friend",
+            target="выпить {dispute_topic} пива",
+            has_explicit_mentions=True,
+            rng=random.Random(3),
+        )
+        self.assertIn("{dispute_topic}", text)
 
 
 if __name__ == "__main__":
