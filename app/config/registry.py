@@ -319,8 +319,13 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # drift: a pending anchor suppresses global jumps and its splice consumes
     # the jump slot. 0 disables (anchor always opens the reply, pre-knob
     # behaviour).
+    # 0.25 (2026-07-16): prod-copy A/B, 5 seeds x 200 on the live
+    # context+chaos package — anchored win rate 0.33 -> 0.58 and novelty
+    # 0.60 -> 0.63 at half the cost: the scorer over-selects spliced
+    # candidates, so 0.5 already pushes the connective share to 0.75 (the
+    # #88 "connective tic" started reading at ~0.8) and 1.0 to 0.87.
     FieldSpec("context_anchor_splice_probability",
-              "CONTEXT_ANCHOR_SPLICE_PROBABILITY", "0",
+              "CONTEXT_ANCHOR_SPLICE_PROBABILITY", "0.25",
               _float_in_range(0.0, 1.0)),
     FieldSpec("reply_context_only_for_replies", "REPLY_CONTEXT_ONLY_FOR_REPLIES",
               "true", _bool()),
@@ -359,7 +364,12 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # punctuation. At alpha 0.3 three back-to-back mentions reach ~0.66, so
     # 0.6 ≈ "three in a row". 0 disables (mentions keep feeding only the M2
     # momentum, pre-knob behaviour).
-    FieldSpec("mood_mention_heated_share", "MOOD_MENTION_HEATED_SHARE", "0",
+    # 0.6 (2026-07-16): replay of 1000 real chat messages — fires on exactly
+    # three consecutive mentions, defuses after one foreign message
+    # (0.657*0.7=0.46), and alternating mentions plateau at ~0.59 so mixed
+    # dialogue never fires; 0.4 fires on two (too eager), 0.8 needs five
+    # (dead). Zero background mood flips at any threshold.
+    FieldSpec("mood_mention_heated_share", "MOOD_MENTION_HEATED_SHARE", "0.6",
               _float_in_range(0.0, 1.0)),
     # Clamp for the instantaneous message rate so bursts cannot spike the EWMA.
     FieldSpec("mood_max_rate_per_min", "MOOD_MAX_RATE_PER_MIN", "120.0",
