@@ -241,6 +241,15 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # and only when backoff is enabled. 0 disables (pre-knob behaviour).
     FieldSpec("order_mix_probability", "ORDER_MIX_PROBABILITY", "0",
               _float_in_range(0.0, 1.0)),
+    # Slot mutations ("отсебятина" channel): chance per accepted candidate to
+    # also field a mutated copy — one content word swapped for a frequent chat
+    # word agreeing by wordform ending. The copy competes in scoring against
+    # its original, so the existing quality/verbatim signals arbitrate. New
+    # word pairs are born exactly here — the walk itself cannot leave the
+    # corpus (2026-07-15 chain-structure audit). 0 disables (no frequency
+    # dictionary reads, no mutation rolls).
+    FieldSpec("slot_mutation_probability", "SLOT_MUTATION_PROBABILITY", "0",
+              _float_in_range(0.0, 1.0)),
     # L1 running jokes: chance to seed an *unprompted* reply from a currently
     # hot n-gram (a phrase the chat picked up in the last ~7 days). 0 disables
     # the whole channel (no recording, no reads) — same gate pattern as
