@@ -156,6 +156,28 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         self.svc._invalidate_text_cache(self.chat)
         self.assertNotIn(self.chat, self.svc._text_cache)
 
+    # --- word frequencies (slot mutations) ---
+
+    async def test_word_frequencies_counted_from_model(self) -> None:
+        await self._record("сегодня хорошая погода")
+        await self._record("завтра хорошая погода")
+        frequencies = await self.svc.get_word_frequencies(self.chat)
+        self.assertEqual(frequencies.get("погода"), 2)
+        self.assertNotIn("сегодня", frequencies)  # opener, not a continuation
+
+    async def test_word_frequencies_trim_short_words(self) -> None:
+        await self._record("вот это да ну и дела")
+        frequencies = await self.svc.get_word_frequencies(self.chat)
+        self.assertNotIn("да", frequencies)
+        self.assertNotIn("и", frequencies)
+
+    async def test_word_frequencies_cached_and_invalidated(self) -> None:
+        await self._record("сегодня хорошая погода")
+        await self.svc.get_word_frequencies(self.chat)
+        self.assertIn(self.chat, self.svc._word_frequencies)
+        await self._record("новое сообщение пришло")
+        self.assertNotIn(self.chat, self.svc._word_frequencies)
+
     # --- user-interaction passthroughs (L2) ---
 
     async def test_user_interaction_methods_require_hasher(self) -> None:
