@@ -21,6 +21,7 @@ from app.core.candidate_scorer import (
     verbatim_quote_severity,
 )
 from app.core.emoji import append_emoji_flavor, strip_trailing_emojis
+from app.core.intonation import IntonationProfile, blend_length_weights
 from app.core.markov import (
     JUMP_CONNECTIVE_TOKENS,
     PUNCT_SET,
@@ -79,6 +80,9 @@ class VerbatimCopyChecker(Protocol):
         self, chat_id: int
     ) -> frozenset[tuple[str, ...]]: ...
     async def get_context_idf(self, chat_id: int) -> Mapping[str, float]: ...
+    async def get_intonation_profile(
+        self, chat_id: int
+    ) -> IntonationProfile | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,7 +329,23 @@ class ResponseGenerator:
             context_idf = await self.learning_service.get_context_idf(
                 request.chat_id
             )
+        # P4 intonation: blend the configured mode weights toward the chat's
+        # observed length habits before mood and mirroring apply on top. The
+        # profile read is skipped entirely when the knob is off; None means
+        # the chat is still below the profile's message floor.
+        intonation_strength = self.runtime_state.intonation_profile_strength
+        intonation_profile: IntonationProfile | None = None
+        if intonation_strength > 0.0:
+            intonation_profile = await self.learning_service.get_intonation_profile(
+                request.chat_id
+            )
         base_weights = self.runtime_state.length_mode_weights
+        if intonation_profile is not None:
+            base_weights = blend_length_weights(
+                base_weights,
+                intonation_profile.length_weights,
+                intonation_strength,
+            )
         mood_weights = (
             base_weights[0] * modifiers.length_weight_mult[0],
             base_weights[1] * modifiers.length_weight_mult[1],
@@ -592,6 +612,8 @@ class ResponseGenerator:
             text,
             generation_rng,
             self.runtime_state.reply_flavor_strength * modifiers.flavor_strength_mult,
+            ending_profile=intonation_profile,
+            profile_strength=intonation_strength,
         )
         # M3 emoji channel: occasionally end on an emoji this chat actually uses.
         # The stats read is skipped entirely when the channel is off so the common
