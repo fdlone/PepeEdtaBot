@@ -150,6 +150,31 @@ def log_attempt_extended(
     )
 
 
+def log_attempt_mutated(
+    _chat_id: int,
+    attempt: int,
+    *,
+    original: str,
+    mutated: str,
+    index: int,
+    score: CandidateScore,
+) -> None:
+    """A slot-mutated copy of an accepted candidate joined the pool."""
+    if not enabled():
+        return
+    gen_logger.info(
+        "  attempt %02d -> SLOT MUTATION added as candidate #%d "
+        "(total=%+.3f)\n"
+        "        original: %r\n"
+        "        mutated : %r",
+        attempt,
+        index,
+        score.total,
+        original,
+        mutated,
+    )
+
+
 def log_attempt_duplicate(_chat_id: int, attempt: int, *, context_used: bool) -> None:
     if not enabled():
         return

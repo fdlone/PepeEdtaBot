@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterable, Mapping
 from app.core.candidate_scorer import VERBATIM_NGRAM_SIZE, build_token_idf
 from app.core.intonation import IntonationProfile, build_intonation_profile
 from app.core.markov import MarkovGenerator, build_windows, content_tokens, tokenize
+from app.core.slot_mutation import MIN_MUTABLE_WORD_LEN
 from app.core.text import sanitize_text
 from app.infrastructure.database import Database
 
@@ -62,6 +63,10 @@ class LearningService:
         # тоже — «мало сообщений» не должно перечитывать выборку на каждый
         # ответ. Сбрасывается вместе с остальными кэшами.
         self._intonation: dict[int, IntonationProfile | None] = {}
+        # Частотный словарь чата для слот-мутаций: агрегат по всей памяти
+        # order-2 цепи (не только окно ретенции messages), сбрасывается вместе
+        # с остальными кэшами при каждом новом сообщении.
+        self._word_frequencies: dict[int, dict[str, int]] = {}
 
     async def get_token_volume(self, chat_id: int) -> int:
         return await self._db.get_chat_token_volume(chat_id)
@@ -179,6 +184,21 @@ class LearningService:
         self._intonation[chat_id] = profile
         return profile
 
+    async def get_word_frequencies(self, chat_id: int) -> Mapping[str, int]:
+        """Частоты слов чата по всей памяти цепи (для слот-мутаций).
+
+        Слова короче ``MIN_MUTABLE_WORD_LEN`` отрезаются ещё в SQL — они всё
+        равно не проходят гард мутаций.
+        """
+        cached = self._word_frequencies.get(chat_id)
+        if cached is not None:
+            return cached
+        frequencies = await self._db.get_word_frequencies(
+            chat_id, min_word_len=MIN_MUTABLE_WORD_LEN
+        )
+        self._word_frequencies[chat_id] = frequencies
+        return frequencies
+
     # --- приватные методы ---
 
     async def _get_recent_texts(self, chat_id: int) -> list[str]:
@@ -198,3 +218,4 @@ class LearningService:
         self._ngram_index.pop(chat_id, None)
         self._token_idf.pop(chat_id, None)
         self._intonation.pop(chat_id, None)
+        self._word_frequencies.pop(chat_id, None)

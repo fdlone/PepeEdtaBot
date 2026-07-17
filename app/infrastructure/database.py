@@ -354,6 +354,13 @@ class Database:
     async def get_chat_token_volume(self, chat_id: int) -> int:
         return await self._require(self.markov).get_chat_token_volume(chat_id)
 
+    async def get_word_frequencies(
+        self, chat_id: int, *, min_word_len: int
+    ) -> dict[str, int]:
+        return await self._require(self.markov).get_word_frequencies(
+            chat_id, min_word_len=min_word_len
+        )
+
     # --- Делегаты к MessagesRepo ---
 
     async def message_exists(self, chat_id: int, text: str) -> bool:

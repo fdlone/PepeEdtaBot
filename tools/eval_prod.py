@@ -57,6 +57,7 @@ from app.core.response_generator import (  # noqa: E402
     GenerationRequest,
     ResponseGenerator,
 )
+from app.core.slot_mutation import MIN_MUTABLE_WORD_LEN  # noqa: E402
 from app.core.text import sanitize_text  # noqa: E402
 from app.infrastructure.database import Database  # noqa: E402
 from app.services.learning_service import (  # noqa: E402
@@ -92,6 +93,7 @@ class _ProdVerbatimChecker:
         self,
         messages: list[str],
         ngram_index: frozenset[tuple[str, ...]] | None = None,
+        db: Database | None = None,
     ) -> None:
         self._texts = {normalize_for_verbatim(m) for m in messages}
         self._ngram_index = ngram_index if ngram_index is not None else frozenset(
@@ -105,6 +107,12 @@ class _ProdVerbatimChecker:
         self._messages = list(messages)
         self._intonation_built = False
         self._intonation: IntonationProfile | None = None
+        # Slot mutations read the chat frequency dictionary and hot n-grams;
+        # the eval delegates to the migrated DB copy and caches (the runtime
+        # LearningService caches too, so per-request cost matches prod).
+        self._db = db
+        self._word_frequencies: dict[str, int] | None = None
+        self._hot_ngrams: list[tuple[str, ...]] | None = None
 
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool:
         normalized = normalize_for_verbatim(text)
@@ -130,6 +138,25 @@ class _ProdVerbatimChecker:
             self._intonation = build_intonation_profile(self._messages)
             self._intonation_built = True
         return self._intonation
+    async def get_word_frequencies(self, chat_id: int) -> dict[str, int]:
+        if self._db is None:
+            return {}
+        if self._word_frequencies is None:
+            self._word_frequencies = await self._db.get_word_frequencies(
+                chat_id, min_word_len=MIN_MUTABLE_WORD_LEN
+            )
+        return self._word_frequencies
+
+    async def get_hot_ngrams(
+        self, chat_id: int, *, min_count: int, recency_share: float
+    ) -> list[tuple[str, ...]]:
+        if self._db is None:
+            return []
+        if self._hot_ngrams is None:
+            self._hot_ngrams = await self._db.get_hot_chat_ngrams(
+                chat_id, min_count=min_count, recency_share=recency_share
+            )
+        return self._hot_ngrams
 
 
 class _TraceCapturingGenerator(MarkovGenerator):
@@ -386,6 +413,7 @@ async def evaluate(
     saved_log_selection = gen_trace_log.log_selection
     saved_log_rejected = gen_trace_log.log_attempt_rejected
     saved_log_extended = gen_trace_log.log_attempt_extended
+    saved_log_mutated = gen_trace_log.log_attempt_mutated
     if selection_margin is not None:
         _rg.SELECTION_SCORE_MARGIN = float(selection_margin)
     if context_weight is not None:
@@ -433,8 +461,19 @@ async def evaluate(
             extension_count += 1
             extended_texts.add(extended)
 
+        # Slot mutations (P2): every fielded mutated copy as (original,
+        # mutated) — the pairs feed the manual morphology review; the set
+        # recovers which winners were mutations.
+        mutation_pairs: list[tuple[str, str]] = []
+        mutated_to_original: dict[str, str] = {}
+
+        def _on_mutated(_chat_id, attempt, *, original, mutated, **_kw):
+            mutation_pairs.append((original, mutated))
+            mutated_to_original[mutated] = original
+
         gen_trace_log.log_attempt_rejected = _on_rejected  # type: ignore[assignment]
         gen_trace_log.log_attempt_extended = _on_extended  # type: ignore[assignment]
+        gen_trace_log.log_attempt_mutated = _on_mutated  # type: ignore[assignment]
         # Built from the registry defaults (app/config/registry.py) so the eval
         # always measures the pipeline the bot actually runs -- a hand-copied
         # namespace silently drifts when a default is retuned. Deviations are
@@ -452,7 +491,7 @@ async def evaluate(
         response_generator = ResponseGenerator(
             generator=generator,
             learning_service=_ProdVerbatimChecker(
-                messages, ngram_index=alltime_ngrams
+                messages, ngram_index=alltime_ngrams, db=db
             ),
             runtime_state=runtime_state,
         )
@@ -477,6 +516,10 @@ async def evaluate(
         # length/verbatim slices show what each extra jump costs.
         winner_jumps: Counter[int] = Counter()
         extension_wins = 0
+        mutation_wins = 0
+        # (original, mutated) of replies that actually won selection: the
+        # perceptual quality bar — fielded-but-losing mutations never surface.
+        mutation_winner_pairs: list[tuple[str, str]] = []
         length_by_jumps: dict[int, list[int]] = {}
         verbatim_by_jumps: dict[int, list[float]] = {}
         # Reply length sliced by the length of the message being answered: a
@@ -506,14 +549,17 @@ async def evaluate(
                 # Surface layers are disabled in evals, so the reply is the
                 # winning candidate verbatim. "unknown" means that stopped
                 # holding and the win-rate below is no longer trustworthy.
+                # A mutated winner keeps its original's walk attribution —
+                # the mutation changes one word, not the start source.
+                source_text = mutated_to_original.get(result.text, result.text)
                 winner_sources[
-                    generator.attempt_sources.get(result.text, "unknown")
+                    generator.attempt_sources.get(source_text, "unknown")
                 ] += 1
-                winner_orders[generator.attempt_orders.get(result.text, 0)] += 1
+                winner_orders[generator.attempt_orders.get(source_text, 0)] += 1
                 winner_source_order[
                     (
-                        generator.attempt_sources.get(result.text, "unknown"),
-                        generator.attempt_orders.get(result.text, 0),
+                        generator.attempt_sources.get(source_text, "unknown"),
+                        generator.attempt_orders.get(source_text, 0),
                     )
                 ] += 1
                 reply_content = content_tokens(tokenize(result.text))
@@ -530,6 +576,11 @@ async def evaluate(
                 jumps = generator.attempt_jumps.get(result.text, -1)
                 if result.text in extended_texts:
                     extension_wins += 1
+                if result.text in mutated_to_original:
+                    mutation_wins += 1
+                    mutation_winner_pairs.append(
+                        (mutated_to_original[result.text], result.text)
+                    )
                 winner_jumps[jumps] += 1
                 length_by_jumps.setdefault(jumps, []).append(len(reply_content))
                 verbatim_by_jumps.setdefault(jumps, []).append(verbatim_ratios[-1])
@@ -550,6 +601,7 @@ async def evaluate(
         gen_trace_log.log_selection = saved_log_selection  # type: ignore[assignment]
         gen_trace_log.log_attempt_rejected = saved_log_rejected  # type: ignore[assignment]
         gen_trace_log.log_attempt_extended = saved_log_extended  # type: ignore[assignment]
+        gen_trace_log.log_attempt_mutated = saved_log_mutated  # type: ignore[assignment]
 
     produced = len(outputs)
     lengths = [len(output) for output in outputs]
@@ -611,6 +663,18 @@ async def evaluate(
         # was extended with novel continuation, and how often that won.
         "verbatim_extension_count": extension_count,
         "verbatim_extension_win_rate": round(extension_wins / produced, 4) if produced else 0.0,
+        # Slot mutations (P2): fielded mutated copies, how often one won, and
+        # (original, mutated) pairs for the manual morphology review.
+        "slot_mutation_candidates": len(mutation_pairs),
+        "slot_mutation_win_rate": round(mutation_wins / produced, 4) if produced else 0.0,
+        "slot_mutation_samples": [
+            {"original": original, "mutated": mutated}
+            for original, mutated in mutation_pairs[:100]
+        ],
+        "slot_mutation_winner_samples": [
+            {"original": original, "mutated": mutated}
+            for original, mutated in mutation_winner_pairs[:100]
+        ],
         "rg_rejections": dict(rg_rejections.most_common()),
         # Отсебятина: share of the reply's content 4-grams absent from the
         # corpus, averaged over replies long enough to have 4-gram windows.

@@ -45,6 +45,7 @@ def _make_runtime_state() -> RuntimeState:
         context_jump_boost=1.0,
         verbatim_extension_share=0.0,
         order_mix_probability=0.0,
+        slot_mutation_probability=0.0,
         hot_ngram_seed_chance=0.05,
         hot_ngram_min_count=3,
         hot_ngram_recency_share=0.5,
