@@ -432,11 +432,11 @@ async def evaluate(
         # mutated) — the pairs feed the manual morphology review; the set
         # recovers which winners were mutations.
         mutation_pairs: list[tuple[str, str]] = []
-        mutated_texts: set[str] = set()
+        mutated_to_original: dict[str, str] = {}
 
         def _on_mutated(_chat_id, attempt, *, original, mutated, **_kw):
             mutation_pairs.append((original, mutated))
-            mutated_texts.add(mutated)
+            mutated_to_original[mutated] = original
 
         gen_trace_log.log_attempt_rejected = _on_rejected  # type: ignore[assignment]
         gen_trace_log.log_attempt_extended = _on_extended  # type: ignore[assignment]
@@ -484,6 +484,9 @@ async def evaluate(
         winner_jumps: Counter[int] = Counter()
         extension_wins = 0
         mutation_wins = 0
+        # (original, mutated) of replies that actually won selection: the
+        # perceptual quality bar — fielded-but-losing mutations never surface.
+        mutation_winner_pairs: list[tuple[str, str]] = []
         length_by_jumps: dict[int, list[int]] = {}
         verbatim_by_jumps: dict[int, list[float]] = {}
         # Reply length sliced by the length of the message being answered: a
@@ -513,14 +516,17 @@ async def evaluate(
                 # Surface layers are disabled in evals, so the reply is the
                 # winning candidate verbatim. "unknown" means that stopped
                 # holding and the win-rate below is no longer trustworthy.
+                # A mutated winner keeps its original's walk attribution —
+                # the mutation changes one word, not the start source.
+                source_text = mutated_to_original.get(result.text, result.text)
                 winner_sources[
-                    generator.attempt_sources.get(result.text, "unknown")
+                    generator.attempt_sources.get(source_text, "unknown")
                 ] += 1
-                winner_orders[generator.attempt_orders.get(result.text, 0)] += 1
+                winner_orders[generator.attempt_orders.get(source_text, 0)] += 1
                 winner_source_order[
                     (
-                        generator.attempt_sources.get(result.text, "unknown"),
-                        generator.attempt_orders.get(result.text, 0),
+                        generator.attempt_sources.get(source_text, "unknown"),
+                        generator.attempt_orders.get(source_text, 0),
                     )
                 ] += 1
                 reply_content = content_tokens(tokenize(result.text))
@@ -537,8 +543,11 @@ async def evaluate(
                 jumps = generator.attempt_jumps.get(result.text, -1)
                 if result.text in extended_texts:
                     extension_wins += 1
-                if result.text in mutated_texts:
+                if result.text in mutated_to_original:
                     mutation_wins += 1
+                    mutation_winner_pairs.append(
+                        (mutated_to_original[result.text], result.text)
+                    )
                 winner_jumps[jumps] += 1
                 length_by_jumps.setdefault(jumps, []).append(len(reply_content))
                 verbatim_by_jumps.setdefault(jumps, []).append(verbatim_ratios[-1])
@@ -628,6 +637,10 @@ async def evaluate(
         "slot_mutation_samples": [
             {"original": original, "mutated": mutated}
             for original, mutated in mutation_pairs[:100]
+        ],
+        "slot_mutation_winner_samples": [
+            {"original": original, "mutated": mutated}
+            for original, mutated in mutation_winner_pairs[:100]
         ],
         "rg_rejections": dict(rg_rejections.most_common()),
         # Отсебятина: share of the reply's content 4-grams absent from the
