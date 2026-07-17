@@ -100,6 +100,7 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.rare_event_daily_cap = 3
     s.user_quirk_chance = 0.0
     s.user_quirk_min_interactions = 25
+    s.user_quirk_name_share = 0.0
     s.rare_events_today = {}
     # Bind the real cap methods so handler tests exercise actual budget logic.
     from app.config.runtime_state import RuntimeState
@@ -1942,6 +1943,7 @@ class TestUserQuirks(unittest.IsolatedAsyncioTestCase):
             # Chance 1.0 keeps the roll deterministic (random() < 1.0 always).
             "user_quirk_chance": 1.0,
             "user_quirk_min_interactions": 25,
+            "user_quirk_name_share": 0.0,
         }
         values.update(overrides)
         return _fake_state(**values)
@@ -2110,6 +2112,35 @@ class TestUserQuirks(unittest.IsolatedAsyncioTestCase):
         self.assertIn(msg.reply.await_args.args[0], USER_QUIRK_VOCATIVES)
         msg.answer.assert_awaited_once_with("сгенерированный ответ бота")
         self.assertEqual(state.rare_events_today, {})
+
+    async def test_name_share_uses_sanitized_first_name(self) -> None:
+        learning_service, generator = self._services(interactions=25)
+        state = self._state(user_quirk_name_share=1.0)
+        msg = _fake_message(text="pepe расскажи что-нибудь")
+        msg.from_user.first_name = "🔥Саня🔥"
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        msg.reply.assert_awaited_once()
+        vocative = msg.reply.await_args.args[0]
+        self.assertTrue(
+            vocative == "саня" or vocative.startswith("саня, "),
+            vocative,
+        )
+        msg.answer.assert_awaited_once_with("сгенерированный ответ бота")
+
+    async def test_name_share_unusable_name_falls_back_to_pool(self) -> None:
+        from app.presentation.fallback_phrases import USER_QUIRK_VOCATIVES
+
+        learning_service, generator = self._services(interactions=25)
+        state = self._state(user_quirk_name_share=1.0)
+        msg = _fake_message(text="pepe расскажи что-нибудь")
+        msg.from_user.first_name = "🔥🔥🔥"
+
+        await self._dispatch(msg, learning_service, generator, state)
+
+        msg.reply.assert_awaited_once()
+        self.assertIn(msg.reply.await_args.args[0], USER_QUIRK_VOCATIVES)
 
     async def test_zero_chance_disables_channel_entirely(self) -> None:
         learning_service, generator = self._services(interactions=100)

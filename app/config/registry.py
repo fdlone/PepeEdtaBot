@@ -301,6 +301,13 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # CHAT_USER_INTERACTION_DECAY_DAYS) at which a user counts as a regular.
     FieldSpec("user_quirk_min_interactions", "USER_QUIRK_MIN_INTERACTIONS",
               "25", _int_min(1)),
+    # L2.1: share of fired quirks whose vocative addresses the regular by
+    # first name (taken live from the incoming update, sanitized, never
+    # stored or logged) instead of the anonymous pool phrase. The name is
+    # bare half the time, fused with a pool phrase otherwise. 0 disables —
+    # the pool-only legacy behaviour.
+    FieldSpec("user_quirk_name_share", "USER_QUIRK_NAME_SHARE", "0",
+              _float_in_range(0.0, 1.0)),
     FieldSpec("use_reply_context", "USE_REPLY_CONTEXT", "true", _bool()),
     FieldSpec(
         "fuzzy_context_casefold",

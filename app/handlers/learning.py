@@ -39,7 +39,7 @@ from app.core.response_generator import (
     ResponseGenerator,
     remember_recent_reply,
 )
-from app.core.text import sanitize_text
+from app.core.text import sanitize_first_name, sanitize_text
 from app.handlers._helpers import (
     is_group_message,
     reply_humanized_sequence_state,
@@ -498,7 +498,24 @@ async def on_text_message(
                 message.chat.id, message.from_user.id
             )
             if interactions >= runtime_state.user_quirk_min_interactions:
-                reply_parts = [next_quirk_vocative(random.Random()), reply_text]
+                # L2.1: part of the quirks address the regular by first name.
+                # The name is read live from this update and sanitized; it is
+                # never stored (the DB side stays an anonymous HMAC counter)
+                # and never logged. An unusable name falls back to the pool.
+                first_name: str | None = None
+                if (
+                    runtime_state.user_quirk_name_share > 0.0
+                    and random.random() < runtime_state.user_quirk_name_share
+                ):
+                    first_name = sanitize_first_name(
+                        message.from_user.first_name or ""
+                    )
+                reply_parts = [
+                    next_quirk_vocative(
+                        random.Random(), first_name=first_name
+                    ),
+                    reply_text,
+                ]
                 runtime_state.note_user_quirk(
                     message.chat.id, message.from_user.id, today_iso
                 )
