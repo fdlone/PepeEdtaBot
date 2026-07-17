@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import unittest
 
+from app.core.intonation import IntonationProfile
 from app.core.reply_flavor import (
     DOUBLE_TERMINAL_PROBABILITY,
     DROP_FINAL_PERIOD_PROBABILITY,
@@ -54,6 +55,52 @@ class TestApplyReplyFlavor(unittest.TestCase):
             outcomes["!"] / rolls, EXCLAMATION_PROBABILITY, delta=0.02
         )
         self.assertGreater(outcomes["."], 0)
+
+    def test_ending_profile_shifts_distribution(self) -> None:
+        # A chat writing mostly without a final period: at full profile
+        # strength dropped periods must dominate and track the chat share.
+        profile = IntonationProfile(
+            length_weights=(0.4, 0.4, 0.2),
+            ending_none_share=0.8,
+            ending_ellipsis_share=0.05,
+            ending_exclamation_share=0.05,
+        )
+        rng = random.Random(17)
+        rolls = 5000
+        dropped = 0
+        for _ in range(rolls):
+            flavored = apply_reply_flavor(
+                "проверка формы.",
+                rng,
+                ending_profile=profile,
+                profile_strength=1.0,
+            )
+            if flavored == "проверка формы":
+                dropped += 1
+        self.assertAlmostEqual(dropped / rolls, 0.8, delta=0.03)
+
+    def test_zero_profile_strength_keeps_defaults(self) -> None:
+        profile = IntonationProfile(
+            length_weights=(0.4, 0.4, 0.2),
+            ending_none_share=1.0,
+            ending_ellipsis_share=0.0,
+            ending_exclamation_share=0.0,
+        )
+        rng = random.Random(19)
+        rolls = 5000
+        dropped = 0
+        for _ in range(rolls):
+            flavored = apply_reply_flavor(
+                "проверка формы.",
+                rng,
+                ending_profile=profile,
+                profile_strength=0.0,
+            )
+            if flavored == "проверка формы":
+                dropped += 1
+        self.assertAlmostEqual(
+            dropped / rolls, DROP_FINAL_PERIOD_PROBABILITY, delta=0.03
+        )
 
     def test_question_and_exclamation_can_double(self) -> None:
         rng = random.Random(13)

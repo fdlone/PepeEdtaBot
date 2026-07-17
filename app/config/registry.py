@@ -195,6 +195,14 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # 1.0 takes most of the gain (replies to a short message 10.0 -> 8.6 tokens,
     # to a long one 12.0 -> 13.9) while the medium band stays put; past it the
     # ramp starts shortening mid-length replies too for little extra spread.
+    # P4 intonation profile: how far the reply's length-mode weights and the
+    # ending-flavor probabilities are blended toward the chat's own observed
+    # habits (short/medium/long shares and final-punctuation shares over the
+    # messages retention window). 0 disables entirely (no profile reads);
+    # 1.0 replaces the configured distributions with the chat's. Applied
+    # only once the chat has >=200 profiled messages.
+    FieldSpec("intonation_profile_strength", "INTONATION_PROFILE_STRENGTH",
+              "0", _float_in_range(0.0, 1.0)),
     FieldSpec("length_context_adaptation", "LENGTH_CONTEXT_ADAPTATION", "1.0",
               _float_in_range(0.0, 3.0)),
     FieldSpec("markov_order", "MARKOV_ORDER", "3", _int_in_set({2, 3})),

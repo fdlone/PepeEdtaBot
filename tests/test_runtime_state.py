@@ -26,6 +26,7 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
         "recent_reply_penalty_strength": 1.0,
         "verbatim_penalty_strength": 1.0,
         "length_mode_weights": (0.25, 0.55, 0.2),
+        "intonation_profile_strength": 0.0,
         "length_context_adaptation": 0.0,
         "markov_order": 3,
         "enable_backoff": True,

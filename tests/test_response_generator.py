@@ -53,6 +53,7 @@ def _runtime_state() -> MagicMock:
     state.slot_mutation_probability = 0.0
     state.hot_ngram_min_count = 3
     state.hot_ngram_recency_share = 0.5
+    state.intonation_profile_strength = 0.0
     return state
 
 
@@ -68,6 +69,7 @@ def _learning_service() -> AsyncMock:
     service.get_context_idf = AsyncMock(return_value={})
     service.get_word_frequencies = AsyncMock(return_value={})
     service.get_hot_ngrams = AsyncMock(return_value=[])
+    service.get_intonation_profile = AsyncMock(return_value=None)
     return service
 
 
@@ -757,6 +759,129 @@ class TestResponseGeneratorSlotMutation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.candidates_scored, 1)
 
 
+class TestResponseGeneratorIntonation(unittest.IsolatedAsyncioTestCase):
+    """P4: the chat intonation profile blends into length weights and flavor."""
+
+    def setUp(self) -> None:
+        patcher = patch(
+            "app.core.response_generator.mask_chat_id", return_value="chat"
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    _PROFILE_WEIGHTS = (0.7, 0.25, 0.05)
+
+    def _profile(self):  # noqa: ANN202
+        from app.core.intonation import IntonationProfile
+
+        return IntonationProfile(
+            length_weights=self._PROFILE_WEIGHTS,
+            ending_none_share=0.8,
+            ending_ellipsis_share=0.1,
+            ending_exclamation_share=0.05,
+        )
+
+    def _generator(self) -> AsyncMock:
+        generator = _traced_generator()
+        generator.generate_text = AsyncMock(return_value="стабильный ответ длиной")
+        return generator
+
+    async def test_full_strength_replaces_length_weights(self) -> None:
+        state = _runtime_state()
+        state.intonation_profile_strength = 1.0
+        learning_service = _learning_service()
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        learning_service.get_intonation_profile = AsyncMock(
+            return_value=self._profile()
+        )
+        captured: list[tuple[float, float, float]] = []
+
+        def fake_sample(weights: tuple[float, float, float], rng: object) -> str:
+            captured.append(weights)
+            return "medium"
+
+        rg = ResponseGenerator(
+            generator=self._generator(),
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(1.0)),
+        )
+        with patch(
+            "app.core.response_generator.sample_length_mode", side_effect=fake_sample
+        ):
+            await rg.generate(_request(), rng=random.Random(0), candidate_target=1)
+
+        for got, want in zip(captured[0], self._PROFILE_WEIGHTS):
+            self.assertAlmostEqual(got, want)
+        learning_service.get_intonation_profile.assert_awaited_once_with(123)
+
+    async def test_zero_strength_never_reads_profile(self) -> None:
+        state = _runtime_state()
+        learning_service = _learning_service()
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        rg = ResponseGenerator(
+            generator=self._generator(),
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(1.0)),
+        )
+        await rg.generate(_request(), rng=random.Random(3), candidate_target=1)
+        learning_service.get_intonation_profile.assert_not_awaited()
+
+    async def test_unprofiled_chat_keeps_base_weights(self) -> None:
+        # Below the message floor the profile is None: base weights apply.
+        state = _runtime_state()
+        state.intonation_profile_strength = 1.0
+        learning_service = _learning_service()
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        captured: list[tuple[float, float, float]] = []
+
+        def fake_sample(weights: tuple[float, float, float], rng: object) -> str:
+            captured.append(weights)
+            return "medium"
+
+        rg = ResponseGenerator(
+            generator=self._generator(),
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(1.0)),
+        )
+        with patch(
+            "app.core.response_generator.sample_length_mode", side_effect=fake_sample
+        ):
+            await rg.generate(_request(), rng=random.Random(5), candidate_target=1)
+
+        self.assertEqual(captured[0], state.length_mode_weights)
+
+    async def test_profile_reaches_reply_flavor(self) -> None:
+        state = _runtime_state()
+        state.intonation_profile_strength = 1.0
+        state.reply_flavor_strength = 1.0
+        profile = self._profile()
+        learning_service = _learning_service()
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        learning_service.get_intonation_profile = AsyncMock(return_value=profile)
+        captured: dict[str, object] = {}
+
+        def fake_flavor(text: str, rng: object, strength: float, **kwargs: object) -> str:
+            captured.update(kwargs)
+            return text
+
+        rg = ResponseGenerator(
+            generator=self._generator(),
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(1.0)),
+        )
+        with patch(
+            "app.core.response_generator.apply_reply_flavor", side_effect=fake_flavor
+        ):
+            await rg.generate(_request(), rng=random.Random(7), candidate_target=1)
+
+        self.assertIs(captured["ending_profile"], profile)
+        self.assertEqual(captured["profile_strength"], 1.0)
+
+
 class TestResponseGeneratorMoodModulation(unittest.IsolatedAsyncioTestCase):
     """M1: mood modifiers adjust randomness, length weights and flavor strength."""
 
@@ -824,7 +949,9 @@ class TestResponseGeneratorMoodModulation(unittest.IsolatedAsyncioTestCase):
     async def test_flavor_strength_is_scaled_by_modifiers(self) -> None:
         captured: list[float] = []
 
-        def fake_flavor(text: str, rng: object, strength: float) -> str:
+        def fake_flavor(
+            text: str, rng: object, strength: float, **kwargs: object
+        ) -> str:
             captured.append(strength)
             return text
 

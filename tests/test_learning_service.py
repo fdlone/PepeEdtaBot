@@ -156,6 +156,29 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         self.svc._invalidate_text_cache(self.chat)
         self.assertNotIn(self.chat, self.svc._text_cache)
 
+    # --- intonation profile (P4) ---
+
+    async def test_intonation_profile_none_below_floor_and_cached(self) -> None:
+        await self._record("привет всем")
+        self.assertIsNone(await self.svc.get_intonation_profile(self.chat))
+        # None is cached too: no re-read until the next message invalidates.
+        self.assertIn(self.chat, self.svc._intonation)
+
+    async def test_intonation_profile_built_and_invalidated(self) -> None:
+        from unittest.mock import patch
+
+        with patch(
+            "app.services.learning_service.build_intonation_profile"
+        ) as builder:
+            builder.return_value = object()
+            await self._record("привет всем")
+            profile = await self.svc.get_intonation_profile(self.chat)
+            self.assertIs(profile, builder.return_value)
+            # Cached: a second read must not rebuild.
+            await self.svc.get_intonation_profile(self.chat)
+            builder.assert_called_once()
+        await self._record("новое сообщение")
+        self.assertNotIn(self.chat, self.svc._intonation)
     # --- word frequencies (slot mutations) ---
 
     async def test_word_frequencies_counted_from_model(self) -> None:

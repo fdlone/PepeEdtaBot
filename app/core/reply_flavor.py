@@ -3,6 +3,8 @@ from __future__ import annotations
 import random
 import re
 
+from app.core.intonation import IntonationProfile
+
 # Probabilities (at strength 1.0) of the mutually exclusive ending transforms.
 # One roll decides which transform applies, so probabilities stay independent
 # of each other and easy to reason about. Only the trailing punctuation
@@ -17,12 +19,20 @@ def apply_reply_flavor(
     text: str,
     rng: random.Random,
     strength: float = 1.0,
+    *,
+    ending_profile: IntonationProfile | None = None,
+    profile_strength: float = 0.0,
 ) -> str:
     """Vary the reply ending so the output stops being uniformly "word word.".
 
     ``strength`` scales all transform probabilities; 0 disables flavoring and
     returns the text unchanged. Applied after candidate selection and
     capitalization, before sending.
+
+    With an ``ending_profile`` (P4 intonation), the base probabilities are
+    first blended toward the chat's observed final-punctuation shares by
+    ``profile_strength`` — a chat that mostly writes without a final period
+    gets mostly period-less replies, one that loves "..." gets more of it.
     """
     if strength <= 0.0 or not text:
         return text
@@ -31,11 +41,29 @@ def apply_reply_flavor(
     if not stripped:
         return text
 
+    drop_probability = DROP_FINAL_PERIOD_PROBABILITY
+    ellipsis_probability = ELLIPSIS_PROBABILITY
+    exclamation_probability = EXCLAMATION_PROBABILITY
+    if ending_profile is not None and profile_strength > 0.0:
+        blend = min(profile_strength, 1.0)
+        drop_probability = (
+            (1.0 - blend) * drop_probability
+            + blend * ending_profile.ending_none_share
+        )
+        ellipsis_probability = (
+            (1.0 - blend) * ellipsis_probability
+            + blend * ending_profile.ending_ellipsis_share
+        )
+        exclamation_probability = (
+            (1.0 - blend) * exclamation_probability
+            + blend * ending_profile.ending_exclamation_share
+        )
+
     if stripped.endswith(".") and not stripped.endswith(".."):
         roll = rng.random()
-        drop_below = DROP_FINAL_PERIOD_PROBABILITY * scale
-        ellipsis_below = drop_below + ELLIPSIS_PROBABILITY * scale
-        exclaim_below = ellipsis_below + EXCLAMATION_PROBABILITY * scale
+        drop_below = drop_probability * scale
+        ellipsis_below = drop_below + ellipsis_probability * scale
+        exclaim_below = ellipsis_below + exclamation_probability * scale
         body = stripped[:-1].rstrip()
         if not body:
             return stripped
