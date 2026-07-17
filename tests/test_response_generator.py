@@ -48,6 +48,11 @@ def _runtime_state() -> MagicMock:
     state.context_jump_boost = 1.0
     state.verbatim_extension_share = 0.0
     state.order_mix_probability = 0.0
+    # Off by default: a bare MagicMock compares truthy and would silently turn
+    # the mutation channel on in every test here.
+    state.slot_mutation_probability = 0.0
+    state.hot_ngram_min_count = 3
+    state.hot_ngram_recency_share = 0.5
     return state
 
 
@@ -61,6 +66,8 @@ def _learning_service() -> AsyncMock:
     service = AsyncMock()
     service.get_verbatim_ngram_index = AsyncMock(return_value=frozenset())
     service.get_context_idf = AsyncMock(return_value={})
+    service.get_word_frequencies = AsyncMock(return_value={})
+    service.get_hot_ngrams = AsyncMock(return_value=[])
     return service
 
 
@@ -626,6 +633,128 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             [call.args[0] for call in scorer.call_args_list],
             [candidate, candidate],
         )
+
+
+class TestResponseGeneratorSlotMutation(unittest.IsolatedAsyncioTestCase):
+    """P2: a slot-mutated copy competes in scoring next to its original."""
+
+    def setUp(self) -> None:
+        patcher = patch(
+            "app.core.response_generator.mask_chat_id", return_value="chat"
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    _ORIGINAL = "завтра сегодня работа опять"
+    _MUTATED = "завтра сегодня суббота опять"
+
+    def _mutating_setup(self) -> tuple[AsyncMock, AsyncMock, MagicMock]:
+        state = _runtime_state()
+        state.slot_mutation_probability = 1.0
+        generator = _traced_generator()
+        generator.generate_text = AsyncMock(return_value=self._ORIGINAL)
+        learning_service = _learning_service()
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        learning_service.get_word_frequencies = AsyncMock(
+            return_value={"суббота": 10}
+        )
+        return state, generator, learning_service
+
+    async def test_mutated_copy_competes_and_can_win(self) -> None:
+        state, generator, learning_service = self._mutating_setup()
+        scores = {self._ORIGINAL: _score(1.0), self._MUTATED: _score(2.0)}
+        scorer = MagicMock(
+            side_effect=lambda text, tokens, context, length_mode: scores[text]
+        )
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=scorer,
+        )
+
+        result = await response_generator.generate_with_result(
+            _request(),
+            rng=random.Random(61),
+            candidate_target=2,
+        )
+
+        self.assertEqual(result.text, self._MUTATED)
+        self.assertEqual(result.candidates_scored, 2)
+        learning_service.get_word_frequencies.assert_awaited_once_with(123)
+        learning_service.get_hot_ngrams.assert_awaited_once()
+        # One real walk produced both candidates.
+        self.assertEqual(generator.generate_text.await_count, 1)
+
+    async def test_zero_probability_never_reads_frequencies(self) -> None:
+        state = _runtime_state()
+        generator = _traced_generator()
+        generator.generate_text = AsyncMock(return_value=self._ORIGINAL)
+        learning_service = _learning_service()
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(1.0)),
+        )
+
+        await response_generator.generate(
+            _request(), rng=random.Random(67), candidate_target=1
+        )
+
+        learning_service.get_word_frequencies.assert_not_awaited()
+        learning_service.get_hot_ngrams.assert_not_awaited()
+
+    async def test_mutated_copy_failing_gates_is_dropped(self) -> None:
+        state, generator, learning_service = self._mutating_setup()
+        generator.generate_text = AsyncMock(
+            side_effect=[self._ORIGINAL] * GENERATION_ATTEMPT_BUDGET
+        )
+        # The mutated text is a verbatim training-sample copy: it must fall at
+        # the same gate the original passed instead of joining the pool.
+        learning_service.is_verbatim_copy = AsyncMock(
+            side_effect=lambda _chat_id, text: text == self._MUTATED
+        )
+        scorer = MagicMock(return_value=_score(1.0))
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=scorer,
+        )
+
+        result = await response_generator.generate_with_result(
+            _request(),
+            rng=random.Random(71),
+            candidate_target=2,
+        )
+
+        self.assertEqual(result.text, self._ORIGINAL)
+        self.assertEqual(result.candidates_scored, 1)
+
+    async def test_hot_ngram_words_are_never_mutated(self) -> None:
+        state, generator, learning_service = self._mutating_setup()
+        # Both mutable words belong to hot n-grams -> no eligible slot.
+        learning_service.get_hot_ngrams = AsyncMock(
+            return_value=[("сегодня", "работа")]
+        )
+        scorer = MagicMock(return_value=_score(1.0))
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=scorer,
+        )
+
+        result = await response_generator.generate_with_result(
+            _request(),
+            rng=random.Random(73),
+            candidate_target=2,
+        )
+
+        self.assertEqual(result.text, self._ORIGINAL)
+        self.assertEqual(result.candidates_scored, 1)
 
 
 class TestResponseGeneratorMoodModulation(unittest.IsolatedAsyncioTestCase):

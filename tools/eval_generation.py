@@ -227,6 +227,7 @@ async def evaluate_generation(
                 context_jump_boost=1.0,
                 verbatim_extension_share=0.0,
                 order_mix_probability=0.0,
+                slot_mutation_probability=0.0,
                 context_anchor_splice_probability=0.0,
                 emoji_append_chance=0.0,
                 normalize_lower=normalize_lower,

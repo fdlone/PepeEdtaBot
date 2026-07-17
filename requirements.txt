@@ -2,3 +2,8 @@ aiogram>=3.7.0,<4.0.0
 aiosqlite>=0.20.0,<1.0.0
 python-dotenv>=1.0.1,<2.0.0
 cryptography>=46.0.7,<50.0.0
+# Morphology guard for slot mutations (P2): POS + case/number/gender agreement
+# between the original word and its replacement. Pure Python + offline
+# dictionaries; the ending heuristic alone let ~40% broken swaps win (measured
+# 2026-07-17 on the prod copy).
+pymorphy3>=2.0.0,<3.0.0

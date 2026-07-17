@@ -116,6 +116,27 @@ class MarkovRepo(BaseRepo):
             for row in rows
         ]
 
+    async def get_word_frequencies(
+        self, chat_id: int, *, min_word_len: int
+    ) -> dict[str, int]:
+        """Occurrence counts of chat words over the whole model memory.
+
+        Counted as continuations (``w3``) of the order-2 chain, so every
+        learned token occurrence except the two openers of each message is
+        represented; short tokens (punctuation, particles) are trimmed in SQL
+        to keep the result compact.
+        """
+        rows = await self._fetch_all(
+            """
+            SELECT w3, SUM(cnt)
+            FROM transitions
+            WHERE chat_id = ? AND LENGTH(w3) >= ?
+            GROUP BY w3
+            """,
+            (chat_id, min_word_len),
+        )
+        return {str(r[0]): int(r[1]) for r in rows}
+
     async def get_chat_token_volume(self, chat_id: int) -> int:
         # Both sums share one lock acquisition: the 2-gram fallback only fires
         # when the 3-gram table is empty, and this runs on the per-message path.
