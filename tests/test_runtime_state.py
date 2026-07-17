@@ -41,6 +41,7 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
         "rare_event_daily_cap": 3,
         "user_quirk_chance": 0.1,
         "user_quirk_min_interactions": 25,
+        "user_quirk_name_share": 0.0,
         "use_reply_context": True,
         "fuzzy_context_casefold": False,
         "reply_context_max_tokens": 12,

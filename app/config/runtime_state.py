@@ -54,6 +54,7 @@ class RuntimeState:
     rare_event_daily_cap: int
     user_quirk_chance: float
     user_quirk_min_interactions: int
+    user_quirk_name_share: float
     use_reply_context: bool
     fuzzy_context_casefold: bool
     reply_context_max_tokens: int
