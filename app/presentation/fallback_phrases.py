@@ -63,10 +63,13 @@ HEATED_FALLBACK_PHRASES: tuple[str, ...] = (
 
 
 # L2 user quirks: short second-person addressives sent as a separate message
-# right before a generated answer to a "regular". No placeholders, no names —
+# right before a generated answer to a "regular". No placeholders by default —
 # nothing about the user is interpolated, so nothing about them is stored or
 # revealed. Picked uniformly: at once-a-day-per-user frequency an anti-repeat
 # window would be dead weight.
+# L2.1: with a ``first_name`` (taken live from the incoming update, never
+# stored) the vocative addresses the regular by name — bare or fused with a
+# pool phrase.
 USER_QUIRK_VOCATIVES: tuple[str, ...] = (
     "опять ты",
     "а, снова ты",
@@ -79,10 +82,25 @@ USER_QUIRK_VOCATIVES: tuple[str, ...] = (
     "снова здорово",
 )
 
+# Share of name vocatives that are the bare name; the rest prepend the name
+# to a pool phrase («саня, опять ты»).
+NAME_VOCATIVE_BARE_SHARE = 0.5
 
-def next_quirk_vocative(rng: random.Random) -> str:
-    """Pick a vocative for a regular's quirk (uniform, no anti-repeat)."""
-    return rng.choice(USER_QUIRK_VOCATIVES)
+
+def next_quirk_vocative(
+    rng: random.Random, *, first_name: str | None = None
+) -> str:
+    """Pick a vocative for a regular's quirk (uniform, no anti-repeat).
+
+    ``first_name`` must already be sanitized (``sanitize_first_name``); None
+    keeps the legacy nameless pool behaviour.
+    """
+    base = rng.choice(USER_QUIRK_VOCATIVES)
+    if first_name is None:
+        return base
+    if rng.random() < NAME_VOCATIVE_BARE_SHARE:
+        return first_name
+    return f"{first_name}, {base}"
 
 
 def is_late_night(now: datetime) -> bool:

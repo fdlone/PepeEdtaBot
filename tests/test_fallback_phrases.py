@@ -120,6 +120,67 @@ class TestUserQuirkVocatives(unittest.TestCase):
         )
 
 
+class TestNameQuirkVocative(unittest.TestCase):
+    def test_name_vocative_is_bare_name_or_name_plus_pool_phrase(self) -> None:
+        from app.presentation.fallback_phrases import (
+            USER_QUIRK_VOCATIVES,
+            next_quirk_vocative,
+        )
+
+        seen_bare = seen_fused = False
+        for seed in range(60):
+            vocative = next_quirk_vocative(
+                random.Random(seed), first_name="саня"
+            )
+            if vocative == "саня":
+                seen_bare = True
+            else:
+                self.assertTrue(vocative.startswith("саня, "))
+                self.assertIn(
+                    vocative.removeprefix("саня, "), USER_QUIRK_VOCATIVES
+                )
+                seen_fused = True
+        self.assertTrue(seen_bare)
+        self.assertTrue(seen_fused)
+
+    def test_none_name_keeps_legacy_pool_behaviour(self) -> None:
+        from app.presentation.fallback_phrases import (
+            USER_QUIRK_VOCATIVES,
+            next_quirk_vocative,
+        )
+
+        picks = {
+            next_quirk_vocative(random.Random(seed), first_name=None)
+            for seed in range(30)
+        }
+        self.assertTrue(picks.issubset(set(USER_QUIRK_VOCATIVES)))
+
+
+class TestSanitizeFirstName(unittest.TestCase):
+    def test_plain_names_lowercased(self) -> None:
+        from app.core.text import sanitize_first_name
+
+        self.assertEqual(sanitize_first_name("Саня"), "саня")
+        self.assertEqual(sanitize_first_name("Anna-Maria"), "anna-maria")
+
+    def test_takes_first_word_only(self) -> None:
+        from app.core.text import sanitize_first_name
+
+        self.assertEqual(sanitize_first_name("Иван Иваныч"), "иван")
+
+    def test_strips_emoji_and_decorations(self) -> None:
+        from app.core.text import sanitize_first_name
+
+        self.assertEqual(sanitize_first_name("🔥Саня🔥"), "саня")
+        self.assertEqual(sanitize_first_name("~*_Slava_*~"), "slava")
+
+    def test_unusable_names_return_none(self) -> None:
+        from app.core.text import sanitize_first_name
+
+        for raw in ("", "   ", "🔥🔥🔥", "Я", "-", "12345", "х" * 25):
+            self.assertIsNone(sanitize_first_name(raw), raw)
+
+
 class TestPickFallbackPhrase(unittest.TestCase):
     def test_picks_from_pool(self) -> None:
         phrase = pick_fallback_phrase(

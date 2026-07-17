@@ -71,6 +71,34 @@ def capitalize_reply_sentences(text: str) -> str:
     return "".join(characters)
 
 
+# Display-name bounds for the L2.1 name vocative: shorter reads as noise
+# ("Я"), longer is a status line, not a name.
+_NAME_MIN_LEN = 2
+_NAME_MAX_LEN = 20
+
+
+def sanitize_first_name(raw: str) -> str | None:
+    """A chat-safe lowercase vocative form of a Telegram first name, or None.
+
+    Uses only what the person already shows in the chat and only transiently
+    (never stored, never logged). The first whitespace-separated word is kept;
+    everything but letters and inner hyphens is dropped, so emoji decorations
+    and status suffixes disappear. None means "unusable, fall back to the
+    generic pool".
+    """
+    parts = raw.strip().split()
+    if not parts:
+        return None
+    cleaned = "".join(
+        ch for ch in parts[0] if ch.isalpha() or ch == "-"
+    ).strip("-")
+    if not (_NAME_MIN_LEN <= len(cleaned) <= _NAME_MAX_LEN):
+        return None
+    if not any(ch.isalpha() for ch in cleaned):
+        return None
+    return cleaned.lower()
+
+
 def sanitize_text(text: str) -> str:
     text = remove_links(text)
     # Redact PII (emails, phone numbers, secrets) before mention removal so the
