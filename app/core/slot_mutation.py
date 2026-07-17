@@ -69,6 +69,20 @@ def _tags(word: str) -> tuple[Any, ...]:
     return tuple(parse.tag for parse in _morph().parse(word))
 
 
+def is_pronominal_word(word: str) -> bool:
+    """True for pronouns and pronominal adjectives («которые», «какая»).
+
+    They pass morphological agreement but gut the sentence when substituted
+    for a content word — the dominant leftover garbage class in the
+    2026-07-17 winner review after the agreement guard landed.
+    """
+    tags = _tags(word)
+    if not tags:
+        return False
+    best = tags[0]
+    return best.POS == "NPRO" or "Apro" in best
+
+
 def agrees_morphologically(original: str, replacement: str) -> bool:
     """True when the replacement can stand in the original's grammatical slot.
 
@@ -162,6 +176,8 @@ def pick_replacement(
         if abs(len(word) - len(original)) > max_delta:
             continue
         if folded in PROTECTED_DISCOURSE_WORDS:
+            continue
+        if is_pronominal_word(word):
             continue
         if not agrees_morphologically(original, word):
             continue

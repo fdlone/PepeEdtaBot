@@ -94,6 +94,26 @@ class TestAgreesMorphologically(unittest.TestCase):
         self.assertFalse(agrees_morphologically("опасность", "использовать"))
 
 
+class TestPronominalFilter(unittest.TestCase):
+    def test_pronominal_adjectives_never_offered(self) -> None:
+        # «давно не актуальные» -> «давно не которые»: agreement passes,
+        # the sentence dies. Dominant garbage class of the winner review.
+        replacement = pick_replacement(
+            "актуальные",
+            {"которые": 100},
+            excluded_tokens=frozenset(),
+            rng=random.Random(1),
+        )
+        self.assertIsNone(replacement)
+
+    def test_content_words_still_pass(self) -> None:
+        from app.core.slot_mutation import is_pronominal_word
+
+        self.assertFalse(is_pronominal_word("работа"))
+        self.assertTrue(is_pronominal_word("которые"))
+        self.assertTrue(is_pronominal_word("каком"))
+
+
 class TestConnectiveProtection(unittest.TestCase):
     def test_splice_connectives_are_not_eligible_slots(self) -> None:
         # «концентрация не та, короче тогда где»: the connective must never
