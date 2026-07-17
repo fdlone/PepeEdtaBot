@@ -156,6 +156,51 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         self.svc._invalidate_text_cache(self.chat)
         self.assertNotIn(self.chat, self.svc._text_cache)
 
+    # --- intonation profile (P4) ---
+
+    async def test_intonation_profile_none_below_floor_and_cached(self) -> None:
+        await self._record("привет всем")
+        self.assertIsNone(await self.svc.get_intonation_profile(self.chat))
+        # None is cached too: no re-read until the next message invalidates.
+        self.assertIn(self.chat, self.svc._intonation)
+
+    async def test_intonation_profile_built_and_invalidated(self) -> None:
+        from unittest.mock import patch
+
+        with patch(
+            "app.services.learning_service.build_intonation_profile"
+        ) as builder:
+            builder.return_value = object()
+            await self._record("привет всем")
+            profile = await self.svc.get_intonation_profile(self.chat)
+            self.assertIs(profile, builder.return_value)
+            # Cached: a second read must not rebuild.
+            await self.svc.get_intonation_profile(self.chat)
+            builder.assert_called_once()
+        await self._record("новое сообщение")
+        self.assertNotIn(self.chat, self.svc._intonation)
+    # --- word frequencies (slot mutations) ---
+
+    async def test_word_frequencies_counted_from_model(self) -> None:
+        await self._record("сегодня хорошая погода")
+        await self._record("завтра хорошая погода")
+        frequencies = await self.svc.get_word_frequencies(self.chat)
+        self.assertEqual(frequencies.get("погода"), 2)
+        self.assertNotIn("сегодня", frequencies)  # opener, not a continuation
+
+    async def test_word_frequencies_trim_short_words(self) -> None:
+        await self._record("вот это да ну и дела")
+        frequencies = await self.svc.get_word_frequencies(self.chat)
+        self.assertNotIn("да", frequencies)
+        self.assertNotIn("и", frequencies)
+
+    async def test_word_frequencies_cached_and_invalidated(self) -> None:
+        await self._record("сегодня хорошая погода")
+        await self.svc.get_word_frequencies(self.chat)
+        self.assertIn(self.chat, self.svc._word_frequencies)
+        await self._record("новое сообщение пришло")
+        self.assertNotIn(self.chat, self.svc._word_frequencies)
+
     # --- user-interaction passthroughs (L2) ---
 
     async def test_user_interaction_methods_require_hasher(self) -> None:

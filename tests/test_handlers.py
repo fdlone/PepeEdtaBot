@@ -70,6 +70,7 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.recent_reply_penalty_strength = 1.0
     s.verbatim_penalty_strength = 0.0
     s.length_mode_weights = (0.25, 0.55, 0.2)
+    s.intonation_profile_strength = 0.0
     s.length_context_adaptation = 0.0
     # Deterministic selection and untouched reply text so handler tests can
     # assert generated candidates verbatim.
@@ -86,6 +87,7 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.context_jump_boost = 1.0
     s.verbatim_extension_share = 0.0
     s.order_mix_probability = 0.0
+    s.slot_mutation_probability = 0.0
     # L1 hot-ngram channel off by default so learn/reply tests stay
     # deterministic; dedicated hot-ngram tests enable it explicitly.
     s.hot_ngram_seed_chance = 0.0
@@ -809,6 +811,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             "repetition_penalty_strength": 1.0,
             "recent_reply_penalty_strength": 1.0,
             "length_mode_weights": (0.25, 0.55, 0.2),
+            "intonation_profile_strength": 0.0,
             "length_context_adaptation": 0.0,
             "markov_order": 3,
             "enable_backoff": True,
@@ -1074,6 +1077,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             repetition_penalty_strength=1.0,
             recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
+            intonation_profile_strength=0.0,
             length_context_adaptation=0.0,
             markov_order=3,
             enable_backoff=True,
@@ -1124,6 +1128,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             repetition_penalty_strength=1.0,
             recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
+            intonation_profile_strength=0.0,
             length_context_adaptation=0.0,
             markov_order=3,
             enable_backoff=True,
@@ -1176,6 +1181,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             repetition_penalty_strength=1.0,
             recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
+            intonation_profile_strength=0.0,
             length_context_adaptation=0.0,
             markov_order=3,
             enable_backoff=True,
@@ -1743,6 +1749,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             repetition_penalty_strength=1.0,
             recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
+            intonation_profile_strength=0.0,
             length_context_adaptation=0.0,
             markov_order=3,
             enable_backoff=True,
@@ -1805,6 +1812,7 @@ class TestMentionCooldownGate(unittest.IsolatedAsyncioTestCase):
             "repetition_penalty_strength": 1.0,
             "recent_reply_penalty_strength": 1.0,
             "length_mode_weights": (0.25, 0.55, 0.2),
+            "intonation_profile_strength": 0.0,
             "length_context_adaptation": 0.0,
             "markov_order": 3,
             "enable_backoff": True,
@@ -1927,6 +1935,7 @@ class TestUserQuirks(unittest.IsolatedAsyncioTestCase):
             "repetition_penalty_strength": 1.0,
             "recent_reply_penalty_strength": 1.0,
             "length_mode_weights": (0.25, 0.55, 0.2),
+            "intonation_profile_strength": 0.0,
             "length_context_adaptation": 0.0,
             "markov_order": 3,
             "enable_backoff": True,

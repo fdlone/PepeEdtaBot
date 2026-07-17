@@ -39,6 +39,7 @@ class RuntimeState:
     recent_reply_penalty_strength: float
     verbatim_penalty_strength: float
     length_mode_weights: tuple[float, float, float]
+    intonation_profile_strength: float
     length_context_adaptation: float
     markov_order: int
     enable_backoff: bool
@@ -46,6 +47,7 @@ class RuntimeState:
     context_jump_boost: float
     verbatim_extension_share: float
     order_mix_probability: float
+    slot_mutation_probability: float
     hot_ngram_seed_chance: float
     hot_ngram_min_count: int
     hot_ngram_recency_share: float

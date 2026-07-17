@@ -21,6 +21,7 @@ from app.core.candidate_scorer import (
     verbatim_quote_severity,
 )
 from app.core.emoji import append_emoji_flavor, strip_trailing_emojis
+from app.core.intonation import IntonationProfile, blend_length_weights
 from app.core.markov import (
     JUMP_CONNECTIVE_TOKENS,
     PUNCT_SET,
@@ -37,6 +38,7 @@ from app.core.markov import (
 )
 from app.core.mood import HEATED, NEUTRAL_MODIFIERS, MoodModifiers
 from app.core.reply_flavor import apply_reply_flavor
+from app.core.slot_mutation import mutate_candidate_tokens
 from app.core.text import capitalize_reply_sentences, sanitize_text
 from app.log_masking import mask_chat_id
 
@@ -79,6 +81,13 @@ class VerbatimCopyChecker(Protocol):
         self, chat_id: int
     ) -> frozenset[tuple[str, ...]]: ...
     async def get_context_idf(self, chat_id: int) -> Mapping[str, float]: ...
+    async def get_intonation_profile(
+        self, chat_id: int
+    ) -> IntonationProfile | None: ...
+    async def get_word_frequencies(self, chat_id: int) -> Mapping[str, int]: ...
+    async def get_hot_ngrams(
+        self, chat_id: int, *, min_count: int, recency_share: float
+    ) -> list[tuple[str, ...]]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,6 +297,71 @@ class ResponseGenerator:
             return None
         return extended
 
+    def _build_score(
+        self,
+        text: str,
+        tokens: list[str],
+        context_tokens: list[str],
+        length_mode: str,
+        *,
+        context_idf: Mapping[str, float],
+        recent_trigrams: set[tuple[str, ...]],
+        recent_penalty_strength: float,
+        corpus_ngrams: frozenset[tuple[str, ...]],
+        verbatim_penalty_strength: float,
+    ) -> CandidateScore:
+        """Full candidate score with the per-request penalty components."""
+        return replace(
+            self.scorer(text, tokens, context_tokens, length_mode),
+            context_relevance=idf_context_relevance(
+                tokens, context_tokens, context_idf
+            ),
+            recent_penalty=recent_penalty_strength
+            * recent_reply_overlap(tokens, recent_trigrams),
+            verbatim_penalty=verbatim_penalty_strength
+            * verbatim_quote_severity(
+                verbatim_ngram_overlap(tokens, corpus_ngrams)
+            ),
+        )
+
+    async def _mutated_variant(
+        self,
+        request: GenerationRequest,
+        candidate_tokens: list[str],
+        *,
+        frequencies: Mapping[str, int],
+        protected_tokens: frozenset[str],
+        rng: random.Random,
+    ) -> tuple[str, list[str]] | None:
+        """A slot-mutated copy of the candidate that passed the reject gates.
+
+        Returns None when no mutation applies or the mutated text fails the
+        same staleness/verbatim gates the original went through.
+        """
+        mutated_tokens = mutate_candidate_tokens(
+            candidate_tokens,
+            frequencies=frequencies,
+            protected_tokens=protected_tokens,
+            context_tokens=request.context_tokens,
+            rng=rng,
+        )
+        if mutated_tokens is None:
+            return None
+        mutated_text = detokenize(
+            mutated_tokens, max_chars=self.runtime_state.max_reply_chars
+        )
+        if not mutated_text:
+            return None
+        reject_reason = await self._candidate_reject_reason(
+            request,
+            mutated_text,
+            sanitize_text(mutated_text).lower(),
+            is_short_generated_reply(mutated_tokens),
+        )
+        if reject_reason is not None:
+            return None
+        return mutated_text, mutated_tokens
+
     async def generate_with_result(
         self,
         request: GenerationRequest,
@@ -325,7 +399,41 @@ class ResponseGenerator:
             context_idf = await self.learning_service.get_context_idf(
                 request.chat_id
             )
+        # P4 intonation: blend the configured mode weights toward the chat's
+        # observed length habits before mood and mirroring apply on top. The
+        # profile read is skipped entirely when the knob is off; None means
+        # the chat is still below the profile's message floor.
+        intonation_strength = self.runtime_state.intonation_profile_strength
+        intonation_profile: IntonationProfile | None = None
+        if intonation_strength > 0.0:
+            intonation_profile = await self.learning_service.get_intonation_profile(
+                request.chat_id
+            )
+        # Slot mutations: the frequency dictionary and the protected hot-ngram
+        # words are fetched once per request, and only when the knob is on.
+        slot_mutation_probability = self.runtime_state.slot_mutation_probability
+        word_frequencies: Mapping[str, int] = {}
+        protected_tokens: frozenset[str] = frozenset()
+        if slot_mutation_probability > 0.0:
+            word_frequencies = await self.learning_service.get_word_frequencies(
+                request.chat_id
+            )
+            if word_frequencies:
+                hot_ngrams = await self.learning_service.get_hot_ngrams(
+                    request.chat_id,
+                    min_count=self.runtime_state.hot_ngram_min_count,
+                    recency_share=self.runtime_state.hot_ngram_recency_share,
+                )
+                protected_tokens = frozenset(
+                    token.casefold() for ngram in hot_ngrams for token in ngram
+                )
         base_weights = self.runtime_state.length_mode_weights
+        if intonation_profile is not None:
+            base_weights = blend_length_weights(
+                base_weights,
+                intonation_profile.length_weights,
+                intonation_strength,
+            )
         mood_weights = (
             base_weights[0] * modifiers.length_weight_mult[0],
             base_weights[1] * modifiers.length_weight_mult[1],
@@ -517,26 +625,16 @@ class ResponseGenerator:
                     )
                     if candidate not in seen_candidates:
                         seen_candidates.add(candidate)
-                        score = replace(
-                            self.scorer(
-                                candidate,
-                                candidate_tokens,
-                                request.context_tokens,
-                                length_mode,
-                            ),
-                            context_relevance=idf_context_relevance(
-                                candidate_tokens,
-                                request.context_tokens,
-                                context_idf,
-                            ),
-                            recent_penalty=recent_penalty_strength
-                            * recent_reply_overlap(candidate_tokens, recent_trigrams),
-                            verbatim_penalty=verbatim_penalty_strength
-                            * verbatim_quote_severity(
-                                verbatim_ngram_overlap(
-                                    candidate_tokens, corpus_ngrams
-                                )
-                            ),
+                        score = self._build_score(
+                            candidate,
+                            candidate_tokens,
+                            request.context_tokens,
+                            length_mode,
+                            context_idf=context_idf,
+                            recent_trigrams=recent_trigrams,
+                            recent_penalty_strength=recent_penalty_strength,
+                            corpus_ngrams=corpus_ngrams,
+                            verbatim_penalty_strength=verbatim_penalty_strength,
                         )
                         candidates.append(
                             _ScoredCandidate(text=candidate, score=score)
@@ -550,6 +648,48 @@ class ResponseGenerator:
                             score=score,
                             text=candidate,
                         )
+                        if (
+                            word_frequencies
+                            and len(candidates) < target
+                            and generation_rng.random() < slot_mutation_probability
+                        ):
+                            variant = await self._mutated_variant(
+                                request,
+                                candidate_tokens,
+                                frequencies=word_frequencies,
+                                protected_tokens=protected_tokens,
+                                rng=generation_rng,
+                            )
+                            if (
+                                variant is not None
+                                and variant[0] not in seen_candidates
+                            ):
+                                mutated_text, mutated_tokens = variant
+                                seen_candidates.add(mutated_text)
+                                mutated_score = self._build_score(
+                                    mutated_text,
+                                    mutated_tokens,
+                                    request.context_tokens,
+                                    length_mode,
+                                    context_idf=context_idf,
+                                    recent_trigrams=recent_trigrams,
+                                    recent_penalty_strength=recent_penalty_strength,
+                                    corpus_ngrams=corpus_ngrams,
+                                    verbatim_penalty_strength=verbatim_penalty_strength,
+                                )
+                                candidates.append(
+                                    _ScoredCandidate(
+                                        text=mutated_text, score=mutated_score
+                                    )
+                                )
+                                gen_trace_log.log_attempt_mutated(
+                                    request.chat_id,
+                                    attempt + 1,
+                                    original=candidate,
+                                    mutated=mutated_text,
+                                    index=len(candidates),
+                                    score=mutated_score,
+                                )
                         if len(candidates) >= target:
                             break
                     else:
@@ -592,6 +732,8 @@ class ResponseGenerator:
             text,
             generation_rng,
             self.runtime_state.reply_flavor_strength * modifiers.flavor_strength_mult,
+            ending_profile=intonation_profile,
+            profile_strength=intonation_strength,
         )
         # M3 emoji channel: occasionally end on an emoji this chat actually uses.
         # The stats read is skipped entirely when the channel is off so the common
