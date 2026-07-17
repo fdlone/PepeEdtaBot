@@ -41,6 +41,10 @@ from app.core import candidate_scorer as _cs  # noqa: E402
 from app.core import gen_trace_log  # noqa: E402
 from app.core import response_generator as _rg  # noqa: E402
 from app.core.candidate_scorer import build_token_idf  # noqa: E402
+from app.core.intonation import (  # noqa: E402
+    IntonationProfile,
+    build_intonation_profile,
+)
 from app.core.markov import (  # noqa: E402
     JUMP_CONNECTIVE_TOKENS,
     PUNCT_SET,
@@ -96,6 +100,11 @@ class _ProdVerbatimChecker:
             for window in content_ngram_windows(message)
         )
         self._token_idf = build_token_idf(tokenize(m) for m in messages)
+        # P4 intonation: built lazily from the same message window the runtime
+        # LearningService profiles; only read when the knob is on.
+        self._messages = list(messages)
+        self._intonation_built = False
+        self._intonation: IntonationProfile | None = None
 
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool:
         normalized = normalize_for_verbatim(text)
@@ -113,6 +122,14 @@ class _ProdVerbatimChecker:
 
     async def get_context_idf(self, chat_id: int) -> dict[str, float]:
         return self._token_idf
+
+    async def get_intonation_profile(
+        self, chat_id: int
+    ) -> IntonationProfile | None:
+        if not self._intonation_built:
+            self._intonation = build_intonation_profile(self._messages)
+            self._intonation_built = True
+        return self._intonation
 
 
 class _TraceCapturingGenerator(MarkovGenerator):
@@ -324,6 +341,23 @@ def incoming_length_bucket(incoming_tokens: int) -> str:
     if incoming_tokens >= _cs.CONTEXT_LENGTH_LONG_TOKENS:
         return "long_in"
     return "mid_in"
+
+
+def _length_shares(lengths: list[int]) -> dict[str, float]:
+    """Short/medium/long shares of content-token lengths (scorer's bands)."""
+    counted = [length for length in lengths if length > 0]
+    if not counted:
+        return {"short": 0.0, "medium": 0.0, "long": 0.0}
+    short_max = _cs.LENGTH_MODE_BANDS["short"][1]
+    long_min = _cs.LENGTH_MODE_BANDS["long"][0]
+    total = len(counted)
+    short = sum(1 for length in counted if length <= short_max)
+    long_ = sum(1 for length in counted if length >= long_min)
+    return {
+        "short": round(short / total, 4),
+        "medium": round((total - short - long_) / total, 4),
+        "long": round(long_ / total, 4),
+    }
 
 
 async def evaluate(
@@ -606,6 +640,13 @@ async def evaluate(
         "repeated_trigram_ratio": round(repeated_ngram_ratio(outputs, 3), 4),
         "avg_length_tokens": round(mean(lengths), 2) if lengths else 0.0,
         "median_length_tokens": median(lengths) if lengths else 0,
+        # P4 intonation: reply length-mode shares next to the chat's own
+        # (classified by the scorer's bands) — the knob is supposed to pull
+        # the former toward the latter.
+        "reply_length_shares": _length_shares(lengths),
+        "chat_length_shares": _length_shares(
+            [len(content_tokens(tokenize(m))) for m in messages]
+        ),
         # Length mirroring: reply length per bucket of the answered message.
         # length_mirror_gap (long bucket mean - short bucket mean) is the
         # headline -- it is ~0 when the length mode ignores the interlocutor.
