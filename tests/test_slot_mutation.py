@@ -4,6 +4,7 @@ import random
 import unittest
 
 from app.core.slot_mutation import (
+    agrees_morphologically,
     eligible_slot_indexes,
     is_mutable_word,
     mutate_candidate_tokens,
@@ -63,6 +64,54 @@ class TestEligibleSlotIndexes(unittest.TestCase):
             tokens, protected_tokens=NO_PROTECTED, context_tokens=NO_CONTEXT
         )
         self.assertEqual(slots, [3])
+
+
+class TestAgreesMorphologically(unittest.TestCase):
+    """Failure modes measured on the prod copy 2026-07-17: matching endings
+    crossing part-of-speech or number lines."""
+
+    def test_matching_noun_forms_agree(self) -> None:
+        self.assertTrue(agrees_morphologically("работа", "суббота"))
+        self.assertTrue(agrees_morphologically("прожарки", "атаки"))
+
+    def test_verb_to_noun_is_rejected(self) -> None:
+        # «резину тянут» -> «резину минут»: same "-нут" ending, broken text.
+        self.assertFalse(agrees_morphologically("тянут", "минут"))
+        # «полностью построена» -> «полностью токена»: participle vs noun.
+        self.assertFalse(agrees_morphologically("построена", "токена"))
+        # «ладно это че» -> «окно это че»: predicative vs noun.
+        self.assertFalse(agrees_morphologically("ладно", "окно"))
+
+    def test_number_mismatch_is_rejected(self) -> None:
+        # «британия более блмная» -> «изменения более блмная»: sg vs pl.
+        self.assertFalse(agrees_morphologically("британия", "изменения"))
+
+    def test_matching_verb_forms_agree(self) -> None:
+        self.assertTrue(agrees_morphologically("сказал", "сделал"))
+        self.assertTrue(agrees_morphologically("тыкает", "кидает"))
+
+    def test_infinitive_vs_noun_is_rejected(self) -> None:
+        self.assertFalse(agrees_morphologically("опасность", "использовать"))
+
+
+class TestConnectiveProtection(unittest.TestCase):
+    def test_splice_connectives_are_not_eligible_slots(self) -> None:
+        # «концентрация не та, короче тогда где»: the connective must never
+        # be the mutated slot.
+        tokens = ["концентрация", "не", "та", ",", "короче", "тогда", "где"]
+        slots = eligible_slot_indexes(
+            tokens, protected_tokens=NO_PROTECTED, context_tokens=NO_CONTEXT
+        )
+        self.assertNotIn(tokens.index("короче"), slots)
+
+    def test_connectives_are_not_offered_as_replacements(self) -> None:
+        replacement = pick_replacement(
+            "гуляли",
+            {"кстати": 100},
+            excluded_tokens=frozenset(),
+            rng=random.Random(1),
+        )
+        self.assertIsNone(replacement)
 
 
 class TestPickReplacement(unittest.TestCase):

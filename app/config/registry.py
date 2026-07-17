@@ -243,7 +243,8 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _float_in_range(0.0, 1.0)),
     # Slot mutations ("отсебятина" channel): chance per accepted candidate to
     # also field a mutated copy — one content word swapped for a frequent chat
-    # word agreeing by wordform ending. The copy competes in scoring against
+    # word agreeing morphologically (pymorphy3: POS + case/number/gender/
+    # tense; ending+length prefilter). The copy competes in scoring against
     # its original, so the existing quality/verbatim signals arbitrate. New
     # word pairs are born exactly here — the walk itself cannot leave the
     # corpus (2026-07-15 chain-structure audit). 0 disables (no frequency

@@ -6,16 +6,24 @@ then competes in candidate scoring against its original — bad mutations lose
 to the existing quality signals (verbatim penalty conversely rewards the
 introduced novelty), so no separate acceptance gate is needed here.
 
-Morphology guard is heuristic and dependency-free: the replacement must share
-the wordform ending with the original (for Russian a matching ending is a
-cheap proxy for matching case/number/gender) and be of comparable length.
+The morphology guard is two-layered. The cheap ending/length heuristic
+prefilters candidates; ``pymorphy3`` then requires real agreement — same part
+of speech and matching case/number/gender/tense/person where the original has
+them. The heuristic alone was measured (2026-07-17, prod copy) to let ~40% of
+winning mutations be grammatically broken: matching endings routinely cross
+part-of-speech lines in Russian («тянут»/«минут», «ладно»/«окно»).
 """
 from __future__ import annotations
 
 import random
 from collections.abc import Iterable, Mapping
+from functools import lru_cache
+from typing import Any
+
+import pymorphy3
 
 from app.core.lexicon import STOPWORDS
+from app.core.markov import JUMP_CONNECTIVE_TOKENS
 
 # A word shorter than this is never mutated nor used as a replacement: short
 # Russian words are mostly function words and pronouns the stopword list
@@ -28,6 +36,62 @@ MAX_LENGTH_DELTA_SHARE = 0.4
 # Words seen fewer times than this in the chat model are not offered as
 # replacements: one-off typos and foreign fragments are not "chat style".
 MIN_REPLACEMENT_FREQUENCY = 3
+
+# Discourse words of the splice scaffolding (M4 jumps, verbatim extensions)
+# are never mutated: swapping the connective breaks the seam the reply was
+# built around («, турбаче тогда где»). The short conjunctions of those
+# phrases are already excluded by the stopword/length guards.
+PROTECTED_DISCOURSE_WORDS: frozenset[str] = frozenset(
+    token
+    for phrase in JUMP_CONNECTIVE_TOKENS
+    for token in phrase
+    if token.isalpha()
+)
+
+# Grammemes that must carry over from the original to the replacement when
+# the original's parse has them.
+_AGREEMENT_GRAMMEMES = ("case", "number", "gender", "tense", "person", "mood")
+
+_MORPH: pymorphy3.MorphAnalyzer | None = None
+
+
+def _morph() -> pymorphy3.MorphAnalyzer:
+    # Lazy singleton: the analyzer loads its dictionaries on first use (~1s),
+    # so processes that never mutate (knob off, tests) pay nothing.
+    global _MORPH
+    if _MORPH is None:
+        _MORPH = pymorphy3.MorphAnalyzer()
+    return _MORPH
+
+
+@lru_cache(maxsize=16384)
+def _tags(word: str) -> tuple[Any, ...]:
+    return tuple(parse.tag for parse in _morph().parse(word))
+
+
+def agrees_morphologically(original: str, replacement: str) -> bool:
+    """True when the replacement can stand in the original's grammatical slot.
+
+    The original's most probable parse fixes the slot: part of speech plus
+    every agreement grammeme it carries. The replacement passes if any of its
+    parses matches that profile exactly.
+    """
+    original_tags = _tags(original)
+    if not original_tags:
+        return False
+    original_tag = original_tags[0]
+    if original_tag.POS is None:
+        return False
+    for tag in _tags(replacement):
+        if tag.POS != original_tag.POS:
+            continue
+        if all(
+            getattr(tag, grammeme) == getattr(original_tag, grammeme)
+            for grammeme in _AGREEMENT_GRAMMEMES
+            if getattr(original_tag, grammeme) is not None
+        ):
+            return True
+    return False
 
 
 def is_mutable_word(token: str) -> bool:
@@ -59,6 +123,8 @@ def eligible_slot_indexes(
         if not is_mutable_word(token):
             continue
         folded = token.casefold()
+        if folded in PROTECTED_DISCOURSE_WORDS:
+            continue
         if folded in context_tokens or folded in protected_tokens:
             continue
         eligible.append(index)
@@ -94,6 +160,10 @@ def pick_replacement(
         if folded[-ENDING_MATCH_LEN:] != ending:
             continue
         if abs(len(word) - len(original)) > max_delta:
+            continue
+        if folded in PROTECTED_DISCOURSE_WORDS:
+            continue
+        if not agrees_morphologically(original, word):
             continue
         pool.append(word)
         weights.append(count)
