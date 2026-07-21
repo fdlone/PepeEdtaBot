@@ -64,6 +64,18 @@ def _morph() -> pymorphy3.MorphAnalyzer:
     return _MORPH
 
 
+def warm_up() -> None:
+    """Load the morphology dictionaries now, off the hot path.
+
+    Laziness is right for tests and tools, but wrong for the bot process: the
+    first mutation happens inside the async reply path, where that ~1s
+    dictionary load blocks the event loop and stalls every other chat. Callers
+    run this at startup (``main.run_bot``), where a second costs nothing.
+    Idempotent — it is just ``_morph()`` under a name that says why.
+    """
+    _morph()
+
+
 @lru_cache(maxsize=16384)
 def _tags(word: str) -> tuple[Any, ...]:
     return tuple(parse.tag for parse in _morph().parse(word))

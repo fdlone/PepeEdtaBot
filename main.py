@@ -11,6 +11,7 @@ from app.config.runtime_state import runtime_state_from_settings
 from app.config.settings import Settings, load_settings
 from app.core import gen_trace_log
 from app.core.markov import MarkovGenerator
+from app.core.slot_mutation import warm_up as warm_up_morphology
 from app.domain.pivo import PivoSecurity
 from app.handlers import admin as admin_handlers
 from app.handlers import common as common_handlers
@@ -101,6 +102,14 @@ async def run_bot() -> None:
         user_hasher=pivo_security.hmac_value,
     )
     runtime_state = runtime_state_from_settings(settings)
+
+    # Slot mutations parse morphology through pymorphy3, whose dictionaries
+    # take ~1s to load on first use. That first use would otherwise land in
+    # the async reply path and block the event loop for every chat. Warmed
+    # unconditionally and in a worker thread: `slot_mutation_probability` is
+    # runtime-mutable via /set, so gating on its startup value would leave the
+    # stall in exactly the case where someone enables mutations live.
+    await asyncio.to_thread(warm_up_morphology)
 
     bot = Bot(token=settings.bot_token)
     me = await bot.get_me()

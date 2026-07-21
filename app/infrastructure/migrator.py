@@ -54,7 +54,7 @@ def _list_pending(applied: set[str]) -> list[tuple[str, Path]]:
     files = sorted(
         f
         for f in _MIGRATIONS_DIR.iterdir()
-        if f.is_file() and _MIGRATION_RE.match(f.name) and f.name != "__init__.py"
+        if f.is_file() and _MIGRATION_RE.match(f.name)
     )
     return [(f.stem, f) for f in files if f.stem not in applied]
 
