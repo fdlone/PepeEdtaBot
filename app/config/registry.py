@@ -201,6 +201,15 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # messages retention window). 0 disables entirely (no profile reads);
     # 1.0 replaces the configured distributions with the chat's. Applied
     # only once the chat has >=200 profiled messages.
+    # Kept at 0 (2026-07-21, B3 deferred). Measured alone the knob looks free
+    # (every metric flat, novelty +0.017), but verified *jointly* with the
+    # B1/B2 package on the prod copy it is the one knob that costs anchoring:
+    # with it ctx_anchored -0.017 and replies shorten 11.0 -> 10.1 tokens
+    # (-9%), without it ctx_anchored is flat (-0.004) and length unchanged.
+    # The shortening is the knob working as designed (blending toward the
+    # chat's own 41%-short habits), so this is a taste trade, not a bug — it
+    # just deserves its own observation window instead of riding along in a
+    # metrics-driven tuning package. Enable as a separate, isolated change.
     FieldSpec("intonation_profile_strength", "INTONATION_PROFILE_STRENGTH",
               "0", _float_in_range(0.0, 1.0)),
     FieldSpec("length_context_adaptation", "LENGTH_CONTEXT_ADAPTATION", "1.0",
@@ -227,7 +236,12 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # why context anchoring and verbatim quoting rise and fall together. The
     # boost breaks exactly that retrace while global walks keep the base
     # probability. 1.0 keeps jumps uniform (pre-knob behaviour).
-    FieldSpec("context_jump_boost", "CONTEXT_JUMP_BOOST", "1.0",
+    # 2.0 (2026-07-21): the "context+chaos" package ran live via /set from
+    # 2026-07-16 and its observation window (O1) closed clean, so the value is
+    # baked in here — a restart used to silently drop back to 1.0. Sweep pass B
+    # confirms the knob is monotonic (1.0 -> ctx_anchored -0.019, 4.0 -> +0.036);
+    # 2.0 sits mid-range, 4.0 also pushes connective_reply_rate toward the tic.
+    FieldSpec("context_jump_boost", "CONTEXT_JUMP_BOOST", "2.0",
               _float_in_range(1.0, 10.0)),
     # Context+chaos: corpus 4-gram share at/above which a *passing* candidate
     # is treated as a near-quote and gets the отсебятина extension (connective
@@ -236,7 +250,12 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # message" to "quote with a word changed". The extension only replaces the
     # candidate when the combined text passes the same gates again. 0 disables
     # (legacy behaviour: only exact copies are extended).
-    FieldSpec("verbatim_extension_share", "VERBATIM_EXTENSION_SHARE", "0",
+    # 0.8 (2026-07-21): part of the same live "context+chaos" package, baked in
+    # after O1 closed. Sweep pass B: the knob does NOT move context anchoring
+    # (flat ~0.62 across 0/0.6/0.8 once extended winners are attributed to their
+    # base — the earlier 0.6 "dip" was an eval artifact); it trades latency
+    # (0 -> 181ms vs 230ms) for fewer bare near-quotes.
+    FieldSpec("verbatim_extension_share", "VERBATIM_EXTENSION_SHARE", "0.8",
               _float_in_range(0.0, 1.0)),
     # Artificial branching valve: probability per generation step of taking
     # the transition from the wider order-2 pool even though the order-3 pool
@@ -247,7 +266,12 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # the established quality floor; order 1 was removed as word salad).
     # Diverts only when order-2 actually offers more options than order-3,
     # and only when backoff is enabled. 0 disables (pre-knob behaviour).
-    FieldSpec("order_mix_probability", "ORDER_MIX_PROBABILITY", "0",
+    # 0.75 (2026-07-21, B1): live at 0.5 via /set since 2026-07-16; raised after
+    # O1 closed. Sweep pass B (10 seeds x 400) is the rare knob that moves three
+    # metrics the right way at once vs 0.5: ctx_anchored +0.019, novelty +0.014,
+    # and connective_reply_rate -0.026 (i.e. AWAY from the ~0.8 "connective tic"
+    # threshold). Monotonic across 0/0.25/0.5/0.75 with no verbatim/length cost.
+    FieldSpec("order_mix_probability", "ORDER_MIX_PROBABILITY", "0.75",
               _float_in_range(0.0, 1.0)),
     # Slot mutations ("отсебятина" channel): chance per accepted candidate to
     # also field a mutated copy — one content word swapped for a frequent chat
@@ -257,7 +281,14 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # word pairs are born exactly here — the walk itself cannot leave the
     # corpus (2026-07-15 chain-structure audit). 0 disables (no frequency
     # dictionary reads, no mutation rolls).
-    FieldSpec("slot_mutation_probability", "SLOT_MUTATION_PROBABILITY", "0",
+    # 0.15 (2026-07-21, B2): enabled after O1 closed. Sweep pass B (10 seeds x
+    # 400): novelty +0.011 (significant) with anchoring/connective/verbatim flat
+    # — the exact profile wanted from this channel. 0.3 buys more novelty
+    # (+0.025) but dents distinct_1 and raises the morphological-garbage share
+    # (manual review of ~150 winners put it at 8-12% already at 0.15, which is
+    # the accepted ceiling); the residue is verb valency and broken idioms, not
+    # morphology, so the pymorphy3 guard cannot catch it.
+    FieldSpec("slot_mutation_probability", "SLOT_MUTATION_PROBABILITY", "0.15",
               _float_in_range(0.0, 1.0)),
     # L1 running jokes: chance to seed an *unprompted* reply from a currently
     # hot n-gram (a phrase the chat picked up in the last ~7 days). 0 disables
