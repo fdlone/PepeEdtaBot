@@ -164,7 +164,14 @@ class TestNearQuoteExtension(unittest.IsolatedAsyncioTestCase):
     async def _generate(
         self, side_effect: list[str], share: float
     ) -> str | None:
-        state = _runtime_state(verbatim_extension_share=share)
+        # This suite exercises the near-quote extension channel only; the
+        # mutation and intonation channels (on by default since 2026-07-21)
+        # would pull the AsyncMock service down paths it does not stub.
+        state = _runtime_state(
+            verbatim_extension_share=share,
+            slot_mutation_probability=0.0,
+            intonation_profile_strength=0.0,
+        )
         generator = _traced_generator()
         generator.generate_text = AsyncMock(side_effect=side_effect)
         service = self._service_with_index(side_effect[0])

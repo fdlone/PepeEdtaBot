@@ -131,6 +131,12 @@ def next_fallback_phrase(
     return phrase
 
 
+def _reply_to_authored_by_bot(reply_to: object, bot_id: int) -> bool:
+    """True when the replied-to message was sent by the bot itself."""
+    author = getattr(reply_to, "from_user", None)
+    return author is not None and getattr(author, "id", None) == bot_id
+
+
 def extract_context_tokens(
     message: Message,
     current_text: str,
@@ -138,13 +144,26 @@ def extract_context_tokens(
     max_tokens: int,
     only_for_replies: bool,
     include_current_message: bool,
+    bot_id: int,
 ) -> list[str]:
     if only_for_replies and message.reply_to_message is None:
         return []
 
     context_parts: list[str] = []
-    if message.reply_to_message and message.reply_to_message.text:
-        context_parts.append(message.reply_to_message.text)
+    reply_to = message.reply_to_message
+    # A reply to the bot's OWN message must not feed the bot's words back as
+    # context. The bot's prior output is corpus-derived, so its n-grams match
+    # stored start-states; the contextual-start path (reply_context_start_bias)
+    # then re-anchors on them and the new reply opens by replaying the previous
+    # bot message verbatim — the self-echo seen across consecutive bot messages.
+    # The current message (the human line we are actually answering) still
+    # anchors the reply via include_current_message.
+    if (
+        reply_to
+        and reply_to.text
+        and not _reply_to_authored_by_bot(reply_to, bot_id)
+    ):
+        context_parts.append(reply_to.text)
     if include_current_message and current_text:
         context_parts.append(current_text)
 
@@ -394,6 +413,7 @@ async def on_text_message(
                 max_tokens=runtime_state.reply_context_max_tokens,
                 only_for_replies=only_for_replies,
                 include_current_message=include_current,
+                bot_id=bot_id,
             )
 
         # Phase 4.1d: context influences generation only through the hidden

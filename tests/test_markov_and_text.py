@@ -488,7 +488,9 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
 
     def test_extract_context_tokens_uses_reply_and_current_message(self) -> None:
         message = SimpleNamespace(
-            reply_to_message=SimpleNamespace(text="Люблю кофе!!! @bot")
+            reply_to_message=SimpleNamespace(
+                text="Люблю кофе!!! @bot", from_user=SimpleNamespace(id=111)
+            )
         )
         tokens = extract_context_tokens(
             message=message,
@@ -497,6 +499,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             max_tokens=8,
             only_for_replies=True,
             include_current_message=True,
+            bot_id=999,
         )
         self.assertEqual(tokens, ["Люблю", "кофе", "!", "!", "А", "я", "утром"])
 
@@ -509,6 +512,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
             max_tokens=6,
             only_for_replies=True,
             include_current_message=True,
+            bot_id=999,
         )
         self.assertEqual(tokens, [])
 

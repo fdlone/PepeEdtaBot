@@ -108,6 +108,16 @@ def build_ngrams(tokens: list[str], size: int) -> list[tuple[str, ...]]:
 
 
 def distinct_ratio(outputs: list[list[str]], size: int) -> float:
+    """Unique ``size``-grams over all ``size``-grams, pooled across outputs.
+
+    NOT comparable across runs of different length. This is a type/token
+    ratio: pooling more text can only repeat n-grams already seen, so the
+    value falls as ``generations`` grows even when the model is unchanged
+    (2026-07-21: the same config scored 0.50 at 200 generations and 0.41 at
+    400, which reads as a regression and is not one). Compare distinct_* only
+    between arms of the SAME sweep pass at equal generations; ``eval_prod``
+    reports ``distinct_basis_tokens`` so the denominator can be checked.
+    """
     ngrams = [
         ngram
         for output in outputs

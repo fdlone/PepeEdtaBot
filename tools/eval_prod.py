@@ -71,7 +71,14 @@ from tools.eval_generation import (  # noqa: E402
 )
 
 DEFAULT_SEED = 20260622
-DEFAULT_GENERATIONS = 300
+# 400 (2026-07-21): the floor for telling a knob's effect from sampling noise.
+# At 200 generations the per-seed spread of context_anchored_win_rate is sd
+# ~0.040 -- wider than most real knob effects (+-0.02..0.04), which is how the
+# 2026-07-20 pass A produced three false "noisy/non-monotonic" verdicts that
+# pass B overturned. At 400 the spread drops to sd ~0.015 (SE of a paired
+# difference ~0.005), enough to resolve effects down to ~0.02. Comparative
+# sweeps should not go below this; single smoke runs may pass --generations.
+DEFAULT_GENERATIONS = 400
 VERBATIM_MIN_N = 4
 VERBATIM_MAX_N = 12
 # Trace ``start_source`` values meaning the walk was anchored on the reply
@@ -451,6 +458,12 @@ async def evaluate(
         # ones live in generator.rejections) and verbatim-copy extensions.
         rg_rejections: Counter[str] = Counter()
         extended_texts: set[str] = set()
+        # An extended reply is a NEW string (base + connective + tail), absent
+        # from attempt_sources, so its winner would be attributed "unknown" and
+        # silently leave the context_anchored bucket even though its head is the
+        # original context-anchored candidate. Map it back to the base so the
+        # start-source metric follows the walk that actually opened the reply.
+        extended_to_original: dict[str, str] = {}
         extension_count = 0
 
         def _on_rejected(_chat_id, attempt, *, context_used, reason, text):
@@ -460,6 +473,7 @@ async def evaluate(
             nonlocal extension_count
             extension_count += 1
             extended_texts.add(extended)
+            extended_to_original[extended] = original
 
         # Slot mutations (P2): every fielded mutated copy as (original,
         # mutated) — the pairs feed the manual morphology review; the set
@@ -550,8 +564,11 @@ async def evaluate(
                 # winning candidate verbatim. "unknown" means that stopped
                 # holding and the win-rate below is no longer trustworthy.
                 # A mutated winner keeps its original's walk attribution —
-                # the mutation changes one word, not the start source.
-                source_text = mutated_to_original.get(result.text, result.text)
+                # the mutation changes one word, not the start source. An
+                # extended winner (base + connective + tail) likewise keeps its
+                # base's start source: the head is the walk that opened it.
+                source_text = extended_to_original.get(result.text, result.text)
+                source_text = mutated_to_original.get(source_text, source_text)
                 winner_sources[
                     generator.attempt_sources.get(source_text, "unknown")
                 ] += 1
@@ -700,6 +717,11 @@ async def evaluate(
         ) if produced else 0.0,
         "distinct_1": round(distinct_ratio(outputs, 1), 4),
         "distinct_2": round(distinct_ratio(outputs, 2), 4),
+        # Denominator behind distinct_*: that metric is a type/token ratio and
+        # sinks as more text is pooled, so it is only comparable between arms
+        # measured at the same volume. Recorded so a cross-run comparison can
+        # be checked against the data instead of remembered.
+        "distinct_basis_tokens": sum(len(output) for output in outputs),
         "repeated_bigram_ratio": round(repeated_ngram_ratio(outputs, 2), 4),
         "repeated_trigram_ratio": round(repeated_ngram_ratio(outputs, 3), 4),
         "avg_length_tokens": round(mean(lengths), 2) if lengths else 0.0,

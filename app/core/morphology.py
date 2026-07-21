@@ -7,6 +7,8 @@ stemmer from there would be a cycle.
 """
 from __future__ import annotations
 
+from functools import lru_cache
+
 # Russian inflectional endings, longest match wins. Deliberately NOT a full
 # Snowball: adjective/noun/verb endings only, one strip per token, and a
 # minimum stem length so short words pass through untouched. Occasional
@@ -36,6 +38,13 @@ _RU_INFLECTION_ENDINGS: tuple[str, ...] = tuple(
 _MIN_STEM_LEN = 3
 
 
+# Memoized: the context-affine start selection (markov.weighted_start3_choice)
+# re-stems the SAME static learned starts on every generation — profiling
+# showed ~11.6M calls collapse to ~6.5k unique tokens (99.9% hit rate), and
+# caching cut generation latency 203ms -> 79ms with byte-identical output.
+# Pure function of the string, so the cache is instance-independent (no bearing
+# on the single-instance assumption). maxsize bounds it to the corpus vocab.
+@lru_cache(maxsize=100_000)
 def stem_token(token: str) -> str:
     """Fold a Russian inflected form to an approximate stem.
 
