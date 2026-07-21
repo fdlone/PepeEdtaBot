@@ -17,6 +17,7 @@ PIVO secrets, LOG_LEVEL) intentionally live only in ``settings.py``.
 from __future__ import annotations
 
 import copy
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -87,6 +88,15 @@ def _int_in_set(allowed: set[int]) -> Domain:
 def _float_in_range(min_v: float, max_v: float) -> Domain:
     def parse(value: str) -> float:
         parsed = float(value)
+        # NaN must be rejected explicitly: every comparison against it is
+        # False, so the range check below would wave it straight through.
+        # A NaN knob does not fail loudly either — it poisons whatever it
+        # touches (`min(1.0, nan)` returns 1.0, turning an invalid
+        # probability into the maximum; a NaN score makes `max()` degenerate
+        # to "first candidate wins"). `inf` is already caught by the range
+        # check, but reject it here too so the guard reads as one rule.
+        if not math.isfinite(parsed):
+            raise ValueError("value must be a finite number")
         if parsed < min_v or parsed > max_v:
             raise ValueError(f"value must be in range [{min_v}..{max_v}]")
         return parsed
@@ -103,6 +113,13 @@ def _parse_length_mode_weights(value: str) -> tuple[float, float, float]:
         short_w, medium_w, long_w = (float(part) for part in parts)
     except ValueError as exc:
         raise ValueError(f"invalid weight in {value!r}") from exc
+    # Same reason as in `_float_in_range`, with a sharper edge: the
+    # non-negative and positive-sum checks below are both False for NaN and
+    # for +inf, so either value reaches `random.choices`, which then raises
+    # "Total of weights must be finite" on *every* generation — the bot goes
+    # mute chat-wide while /set reported success.
+    if not all(math.isfinite(weight) for weight in (short_w, medium_w, long_w)):
+        raise ValueError("weights must be finite numbers")
     if min(short_w, medium_w, long_w) < 0.0:
         raise ValueError("weights must be non-negative")
     if short_w + medium_w + long_w <= 0.0:
