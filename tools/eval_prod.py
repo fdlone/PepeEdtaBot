@@ -451,6 +451,12 @@ async def evaluate(
         # ones live in generator.rejections) and verbatim-copy extensions.
         rg_rejections: Counter[str] = Counter()
         extended_texts: set[str] = set()
+        # An extended reply is a NEW string (base + connective + tail), absent
+        # from attempt_sources, so its winner would be attributed "unknown" and
+        # silently leave the context_anchored bucket even though its head is the
+        # original context-anchored candidate. Map it back to the base so the
+        # start-source metric follows the walk that actually opened the reply.
+        extended_to_original: dict[str, str] = {}
         extension_count = 0
 
         def _on_rejected(_chat_id, attempt, *, context_used, reason, text):
@@ -460,6 +466,7 @@ async def evaluate(
             nonlocal extension_count
             extension_count += 1
             extended_texts.add(extended)
+            extended_to_original[extended] = original
 
         # Slot mutations (P2): every fielded mutated copy as (original,
         # mutated) — the pairs feed the manual morphology review; the set
@@ -550,8 +557,11 @@ async def evaluate(
                 # winning candidate verbatim. "unknown" means that stopped
                 # holding and the win-rate below is no longer trustworthy.
                 # A mutated winner keeps its original's walk attribution —
-                # the mutation changes one word, not the start source.
-                source_text = mutated_to_original.get(result.text, result.text)
+                # the mutation changes one word, not the start source. An
+                # extended winner (base + connective + tail) likewise keeps its
+                # base's start source: the head is the walk that opened it.
+                source_text = extended_to_original.get(result.text, result.text)
+                source_text = mutated_to_original.get(source_text, source_text)
                 winner_sources[
                     generator.attempt_sources.get(source_text, "unknown")
                 ] += 1
