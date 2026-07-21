@@ -573,6 +573,7 @@ class TestExtractContextTokens(unittest.TestCase):
             max_tokens=10,
             only_for_replies=False,
             include_current_message=True,
+            bot_id=999,
         )
         defaults.update(kwargs)
         return extract_context_tokens(**defaults)  # type: ignore[arg-type]
@@ -593,6 +594,60 @@ class TestExtractContextTokens(unittest.TestCase):
             max_tokens=3,
         )
         self.assertLessEqual(len(tokens), 3)
+
+    def test_reply_to_bot_own_message_is_dropped_from_context(self) -> None:
+        # Human replies to the bot: reply_to is the bot's own line. Its text
+        # must NOT enter context (self-echo cause); the human current message
+        # still anchors the reply.
+        from types import SimpleNamespace
+
+        message = SimpleNamespace(
+            reply_to_message=SimpleNamespace(
+                text="например кая скейлила урон",
+                from_user=SimpleNamespace(id=999),
+            )
+        )
+        tokens = self._call(
+            message=message,
+            current_text="урон по жопе демида",
+            only_for_replies=True,
+        )
+        self.assertEqual(tokens, ["урон", "по", "жопе", "демида"])
+
+    def test_reply_to_human_message_is_kept_in_context(self) -> None:
+        from types import SimpleNamespace
+
+        message = SimpleNamespace(
+            reply_to_message=SimpleNamespace(
+                text="люблю кофе",
+                from_user=SimpleNamespace(id=111),  # a human, not the bot
+            )
+        )
+        tokens = self._call(
+            message=message,
+            current_text="а я утром",
+            only_for_replies=True,
+        )
+        self.assertEqual(tokens, ["люблю", "кофе", "а", "я", "утром"])
+
+    def test_reply_to_bot_without_current_yields_empty(self) -> None:
+        # Non-default: include_current off + reply is the bot's own -> no
+        # context at all (documented degradation for that config).
+        from types import SimpleNamespace
+
+        message = SimpleNamespace(
+            reply_to_message=SimpleNamespace(
+                text="слова бота",
+                from_user=SimpleNamespace(id=999),
+            )
+        )
+        tokens = self._call(
+            message=message,
+            current_text="ответ человека",
+            only_for_replies=True,
+            include_current_message=False,
+        )
+        self.assertEqual(tokens, [])
 
 
 class TestReplyHumanizedResilience(unittest.IsolatedAsyncioTestCase):
