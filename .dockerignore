@@ -1,3 +1,8 @@
+# Keep this file in sync with .gitignore: anything untracked because it holds
+# chat data or local state must also stay out of the build context. The
+# Dockerfile does `COPY . .`, so an omission here bakes real data into an
+# image layer, where a runtime bind-mount only hides it — it does not remove it.
+
 .git
 .idea
 .venv
@@ -5,15 +10,47 @@ __pycache__
 .pytest_cache
 .mypy_cache
 .ruff_cache
-.env
-markov.db
-markov.db-shm
-markov.db-wal
-db_prod_copy/
-.test_tmp/
-Screenshot_*.jpg
 *.pyc
 *.pyo
 *.pyd
+
+# Secrets
+.env
+
+# Databases: the runtime one is bind-mounted in, never built in. `data/` is the
+# default DB_PATH (see .env.example) and the compose mount point, so on a host
+# that has run the bot it holds the chat corpus and the /pivo subscriptions.
+data/
+markov.db
+markov.db-shm
+markov.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+db_prod_copy/
+
+# Logs: with GEN_TRACE_LOG=true these carry candidate texts, i.e. chat content.
+*.log
+
+# Local screenshots of the real chat (both the loose form and the folder).
+Screenshot_*.jpg
+scrin/
+
+# Eval reports embed a real chat_id and a DB path (see .gitignore).
+tools/eval_prod_baseline.json
+
+# Local test scratch data
+.test_tmp/
+test_*.sqlite
+test_*.sqlite-shm
+test_*.sqlite-wal
+
+# Not needed at runtime
 tests
 docs
+.github
+.claude
+AGENTS.md
+CLAUDE.md
+.mcp.json
+skills-lock.json

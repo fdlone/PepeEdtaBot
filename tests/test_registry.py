@@ -13,11 +13,21 @@ from types import SimpleNamespace
 from app.config import registry
 from app.config.registry import (
     RUNTIME_FIELDS,
+    FieldSpec,
     get_spec,
     runtime_field_names,
     try_apply,
     validate_cross_fields,
 )
+
+
+def _parses(spec: FieldSpec, value: str) -> bool:
+    """True when ``spec`` accepts ``value`` (used to assert that it does not)."""
+    try:
+        spec.parse(value)
+    except Exception:
+        return False
+    return True
 
 
 def _make_state(**overrides: object) -> SimpleNamespace:
@@ -74,6 +84,15 @@ class TestParsers(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse("1.5")
 
+    def test_float_in_range_rejects_non_finite(self) -> None:
+        # Every comparison against NaN is False, so a bare range check waves it
+        # through. Downstream it does not fail loudly either: `min(1.0, nan)`
+        # is 1.0, which silently promotes an invalid probability to the maximum.
+        parse = registry._float_in_range(0.0, 1.0)
+        for value in ("nan", "NaN", "inf", "-inf", "Infinity"):
+            with self.assertRaises(ValueError):
+                parse(value)
+
     def test_parse_length_mode_weights_valid(self) -> None:
         self.assertEqual(
             registry._parse_length_mode_weights("0.25, 0.55, 0.2"),
@@ -87,6 +106,40 @@ class TestParsers(unittest.TestCase):
         for value in ("0.5,0.5", "1,2,3,4", "a,b,c", "-1,1,1", "0,0,0"):
             with self.assertRaises(ValueError):
                 registry._parse_length_mode_weights(value)
+
+    def test_parse_length_mode_weights_rejects_non_finite(self) -> None:
+        # Both guards below ("non-negative", "sum positive") are False for NaN
+        # and for +inf, so either one reaches random.choices, which raises
+        # "Total of weights must be finite" on every single generation.
+        for value in ("nan,1,1", "1,nan,1", "1,1,nan", "inf,1,1", "1,inf,1"):
+            with self.assertRaises(ValueError):
+                registry._parse_length_mode_weights(value)
+
+
+class TestNoKnobAcceptsNonFinite(unittest.TestCase):
+    """Registry-wide net: no numeric field may accept a non-finite value.
+
+    Pins the whole surface rather than the two parsers, so a future field that
+    brings its own parser cannot quietly reopen the hole.
+    """
+
+    def test_no_spec_accepts_non_finite_scalar(self) -> None:
+        accepted = [
+            (spec.name, value)
+            for spec in RUNTIME_FIELDS
+            for value in ("nan", "NaN", "inf", "-inf", "Infinity")
+            if _parses(spec, value)
+        ]
+        self.assertEqual(accepted, [])
+
+    def test_no_spec_accepts_non_finite_triplet(self) -> None:
+        accepted = [
+            (spec.name, value)
+            for spec in RUNTIME_FIELDS
+            for value in ("nan,1,1", "inf,1,1", "1,1,nan")
+            if _parses(spec, value)
+        ]
+        self.assertEqual(accepted, [])
 
 
 class TestSpecLookup(unittest.TestCase):
