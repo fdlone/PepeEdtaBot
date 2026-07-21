@@ -934,6 +934,7 @@ class MarkovGenerator:
         self,
         chat_id: int,
         max_chars: int,
+        *,
         max_tokens: int = 45,
         seed_tokens: list[str] | None = None,
         context_tokens: list[str] | None = None,
@@ -979,6 +980,12 @@ class MarkovGenerator:
         self,
         chat_id: int,
         max_chars: int,
+        # Keyword-only past this point: what follows is a run of same-typed
+        # knobs — three of them named context_*bias*/context_*affinity* — that
+        # a positional call could silently transpose. Every caller already
+        # passes them by name, so this pins the existing convention rather
+        # than changing any behaviour.
+        *,
         max_tokens: int = 45,
         seed_tokens: list[str] | None = None,
         context_tokens: list[str] | None = None,
@@ -1014,7 +1021,7 @@ class MarkovGenerator:
                 context_tokens=context_tokens,
                 context_bias=context_bias,
                 context_start_bias=context_start_bias,
-            context_start_affinity=context_start_affinity,
+                context_start_affinity=context_start_affinity,
                 randomness_strength=attempt_randomness_strength,
                 repetition_penalty_strength=repetition_penalty_strength,
                 markov_order=markov_order,
