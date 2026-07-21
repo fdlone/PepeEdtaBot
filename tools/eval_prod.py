@@ -71,7 +71,14 @@ from tools.eval_generation import (  # noqa: E402
 )
 
 DEFAULT_SEED = 20260622
-DEFAULT_GENERATIONS = 300
+# 400 (2026-07-21): the floor for telling a knob's effect from sampling noise.
+# At 200 generations the per-seed spread of context_anchored_win_rate is sd
+# ~0.040 -- wider than most real knob effects (+-0.02..0.04), which is how the
+# 2026-07-20 pass A produced three false "noisy/non-monotonic" verdicts that
+# pass B overturned. At 400 the spread drops to sd ~0.015 (SE of a paired
+# difference ~0.005), enough to resolve effects down to ~0.02. Comparative
+# sweeps should not go below this; single smoke runs may pass --generations.
+DEFAULT_GENERATIONS = 400
 VERBATIM_MIN_N = 4
 VERBATIM_MAX_N = 12
 # Trace ``start_source`` values meaning the walk was anchored on the reply
@@ -710,6 +717,11 @@ async def evaluate(
         ) if produced else 0.0,
         "distinct_1": round(distinct_ratio(outputs, 1), 4),
         "distinct_2": round(distinct_ratio(outputs, 2), 4),
+        # Denominator behind distinct_*: that metric is a type/token ratio and
+        # sinks as more text is pooled, so it is only comparable between arms
+        # measured at the same volume. Recorded so a cross-run comparison can
+        # be checked against the data instead of remembered.
+        "distinct_basis_tokens": sum(len(output) for output in outputs),
         "repeated_bigram_ratio": round(repeated_ngram_ratio(outputs, 2), 4),
         "repeated_trigram_ratio": round(repeated_ngram_ratio(outputs, 3), 4),
         "avg_length_tokens": round(mean(lengths), 2) if lengths else 0.0,
