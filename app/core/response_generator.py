@@ -238,6 +238,95 @@ class ResponseGenerator:
             return VERBATIM_COPY_REASON
         return None
 
+    async def _read_mutation_inputs(
+        self, request: GenerationRequest
+    ) -> tuple[Mapping[str, int], frozenset[str]]:
+        """Frequency dictionary and protected hot-ngram words for slot mutations.
+
+        Both reads happen once per request and only when the knob is on; the
+        hot-ngram read is additionally skipped when the chat has no frequency
+        data, because without it no mutation can be proposed anyway.
+        """
+        word_frequencies = await self.learning_service.get_word_frequencies(
+            request.chat_id
+        )
+        if not word_frequencies:
+            return {}, frozenset()
+        hot_ngrams = await self.learning_service.get_hot_ngrams(
+            request.chat_id,
+            min_count=self.runtime_state.hot_ngram_min_count,
+            recency_share=self.runtime_state.hot_ngram_recency_share,
+        )
+        protected_tokens = frozenset(
+            token.casefold() for ngram in hot_ngrams for token in ngram
+        )
+        return word_frequencies, protected_tokens
+
+    def _plan_length(
+        self,
+        request: GenerationRequest,
+        modifiers: MoodModifiers,
+        intonation_profile: IntonationProfile | None,
+        intonation_strength: float,
+        rng: random.Random,
+    ) -> tuple[str, int]:
+        """Sample the length mode for this reply and the token ceiling it implies.
+
+        Three influences stack onto the configured weights, in this order: the
+        chat's observed length habits (P4 intonation), the mood multiplier, and
+        length mirroring of the incoming message. Consumes exactly one draw
+        from ``rng``.
+        """
+        base_weights = self.runtime_state.length_mode_weights
+        if intonation_profile is not None:
+            base_weights = blend_length_weights(
+                base_weights,
+                intonation_profile.length_weights,
+                intonation_strength,
+            )
+        mood_weights = (
+            base_weights[0] * modifiers.length_weight_mult[0],
+            base_weights[1] * modifiers.length_weight_mult[1],
+            base_weights[2] * modifiers.length_weight_mult[2],
+        )
+        # The message we are answering gets a say in how long the answer is:
+        # people mirror each other's length, and the fixed weights did not.
+        # Counted on the current message alone -- request.context_tokens also
+        # carries the replied-to message, whose length is not what we mirror.
+        incoming_tokens = len(
+            content_tokens(tokenize(request.current_message_normalized))
+        )
+        conditioned_weights = context_length_weights(
+            mood_weights,
+            incoming_tokens,
+            self.runtime_state.length_context_adaptation,
+        )
+        length_mode = sample_length_mode(conditioned_weights, rng)
+        max_tokens = self.runtime_state.max_reply_tokens
+        if length_mode == "short":
+            max_tokens = min(max_tokens, SHORT_MODE_MAX_TOKENS)
+        return length_mode, max_tokens
+
+    async def _evaluate_candidate(
+        self, request: GenerationRequest, candidate: str
+    ) -> tuple[list[str], bool, str | None]:
+        """Tokenize ``candidate`` and run the rejection gates over it.
+
+        Returns ``(tokens, is_short, reject_reason)``. Every extension in the
+        attempt loop rewrites the candidate text and has to redo exactly this
+        work on the new string, so it lives here instead of being spelled out
+        at each of the three sites.
+        """
+        normalized = sanitize_text(candidate).lower()
+        tokens = tokenize(
+            candidate, normalize_lower=self.runtime_state.normalize_lower
+        )
+        is_short = is_short_generated_reply(tokens)
+        reason = await self._candidate_reject_reason(
+            request, candidate, normalized, is_short
+        )
+        return tokens, is_short, reason
+
     async def _extend_verbatim_candidate(
         self,
         request: GenerationRequest,
@@ -415,49 +504,19 @@ class ResponseGenerator:
         word_frequencies: Mapping[str, int] = {}
         protected_tokens: frozenset[str] = frozenset()
         if slot_mutation_probability > 0.0:
-            word_frequencies = await self.learning_service.get_word_frequencies(
-                request.chat_id
+            word_frequencies, protected_tokens = await self._read_mutation_inputs(
+                request
             )
-            if word_frequencies:
-                hot_ngrams = await self.learning_service.get_hot_ngrams(
-                    request.chat_id,
-                    min_count=self.runtime_state.hot_ngram_min_count,
-                    recency_share=self.runtime_state.hot_ngram_recency_share,
-                )
-                protected_tokens = frozenset(
-                    token.casefold() for ngram in hot_ngrams for token in ngram
-                )
-        base_weights = self.runtime_state.length_mode_weights
-        if intonation_profile is not None:
-            base_weights = blend_length_weights(
-                base_weights,
-                intonation_profile.length_weights,
-                intonation_strength,
-            )
-        mood_weights = (
-            base_weights[0] * modifiers.length_weight_mult[0],
-            base_weights[1] * modifiers.length_weight_mult[1],
-            base_weights[2] * modifiers.length_weight_mult[2],
+        length_mode, max_tokens = self._plan_length(
+            request,
+            modifiers,
+            intonation_profile,
+            intonation_strength,
+            generation_rng,
         )
-        # The message we are answering gets a say in how long the answer is:
-        # people mirror each other's length, and the fixed weights did not.
-        # Counted on the current message alone -- request.context_tokens also
-        # carries the replied-to message, whose length is not what we mirror.
-        incoming_tokens = len(
-            content_tokens(tokenize(request.current_message_normalized))
-        )
-        conditioned_weights = context_length_weights(
-            mood_weights,
-            incoming_tokens,
-            self.runtime_state.length_context_adaptation,
-        )
-        length_mode = sample_length_mode(conditioned_weights, generation_rng)
         effective_randomness = max(
             0.0, self.runtime_state.randomness_strength + modifiers.randomness_delta
         )
-        max_tokens = self.runtime_state.max_reply_tokens
-        if length_mode == "short":
-            max_tokens = min(max_tokens, SHORT_MODE_MAX_TOKENS)
 
         gen_trace_log.log_request_header(
             request.chat_id,
@@ -519,18 +578,11 @@ class ResponseGenerator:
                     context_used=bool(attempt_context_tokens),
                 )
             else:
-                candidate_normalized = sanitize_text(candidate).lower()
-                candidate_tokens = tokenize(
-                    candidate,
-                    normalize_lower=self.runtime_state.normalize_lower,
-                )
-                is_short_candidate = is_short_generated_reply(candidate_tokens)
-                reject_reason = await self._candidate_reject_reason(
-                    request,
-                    candidate,
-                    candidate_normalized,
+                (
+                    candidate_tokens,
                     is_short_candidate,
-                )
+                    reject_reason,
+                ) = await self._evaluate_candidate(request, candidate)
                 was_extended = False
                 if reject_reason == VERBATIM_COPY_REASON:
                     # Corpus replies are welcome — bare quotes are not: extend
@@ -548,20 +600,11 @@ class ResponseGenerator:
                         )
                         was_extended = True
                         candidate = extended
-                        candidate_normalized = sanitize_text(candidate).lower()
-                        candidate_tokens = tokenize(
-                            candidate,
-                            normalize_lower=self.runtime_state.normalize_lower,
-                        )
-                        is_short_candidate = is_short_generated_reply(
-                            candidate_tokens
-                        )
-                        reject_reason = await self._candidate_reject_reason(
-                            request,
-                            candidate,
-                            candidate_normalized,
+                        (
+                            candidate_tokens,
                             is_short_candidate,
-                        )
+                            reject_reason,
+                        ) = await self._evaluate_candidate(request, candidate)
                 if (
                     reject_reason is None
                     and not was_extended
@@ -580,17 +623,8 @@ class ResponseGenerator:
                         request, candidate, generation_rng
                     )
                     if extended is not None:
-                        extended_normalized = sanitize_text(extended).lower()
-                        extended_tokens = tokenize(
-                            extended,
-                            normalize_lower=self.runtime_state.normalize_lower,
-                        )
-                        extended_short = is_short_generated_reply(extended_tokens)
-                        extended_reject = await self._candidate_reject_reason(
-                            request,
-                            extended,
-                            extended_normalized,
-                            extended_short,
+                        extended_tokens, _, extended_reject = (
+                            await self._evaluate_candidate(request, extended)
                         )
                         if extended_reject is None:
                             gen_trace_log.log_attempt_extended(
