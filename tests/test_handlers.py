@@ -256,6 +256,8 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
     # --- fallback handlers для unauthorized админ-команд ---
 
     async def test_set_denied_replies_with_explanation(self) -> None:
+        # /set is OWNER_ID-only (O5, docs/OPEN.md): no chat-admin path, so the
+        # denial text must not imply chat admins ever qualify here.
         from app.handlers.admin import cmd_set_denied
         msg = _fake_message(text="/set foo bar")
         state = _fake_state()
@@ -263,7 +265,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         msg.reply.assert_awaited_once()
         text = msg.reply.call_args[0][0]
         assert "OWNER_ID" in text
-        assert "админ" in text.lower()
+        assert "админ" not in text.lower()
 
     async def test_setprob_denied_replies_with_explanation(self) -> None:
         from app.handlers.admin import cmd_setprob_denied
