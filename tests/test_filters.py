@@ -109,6 +109,46 @@ class TestAdminOrOwner(unittest.IsolatedAsyncioTestCase):
         bot.get_chat_administrators.assert_awaited_once()
 
 
+class TestOwnerOnly(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        from app.filters import OwnerOnly
+        self.f = OwnerOnly()
+
+    async def test_owner_allowed(self) -> None:
+        msg = _make_message(ChatType.GROUP, user_id=42)
+        settings = _make_settings(owner_id=42)
+        self.assertTrue(await self.f(msg, settings))
+
+    async def test_chat_admin_blocked(self) -> None:
+        # Unlike AdminOrOwner, being a chat admin must never be enough here.
+        msg = _make_message(ChatType.GROUP, user_id=7)
+        settings = _make_settings(owner_id=None)
+        self.assertFalse(await self.f(msg, settings))
+
+    async def test_other_user_blocked(self) -> None:
+        msg = _make_message(ChatType.GROUP, user_id=99)
+        settings = _make_settings(owner_id=42)
+        self.assertFalse(await self.f(msg, settings))
+
+    async def test_no_owner_configured_blocked(self) -> None:
+        msg = _make_message(ChatType.GROUP, user_id=42)
+        settings = _make_settings(owner_id=None)
+        self.assertFalse(await self.f(msg, settings))
+
+    async def test_no_from_user_blocked(self) -> None:
+        msg = _make_message(ChatType.GROUP)
+        msg.from_user = None
+        settings = _make_settings(owner_id=1)
+        self.assertFalse(await self.f(msg, settings))
+
+    async def test_private_chat_still_allowed_for_owner(self) -> None:
+        # OwnerOnly itself doesn't restrict chat type; /set additionally
+        # chains GroupOnly() at the router level.
+        msg = _make_message(ChatType.PRIVATE, user_id=42)
+        settings = _make_settings(owner_id=42)
+        self.assertTrue(await self.f(msg, settings))
+
+
 class TestThrottlingMiddleware(unittest.IsolatedAsyncioTestCase):
     def _make_cmd_message(self, text: str, user_id: int = 1, chat_id: int = 100) -> MagicMock:
         from aiogram.types import Message

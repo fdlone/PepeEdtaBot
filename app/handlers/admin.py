@@ -15,7 +15,7 @@ from app.config.runtime_config import (
 from app.config.runtime_state import RuntimeState
 from app.config.settings import Settings
 from app.core.markov import MarkovGenerator
-from app.filters import AdminOrOwner, GroupOnly
+from app.filters import AdminOrOwner, GroupOnly, OwnerOnly
 from app.handlers._helpers import reply_humanized_state
 from app.infrastructure.database import Database
 from app.presentation.bot_messages import (
@@ -37,9 +37,9 @@ def _extract_command_arg(text: str) -> str:
 async def _reply_no_permission(
     message: Message, runtime_state: RuntimeState
 ) -> None:
-    """Отказ для команд, требующих OWNER_ID или прав админа чата."""
+    """Отказ для /set и /setprob (OWNER_ID-only, см. O5 в docs/OPEN.md)."""
     await reply_humanized_state(
-        message, "Команда доступна OWNER_ID и администраторам чата.", runtime_state
+        message, "Команда доступна только OWNER_ID.", runtime_state
     )
 
 
@@ -50,7 +50,13 @@ async def cmd_config(message: Message, runtime_state: RuntimeState) -> None:
     await reply_humanized_state(message, text, runtime_state)
 
 
-@router.message(Command("set"), GroupOnly(), AdminOrOwner())
+# O5 (docs/OPEN.md): RuntimeState is one instance per process, not per chat,
+# so a knob change here is visible to every chat the bot is in. AdminOrOwner
+# would let any chat's own admins reach that process-global effect; OWNER_ID
+# is the interim fix. Proper fix is scoping RuntimeState overlays by chat_id
+# (deferred — bigger refactor, see docs/OPEN.md backlog) after which this can
+# go back to AdminOrOwner.
+@router.message(Command("set"), GroupOnly(), OwnerOnly())
 async def cmd_set(
     message: Message, runtime_state: RuntimeState, settings: Settings
 ) -> None:
@@ -96,7 +102,8 @@ async def cmd_set_denied(message: Message, runtime_state: RuntimeState) -> None:
     await _reply_no_permission(message, runtime_state)
 
 
-@router.message(Command("setprob"), GroupOnly(), AdminOrOwner())
+# Same O5 rationale as cmd_set above: reply_probability is process-global.
+@router.message(Command("setprob"), GroupOnly(), OwnerOnly())
 async def cmd_setprob(
     message: Message, runtime_state: RuntimeState, settings: Settings
 ) -> None:
