@@ -589,6 +589,73 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("PepeUser", record)
         self.assertNotIn(str(msg.chat.id), record)
 
+    async def _run_pivo_with_report(
+        self,
+        *,
+        owner_id: int | None = 42,
+        report_enabled: bool = True,
+        send_side_effect: Exception | None = None,
+    ) -> tuple[MagicMock, AsyncMock, AsyncMock]:
+        from app.handlers.pivo import cmd_pivo
+        msg = _fake_message()
+        msg.chat.title = "Пивной чат"
+        sent = MagicMock()
+        sent.entities = [SimpleNamespace(type="text_mention")]
+        msg.reply = AsyncMock(return_value=sent)
+        pivo_service = AsyncMock()
+        quota = MagicMock(allowed=True, usage_day="2026-08-05")
+        pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
+        pivo_service.build_call_message = AsyncMock(
+            return_value=PivoCallMessage(
+                "Выходи пить! @PepeUser",
+                2,
+                {},
+                {"by_id": 2, "by_username": 0, "skipped": 1},
+            )
+        )
+        state = _fake_state()
+        state.pivo_report_to_owner = report_enabled
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(return_value=[])
+        bot.send_message = AsyncMock(side_effect=send_side_effect)
+        settings = MagicMock(owner_id=owner_id)
+
+        await cmd_pivo(msg, pivo_service, state, bot, settings)
+        return msg, bot, pivo_service
+
+    async def test_pivo_reports_aggregate_to_owner(self) -> None:
+        _msg, bot, _svc = await self._run_pivo_with_report()
+
+        bot.send_message.assert_awaited_once()
+        target, text = bot.send_message.await_args.args[:2]
+        self.assertEqual(target, 42)
+        # Владелец логов не читает — числа должны быть в самом сообщении.
+        self.assertIn("Пивной чат", text)
+        self.assertIn("text_mention=1", text)
+        self.assertIn("2", text)
+        # Персональных данных подписчиков в отчёте быть не должно.
+        self.assertNotIn("PepeUser", text)
+
+    async def test_pivo_does_not_report_without_owner(self) -> None:
+        _msg, bot, _svc = await self._run_pivo_with_report(owner_id=None)
+
+        bot.send_message.assert_not_called()
+
+    async def test_pivo_does_not_report_when_knob_is_off(self) -> None:
+        _msg, bot, _svc = await self._run_pivo_with_report(report_enabled=False)
+
+        bot.send_message.assert_not_called()
+
+    async def test_failed_owner_report_does_not_break_pivo(self) -> None:
+        # Сообщение в чат уже доставлено: отчёт не может отменить вызов.
+        _msg, bot, pivo_service = await self._run_pivo_with_report(
+            send_side_effect=RuntimeError("bot was blocked by the user")
+        )
+
+        bot.send_message.assert_awaited_once()
+        pivo_service.record_pool_usage.assert_awaited_once()
+        pivo_service.refund_daily_call_quota.assert_not_called()
+
     async def test_pivo_check_lists_paths_for_owner(self) -> None:
         from app.domain.pivo import PivoMentionResult
         from app.handlers.pivo import cmd_pivo_check

@@ -56,6 +56,7 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
         "pivo_recent_pool_window": 5,
         "pivo_temporal_flavor_chance": 0.5,
         "pivo_mention_by_id": True,
+        "pivo_report_to_owner": True,
         "mood_enabled": True,
         "mood_modulation_strength": 1.0,
         "mood_ewma_alpha": 0.3,
