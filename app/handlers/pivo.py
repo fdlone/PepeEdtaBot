@@ -28,6 +28,52 @@ router = Router(name="pivo")
 logger = logging.getLogger("chat_markov")
 
 
+def _entity_counts(sent: Message | None) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for entity in (sent.entities if sent is not None else None) or ():
+        counts[entity.type] = counts.get(entity.type, 0) + 1
+    return counts
+
+
+async def _report_mentions_to_owner(
+    message: Message,
+    bot: Bot,
+    settings: Settings,
+    call: PivoCallMessage,
+    sent: Message | None,
+) -> None:
+    """Шлёт владельцу в личку тот же агрегат, что уходит в лог.
+
+    O2: логи владельцу недоступны, поэтому сигнал, по которому принимается
+    решение («появился ли `text_mention`»), обязан доходить до него сам.
+    Название чата здесь есть — маска из лога человеку ничего не говорит, —
+    а персональных данных подписчиков нет.
+
+    Сообщение уже доставлено в чат, поэтому любая ошибка отправки отчёта
+    гасится: отчёт не может отменить состоявшийся вызов.
+    """
+    if settings.owner_id is None:
+        return
+
+    counts = _entity_counts(sent)
+    paths = call.mention_paths
+    chat_title = message.chat.title or message.chat.full_name or str(message.chat.type)
+    report = (
+        f"/pivo в «{chat_title}»\n"
+        f"упомянуто: {call.mentions_count}\n"
+        f"по user_id: {paths.get(MENTION_BY_ID, 0)}, "
+        f"строкой: {paths.get(MENTION_BY_USERNAME, 0)}, "
+        f"пропущено: {paths.get(MENTION_SKIPPED, 0)}\n"
+        f"entity сервера: text_mention={counts.get('text_mention', 0)}, "
+        f"mention={counts.get('mention', 0)}"
+    )
+    try:
+        await bot.send_message(settings.owner_id, report)
+    except Exception:
+        # Самый вероятный случай — владелец не начинал диалог с ботом.
+        logger.warning("pivo owner report not delivered", exc_info=True)
+
+
 def _log_mention_aggregate(
     chat_id: int, call: PivoCallMessage, sent: Message | None
 ) -> None:
@@ -38,9 +84,7 @@ def _log_mention_aggregate(
     сигнал о том, приняты ли упоминания по user_id. Персональных данных в
     записи быть не должно.
     """
-    entity_counts: dict[str, int] = {}
-    for entity in (sent.entities if sent is not None else None) or ():
-        entity_counts[entity.type] = entity_counts.get(entity.type, 0) + 1
+    entity_counts = _entity_counts(sent)
     try:
         masked_chat = mask_chat_id(chat_id)
     except LogMaskingNotInitialized:
@@ -137,6 +181,8 @@ async def cmd_pivo(
     logger.info("pivo command executed")
     logger.info("mentions count: %s", call.mentions_count)
     _log_mention_aggregate(message.chat.id, call, sent)
+    if runtime_state.pivo_report_to_owner:
+        await _report_mentions_to_owner(message, bot, settings, call, sent)
 
 
 @router.message(Command("pivo_on"), GroupOnly())

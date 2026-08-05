@@ -447,6 +447,11 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # The visible label stays the ``@username``, so turning this off is only
     # ever needed if the id-based path itself misbehaves.
     FieldSpec("pivo_mention_by_id", "PIVO_MENTION_BY_ID", "true", _bool()),
+    # O2 observability: DM the owner the same aggregate that goes to the log
+    # after every /pivo. The owner has no access to logs, so without this the
+    # signal exists but nobody can read it — and the whole observation
+    # protocol for O2 is unusable.
+    FieldSpec("pivo_report_to_owner", "PIVO_REPORT_TO_OWNER", "true", _bool()),
     # M1 chat mood: a hidden per-chat state (sleepy/calm/lively/heated) that drifts
     # the bot's behaviour with conversation rhythm.
     FieldSpec("mood_enabled", "MOOD_ENABLED", "true", _bool()),

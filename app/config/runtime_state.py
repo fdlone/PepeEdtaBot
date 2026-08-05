@@ -69,6 +69,7 @@ class RuntimeState:
     pivo_recent_pool_window: int
     pivo_temporal_flavor_chance: float
     pivo_mention_by_id: bool
+    pivo_report_to_owner: bool
     mood_enabled: bool
     mood_modulation_strength: float
     mood_ewma_alpha: float
