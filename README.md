@@ -243,7 +243,11 @@ python -m tools.seed_diverse --db markov.db
   тишины и стирается `/clear confirm`; `USER_QUIRK_CHANCE=0` отключает и
   запись, и чтение.
 - В learning-логах `chat_id` маскируется HKDF-SHA256-derived ключом и коротким
-  HMAC-mask; не добавляйте raw `chat_id` в новые log-сообщения.
+  HMAC-mask; не добавляйте raw `chat_id` в новые log-сообщения. Инвариант
+  распространяется и на чужой текст: aiogram зашивает сырой `chat_id` внутрь
+  сообщения части исключений (`TelegramRetryAfter`, `TelegramMigrateToChat`),
+  поэтому такой текст перед логированием проходит через
+  `mask_chat_ids_in_text` — маскировать аргументы там недостаточно.
 
 ## Архитектура
 Подробное описание слоёв и DI — в [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
