@@ -236,11 +236,15 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
     async def test_set_global_form_changes_the_global_value(self) -> None:
         from app.handlers.admin import cmd_set
 
-        msg = _fake_message(text="/set global reply_probability 0.5", chat_id=100)
+        msg = _fake_message(
+            text="/set global reply_probability 0.5", user_id=42, chat_id=100
+        )
         base = _real_runtime_state()
         base.reply_probability = 0.1
 
-        await cmd_set(msg, base.effective(100), MagicMock(), base)
+        # The global form is the owner's; a chat admin gets refused (covered
+        # separately below).
+        await cmd_set(msg, base.effective(100), MagicMock(owner_id=42), base)
 
         self.assertEqual(base.reply_probability, 0.5)
         self.assertEqual(base.chat_overrides, {})
@@ -269,6 +273,93 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         await cmd_set(msg, base.effective(100), MagicMock(), base)
 
         self.assertEqual(base.effective(100).reply_probability, 0.5)
+
+    async def test_chat_admin_can_tune_their_own_chat(self) -> None:
+        from app.handlers.admin import cmd_set
+
+        msg = _fake_message(text="/set reply_probability 0.5", user_id=7, chat_id=100)
+        base = _real_runtime_state()
+        base.reply_probability = 0.1
+        settings = MagicMock(owner_id=42)  # caller is an admin, not the owner
+
+        await cmd_set(msg, base.effective(100), settings, base)
+
+        self.assertEqual(base.effective(100).reply_probability, 0.5)
+        self.assertEqual(base.reply_probability, 0.1)
+
+    async def test_chat_admin_cannot_change_the_global_value(self) -> None:
+        from app.handlers.admin import cmd_set
+
+        msg = _fake_message(
+            text="/set global reply_probability 0.5", user_id=7, chat_id=100
+        )
+        base = _real_runtime_state()
+        base.reply_probability = 0.1
+        settings = MagicMock(owner_id=42)
+
+        await cmd_set(msg, base.effective(100), settings, base)
+
+        self.assertEqual(base.reply_probability, 0.1)
+        # And it must not quietly fall back to scoping the change to this
+        # chat: the caller asked for "everywhere" and has to learn it failed.
+        self.assertEqual(base.chat_overrides, {})
+        self.assertIn("только OWNER_ID", msg.reply.await_args.args[0])
+
+    async def test_chat_admin_cannot_change_global_probability(self) -> None:
+        from app.handlers.admin import cmd_setprob
+
+        msg = _fake_message(text="/setprob global 0.5", user_id=7, chat_id=100)
+        base = _real_runtime_state()
+        base.reply_probability = 0.1
+        settings = MagicMock(owner_id=42)
+
+        await cmd_setprob(msg, base.effective(100), settings, base)
+
+        self.assertEqual(base.reply_probability, 0.1)
+        self.assertEqual(base.chat_overrides, {})
+
+    async def test_owner_can_still_use_both_forms(self) -> None:
+        from app.handlers.admin import cmd_set
+
+        base = _real_runtime_state()
+        base.reply_probability = 0.1
+        settings = MagicMock(owner_id=42)
+
+        scoped = _fake_message(
+            text="/set reply_probability 0.5", user_id=42, chat_id=100
+        )
+        await cmd_set(scoped, base.effective(100), settings, base)
+        glob = _fake_message(
+            text="/set global reply_probability 0.3", user_id=42, chat_id=100
+        )
+        await cmd_set(glob, base.effective(100), settings, base)
+
+        self.assertEqual(base.reply_probability, 0.3)
+        self.assertEqual(base.effective(100).reply_probability, 0.5)
+
+    async def test_chat_admin_can_reset_their_chat(self) -> None:
+        from app.handlers.admin import cmd_set
+
+        msg = _fake_message(text="/set reset reply_probability", user_id=7, chat_id=100)
+        base = _real_runtime_state()
+        base.reply_probability = 0.1
+        base.set_override(100, "reply_probability", 0.5)
+
+        await cmd_set(msg, base.effective(100), MagicMock(owner_id=42), base)
+
+        self.assertEqual(base.effective(100).reply_probability, 0.1)
+
+    def test_set_and_setprob_are_registered_for_chat_admins(self) -> None:
+        from app.filters import AdminOrOwner
+        from app.handlers.admin import cmd_set, cmd_setprob, router
+
+        for callback in (cmd_set, cmd_setprob):
+            with self.subTest(command=callback.__name__):
+                handler = next(
+                    h for h in router.message.handlers if h.callback is callback
+                )
+                filter_types = {type(f.callback) for f in handler.filters or ()}
+                self.assertIn(AdminOrOwner, filter_types)
 
     async def test_setprob_valid_value(self) -> None:
         from app.handlers.admin import cmd_setprob
@@ -319,8 +410,9 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
     # --- fallback handlers для unauthorized админ-команд ---
 
     async def test_set_denied_replies_with_explanation(self) -> None:
-        # /set is OWNER_ID-only (O5, docs/OPEN.md): no chat-admin path, so the
-        # denial text must not imply chat admins ever qualify here.
+        # The scoped form is open to this chat's admins again (the O5 vector
+        # is closed by scope, not by rights), so the denial names both — a
+        # refusal that hides who does qualify is a worse refusal.
         from app.handlers.admin import cmd_set_denied
         msg = _fake_message(text="/set foo bar")
         state = _fake_state()
@@ -328,7 +420,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         msg.reply.assert_awaited_once()
         text = msg.reply.call_args[0][0]
         assert "OWNER_ID" in text
-        assert "админ" not in text.lower()
+        assert "админ" in text.lower()
 
     async def test_setprob_denied_replies_with_explanation(self) -> None:
         from app.handlers.admin import cmd_setprob_denied
