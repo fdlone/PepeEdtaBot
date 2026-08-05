@@ -127,6 +127,10 @@ class TestNumericKnobsAreBoundedBothWays(unittest.TestCase):
         ("min_tokens_for_model", 1000000),
         ("reply_burst_boost_sec", 3600),
         ("reply_burst_suppress_sec", 3600),
+        ("hot_ngram_min_count", 1000),
+        ("rare_event_daily_cap", 100),
+        ("user_quirk_min_interactions", 10000),
+        ("reply_context_max_tokens", 300),
     )
 
     def test_value_at_ceiling_is_accepted(self) -> None:
@@ -152,19 +156,14 @@ class TestNumericKnobsAreBoundedBothWays(unittest.TestCase):
                 assert spec is not None
                 self.assertIn("..", spec.parse.hint)
 
-    # Knobs that still accept an arbitrarily large value. This revision was
-    # deliberately scoped to the five the 2026-07-21 review named (see
-    # openspec/changes/add-knob-upper-bounds), so the rest are recorded here
-    # rather than fixed silently — and a *new* knob without a ceiling still
-    # fails the guard below. Tracked in docs/OPEN.md.
+    # Knobs whose parser alone accepts an arbitrarily large value. Only one
+    # is left, and it is bounded in practice rather than by its parser — a
+    # *new* knob without a ceiling still fails the guard below.
     KNOWN_UNBOUNDED = {
         # Bounded transitively: validate_cross_fields requires
-        # typing_min_ms <= typing_max_ms, and that one is capped at 15000.
+        # typing_min_ms <= typing_max_ms, and that one is capped at 15000, so
+        # a huge value here cannot survive load_settings or /set.
         "typing_min_ms",
-        "hot_ngram_min_count",
-        "rare_event_daily_cap",
-        "user_quirk_min_interactions",
-        "reply_context_max_tokens",
     }
     # Ceilings legitimately above the probe below.
     KNOWN_HIGH = {"min_tokens_for_model", "max_reply_chars"}
@@ -177,6 +176,15 @@ class TestNumericKnobsAreBoundedBothWays(unittest.TestCase):
             if spec.name not in self.KNOWN_HIGH and _parses(spec, probe)
         }
         self.assertEqual(unbounded - self.KNOWN_UNBOUNDED, set())
+
+    def test_typing_min_is_bounded_transitively(self) -> None:
+        # The one remaining exception has to be an exception in name only:
+        # its parser accepts a huge value, but the cross-field invariant
+        # against the (now capped) maximum rejects it.
+        state = _make_state(typing_min_ms=350, typing_max_ms=1100)
+        with self.assertRaises(ValueError):
+            try_apply(state, "typing_min_ms", "100000000")
+        self.assertEqual(state.typing_min_ms, 350)
 
     def test_known_unbounded_list_does_not_go_stale(self) -> None:
         # If one of these gets a ceiling later, this test fails and the entry

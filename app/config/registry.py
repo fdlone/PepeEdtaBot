@@ -336,7 +336,10 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("hot_ngram_seed_chance", "HOT_NGRAM_SEED_CHANCE", "0.25",
               _float_in_range(0.0, 1.0)),
     # Minimum window occurrences before an n-gram can be considered hot.
-    FieldSpec("hot_ngram_min_count", "HOT_NGRAM_MIN_COUNT", "3", _int_min(1)),
+    # Ceiling: no n-gram repeats a thousand times inside a chat's retention
+    # window, so anything near it silently switches local memes off.
+    FieldSpec("hot_ngram_min_count", "HOT_NGRAM_MIN_COUNT", "3",
+              _int_in_range(1, 1000)),
     # Hot = window count / all-time count >= this share; 0.5 means at least
     # half of all recorded occurrences happened inside the decay window.
     FieldSpec("hot_ngram_recency_share", "HOT_NGRAM_RECENCY_SHARE", "0.5",
@@ -355,7 +358,10 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("false_start_chance", "FALSE_START_CHANCE", "0.05",
               _float_in_range(0.0, 1.0)),
     # Combined per-chat daily budget for rare events + false starts.
-    FieldSpec("rare_event_daily_cap", "RARE_EVENT_DAILY_CAP", "3", _int_min(0)),
+    # Ceiling: a hundred shape breaks a day in one chat is not a budget any
+    # more, it is the absence of one.
+    FieldSpec("rare_event_daily_cap", "RARE_EVENT_DAILY_CAP", "3",
+              _int_in_range(0, 100)),
     # L2 user quirks: chance to precede a generated answer to a "regular"'s
     # direct address with a short vocative message ("опять ты"). 0 disables
     # the whole channel — no interaction-counter writes, no reads (same gate
@@ -365,8 +371,10 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _float_in_range(0.0, 1.0)),
     # Answered-mention count (decayed over ~30 days, see
     # CHAT_USER_INTERACTION_DECAY_DAYS) at which a user counts as a regular.
+    # Ceiling: the counter decays, so a threshold in the thousands is never
+    # reached and quirks simply stop firing.
     FieldSpec("user_quirk_min_interactions", "USER_QUIRK_MIN_INTERACTIONS",
-              "25", _int_min(1)),
+              "25", _int_in_range(1, 10000)),
     # L2.1: share of fired quirks whose vocative addresses the regular by
     # first name (taken live from the incoming update, sanitized, never
     # stored or logged) instead of the anonymous pool phrase. The name is
@@ -381,8 +389,11 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
         "true",
         _bool(),
     ),
+    # Ceiling matches the scale of max_reply_tokens (1..300): context longer
+    # than the longest possible reply buys the matcher nothing and costs
+    # latency on every generation.
     FieldSpec("reply_context_max_tokens", "REPLY_CONTEXT_MAX_TOKENS", "12",
-              _int_min(2)),
+              _int_in_range(2, 300)),
     FieldSpec("reply_context_bias", "REPLY_CONTEXT_BIAS", "1.8",
               _float_in_range(1.0, 4.0)),
     FieldSpec("reply_context_start_bias", "REPLY_CONTEXT_START_BIAS", "2.2",
