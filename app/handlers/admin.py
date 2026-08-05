@@ -16,7 +16,7 @@ from app.config.runtime_config import (
 from app.config.runtime_state import RuntimeState
 from app.config.settings import Settings
 from app.core.markov import MarkovGenerator
-from app.filters import AdminOrOwner, GroupOnly, OwnerOnly
+from app.filters import AdminOrOwner, GroupOnly, is_owner
 from app.handlers._helpers import reply_humanized_state
 from app.infrastructure.database import Database
 from app.presentation.bot_messages import (
@@ -38,9 +38,27 @@ def _extract_command_arg(text: str) -> str:
 async def _reply_no_permission(
     message: Message, runtime_state: RuntimeState
 ) -> None:
-    """Отказ для /set и /setprob (OWNER_ID-only, см. O5 в docs/OPEN.md)."""
+    """Отказ для /set и /setprob тем, кто не админ этого чата и не владелец."""
     await reply_humanized_state(
-        message, "Команда доступна только OWNER_ID.", runtime_state
+        message,
+        "Команда доступна админам этого чата и OWNER_ID.",
+        runtime_state,
+    )
+
+
+async def _reply_global_denied(
+    message: Message, runtime_state: RuntimeState
+) -> None:
+    """Отказ на глобальную форму тому, кто админ чата, но не владелец.
+
+    Значение при этом НЕ применяется к чату вызова: человек просил изменить
+    всё, и тихая подмена области скрыла бы, что произошло не то.
+    """
+    await reply_humanized_state(
+        message,
+        "Глобальная форма доступна только OWNER_ID. "
+        "Без слова global настройка меняется в этом чате.",
+        runtime_state,
     )
 
 
@@ -61,11 +79,14 @@ async def cmd_config(
     await reply_humanized_state(message, text, runtime_state)
 
 
-# O5 (docs/OPEN.md): RuntimeState is one instance per process. `/set` used to
-# retune every chat at once; it now writes into this chat's overlay, so the
-# owner can tune one chat without touching the rest. The explicit `global`
-# form keeps the old reach, and OWNER_ID remains the gate either way.
-@router.message(Command("set"), GroupOnly(), OwnerOnly())
+# O5 (docs/OPEN.md) was about reach, not about who asks: /set used to retune
+# every chat at once, so any chat's admins could affect all the others. The
+# overlay closed that — the scoped form only touches the chat it was sent in,
+# which its admins already control (they can evict the bot or /clear it). So
+# the scoped form is AdminOrOwner again; the `global` form still carries the
+# process-wide effect and stays OWNER_ID-only, checked inside the handler
+# because the scope is a word in the text, not a separate command.
+@router.message(Command("set"), GroupOnly(), AdminOrOwner())
 async def cmd_set(
     message: Message,
     runtime_state: RuntimeState,
@@ -113,6 +134,10 @@ async def cmd_set(
         return
 
     is_global = scope_word == "global"
+    if is_global and not await is_owner(message, settings):
+        await _reply_global_denied(message, runtime_state)
+        return
+
     arguments = parts[1:] if is_global else parts
     if len(arguments) != 2:
         await reply_humanized_state(message, usage, runtime_state)
@@ -151,8 +176,8 @@ async def cmd_set_denied(message: Message, runtime_state: RuntimeState) -> None:
     await _reply_no_permission(message, runtime_state)
 
 
-# Scoped to this chat like /set; `/setprob global 0.2` still retunes everyone.
-@router.message(Command("setprob"), GroupOnly(), OwnerOnly())
+# Same split as /set: scoped form to chat admins, `global` to OWNER_ID only.
+@router.message(Command("setprob"), GroupOnly(), AdminOrOwner())
 async def cmd_setprob(
     message: Message,
     runtime_state: RuntimeState,
@@ -167,6 +192,9 @@ async def cmd_setprob(
 
     parts = raw.split()
     is_global = parts[0].lower() == "global"
+    if is_global and not await is_owner(message, settings):
+        await _reply_global_denied(message, runtime_state)
+        return
     if is_global:
         parts = parts[1:]
     if len(parts) != 1:
