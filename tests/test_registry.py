@@ -18,6 +18,7 @@ from app.config.registry import (
     get_spec,
     runtime_field_names,
     try_apply,
+    try_apply_for_chat,
     validate_cross_fields,
 )
 
@@ -206,6 +207,54 @@ class TestNumericKnobsAreBoundedBothWays(unittest.TestCase):
         self.assertGreater(configured, TYPING_HARD_CAP_MS)
         delay = compute_typing_delay_ms(0, configured, configured, 0, rng=random.Random(1))
         self.assertEqual(delay, configured)
+
+
+class TestTryApplyForChat(unittest.TestCase):
+    """Cross-field checks must run against what the chat sees, not the globals."""
+
+    def _state(self, **overrides: object):
+        from tests.test_runtime_state import make_runtime_state
+
+        return make_runtime_state(**overrides)
+
+    def test_value_lands_in_the_overlay_not_the_global(self) -> None:
+        state = self._state(reply_probability=0.08)
+        try_apply_for_chat(state, 100, "reply_probability", "0.5")
+
+        self.assertEqual(state.effective(100).reply_probability, 0.5)
+        self.assertEqual(state.reply_probability, 0.08)
+
+    def test_valid_against_chat_overrides_is_accepted(self) -> None:
+        # Globally typing_min is 350; the chat lowered it to 100, so a max of
+        # 200 is fine here even though it would break the global pair.
+        state = self._state(typing_min_ms=350, typing_max_ms=1100)
+        state.set_override(100, "typing_min_ms", 100)
+
+        try_apply_for_chat(state, 100, "typing_max_ms", "200")
+
+        self.assertEqual(state.effective(100).typing_max_ms, 200)
+
+    def test_invalid_against_chat_overrides_is_rejected(self) -> None:
+        state = self._state(typing_min_ms=350, typing_max_ms=1100)
+        state.set_override(100, "typing_min_ms", 900)
+
+        with self.assertRaises(ValueError):
+            try_apply_for_chat(state, 100, "typing_max_ms", "500")
+
+        # Rejected whole: nothing written, chat keeps its previous values.
+        self.assertEqual(state.effective(100).typing_max_ms, 1100)
+        self.assertNotIn("typing_max_ms", state.chat_overrides.get(100, {}))
+
+    def test_unknown_key_raises_keyerror(self) -> None:
+        with self.assertRaises(KeyError):
+            try_apply_for_chat(self._state(), 100, "nope", "1")
+
+    def test_invalid_value_leaves_chat_untouched(self) -> None:
+        state = self._state(markov_order=3)
+        with self.assertRaises(ValueError):
+            try_apply_for_chat(state, 100, "markov_order", "5")
+        self.assertEqual(state.effective(100).markov_order, 3)
+        self.assertEqual(state.chat_overrides, {})
 
 
 class TestNoKnobAcceptsNonFinite(unittest.TestCase):

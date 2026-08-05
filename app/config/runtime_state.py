@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.config.registry import RUNTIME_FIELDS
 from app.config.settings import Settings
@@ -111,6 +113,44 @@ class RuntimeState:
     last_user_quirk_day: dict[tuple[int, int], str] = field(default_factory=dict)
     _last_chat_activity: dict[int, float] = field(default_factory=dict)
     _cleanup_tick: int = 0
+    # Per-chat setting overrides on top of the global values above:
+    # chat_id -> {field name: value}. Only settings live here; the live
+    # per-chat state (the dicts above) is never split — see ``effective``.
+    chat_overrides: dict[int, dict[str, Any]] = field(default_factory=dict)
+
+    def effective(self, chat_id: int) -> RuntimeState:
+        """Return the state as this chat sees it.
+
+        Without overrides this returns ``self`` — the very same object, not a
+        copy. That is what keeps a chat that never used ``/set`` behaving
+        byte-identically to before overlays existed (and costs nothing on the
+        hot path).
+
+        With overrides it is a shallow copy: every per-chat dict above is
+        shared by reference, so anti-repeat history, mood and counters keep
+        accumulating on the one true state no matter which view wrote them.
+        Only the scalar settings differ.
+        """
+        overrides = self.chat_overrides.get(chat_id)
+        if not overrides:
+            return self
+        view = copy.copy(self)
+        for name, value in overrides.items():
+            setattr(view, name, value)
+        return view
+
+    def set_override(self, chat_id: int, name: str, value: Any) -> None:
+        self.chat_overrides.setdefault(chat_id, {})[name] = value
+
+    def clear_override(self, chat_id: int, name: str) -> bool:
+        """Drop one override; returns whether there was anything to drop."""
+        overrides = self.chat_overrides.get(chat_id)
+        if not overrides or name not in overrides:
+            return False
+        del overrides[name]
+        if not overrides:
+            self.chat_overrides.pop(chat_id, None)
+        return True
 
     def mood_config(self) -> MoodConfig:
         return MoodConfig(
@@ -194,6 +234,9 @@ class RuntimeState:
         for key in [k for k in self.last_user_quirk_day if k[0] == chat_id]:
             self.last_user_quirk_day.pop(key, None)
         self._last_chat_activity.pop(chat_id, None)
+        # Overrides are per-chat state like everything else here: a chat the
+        # bot forgot must not come back carrying its old tuning.
+        self.chat_overrides.pop(chat_id, None)
 
     def prune_inactive(self, now: float) -> None:
         cutoff = now - self.runtime_state_ttl_sec

@@ -81,6 +81,77 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
     return RuntimeState(**base)
 
 
+class TestChatOverrides(unittest.TestCase):
+    def test_chat_without_overrides_gets_the_same_object(self) -> None:
+        # Not merely equal — identical. This is what keeps the untouched path
+        # byte-for-byte what it was before overlays existed.
+        state = make_runtime_state()
+        self.assertIs(state.effective(100), state)
+
+    def test_override_applies_only_to_its_chat(self) -> None:
+        state = make_runtime_state(reply_probability=0.08)
+        state.set_override(100, "reply_probability", 0.5)
+
+        self.assertEqual(state.effective(100).reply_probability, 0.5)
+        self.assertEqual(state.effective(200).reply_probability, 0.08)
+        self.assertEqual(state.reply_probability, 0.08)
+
+    def test_live_state_is_shared_not_split(self) -> None:
+        # Anti-repeat, mood and counters must keep accumulating on the one
+        # true state no matter which view wrote them.
+        state = make_runtime_state()
+        state.set_override(100, "reply_probability", 0.5)
+        view = state.effective(100)
+
+        view.note_reply_sent(100, now=1000.0)
+        view.recent_replies[100] = deque(["ответ"], maxlen=20)
+        view.note_rare_event(100, "2026-08-05")
+
+        self.assertEqual(state.last_reply_ts[100], 1000.0)
+        self.assertEqual(list(state.recent_replies[100]), ["ответ"])
+        self.assertEqual(state.rare_events_today[100], ("2026-08-05", 1))
+
+    def test_setting_an_override_does_not_reset_live_state(self) -> None:
+        state = make_runtime_state()
+        state.note_reply_sent(100, now=1000.0)
+        state.recent_replies[100] = deque(["ответ"], maxlen=20)
+
+        state.set_override(100, "reply_probability", 0.5)
+        state.clear_override(100, "reply_probability")
+
+        self.assertEqual(state.last_reply_ts[100], 1000.0)
+        self.assertEqual(list(state.recent_replies[100]), ["ответ"])
+
+    def test_clear_override_returns_chat_to_global(self) -> None:
+        state = make_runtime_state(reply_probability=0.08)
+        state.set_override(100, "reply_probability", 0.5)
+
+        self.assertTrue(state.clear_override(100, "reply_probability"))
+        self.assertEqual(state.effective(100).reply_probability, 0.08)
+        self.assertIs(state.effective(100), state)
+        # Nothing left to clear the second time.
+        self.assertFalse(state.clear_override(100, "reply_probability"))
+
+    def test_forget_chat_drops_overrides(self) -> None:
+        state = make_runtime_state()
+        state.set_override(100, "reply_probability", 0.5)
+        state.note_chat_activity(100, now=10.0)
+
+        state.forget_chat(100)
+
+        self.assertEqual(state.chat_overrides, {})
+
+    def test_inactive_chat_loses_overrides_with_the_rest_of_its_state(self) -> None:
+        state = make_runtime_state()
+        state.set_override(100, "reply_probability", 0.5)
+        state.note_chat_activity(100, now=10.0)
+
+        state.prune_inactive(now=21.0)
+
+        self.assertEqual(state.chat_overrides, {})
+        self.assertIs(state.effective(100), state)
+
+
 class TestRuntimeState(unittest.TestCase):
     def test_prune_inactive_removes_stale_chat_entries(self) -> None:
         state = make_runtime_state()

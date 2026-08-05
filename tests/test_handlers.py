@@ -14,6 +14,14 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from app.services.pivo_service import PivoCallMessage
 
+
+def _real_runtime_state() -> object:
+    """A genuine RuntimeState — overlay tests need real behaviour, not a mock."""
+    from tests.test_runtime_state import make_runtime_state
+
+    return make_runtime_state()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -184,39 +192,92 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         from app.handlers.admin import cmd_config
         msg = _fake_message(text="/config")
         state = _fake_state()
+        base = _real_runtime_state()
         with patch("app.handlers.admin.format_config_message", return_value="cfg"):
-            await cmd_config(msg, state)
+            await cmd_config(msg, state, base)
         msg.reply.assert_awaited_once()
+
+    async def test_config_marks_chat_overrides(self) -> None:
+        from app.handlers.admin import cmd_config
+
+        msg = _fake_message(text="/config")
+        base = _real_runtime_state()
+        base.set_override(msg.chat.id, "reply_probability", 0.5)
+        await cmd_config(msg, base.effective(msg.chat.id), base)
+
+        text = msg.reply.await_args.args[0]
+        self.assertIn("Переопределено для этого чата", text)
+        self.assertIn("reply_probability", text)
 
     async def test_set_no_args_shows_usage(self) -> None:
         from app.handlers.admin import cmd_set
         msg = _fake_message(text="/set")
         state = _fake_state()
         settings = MagicMock()
-        await cmd_set(msg, state, settings)
+        await cmd_set(msg, state, settings, _real_runtime_state())
         msg.reply.assert_awaited_once()
         assert "Использование" in msg.reply.call_args[0][0]
 
-    async def test_set_valid_key_applies(self) -> None:
-        from app.config.runtime_state import RuntimeState
+    async def test_set_writes_override_for_this_chat_only(self) -> None:
         from app.handlers.admin import cmd_set
 
-        msg = _fake_message(text="/set reply_probability 0.5")
-        real_state = MagicMock(spec=RuntimeState)
-        real_state.reply_probability = 0.1
-        settings = MagicMock()
-        with patch("app.handlers.admin.apply_runtime_setting") as mock_apply:
-            await cmd_set(msg, real_state, settings)
-            mock_apply.assert_called_once()
-        msg.reply.assert_awaited_once()
+        msg = _fake_message(text="/set reply_probability 0.5", chat_id=100)
+        base = _real_runtime_state()
+        base.reply_probability = 0.1
+
+        await cmd_set(msg, base.effective(100), MagicMock(), base)
+
+        # Written into the overlay, not the global value.
+        self.assertEqual(base.effective(100).reply_probability, 0.5)
+        self.assertEqual(base.reply_probability, 0.1)
+        self.assertEqual(base.effective(200).reply_probability, 0.1)
+        self.assertIn("в этом чате", msg.reply.await_args.args[0])
+
+    async def test_set_global_form_changes_the_global_value(self) -> None:
+        from app.handlers.admin import cmd_set
+
+        msg = _fake_message(text="/set global reply_probability 0.5", chat_id=100)
+        base = _real_runtime_state()
+        base.reply_probability = 0.1
+
+        await cmd_set(msg, base.effective(100), MagicMock(), base)
+
+        self.assertEqual(base.reply_probability, 0.5)
+        self.assertEqual(base.chat_overrides, {})
+        self.assertIn("глобально", msg.reply.await_args.args[0])
+
+    async def test_set_reset_returns_chat_to_the_global_value(self) -> None:
+        from app.handlers.admin import cmd_set
+
+        msg = _fake_message(text="/set reset reply_probability", chat_id=100)
+        base = _real_runtime_state()
+        base.reply_probability = 0.1
+        base.set_override(100, "reply_probability", 0.5)
+
+        await cmd_set(msg, base.effective(100), MagicMock(), base)
+
+        self.assertEqual(base.effective(100).reply_probability, 0.1)
+
+    async def test_set_survives_to_the_next_update(self) -> None:
+        # The trap this design has: writing into the per-chat *view* would
+        # report success and vanish. Read it back the way a later update does.
+        from app.handlers.admin import cmd_set
+
+        msg = _fake_message(text="/set reply_probability 0.5", chat_id=100)
+        base = _real_runtime_state()
+
+        await cmd_set(msg, base.effective(100), MagicMock(), base)
+
+        self.assertEqual(base.effective(100).reply_probability, 0.5)
 
     async def test_setprob_valid_value(self) -> None:
         from app.handlers.admin import cmd_setprob
-        msg = _fake_message(text="/setprob 0.3")
-        state = _fake_state(reply_probability=0.1)
-        settings = MagicMock()
-        await cmd_setprob(msg, state, settings)
-        assert state.reply_probability == 0.3
+        msg = _fake_message(text="/setprob 0.3", chat_id=100)
+        base = _real_runtime_state()
+        base.reply_probability = 0.1
+        await cmd_setprob(msg, base.effective(100), MagicMock(), base)
+        self.assertEqual(base.effective(100).reply_probability, 0.3)
+        self.assertEqual(base.reply_probability, 0.1)
         msg.reply.assert_awaited_once()
 
     async def test_setprob_invalid_value_replies_error(self) -> None:
@@ -224,7 +285,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         msg = _fake_message(text="/setprob abc")
         state = _fake_state()
         settings = MagicMock()
-        await cmd_setprob(msg, state, settings)
+        await cmd_setprob(msg, state, settings, _real_runtime_state())
         msg.reply.assert_awaited_once()
         assert "диапазон" in msg.reply.call_args[0][0]
 
