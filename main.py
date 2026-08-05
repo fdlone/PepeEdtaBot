@@ -23,9 +23,41 @@ from app.middlewares import ThrottlingMiddleware
 from app.presentation.bot_messages import TELEGRAM_COMMANDS
 from app.services import LearningService, PivoService
 
+# Per-user per-chat cooldowns, assigned by class of command rather than one by
+# one, so a new command inherits a window by where it belongs:
+#   - cheap read, answered from memory        -> 15 s
+#   - read that touches the database          -> 60 s
+#   - write to the database                   -> 30 s
+# Without them any participant could loop a command and make the bot answer
+# indefinitely — traffic amplification in the bot's name and a flood-ban risk.
+# The list is pinned by a test; see COOLDOWN_EXEMPT_COMMANDS for what is
+# deliberately left out.
 COMMAND_COOLDOWNS_SECONDS = {
+    "ping": 15.0,
+    "help": 15.0,
+    "config": 15.0,
+    "pivo_privacy": 15.0,
+    "stats": 60.0,
+    "pivo_on": 30.0,
+    "pivo_off": 30.0,
     "clear": 60.0 * 60.0,
 }
+
+# Commands intentionally without a window, each for a stated reason:
+#   - set / setprob / pivo_check are owner-only (OwnerOnly filter, see O5), so
+#     no participant can use them to amplify traffic, and knob tuning is
+#     iterative by nature — rate-limiting the owner against themselves buys
+#     nothing.
+#   - pivo was deliberately removed from throttling in 282051f: the middleware
+#     drops a call *before* the handler, so a throttled /pivo answered with
+#     silence instead of the "daily quota exhausted" reply. Its daily quota is
+#     the rate limit; re-adding a window here would restore that bug.
+COOLDOWN_EXEMPT_COMMANDS = frozenset({"set", "setprob", "pivo_check", "pivo"})
+
+# Silence reads as "the bot is broken" only where the user asked for something
+# and expects confirmation; elsewhere a refusal reply is itself the traffic we
+# are damping.
+COMMANDS_NOTIFIED_ON_THROTTLE = {"clear", "pivo_on", "pivo_off"}
 
 
 def configure_dispatcher(
@@ -43,7 +75,7 @@ def configure_dispatcher(
     dp.message.middleware(
         ThrottlingMiddleware(
             limits=COMMAND_COOLDOWNS_SECONDS,
-            notify_on_throttle={"clear"},
+            notify_on_throttle=COMMANDS_NOTIFIED_ON_THROTTLE,
             state_ttl_sec=settings.throttle_state_ttl_sec,
             state_max_keys=settings.throttle_state_max_keys,
         )

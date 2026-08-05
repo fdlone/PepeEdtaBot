@@ -288,6 +288,25 @@ class TestThrottlingMiddleware(unittest.IsolatedAsyncioTestCase):
         result = await mw(handler, msg2, {})
         self.assertEqual(result, "ok")
 
+    async def test_same_user_in_another_chat_not_throttled(self) -> None:
+        # One noisy participant must not mute the bot for a different chat.
+        mw = self._make_middleware()
+        handler = AsyncMock(return_value="ok")
+        msg1 = self._make_cmd_message("/pivo", user_id=1, chat_id=100)
+        msg2 = self._make_cmd_message("/pivo", user_id=1, chat_id=200)
+        await mw(handler, msg1, {})
+        result = await mw(handler, msg2, {})
+        self.assertEqual(result, "ok")
+
+    async def test_private_chat_is_throttled_like_a_group(self) -> None:
+        # /config is reachable in a private chat, which is exactly where
+        # nobody would notice it being looped.
+        mw = self._make_middleware()
+        handler = AsyncMock(return_value="ok")
+        private = self._make_cmd_message("/clear", user_id=7, chat_id=7)
+        self.assertEqual(await mw(handler, private, {}), "ok")
+        self.assertIsNone(await mw(handler, private, {}))
+
     async def test_different_commands_not_throttled(self) -> None:
         mw = self._make_middleware()
         handler = AsyncMock(return_value="ok")
