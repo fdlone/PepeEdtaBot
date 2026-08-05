@@ -18,11 +18,60 @@ logger = logging.getLogger("chat_markov")
 # demoted admin keeping rights for up to the TTL. INVARIANT: single-instance —
 # this in-memory state is not shared across workers/instances (audit A4).
 ADMIN_CACHE_TTL_SECONDS = 60.0
+# An entry stays cached only while it is being used: the TTL above governs
+# freshness, these two govern growth. Without them the dict keeps a row for
+# every chat that ever ran an admin command, and there is no chat allowlist,
+# so the key set is driven from outside. Same policy as the neighbouring
+# in-memory states (``RuntimeState.prune_inactive``,
+# ``ThrottlingMiddleware._prune_state``); the numbers are generous because an
+# entry is one small tuple and eviction only costs a refetch.
+ADMIN_CACHE_MAX_CHATS = 512
+_ADMIN_CACHE_CLEANUP_EVERY = 64
+
 _admin_cache: dict[int, tuple[float, frozenset[int]]] = {}
+_cleanup_tick = 0
+
+
+def _prune_admin_cache(now: float) -> None:
+    """Drop entries nobody refreshed, then cap what is left.
+
+    Eviction never changes an access decision: a chat that comes back simply
+    gets its admin list refetched, exactly as it would after the TTL.
+    """
+    cutoff = now - ADMIN_CACHE_TTL_SECONDS
+    stale_keys = [
+        chat_id
+        for chat_id, (cached_at, _) in _admin_cache.items()
+        if cached_at < cutoff
+    ]
+    for chat_id in stale_keys:
+        _admin_cache.pop(chat_id, None)
+
+    overflow = len(_admin_cache) - ADMIN_CACHE_MAX_CHATS
+    if overflow > 0:
+        oldest = sorted(_admin_cache.items(), key=lambda item: item[1][0])[:overflow]
+        for chat_id, _ in oldest:
+            _admin_cache.pop(chat_id, None)
+
+
+def reset_admin_cache() -> None:
+    """Drop the whole cache. Tests use this to start from a known state."""
+    global _cleanup_tick
+    _admin_cache.clear()
+    _cleanup_tick = 0
 
 
 async def _get_admin_ids(bot: Bot, chat_id: int) -> frozenset[int]:
+    global _cleanup_tick
     now = time.monotonic()
+
+    _cleanup_tick += 1
+    if _cleanup_tick >= _ADMIN_CACHE_CLEANUP_EVERY or (
+        len(_admin_cache) > ADMIN_CACHE_MAX_CHATS
+    ):
+        _cleanup_tick = 0
+        _prune_admin_cache(now)
+
     cached = _admin_cache.get(chat_id)
     if cached is not None and now - cached[0] < ADMIN_CACHE_TTL_SECONDS:
         return cached[1]

@@ -109,6 +109,91 @@ class TestAdminOrOwner(unittest.IsolatedAsyncioTestCase):
         bot.get_chat_administrators.assert_awaited_once()
 
 
+class TestAdminCacheEviction(unittest.IsolatedAsyncioTestCase):
+    """Growth policy for the one in-memory state that used to lack it."""
+
+    async def asyncSetUp(self) -> None:
+        from app.filters import admin_or_owner
+
+        self.mod = admin_or_owner
+        self.mod.reset_admin_cache()
+        self.addCleanup(self.mod.reset_admin_cache)
+
+    def _put(self, chat_id: int, cached_at: float) -> None:
+        self.mod._admin_cache[chat_id] = (cached_at, frozenset({7}))
+
+    async def test_stale_entries_are_dropped_not_just_overwritten(self) -> None:
+        now = 10_000.0
+        self._put(1, now - self.mod.ADMIN_CACHE_TTL_SECONDS - 1)
+        self._put(2, now - 1)
+
+        self.mod._prune_admin_cache(now)
+
+        self.assertNotIn(1, self.mod._admin_cache)
+        self.assertIn(2, self.mod._admin_cache)
+
+    async def test_overflow_evicts_least_recently_cached(self) -> None:
+        now = 10_000.0
+        # All fresh, so only the cap can evict — oldest cached go first.
+        for i in range(self.mod.ADMIN_CACHE_MAX_CHATS + 10):
+            self._put(i, now - (self.mod.ADMIN_CACHE_TTL_SECONDS - 1) + i * 0.001)
+
+        self.mod._prune_admin_cache(now)
+
+        self.assertLessEqual(
+            len(self.mod._admin_cache), self.mod.ADMIN_CACHE_MAX_CHATS
+        )
+        self.assertNotIn(0, self.mod._admin_cache)
+        self.assertIn(self.mod.ADMIN_CACHE_MAX_CHATS + 9, self.mod._admin_cache)
+
+    async def test_cache_stays_bounded_across_many_chats(self) -> None:
+        from app.filters import AdminOrOwner
+
+        f = AdminOrOwner()
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(return_value=[_make_admin_member(7)])
+        settings = _make_settings(owner_id=None)
+
+        for chat_id in range(self.mod.ADMIN_CACHE_MAX_CHATS + 200):
+            msg = _make_message(ChatType.GROUP, user_id=7)
+            msg.chat.id = chat_id
+            await f(msg, bot, settings)
+
+        self.assertLessEqual(
+            len(self.mod._admin_cache),
+            self.mod.ADMIN_CACHE_MAX_CHATS + self.mod._ADMIN_CACHE_CLEANUP_EVERY,
+        )
+
+    async def test_eviction_does_not_change_the_access_decision(self) -> None:
+        from app.filters import AdminOrOwner
+
+        f = AdminOrOwner()
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(return_value=[_make_admin_member(7)])
+        settings = _make_settings(owner_id=None)
+        msg = _make_message(ChatType.GROUP, user_id=7)
+
+        self.assertTrue(await f(msg, bot, settings))
+        self.mod.reset_admin_cache()
+        # Evicted: the list is refetched and the verdict is the same.
+        self.assertTrue(await f(msg, bot, settings))
+        self.assertEqual(bot.get_chat_administrators.await_count, 2)
+
+    async def test_eviction_keeps_denial_fail_closed(self) -> None:
+        from app.filters import AdminOrOwner
+
+        f = AdminOrOwner()
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(side_effect=Exception("network error"))
+        settings = _make_settings(owner_id=None)
+        msg = _make_message(ChatType.GROUP, user_id=7)
+
+        self.assertFalse(await f(msg, bot, settings))
+        # A failed lookup must not be cached as "allowed" — or as anything.
+        self.assertEqual(self.mod._admin_cache, {})
+        self.assertFalse(await f(msg, bot, settings))
+
+
 class TestOwnerOnly(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         from app.filters import OwnerOnly
