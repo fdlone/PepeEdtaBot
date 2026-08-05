@@ -3,14 +3,18 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from typing import NamedTuple
 
 from aiogram.types import User
 
 from app.domain.pivo import (
+    MENTION_SKIPPED,
     PIVO_FALLBACK_MENTIONS,
     PivoMember,
+    PivoMentionResult,
     PivoSecurity,
     collect_pivo_mentions,
+    count_mention_paths,
     display_name_from_user,
 )
 from app.infrastructure.database import Database
@@ -27,6 +31,15 @@ PIVO_DEFAULT_SUBSCRIBER_FANOUT_LIMIT = 20
 
 class PivoCallLimitError(ValueError):
     pass
+
+
+class PivoCallMessage(NamedTuple):
+    """Готовое сообщение /pivo вместе с тем, что нужно залогировать после."""
+
+    text: str
+    mentions_count: int
+    picks: dict[str, int]
+    mention_paths: dict[str, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,14 +173,20 @@ class PivoService:
         recent_pool_window: int = 0,
         temporal_flavor_chance: float = 0.0,
         now: datetime | None = None,
-    ) -> tuple[str, int, dict[str, int]]:
-        """Возвращает сообщение /pivo, число упоминаний и выбранные индексы пулов.
+        mention_by_id: bool = True,
+    ) -> PivoCallMessage:
+        """Возвращает сообщение /pivo, число упоминаний, индексы пулов и агрегат.
 
         Метод не имеет побочных эффектов в БД: анти-повтор фиксируется отдельным
         вызовом ``record_pool_usage`` только после успешной отправки, чтобы
         отклонённые по квоте или недоставленные вызовы не крутили пулы.
+
+        ``mention_paths`` — распределение подписчиков по способам упоминания
+        (только числа, без персональных данных); при явных упоминаниях оно
+        пустое, потому что там строки пришли от человека, а не из подписок.
         """
         chat_hash = self._security.hmac_value(chat_id)
+        mention_paths: dict[str, int] = {}
         if explicit_mentions:
             mention_items = list(explicit_mentions)
             if len(mention_items) > self._explicit_mentions_limit:
@@ -176,20 +195,17 @@ class PivoService:
                     f"{self._explicit_mentions_limit} явных упоминаний за раз."
                 )
         else:
-            rows = await self._db.get_chat_members(chat_hash)
-            members = [
-                PivoMember(
-                    encrypted_user_id=str(row["encrypted_user_id"]),
-                    encrypted_username=str(row["encrypted_username"]),
-                    encrypted_display_name=str(row["encrypted_display_name"]),
-                )
-                for row in rows
-            ]
-            mention_items = collect_pivo_mentions(
-                members=members,
+            results = await self._collect_subscriber_mentions(
+                chat_hash=chat_hash,
                 caller_user_id=caller_user_id,
-                security=self._security,
+                mention_by_id=mention_by_id,
             )
+            mention_paths = count_mention_paths(results)
+            # Подписчик без пригодного упоминания пропускается: сообщение
+            # собирается и уходит без него, а его пропуск виден в агрегате.
+            mention_items = [
+                result.text for result in results if result.path != MENTION_SKIPPED
+            ]
             if len(mention_items) > self._subscriber_fanout_limit:
                 raise PivoCallLimitError(
                     "В списке подписчиков /pivo слишком много людей: "
@@ -213,7 +229,54 @@ class PivoService:
             now=now,
             temporal_flavor_chance=temporal_flavor_chance,
         )
-        return result.text, len(mention_items), result.picks
+        return PivoCallMessage(
+            text=result.text,
+            mentions_count=len(mention_items),
+            picks=result.picks,
+            mention_paths=mention_paths,
+        )
+
+    async def _collect_subscriber_mentions(
+        self,
+        *,
+        chat_hash: str,
+        caller_user_id: int,
+        mention_by_id: bool,
+    ) -> list[PivoMentionResult]:
+        """Строит упоминания подписчиков чата вместе с выбранным путём."""
+        rows = await self._db.get_chat_members(chat_hash)
+        members = [
+            PivoMember(
+                encrypted_user_id=str(row["encrypted_user_id"]),
+                encrypted_username=str(row["encrypted_username"]),
+                encrypted_display_name=str(row["encrypted_display_name"]),
+            )
+            for row in rows
+        ]
+        return collect_pivo_mentions(
+            members=members,
+            caller_user_id=caller_user_id,
+            security=self._security,
+            mention_by_id=mention_by_id,
+        )
+
+    async def describe_mention_paths(
+        self,
+        chat_id: int,
+        caller_user_id: int,
+        *,
+        mention_by_id: bool = True,
+    ) -> list[PivoMentionResult]:
+        """Диагностика `/pivo_check`: как построено упоминание каждого подписчика.
+
+        Возвращает те же результаты, что пошли бы в сообщение, — вызывающий
+        сам решает, что из них показать.
+        """
+        return await self._collect_subscriber_mentions(
+            chat_hash=self._security.hmac_value(chat_id),
+            caller_user_id=caller_user_id,
+            mention_by_id=mention_by_id,
+        )
 
     async def record_pool_usage(
         self,

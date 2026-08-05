@@ -12,6 +12,8 @@ from collections import deque
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+from app.services.pivo_service import PivoCallMessage
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -360,7 +362,9 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         pivo_service = AsyncMock()
         quota = MagicMock(allowed=True, usage_day="2026-05-12")
         pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
-        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2, {}))
+        pivo_service.build_call_message = AsyncMock(
+            return_value=PivoCallMessage("Выходи пить!", 2, {}, {})
+        )
         state = _fake_state()
         bot = AsyncMock()
         bot.get_chat_administrators = AsyncMock(return_value=[])
@@ -377,6 +381,7 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
             recent_pool_window=5,
             temporal_flavor_chance=0.5,
             now=ANY,
+            mention_by_id=ANY,
         )
         pivo_service.consume_daily_call_quota.assert_awaited_once_with(
             chat_id=msg.chat.id,
@@ -394,7 +399,9 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         pivo_service = AsyncMock()
         quota = MagicMock(allowed=True, usage_day="2026-05-12")
         pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
-        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 1, {}))
+        pivo_service.build_call_message = AsyncMock(
+            return_value=PivoCallMessage("Выходи пить!", 1, {}, {})
+        )
         state = _fake_state()
         bot = AsyncMock()
         bot.get_chat_administrators = AsyncMock(return_value=[])
@@ -412,6 +419,7 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
             recent_pool_window=5,
             temporal_flavor_chance=0.5,
             now=ANY,
+            mention_by_id=ANY,
         )
         msg.reply.assert_awaited_once()
 
@@ -447,7 +455,9 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
             usage_day="2026-05-12",
         )
         pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
-        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2, {}))
+        pivo_service.build_call_message = AsyncMock(
+            return_value=PivoCallMessage("Выходи пить!", 2, {}, {})
+        )
         state = _fake_state()
         bot = AsyncMock()
         bot.get_chat_administrators = AsyncMock(return_value=[])
@@ -468,7 +478,9 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         pivo_service = AsyncMock()
         quota = MagicMock(allowed=True, usage_day="2026-05-12")
         pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
-        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2, {}))
+        pivo_service.build_call_message = AsyncMock(
+            return_value=PivoCallMessage("Выходи пить!", 2, {}, {})
+        )
         state = _fake_state()
         bot = AsyncMock()
         bot.get_chat_administrators = AsyncMock(
@@ -490,7 +502,9 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         from app.handlers.pivo import cmd_pivo
         msg = _fake_message(user_id=42)
         pivo_service = AsyncMock()
-        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2, {}))
+        pivo_service.build_call_message = AsyncMock(
+            return_value=PivoCallMessage("Выходи пить!", 2, {}, {})
+        )
         state = _fake_state()
         bot = AsyncMock()
         settings = MagicMock(owner_id=42)
@@ -509,7 +523,9 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         pivo_service = AsyncMock()
         quota = MagicMock(allowed=True, usage_day="2026-05-12")
         pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
-        pivo_service.build_call_message = AsyncMock(return_value=("Выходи пить!", 2, {}))
+        pivo_service.build_call_message = AsyncMock(
+            return_value=PivoCallMessage("Выходи пить!", 2, {}, {})
+        )
         pivo_service.refund_daily_call_quota = AsyncMock()
         state = _fake_state()
         bot = AsyncMock()
@@ -525,6 +541,118 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
             user_id=msg.from_user.id,
             usage_day=quota.usage_day,
         )
+
+    async def test_pivo_logs_mention_aggregate_without_personal_data(self) -> None:
+        from app.handlers.pivo import cmd_pivo
+        msg = _fake_message()
+        sent = MagicMock()
+        sent.entities = [
+            SimpleNamespace(type="text_mention"),
+            SimpleNamespace(type="text_mention"),
+            SimpleNamespace(type="bold"),
+        ]
+        msg.reply = AsyncMock(return_value=sent)
+        pivo_service = AsyncMock()
+        quota = MagicMock(allowed=True, usage_day="2026-05-12")
+        pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
+        pivo_service.build_call_message = AsyncMock(
+            return_value=PivoCallMessage(
+                "Выходи пить! @PepeUser",
+                2,
+                {},
+                {"by_id": 2, "by_username": 0, "skipped": 1},
+            )
+        )
+        state = _fake_state()
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(return_value=[])
+        settings = MagicMock(owner_id=None)
+
+        # Маскирование включено, как в живом процессе, — иначе тест проверял бы
+        # только аварийную заглушку.
+        from app import log_masking
+
+        log_masking.init_masking("test-secret-for-masking")
+        self.addCleanup(log_masking.reset_masking)
+
+        with self.assertLogs("chat_markov", level="INFO") as captured:
+            await cmd_pivo(msg, pivo_service, state, bot, settings)
+
+        aggregate = [line for line in captured.output if "pivo mentions" in line]
+        self.assertEqual(len(aggregate), 1)
+        record = aggregate[0]
+        # Числа из entity сервера — это и есть машинный сигнал по O2.
+        self.assertIn("text_mention=2", record)
+        self.assertIn("mention=0", record)
+        self.assertIn("'by_id': 2", record)
+        # Ни ников, ни сырого chat_id в записи быть не должно.
+        self.assertNotIn("PepeUser", record)
+        self.assertNotIn(str(msg.chat.id), record)
+
+    async def test_pivo_check_lists_paths_for_owner(self) -> None:
+        from app.domain.pivo import PivoMentionResult
+        from app.handlers.pivo import cmd_pivo_check
+        msg = _fake_message()
+        pivo_service = AsyncMock()
+        pivo_service.describe_mention_paths = AsyncMock(
+            return_value=[
+                PivoMentionResult(
+                    text='<a href="tg://user?id=1">@PepeUser</a>',
+                    path="by_id",
+                    reason="ссылка по user_id",
+                    label="@PepeUser",
+                ),
+                PivoMentionResult(
+                    text="", path="skipped", reason="нет user_id и ника", label=""
+                ),
+            ]
+        )
+        state = _fake_state()
+
+        await cmd_pivo_check(msg, pivo_service, state)
+
+        reply_text = msg.reply.await_args.args[0]
+        self.assertIn("by_id", reply_text)
+        self.assertIn("skipped", reply_text)
+        self.assertIn("PepeUser", reply_text)
+        # Диагностика не должна пинговать чат: ни разметки упоминания,
+        # ни «@» перед ником в ответе быть не должно.
+        self.assertNotIn("tg://user", reply_text)
+        self.assertNotIn("@PepeUser", reply_text)
+
+    async def test_pivo_check_reports_empty_subscriber_list(self) -> None:
+        from app.handlers.pivo import cmd_pivo_check
+        msg = _fake_message()
+        pivo_service = AsyncMock()
+        pivo_service.describe_mention_paths = AsyncMock(return_value=[])
+        state = _fake_state()
+
+        await cmd_pivo_check(msg, pivo_service, state)
+
+        self.assertIn("нет подписчиков", msg.reply.await_args.args[0])
+
+    async def test_pivo_check_denied_for_non_owner(self) -> None:
+        from app.handlers.pivo import cmd_pivo_check_denied
+        msg = _fake_message()
+        state = _fake_state()
+
+        await cmd_pivo_check_denied(msg, state)
+
+        reply_text = msg.reply.await_args.args[0]
+        self.assertIn("владельцу", reply_text)
+        # Отказ не должен раскрывать состав подписчиков.
+        self.assertNotIn("by_id", reply_text)
+
+    async def test_pivo_check_is_owner_only(self) -> None:
+        from app.filters import GroupOnly, OwnerOnly
+        from app.handlers.pivo import cmd_pivo_check, router
+
+        handler = next(
+            h for h in router.message.handlers if h.callback is cmd_pivo_check
+        )
+        filter_types = {type(f.callback) for f in handler.filters or ()}
+        self.assertIn(OwnerOnly, filter_types)
+        self.assertIn(GroupOnly, filter_types)
 
     async def test_pivo_on_subscribes_user(self) -> None:
         from app.handlers.pivo import cmd_pivo_on
