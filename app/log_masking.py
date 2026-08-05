@@ -25,17 +25,33 @@ Usage::
 Calling ``mask_chat_id`` before ``init_masking`` raises
 ``LogMaskingNotInitialized`` — failing fast is better than silently
 leaking raw IDs because someone forgot to wire the masker.
+
+The invariant covers more than our own log calls: a third-party
+exception can carry a raw ``chat_id`` inside its message text (aiogram
+bakes one into ``TelegramRetryAfter`` and ``TelegramMigrateToChat``).
+``mask_chat_ids_in_text`` exists for that case — it masks identifiers
+found in text we did not format ourselves.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 _DOMAIN = b"logging:chat_id"
 _MASK_HEX_LEN = 8
+
+# Stands in for a mask when the key was never derived. Keeps the raw id
+# out of the log without making the caller handle an exception.
+UNMASKED_PLACEHOLDER = "unmasked"
+
+# A chat id inside foreign text: a negative integer long enough that
+# nothing else in these messages can be confused for one.
+_MIN_CHAT_ID_DIGITS = 9
+_CHAT_ID_IN_TEXT = re.compile(rf"(?<![\d-])-\d{{{_MIN_CHAT_ID_DIGITS},}}(?!\d)")
 
 _key: bytes | None = None
 
@@ -77,3 +93,29 @@ def mask_chat_id(chat_id: int) -> str:
         )
     digest = hmac.new(_key, str(chat_id).encode("utf-8"), hashlib.sha256).hexdigest()
     return digest[:_MASK_HEX_LEN]
+
+
+def mask_chat_ids_in_text(text: str) -> str:
+    """Mask chat identifiers that appear inside a text we did not format.
+
+    Recognition is by shape, not by phrasing: the wording belongs to
+    aiogram and Telegram and changes between versions, while the shape of
+    an identifier does not. A chat id is a negative integer with at least
+    ``_MIN_CHAT_ID_DIGITS`` digits — supergroups (``-100…``) and basic
+    groups both match, while everything else these messages carry (retry
+    delays, error codes, message ids) does not: those are positive, or
+    far too short.
+
+    Unlike :func:`mask_chat_id` this never raises. It is used on the error
+    path, where losing the log line costs more than losing one field, so
+    an underived key yields a placeholder instead of an exception — the
+    raw identifier is still never written.
+    """
+    return _CHAT_ID_IN_TEXT.sub(_mask_match, text)
+
+
+def _mask_match(match: re.Match[str]) -> str:
+    try:
+        return mask_chat_id(int(match.group(0)))
+    except LogMaskingNotInitialized:
+        return UNMASKED_PLACEHOLDER
