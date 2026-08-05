@@ -7,6 +7,7 @@ pin them down directly.
 """
 from __future__ import annotations
 
+import random
 import unittest
 from types import SimpleNamespace
 
@@ -114,6 +115,89 @@ class TestParsers(unittest.TestCase):
         for value in ("nan,1,1", "1,nan,1", "1,1,nan", "inf,1,1", "1,inf,1"):
             with self.assertRaises(ValueError):
                 registry._parse_length_mode_weights(value)
+
+
+class TestNumericKnobsAreBoundedBothWays(unittest.TestCase):
+    """Ceilings for the knobs that used to be declared with a floor only."""
+
+    # (field, ceiling) — the value one past the ceiling must be rejected.
+    BOUNDED = (
+        ("typing_max_ms", 15000),
+        ("min_cooldown_sec", 3600),
+        ("min_tokens_for_model", 1000000),
+        ("reply_burst_boost_sec", 3600),
+        ("reply_burst_suppress_sec", 3600),
+    )
+
+    def test_value_at_ceiling_is_accepted(self) -> None:
+        for name, ceiling in self.BOUNDED:
+            with self.subTest(name=name):
+                spec = get_spec(name)
+                assert spec is not None
+                self.assertEqual(spec.parse(str(ceiling)), ceiling)
+
+    def test_value_above_ceiling_is_rejected(self) -> None:
+        for name, ceiling in self.BOUNDED:
+            with self.subTest(name=name):
+                spec = get_spec(name)
+                assert spec is not None
+                self.assertFalse(_parses(spec, str(ceiling + 1)))
+
+    def test_rejection_names_the_allowed_range(self) -> None:
+        # The refusal has to tell the operator what is allowed — that text is
+        # what /set echoes back.
+        for name, _ in self.BOUNDED:
+            with self.subTest(name=name):
+                spec = get_spec(name)
+                assert spec is not None
+                self.assertIn("..", spec.parse.hint)
+
+    # Knobs that still accept an arbitrarily large value. This revision was
+    # deliberately scoped to the five the 2026-07-21 review named (see
+    # openspec/changes/add-knob-upper-bounds), so the rest are recorded here
+    # rather than fixed silently — and a *new* knob without a ceiling still
+    # fails the guard below. Tracked in docs/OPEN.md.
+    KNOWN_UNBOUNDED = {
+        # Bounded transitively: validate_cross_fields requires
+        # typing_min_ms <= typing_max_ms, and that one is capped at 15000.
+        "typing_min_ms",
+        "hot_ngram_min_count",
+        "rare_event_daily_cap",
+        "user_quirk_min_interactions",
+        "reply_context_max_tokens",
+    }
+    # Ceilings legitimately above the probe below.
+    KNOWN_HIGH = {"min_tokens_for_model", "max_reply_chars"}
+
+    def test_no_numeric_knob_is_left_without_a_ceiling(self) -> None:
+        probe = "100000000"
+        unbounded = {
+            spec.name
+            for spec in RUNTIME_FIELDS
+            if spec.name not in self.KNOWN_HIGH and _parses(spec, probe)
+        }
+        self.assertEqual(unbounded - self.KNOWN_UNBOUNDED, set())
+
+    def test_known_unbounded_list_does_not_go_stale(self) -> None:
+        # If one of these gets a ceiling later, this test fails and the entry
+        # must be removed — the list must never outlive the gap it records.
+        probe = "100000000"
+        still_unbounded = {
+            name for name in self.KNOWN_UNBOUNDED if _parses(get_spec(name), probe)  # type: ignore[arg-type]
+        }
+        self.assertEqual(still_unbounded, self.KNOWN_UNBOUNDED)
+
+    def test_typing_pause_ceiling_keeps_configured_max_above_hard_cap(self) -> None:
+        # The deliberate rule "a configured max outranks TYPING_HARD_CAP_MS"
+        # must stay reachable through a legal config.
+        from app.handlers._helpers import TYPING_HARD_CAP_MS, compute_typing_delay_ms
+
+        spec = get_spec("typing_max_ms")
+        assert spec is not None
+        configured = spec.parse("15000")
+        self.assertGreater(configured, TYPING_HARD_CAP_MS)
+        delay = compute_typing_delay_ms(0, configured, configured, 0, rng=random.Random(1))
+        self.assertEqual(delay, configured)
 
 
 class TestNoKnobAcceptsNonFinite(unittest.TestCase):
