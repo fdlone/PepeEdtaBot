@@ -19,7 +19,7 @@ from app.handlers import errors as error_handlers
 from app.handlers import learning as learning_handlers
 from app.handlers import pivo as pivo_handlers
 from app.infrastructure.database import Database
-from app.middlewares import ThrottlingMiddleware
+from app.middlewares import ChatSettingsMiddleware, ThrottlingMiddleware
 from app.presentation.bot_messages import TELEGRAM_COMMANDS
 from app.services import LearningService, PivoService
 
@@ -80,6 +80,10 @@ def configure_dispatcher(
             state_max_keys=settings.throttle_state_max_keys,
         )
     )
+    # Registered after throttling so a dropped update never pays for building
+    # the per-chat view. Handlers keep reading `runtime_state`; this decides
+    # which view that name points at.
+    dp.message.middleware(ChatSettingsMiddleware())
     dp["db"] = db
     dp["generator"] = generator
     dp["pivo_service"] = pivo_service

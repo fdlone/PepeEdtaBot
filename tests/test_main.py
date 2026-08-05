@@ -62,7 +62,7 @@ class TestMainWiring(unittest.TestCase):
         )
 
     def test_configure_dispatcher_registers_expected_data_routers_and_middleware(self) -> None:
-        from app.middlewares import ThrottlingMiddleware
+        from app.middlewares import ChatSettingsMiddleware, ThrottlingMiddleware
         from main import configure_dispatcher
 
         dependencies = {
@@ -94,8 +94,11 @@ class TestMainWiring(unittest.TestCase):
             ["common", "admin", "pivo", "learning", "errors"],
         )
         middlewares = dp.message.middleware._middlewares
-        self.assertEqual(len(middlewares), 1)
+        self.assertEqual(len(middlewares), 2)
         self.assertIsInstance(middlewares[0], ThrottlingMiddleware)
+        # Order matters: a throttled update must not pay for building the
+        # per-chat settings view.
+        self.assertIsInstance(middlewares[1], ChatSettingsMiddleware)
         self.assertEqual(middlewares[0]._state_ttl_sec, 111.0)
         self.assertEqual(middlewares[0]._state_max_keys, 222)
         self.assertEqual(

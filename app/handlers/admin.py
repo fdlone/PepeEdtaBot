@@ -11,6 +11,7 @@ from app.config.runtime_config import (
     InvalidRuntimeSettingValueError,
     UnknownRuntimeSettingError,
     apply_runtime_setting,
+    clear_runtime_setting,
 )
 from app.config.runtime_state import RuntimeState
 from app.config.settings import Settings
@@ -44,21 +45,32 @@ async def _reply_no_permission(
 
 
 @router.message(Command("config"))
-async def cmd_config(message: Message, runtime_state: RuntimeState) -> None:
+async def cmd_config(
+    message: Message,
+    runtime_state: RuntimeState,
+    runtime_state_base: RuntimeState,
+) -> None:
     raw = _extract_command_arg(message.text or "")
-    text = format_config_message(runtime_state, full=raw.strip().lower() == "full")
+    # runtime_state is already this chat's view, so the values shown are the
+    # effective ones; the base state only says which of them were overridden.
+    text = format_config_message(
+        runtime_state,
+        full=raw.strip().lower() == "full",
+        overridden=runtime_state_base.chat_overrides.get(message.chat.id, {}),
+    )
     await reply_humanized_state(message, text, runtime_state)
 
 
-# O5 (docs/OPEN.md): RuntimeState is one instance per process, not per chat,
-# so a knob change here is visible to every chat the bot is in. AdminOrOwner
-# would let any chat's own admins reach that process-global effect; OWNER_ID
-# is the interim fix. Proper fix is scoping RuntimeState overlays by chat_id
-# (deferred — bigger refactor, see docs/OPEN.md backlog) after which this can
-# go back to AdminOrOwner.
+# O5 (docs/OPEN.md): RuntimeState is one instance per process. `/set` used to
+# retune every chat at once; it now writes into this chat's overlay, so the
+# owner can tune one chat without touching the rest. The explicit `global`
+# form keeps the old reach, and OWNER_ID remains the gate either way.
 @router.message(Command("set"), GroupOnly(), OwnerOnly())
 async def cmd_set(
-    message: Message, runtime_state: RuntimeState, settings: Settings
+    message: Message,
+    runtime_state: RuntimeState,
+    settings: Settings,
+    runtime_state_base: RuntimeState,
 ) -> None:
     raw = _extract_command_arg(message.text or "")
     if raw.strip().lower() == "help":
@@ -66,18 +78,54 @@ async def cmd_set(
             message, format_set_help_message(), runtime_state
         )
         return
-    usage = "Использование: /set <key> <value>\nПодсказка: /set help"
+    usage = (
+        "Использование: /set <key> <value>\n"
+        "Глобально во всех чатах: /set global <key> <value>\n"
+        "Вернуть чат к глобальному значению: /set reset <key>\n"
+        "Подсказка: /set help"
+    )
     if not raw:
         await reply_humanized_state(message, usage, runtime_state)
         return
-    parts = raw.split(maxsplit=1)
-    if len(parts) != 2:
+    parts = raw.split(maxsplit=2)
+    scope_word = parts[0].strip().lower()
+
+    if scope_word == "reset":
+        if len(parts) != 2:
+            await reply_humanized_state(message, usage, runtime_state)
+            return
+        key = parts[1].strip().lower()
+        try:
+            cleared = clear_runtime_setting(runtime_state_base, message.chat.id, key)
+        except UnknownRuntimeSettingError:
+            await reply_humanized_state(
+                message,
+                f"{UNKNOWN_RUNTIME_KEY_MESSAGE}\n\nПодсказка: /set help",
+                runtime_state,
+            )
+            return
+        text = (
+            f"{key}: чат вернулся к глобальному значению."
+            if cleared
+            else f"{key}: в этом чате и так глобальное значение."
+        )
+        await reply_humanized_state(message, text, runtime_state)
+        return
+
+    is_global = scope_word == "global"
+    arguments = parts[1:] if is_global else parts
+    if len(arguments) != 2:
         await reply_humanized_state(message, usage, runtime_state)
         return
 
-    key, value = parts[0].strip().lower(), parts[1].strip()
+    key, value = arguments[0].strip().lower(), arguments[1].strip()
     try:
-        apply_runtime_setting(runtime_state, key, value)
+        apply_runtime_setting(
+            runtime_state_base,
+            key,
+            value,
+            chat_id=None if is_global else message.chat.id,
+        )
     except UnknownRuntimeSettingError:
         await reply_humanized_state(
             message,
@@ -91,8 +139,9 @@ async def cmd_set(
         )
         return
 
+    scope = "глобально, во всех чатах" if is_global else "в этом чате"
     await reply_humanized_state(
-        message, f"Обновлено: {key}={value} (до перезапуска)", runtime_state
+        message, f"Обновлено: {key}={value} ({scope}, до перезапуска)", runtime_state
     )
 
 
@@ -102,34 +151,47 @@ async def cmd_set_denied(message: Message, runtime_state: RuntimeState) -> None:
     await _reply_no_permission(message, runtime_state)
 
 
-# Same O5 rationale as cmd_set above: reply_probability is process-global.
+# Scoped to this chat like /set; `/setprob global 0.2` still retunes everyone.
 @router.message(Command("setprob"), GroupOnly(), OwnerOnly())
 async def cmd_setprob(
-    message: Message, runtime_state: RuntimeState, settings: Settings
+    message: Message,
+    runtime_state: RuntimeState,
+    settings: Settings,
+    runtime_state_base: RuntimeState,
 ) -> None:
-    raw = _extract_command_arg(message.text or "")
+    raw = _extract_command_arg(message.text or "").strip()
+    usage = "Использование: /setprob 0.2 (или /setprob global 0.2)"
     if not raw:
-        await reply_humanized_state(
-            message, "Использование: /setprob 0.2", runtime_state
-        )
+        await reply_humanized_state(message, usage, runtime_state)
         return
+
+    parts = raw.split()
+    is_global = parts[0].lower() == "global"
+    if is_global:
+        parts = parts[1:]
+    if len(parts) != 1:
+        await reply_humanized_state(message, usage, runtime_state)
+        return
+
+    # Goes through the shared apply path instead of assigning the field: that
+    # is what routes the value into the right scope and keeps cross-field
+    # validation in one place.
     try:
-        value = float(raw)
-    except ValueError:
+        apply_runtime_setting(
+            runtime_state_base,
+            "reply_probability",
+            parts[0],
+            chat_id=None if is_global else message.chat.id,
+        )
+    except (UnknownRuntimeSettingError, InvalidRuntimeSettingValueError):
         await reply_humanized_state(
             message, "Нужно число в диапазоне 0..1", runtime_state
         )
         return
 
-    if not 0.0 <= value <= 1.0:
-        await reply_humanized_state(
-            message, "Значение должно быть в диапазоне 0..1", runtime_state
-        )
-        return
-
-    runtime_state.reply_probability = value
+    scope = "глобально, во всех чатах" if is_global else "в этом чате"
     await reply_humanized_state(
-        message, f"REPLY_PROBABILITY теперь: {value}", runtime_state
+        message, f"REPLY_PROBABILITY теперь: {parts[0]} ({scope})", runtime_state
     )
 
 

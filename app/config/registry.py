@@ -577,3 +577,21 @@ def try_apply(state: Any, name: str, value: str) -> None:
     setattr(candidate, name, parsed)
     validate_cross_fields(candidate)
     setattr(state, name, parsed)
+
+
+def try_apply_for_chat(state: Any, chat_id: int, name: str, value: str) -> None:
+    """Same as ``try_apply``, but the value lands in ``chat_id``'s overlay.
+
+    Cross-field invariants are checked against the values *this chat* sees,
+    not the globals: a maximum that is valid next to the chat's overridden
+    minimum must be accepted, and one that breaks the chat's own combination
+    must be rejected even if it would be fine globally.
+    """
+    spec = _SPECS_BY_NAME.get(name)
+    if spec is None:
+        raise KeyError(name)
+    parsed = spec.parse(value)
+    candidate = copy.copy(state.effective(chat_id))
+    setattr(candidate, name, parsed)
+    validate_cross_fields(candidate)
+    state.set_override(chat_id, name, parsed)

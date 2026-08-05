@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from app.config.registry import field_hint
@@ -78,7 +79,12 @@ def format_stats_message(stats: dict[str, int]) -> str:
     return f"объём модели: {stats['volume']}"
 
 
-def format_config_message(state: RuntimeState, full: bool = False) -> str:
+def format_config_message(
+    state: RuntimeState,
+    full: bool = False,
+    *,
+    overridden: Iterable[str] = (),
+) -> str:
     lines = [
         "Настройки:",
         f"шанс ответа: {state.reply_probability}",
@@ -114,6 +120,14 @@ def format_config_message(state: RuntimeState, full: bool = False) -> str:
             ]
         )
     lines.append("")
+    if overridden:
+        # The values above are what THIS chat sees; say which of them stopped
+        # following the global default, otherwise the reader cannot tell a
+        # tuned chat from an untouched one.
+        lines.append(
+            "Переопределено для этого чата: " + ", ".join(sorted(overridden))
+        )
+        lines.append("Вернуть к глобальному: /set reset <key>")
     lines.append("Изменения через /set действуют до перезапуска.")
     return "\n".join(lines)
 
