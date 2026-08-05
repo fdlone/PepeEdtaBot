@@ -524,6 +524,13 @@ class Database:
             chat_id, user_hash
         )
 
+    async def get_user_interaction_stats(
+        self, chat_id: int, threshold: int
+    ) -> tuple[int, int, int]:
+        return await self._require(self.chat_user_interactions).get_stats(
+            chat_id, threshold
+        )
+
     async def decay_chat_user_interactions(
         self,
         *,
