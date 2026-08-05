@@ -10,15 +10,51 @@ from aiogram.types import Message
 
 from app.config.runtime_state import RuntimeState
 from app.config.settings import Settings
-from app.domain.pivo import PIVO_PRIVACY_MESSAGE
-from app.filters import GroupOnly, is_admin_or_owner
+from app.domain.pivo import (
+    MENTION_BY_ID,
+    MENTION_BY_USERNAME,
+    MENTION_SKIPPED,
+    PIVO_PRIVACY_MESSAGE,
+    count_mention_paths,
+)
+from app.filters import GroupOnly, OwnerOnly, is_admin_or_owner
 from app.handlers._helpers import reply_humanized_state
+from app.log_masking import LogMaskingNotInitialized, mask_chat_id
 from app.services import PivoService
 from app.services.pivo_parser import parse_pivo_command
-from app.services.pivo_service import PivoCallLimitError
+from app.services.pivo_service import PivoCallLimitError, PivoCallMessage
 
 router = Router(name="pivo")
 logger = logging.getLogger("chat_markov")
+
+
+def _log_mention_aggregate(
+    chat_id: int, call: PivoCallMessage, sent: Message | None
+) -> None:
+    """Пишет агрегат по упоминаниям: только числа и маскированный chat_id.
+
+    O2: доставку уведомления бот наблюдать не может, а вот entity в объекте
+    отправленного сообщения — это разбор сервера, единственный машинный
+    сигнал о том, приняты ли упоминания по user_id. Персональных данных в
+    записи быть не должно.
+    """
+    entity_counts: dict[str, int] = {}
+    for entity in (sent.entities if sent is not None else None) or ():
+        entity_counts[entity.type] = entity_counts.get(entity.type, 0) + 1
+    try:
+        masked_chat = mask_chat_id(chat_id)
+    except LogMaskingNotInitialized:
+        # Сообщение уже доставлено — потерять строку в логе допустимо,
+        # уронить на ней хендлер нет. Сырой chat_id при этом не пишем.
+        masked_chat = "unmasked"
+    logger.info(
+        "pivo mentions: chat=%s subscribers=%s paths=%s text_mention=%s mention=%s",
+        masked_chat,
+        call.mentions_count,
+        call.mention_paths,
+        entity_counts.get("text_mention", 0),
+        entity_counts.get("mention", 0),
+    )
 
 
 @router.message(Command("pivo"), GroupOnly())
@@ -38,7 +74,7 @@ async def cmd_pivo(
     quota = None
 
     try:
-        text, mentions_count, pool_picks = await pivo_service.build_call_message(
+        call = await pivo_service.build_call_message(
             chat_id=message.chat.id,
             caller_user_id=message.from_user.id,
             planned_time=command_args.planned_time,
@@ -47,6 +83,7 @@ async def cmd_pivo(
             recent_pool_window=runtime_state.pivo_recent_pool_window,
             temporal_flavor_chance=runtime_state.pivo_temporal_flavor_chance,
             now=datetime.now(),
+            mention_by_id=runtime_state.pivo_mention_by_id,
         )
     except PivoCallLimitError as exc:
         await reply_humanized_state(message, str(exc), runtime_state)
@@ -74,7 +111,7 @@ async def cmd_pivo(
             return
 
     try:
-        await message.reply(text, parse_mode=ParseMode.HTML)
+        sent = await message.reply(call.text, parse_mode=ParseMode.HTML)
     except Exception:
         if quota is not None:
             await pivo_service.refund_daily_call_quota(
@@ -93,12 +130,13 @@ async def cmd_pivo(
     # so quota-rejected or failed calls do not rotate the template pools.
     await pivo_service.record_pool_usage(
         message.chat.id,
-        pool_picks,
+        call.picks,
         recent_pool_window=runtime_state.pivo_recent_pool_window,
     )
 
     logger.info("pivo command executed")
-    logger.info("mentions count: %s", mentions_count)
+    logger.info("mentions count: %s", call.mentions_count)
+    _log_mention_aggregate(message.chat.id, call, sent)
 
 
 @router.message(Command("pivo_on"), GroupOnly())
@@ -131,6 +169,59 @@ async def cmd_pivo_off(
     logger.info("pivo member removed")
     await reply_humanized_state(
         message, "Готово, больше не буду звать тебя через /pivo.", runtime_state
+    )
+
+
+@router.message(Command("pivo_check"), GroupOnly(), OwnerOnly())
+async def cmd_pivo_check(
+    message: Message,
+    pivo_service: PivoService,
+    runtime_state: RuntimeState,
+) -> None:
+    """O2-диагностика: каким путём построено упоминание каждого подписчика.
+
+    Ответ намеренно не содержит разметки упоминаний: диагностика не должна
+    пинговать чат. Поэтому подпись показывается без ведущей ``@`` — иначе
+    Telegram снова разберёт её как упоминание и разошлёт уведомления.
+    """
+    if message.from_user is None:
+        return
+
+    results = await pivo_service.describe_mention_paths(
+        message.chat.id,
+        message.from_user.id,
+        mention_by_id=runtime_state.pivo_mention_by_id,
+    )
+    if not results:
+        await reply_humanized_state(
+            message, "В этом чате нет подписчиков /pivo.", runtime_state
+        )
+        return
+
+    lines = [f"Упоминания /pivo (by_id={runtime_state.pivo_mention_by_id}):"]
+    lines += [
+        f"- {result.label.lstrip('@') or '?'}: {result.path} ({result.reason})"
+        for result in results
+    ]
+    counts = count_mention_paths(results)
+    lines.append(
+        f"Итого: {counts[MENTION_BY_ID]} по id, "
+        f"{counts[MENTION_BY_USERNAME]} строкой, "
+        f"{counts[MENTION_SKIPPED]} пропущено."
+    )
+    # Расшифрованные ники уходят только в ответ (они и так видны в /pivo),
+    # но не в лог — там остаётся один агрегат.
+    logger.info("pivo_check executed: paths=%s", counts)
+    await reply_humanized_state(message, "\n".join(lines), runtime_state)
+
+
+@router.message(Command("pivo_check"), GroupOnly())
+async def cmd_pivo_check_denied(
+    message: Message, runtime_state: RuntimeState
+) -> None:
+    """Fallback: вызывается, когда OwnerOnly отказал в правах для /pivo_check."""
+    await reply_humanized_state(
+        message, "Эта команда доступна только владельцу бота.", runtime_state
     )
 
 

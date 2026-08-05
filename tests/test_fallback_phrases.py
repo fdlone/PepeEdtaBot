@@ -66,6 +66,7 @@ def _make_runtime_state() -> RuntimeState:
         reply_context_include_current_message=True,
         pivo_recent_pool_window=5,
         pivo_temporal_flavor_chance=0.5,
+        pivo_mention_by_id=True,
         mood_enabled=True,
         mood_modulation_strength=1.0,
         mood_ewma_alpha=0.3,

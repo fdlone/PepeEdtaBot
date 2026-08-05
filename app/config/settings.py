@@ -73,6 +73,7 @@ class Settings:
     reply_context_include_current_message: bool
     pivo_recent_pool_window: int
     pivo_temporal_flavor_chance: float
+    pivo_mention_by_id: bool
     mood_enabled: bool
     mood_modulation_strength: float
     mood_ewma_alpha: float

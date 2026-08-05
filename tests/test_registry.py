@@ -190,6 +190,38 @@ class TestTryApply(unittest.TestCase):
         try_apply(state, "markov_order", "2")
         self.assertEqual(state.markov_order, 2)
 
+    def test_pivo_mention_by_id_rollback_applies_to_next_call(self) -> None:
+        """O2: аварийный откат должен работать через /set, без рестарта."""
+        from app.domain.pivo import (
+            MENTION_BY_ID,
+            MENTION_BY_USERNAME,
+            PivoMember,
+            PivoSecurity,
+            build_pivo_mention,
+        )
+
+        security = PivoSecurity("hmac-secret-value", "encryption-secret-value")
+        member = PivoMember(
+            encrypted_user_id=security.encrypt_value("100"),
+            encrypted_username=security.encrypt_value("PepeUser"),
+            encrypted_display_name=security.encrypt_value("Pepe"),
+        )
+        # Дефолт реестра — включено; ручка отката должна уметь выключить.
+        self.assertEqual(get_spec("pivo_mention_by_id").default, "true")
+        state = _make_state(pivo_mention_by_id=True)
+        before = build_pivo_mention(
+            member, security, mention_by_id=state.pivo_mention_by_id
+        )
+        self.assertEqual(before.path, MENTION_BY_ID)
+
+        try_apply(state, "pivo_mention_by_id", "false")
+
+        after = build_pivo_mention(
+            member, security, mention_by_id=state.pivo_mention_by_id
+        )
+        self.assertEqual(after.path, MENTION_BY_USERNAME)
+        self.assertEqual(after.text, "@PepeUser")
+
 
 if __name__ == "__main__":
     unittest.main()

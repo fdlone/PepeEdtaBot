@@ -412,6 +412,12 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # (late-night / Friday / Monday) when one applies. 0 disables temporal flavor.
     FieldSpec("pivo_temporal_flavor_chance", "PIVO_TEMPORAL_FLAVOR_CHANCE", "0.5",
               _float_in_range(0.0, 1.0)),
+    # O2: mention subscribers by user id (an inline ``tg://user?id=`` link the
+    # server turns into a ``text_mention`` entity) instead of the bare
+    # ``@username`` string, whose entity is resolved by matching the name.
+    # The visible label stays the ``@username``, so turning this off is only
+    # ever needed if the id-based path itself misbehaves.
+    FieldSpec("pivo_mention_by_id", "PIVO_MENTION_BY_ID", "true", _bool()),
     # M1 chat mood: a hidden per-chat state (sleepy/calm/lively/heated) that drifts
     # the bot's behaviour with conversation rhythm.
     FieldSpec("mood_enabled", "MOOD_ENABLED", "true", _bool()),

@@ -8,6 +8,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.domain.pivo import (
+    MENTION_BY_ID,
+    MENTION_BY_USERNAME,
+    MENTION_SKIPPED,
     PIVO_FALLBACK_MENTIONS,
     PIVO_PRIVACY_MESSAGE,
     PivoMember,
@@ -85,11 +88,19 @@ class TestPivo(unittest.TestCase):
         self.assertEqual(security.hmac_value("12345"), security.hmac_value("12345"))
         self.assertNotEqual(security.hmac_value("12345"), "12345")
 
-    def test_build_pivo_mention_uses_username(self) -> None:
+    def test_build_pivo_mention_links_user_id_and_keeps_username_label(self) -> None:
+        # O2: ссылка несёт упоминание по user_id, подпись оставляет прежний
+        # «@ник» — то, что видит читатель чата, не меняется.
         security = make_security()
         member = make_member(security, user_id=100, username="PepeUser")
 
-        self.assertEqual(build_pivo_mention(member, security), "@PepeUser")
+        mention = build_pivo_mention(member, security)
+
+        self.assertEqual(
+            mention.text,
+            '<a href="tg://user?id=100">@PepeUser</a>',
+        )
+        self.assertEqual(mention.path, MENTION_BY_ID)
 
     def test_build_pivo_mention_uses_inline_mention_without_username(self) -> None:
         security = make_security()
@@ -103,9 +114,74 @@ class TestPivo(unittest.TestCase):
         mention = build_pivo_mention(member, security)
 
         self.assertEqual(
-            mention,
+            mention.text,
             '<a href="tg://user?id=101">Pepe &lt;Admin&gt;</a>',
         )
+        self.assertEqual(mention.path, MENTION_BY_ID)
+
+    def test_build_pivo_mention_falls_back_to_username_when_knob_off(self) -> None:
+        security = make_security()
+        member = make_member(security, user_id=100, username="PepeUser")
+
+        mention = build_pivo_mention(member, security, mention_by_id=False)
+
+        self.assertEqual(mention.text, "@PepeUser")
+        self.assertEqual(mention.path, MENTION_BY_USERNAME)
+
+    def test_build_pivo_mention_keeps_id_link_when_knob_off_without_username(
+        self,
+    ) -> None:
+        # Ручка отката не должна ронять подписчиков без ника: для них ссылка
+        # по user_id и была прежним поведением.
+        security = make_security()
+        member = make_member(
+            security, user_id=101, username="", display_name="Pepe"
+        )
+
+        mention = build_pivo_mention(member, security, mention_by_id=False)
+
+        self.assertEqual(mention.text, '<a href="tg://user?id=101">Pepe</a>')
+        self.assertEqual(mention.path, MENTION_BY_ID)
+
+    def test_build_pivo_mention_uses_username_when_user_id_is_corrupt(self) -> None:
+        security = make_security()
+        member = PivoMember(
+            encrypted_user_id=security.encrypt_value("not-an-id"),
+            encrypted_username=security.encrypt_value("PepeUser"),
+            encrypted_display_name=security.encrypt_value("Pepe"),
+        )
+
+        mention = build_pivo_mention(member, security)
+
+        self.assertEqual(mention.text, "@PepeUser")
+        self.assertEqual(mention.path, MENTION_BY_USERNAME)
+
+    def test_build_pivo_mention_skips_when_nothing_is_usable(self) -> None:
+        security = make_security()
+        member = PivoMember(
+            encrypted_user_id=security.encrypt_value("not-an-id"),
+            encrypted_username=security.encrypt_value(""),
+            encrypted_display_name=security.encrypt_value("Pepe"),
+        )
+
+        mention = build_pivo_mention(member, security)
+
+        self.assertEqual(mention.text, "")
+        self.assertEqual(mention.path, MENTION_SKIPPED)
+
+    def test_build_pivo_mention_escapes_label_and_id(self) -> None:
+        security = make_security()
+        member = make_member(
+            security,
+            user_id=102,
+            username="",
+            display_name='Pepe "<script>"',
+        )
+
+        mention = build_pivo_mention(member, security)
+
+        self.assertNotIn("<script>", mention.text)
+        self.assertIn("&lt;script&gt;", mention.text)
 
     def test_display_name_from_user_supports_fallback(self) -> None:
         self.assertEqual(
@@ -144,7 +220,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         db.get_chat_members = AsyncMock()
         service = self._make_service(db, security)
 
-        text, mentions_count, _picks = await service.build_call_message(
+        text, mentions_count, _picks, _paths = await service.build_call_message(
             chat_id=100,
             caller_user_id=200,
             explicit_mentions=("@friend",),
@@ -160,7 +236,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         db.get_chat_members = AsyncMock()
         service = self._make_service(db, security)
 
-        text, mentions_count, _picks = await service.build_call_message(
+        text, mentions_count, _picks, _paths = await service.build_call_message(
             chat_id=100,
             caller_user_id=200,
             explicit_mentions=("@one", "@two"),
@@ -269,7 +345,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
             ]
         )
         with patch(RANDOM_CHOICE_PATH, side_effect=lambda _: next(choices)):
-            text, mentions_count, _picks = await service.build_call_message(
+            text, mentions_count, _picks, _paths = await service.build_call_message(
                 chat_id=100,
                 caller_user_id=200,
                 planned_time="20:00",
@@ -294,7 +370,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         )
         service = self._make_service(db, security)
 
-        text, mentions_count, _picks = await service.build_call_message(
+        text, mentions_count, _picks, _paths = await service.build_call_message(
             chat_id=100,
             caller_user_id=200,
         )
@@ -315,7 +391,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         )
         service = self._make_service(db, security)
 
-        text, mentions_count, _picks = await service.build_call_message(
+        text, mentions_count, _picks, _paths = await service.build_call_message(
             chat_id=100,
             caller_user_id=200,
         )
@@ -364,7 +440,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
             ]
         )
         with patch(RANDOM_CHOICE_PATH, side_effect=lambda _: next(choices)):
-            text, mentions_count, _picks = await service.build_call_message(
+            text, mentions_count, _picks, _paths = await service.build_call_message(
                 chat_id=100,
                 caller_user_id=200,
                 planned_time="<20:00>",
@@ -385,7 +461,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         )
         service = self._make_service(db, security)
 
-        text, mentions_count, _picks = await service.build_call_message(
+        text, mentions_count, _picks, _paths = await service.build_call_message(
             chat_id=100,
             caller_user_id=200,
         )
@@ -426,7 +502,7 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
         await self.service.subscribe(chat_id=500, user=caller)
         await self.service.subscribe(chat_id=500, user=friend)
 
-        text, mentions_count, _picks = await self.service.build_call_message(
+        text, mentions_count, _picks, _paths = await self.service.build_call_message(
             chat_id=500,
             caller_user_id=caller.id,
         )
@@ -472,7 +548,7 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(quota.used_count, 3)
 
         await self.service.unsubscribe(chat_id=500, user_id=friend.id)
-        text, mentions_count, _picks = await self.service.build_call_message(
+        text, mentions_count, _picks, _paths = await self.service.build_call_message(
             chat_id=500,
             caller_user_id=caller.id,
         )
@@ -484,7 +560,7 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
         # indices so a later call can avoid them. build_call_message itself
         # must stay side-effect free (N3): quota-rejected or undelivered calls
         # must not rotate the pools.
-        _text, _count, picks = await self.service.build_call_message(
+        _text, _count, picks, _paths = await self.service.build_call_message(
             chat_id=700,
             caller_user_id=1,
             explicit_mentions=("@a",),
@@ -499,7 +575,7 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(len(v) == 1 for v in recent.values()))
 
     async def test_zero_window_records_nothing(self) -> None:
-        _text, _count, picks = await self.service.build_call_message(
+        _text, _count, picks, _paths = await self.service.build_call_message(
             chat_id=701,
             caller_user_id=1,
             explicit_mentions=("@a",),
@@ -514,7 +590,7 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
         # accumulate distinct values rather than repeating a single one.
         chat_hash = self.security.hmac_value(702)
         for _ in range(4):
-            _text, _count, picks = await self.service.build_call_message(
+            _text, _count, picks, _paths = await self.service.build_call_message(
                 chat_id=702,
                 caller_user_id=1,
                 explicit_mentions=("@a",),
@@ -535,7 +611,7 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
         await self.service.consume_daily_call_quota(
             chat_id=800, user_id=300, is_admin_or_owner=False, today=date(2026, 5, 9)
         )
-        _text, _count, picks = await self.service.build_call_message(
+        _text, _count, picks, _paths = await self.service.build_call_message(
             chat_id=800, caller_user_id=1, explicit_mentions=("@a",), recent_pool_window=5
         )
         await self.service.record_pool_usage(800, picks, recent_pool_window=5)
