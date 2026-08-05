@@ -144,8 +144,17 @@ class FieldSpec:
 RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("reply_probability", "REPLY_PROBABILITY", "0.08",
               _float_in_range(0.0, 1.0)),
-    FieldSpec("min_cooldown_sec", "MIN_COOLDOWN_SEC", "45", _int_min(0)),
-    FieldSpec("min_tokens_for_model", "MIN_TOKENS_FOR_MODEL", "200", _int_min(0)),
+    # Ceiling is an hour: a longer pause between replies is not a cooldown any
+    # more, it is silence, and rate is expressed through reply_probability and
+    # the hourly cap instead.
+    FieldSpec("min_cooldown_sec", "MIN_COOLDOWN_SEC", "45",
+              _int_in_range(0, 3600)),
+    # The chain's live memory is tens of thousands of n-gram instances (27.6k
+    # 4-grams, measured 2026-07-15), so a million is unreachable — i.e. "the
+    # bot never speaks". Two orders of magnitude above the real corpus leaves
+    # experiments room while still catching a typo in the digit count.
+    FieldSpec("min_tokens_for_model", "MIN_TOKENS_FOR_MODEL", "200",
+              _int_in_range(0, 1000000)),
     FieldSpec("max_reply_chars", "MAX_REPLY_CHARS", "280",
               _int_in_range(20, 4000)),
     FieldSpec("max_reply_tokens", "MAX_REPLY_TOKENS", "45",
@@ -157,8 +166,17 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
         "false",
         _bool(),
     ),
+    # No explicit ceiling needed: validate_cross_fields enforces
+    # typing_min_ms <= typing_max_ms, so this is bounded by the one below.
     FieldSpec("typing_min_ms", "TYPING_MIN_MS", "350", _int_min(0)),
-    FieldSpec("typing_max_ms", "TYPING_MAX_MS", "1100", _int_min(0)),
+    # Telegram's "typing" indicator lives ~5 s and is renewed; a pause beyond
+    # 15 s reads as a hung bot rather than someone typing. The ceiling stays
+    # above TYPING_HARD_CAP_MS (4 s) and above the 5 s pinned by
+    # test_cap_never_cuts_below_configured_max, so the deliberate rule "a
+    # configured max outranks the built-in cap" remains reachable through a
+    # legal config — it just can no longer be raised to ten minutes.
+    FieldSpec("typing_max_ms", "TYPING_MAX_MS", "1100",
+              _int_in_range(0, 15000)),
     FieldSpec("typing_per_char_ms", "TYPING_PER_CHAR_MS", "12",
               _int_in_range(0, 200)),
     FieldSpec("randomness_strength", "RANDOMNESS_STRENGTH", "2.0",
@@ -467,12 +485,15 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # Burst rhythm: right after the bot replies its probability is boosted for
     # ``boost_sec`` (join the exchange), then suppressed for the following
     # ``suppress_sec`` (withdraw). ``min_cooldown_sec`` remains the hard floor.
+    # Both windows are capped at an hour: past that a "burst" is not a burst
+    # but a permanent mode, which belongs in the base probability instead. The
+    # two share a ceiling so the pair cannot be split across scales.
     FieldSpec("reply_burst_boost_sec", "REPLY_BURST_BOOST_SEC", "180",
-              _int_min(0)),
+              _int_in_range(0, 3600)),
     FieldSpec("reply_burst_boost_mult", "REPLY_BURST_BOOST_MULT", "2.0",
               _float_in_range(0.0, 10.0)),
     FieldSpec("reply_burst_suppress_sec", "REPLY_BURST_SUPPRESS_SEC", "600",
-              _int_min(0)),
+              _int_in_range(0, 3600)),
     FieldSpec("reply_burst_suppress_mult", "REPLY_BURST_SUPPRESS_MULT", "0.5",
               _float_in_range(0.0, 10.0)),
     # Safety cap on unprompted replies per rolling hour per chat (mentions always
