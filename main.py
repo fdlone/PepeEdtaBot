@@ -44,7 +44,7 @@ COMMAND_COOLDOWNS_SECONDS = {
 }
 
 # Commands intentionally without a window, each for a stated reason:
-#   - set / setprob / pivo_check are owner-only (OwnerOnly filter, see O5), so
+#   - set / setprob / pivo_check / quirk_stats are owner-only, so
 #     no participant can use them to amplify traffic, and knob tuning is
 #     iterative by nature — rate-limiting the owner against themselves buys
 #     nothing.
@@ -52,7 +52,9 @@ COMMAND_COOLDOWNS_SECONDS = {
 #     drops a call *before* the handler, so a throttled /pivo answered with
 #     silence instead of the "daily quota exhausted" reply. Its daily quota is
 #     the rate limit; re-adding a window here would restore that bug.
-COOLDOWN_EXEMPT_COMMANDS = frozenset({"set", "setprob", "pivo_check", "pivo"})
+COOLDOWN_EXEMPT_COMMANDS = frozenset(
+    {"set", "setprob", "pivo_check", "quirk_stats", "pivo"}
+)
 
 # Silence reads as "the bot is broken" only where the user asked for something
 # and expects confirmation; elsewhere a refusal reply is itself the traffic we

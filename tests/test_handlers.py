@@ -361,6 +361,98 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
                 filter_types = {type(f.callback) for f in handler.filters or ()}
                 self.assertIn(AdminOrOwner, filter_types)
 
+    async def test_quirk_stats_reports_numbers_for_the_chat(self) -> None:
+        from app.handlers.admin import cmd_quirk_stats
+
+        msg = _fake_message(text="/quirk_stats", chat_id=100)
+        state = _fake_state()
+        state.user_quirk_min_interactions = 25
+        learning_service = AsyncMock()
+        learning_service.get_user_interaction_stats = AsyncMock(
+            return_value=(4, 31, 1)
+        )
+
+        await cmd_quirk_stats(msg, state, learning_service)
+
+        text = msg.reply.await_args.args[0]
+        for expected in ("25", "4", "31", "1"):
+            self.assertIn(expected, text)
+
+    async def test_quirk_stats_says_when_the_threshold_is_unreached(self) -> None:
+        # The point of the command: a feature that never fires must be
+        # distinguishable from a broken one.
+        from app.handlers.admin import cmd_quirk_stats
+
+        msg = _fake_message(text="/quirk_stats")
+        state = _fake_state()
+        state.user_quirk_min_interactions = 25
+        learning_service = AsyncMock()
+        learning_service.get_user_interaction_stats = AsyncMock(
+            return_value=(3, 6, 0)
+        )
+
+        await cmd_quirk_stats(msg, state, learning_service)
+
+        self.assertIn("Порог пока не взял никто", msg.reply.await_args.args[0])
+
+    async def test_quirk_stats_handles_an_empty_chat(self) -> None:
+        from app.handlers.admin import cmd_quirk_stats
+
+        msg = _fake_message(text="/quirk_stats")
+        state = _fake_state()
+        learning_service = AsyncMock()
+        learning_service.get_user_interaction_stats = AsyncMock(
+            return_value=(0, 0, 0)
+        )
+
+        await cmd_quirk_stats(msg, state, learning_service)
+
+        text = msg.reply.await_args.args[0]
+        self.assertIn("не накоплено", text)
+
+    async def test_quirk_stats_reveals_no_identifiers(self) -> None:
+        from app.handlers.admin import cmd_quirk_stats
+
+        msg = _fake_message(text="/quirk_stats", user_id=777, chat_id=100)
+        state = _fake_state()
+        state.user_quirk_min_interactions = 25
+        learning_service = AsyncMock()
+        learning_service.get_user_interaction_stats = AsyncMock(
+            return_value=(4, 31, 1)
+        )
+
+        await cmd_quirk_stats(msg, state, learning_service)
+
+        text = msg.reply.await_args.args[0]
+        # Counters are anonymous by construction; diagnostics must not undo it.
+        self.assertNotIn("777", text)
+        self.assertNotIn("100", text)
+        # And the service is asked for an aggregate, not for anyone's count.
+        learning_service.get_user_interaction_count.assert_not_called()
+
+    async def test_quirk_stats_denied_for_non_owner(self) -> None:
+        from app.handlers.admin import cmd_quirk_stats_denied
+
+        msg = _fake_message(text="/quirk_stats")
+        state = _fake_state()
+
+        await cmd_quirk_stats_denied(msg, state)
+
+        text = msg.reply.await_args.args[0]
+        self.assertIn("OWNER_ID", text)
+        self.assertNotIn("порог", text.lower())
+
+    def test_quirk_stats_is_owner_only(self) -> None:
+        from app.filters import GroupOnly, OwnerOnly
+        from app.handlers.admin import cmd_quirk_stats, router
+
+        handler = next(
+            h for h in router.message.handlers if h.callback is cmd_quirk_stats
+        )
+        filter_types = {type(f.callback) for f in handler.filters or ()}
+        self.assertIn(OwnerOnly, filter_types)
+        self.assertIn(GroupOnly, filter_types)
+
     async def test_setprob_valid_value(self) -> None:
         from app.handlers.admin import cmd_setprob
         msg = _fake_message(text="/setprob 0.3", chat_id=100)

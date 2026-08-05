@@ -16,7 +16,7 @@ from app.config.runtime_config import (
 from app.config.runtime_state import RuntimeState
 from app.config.settings import Settings
 from app.core.markov import MarkovGenerator
-from app.filters import AdminOrOwner, GroupOnly, is_owner
+from app.filters import AdminOrOwner, GroupOnly, OwnerOnly, is_owner
 from app.handlers._helpers import reply_humanized_state
 from app.infrastructure.database import Database
 from app.presentation.bot_messages import (
@@ -24,7 +24,7 @@ from app.presentation.bot_messages import (
     format_config_message,
     format_set_help_message,
 )
-from app.services import PivoService
+from app.services import LearningService, PivoService
 
 router = Router(name="admin")
 logger = logging.getLogger("chat_markov")
@@ -229,6 +229,52 @@ async def cmd_setprob_denied(
 ) -> None:
     """Fallback: вызывается, когда AdminOrOwner отказал в правах для /setprob."""
     await _reply_no_permission(message, runtime_state)
+
+
+@router.message(Command("quirk_stats"), GroupOnly(), OwnerOnly())
+async def cmd_quirk_stats(
+    message: Message,
+    runtime_state: RuntimeState,
+    learning_service: LearningService,
+) -> None:
+    """Достижим ли порог «завсегдатая» в этом чате.
+
+    Фича, которая никогда не срабатывает, снаружи неотличима от сломанной:
+    причуды L2 живут с 2026-07-16, а обращений в чате никто не видел. Ответ —
+    только числа: счётчики хранятся анонимно (HMAC), и диагностика этого не
+    отменяет.
+    """
+    threshold = runtime_state.user_quirk_min_interactions
+    people, max_count, at_or_above = await learning_service.get_user_interaction_stats(
+        message.chat.id, threshold
+    )
+    if people == 0:
+        await reply_humanized_state(
+            message,
+            "Обращений к боту пока не накоплено — счётчиков в этом чате нет.",
+            runtime_state,
+        )
+        return
+
+    text = (
+        f"Счётчики обращений (порог завсегдатая: {threshold}):\n"
+        f"людей со счётчиком: {people}\n"
+        f"максимум: {max_count}\n"
+        f"достигли порога: {at_or_above}"
+    )
+    if at_or_above == 0:
+        text += "\n\nПорог пока не взял никто — причуды не срабатывают поэтому."
+    await reply_humanized_state(message, text, runtime_state)
+
+
+@router.message(Command("quirk_stats"), GroupOnly())
+async def cmd_quirk_stats_denied(
+    message: Message, runtime_state: RuntimeState
+) -> None:
+    """Fallback: вызывается, когда OwnerOnly отказал в правах."""
+    await reply_humanized_state(
+        message, "Команда доступна только OWNER_ID.", runtime_state
+    )
 
 
 @router.message(Command("clear"), GroupOnly(), AdminOrOwner())

@@ -127,6 +127,16 @@ class LearningService:
             chat_id, self._hash_user(user_id)
         )
 
+    async def get_user_interaction_stats(
+        self, chat_id: int, threshold: int
+    ) -> tuple[int, int, int]:
+        """``(people, max_count, at_or_above)`` for the chat — numbers only.
+
+        Answers "is the regulars threshold reachable in this chat?" without
+        touching the anonymity of the counters themselves.
+        """
+        return await self._db.get_user_interaction_stats(chat_id, threshold)
+
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool:
         """True если текст дословно совпадает с одним из последних обучающих сообщений.
 

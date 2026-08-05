@@ -34,6 +34,27 @@ class ChatUserInteractionsRepo(DecayableCountsRepo):
         )
         return int(row[0] or 0) if row else 0
 
+    async def get_stats(self, chat_id: int, threshold: int) -> tuple[int, int, int]:
+        """Aggregate for the chat: ``(people, max_count, at_or_above)``.
+
+        Numbers only — the caller must be able to answer "is the regulars
+        threshold reachable here?" without anything that points at a person.
+        The counters are anonymous by construction (HMAC), and a diagnostic
+        must not undo that.
+        """
+        row = await self._fetch_one(
+            """
+            SELECT COUNT(*), COALESCE(MAX(cnt), 0),
+                   COALESCE(SUM(CASE WHEN cnt >= ? THEN 1 ELSE 0 END), 0)
+            FROM chat_user_interactions
+            WHERE chat_id = ?
+            """,
+            (threshold, chat_id),
+        )
+        if row is None:
+            return 0, 0, 0
+        return int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)
+
     async def decay_stale(self, cutoff_iso: str) -> int:
         """Halve counts of users quiet since ``cutoff_iso`` so regulars fade."""
         return await self._decay_stale("chat_user_interactions", cutoff_iso)

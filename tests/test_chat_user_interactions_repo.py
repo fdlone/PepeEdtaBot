@@ -154,3 +154,36 @@ class TestDatabaseUserInteractionDelegates(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             await self.db.get_user_interaction_count(CHAT, USER_HASH), 1
         )
+
+    async def test_stats_aggregate_counts_people_max_and_threshold(self) -> None:
+        # Three people with 1, 3 and 5 answered mentions; threshold 3.
+        for _ in range(1):
+            await self.db.record_user_interaction(CHAT, "b" * 64)
+        for _ in range(3):
+            await self.db.record_user_interaction(CHAT, "c" * 64)
+        for _ in range(5):
+            await self.db.record_user_interaction(CHAT, "d" * 64)
+        # A neighbouring chat must not leak into the aggregate.
+        await self.db.record_user_interaction(OTHER_CHAT, "e" * 64)
+
+        people, max_count, at_or_above = await self.db.get_user_interaction_stats(
+            CHAT, 3
+        )
+
+        self.assertEqual(people, 3)
+        self.assertEqual(max_count, 5)
+        self.assertEqual(at_or_above, 2)
+
+    async def test_stats_on_empty_chat_are_zeros_not_an_error(self) -> None:
+        self.assertEqual(
+            await self.db.get_user_interaction_stats(OTHER_CHAT, 25), (0, 0, 0)
+        )
+
+    async def test_stats_do_not_change_the_counters(self) -> None:
+        await self.db.record_user_interaction(CHAT, USER_HASH)
+
+        before = await self.db.get_user_interaction_count(CHAT, USER_HASH)
+        await self.db.get_user_interaction_stats(CHAT, 1)
+        after = await self.db.get_user_interaction_count(CHAT, USER_HASH)
+
+        self.assertEqual(before, after)
