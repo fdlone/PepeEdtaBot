@@ -1306,27 +1306,27 @@ class TestExtractContextTokens(unittest.TestCase):
 
 
 class TestReplyHumanizedResilience(unittest.IsolatedAsyncioTestCase):
-    """`reply_humanized` is the single point that calls Telegram's chat-action
+    """`reply_humanized_sequence` is the single point that calls Telegram's chat-action
     API. A 5xx or network blip there must not block the actual reply — the
     helper catches the exception and proceeds to `message.reply`."""
 
     async def test_send_chat_action_failure_does_not_block_reply(self) -> None:
-        from app.handlers._helpers import reply_humanized
+        from app.handlers._helpers import reply_humanized_sequence
 
         msg = _fake_message()
         msg.bot.send_chat_action = AsyncMock(
             side_effect=RuntimeError("telegram chat-action 5xx")
         )
 
-        await reply_humanized(msg, "ответ", typing_min_ms=0, typing_max_ms=0)
+        await reply_humanized_sequence(msg, ["ответ"], 0, 0)
 
         msg.reply.assert_awaited_once_with("ответ")
 
     async def test_send_chat_action_called_when_bot_present(self) -> None:
-        from app.handlers._helpers import reply_humanized
+        from app.handlers._helpers import reply_humanized_sequence
 
         msg = _fake_message()
-        await reply_humanized(msg, "ответ", typing_min_ms=0, typing_max_ms=0)
+        await reply_humanized_sequence(msg, ["ответ"], 0, 0)
         msg.bot.send_chat_action.assert_awaited_once()
         msg.reply.assert_awaited_once_with("ответ")
 

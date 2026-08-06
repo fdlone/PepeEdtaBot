@@ -395,9 +395,6 @@ class Database:
 
     # --- Делегаты к MessagesRepo ---
 
-    async def message_exists(self, chat_id: int, text: str) -> bool:
-        return await self._require(self.messages).exists(chat_id, text)
-
     async def get_recent_normalized_messages(
         self, chat_id: int, limit: int
     ) -> list[str]:

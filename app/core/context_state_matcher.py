@@ -12,7 +12,6 @@ _MATCH_KIND_PRIORITY = {"exact": 0, "casefold": 1}
 class ContextStateMatch:
     state: tuple[str, ...]
     match_kind: str
-    similarity: float
     transition_count: int
 
 
@@ -51,7 +50,6 @@ class ContextStateMatcher:
                 ContextStateMatch(
                     state=context_window,
                     match_kind="exact",
-                    similarity=1.0,
                     transition_count=exact_count,
                 )
             )
@@ -64,7 +62,6 @@ class ContextStateMatcher:
                 ContextStateMatch(
                     state=state,
                     match_kind="casefold",
-                    similarity=1.0,
                     transition_count=transition_count,
                 )
             )
@@ -73,7 +70,6 @@ class ContextStateMatcher:
             matches,
             key=lambda match: (
                 _MATCH_KIND_PRIORITY[match.match_kind],
-                -match.similarity,
                 -match.transition_count,
                 match.state,
             ),

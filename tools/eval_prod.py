@@ -49,6 +49,7 @@ from app.core.markov import (  # noqa: E402
     JUMP_CONNECTIVE_TOKENS,
     PUNCT_SET,
     MarkovGenerator,
+    build_windows,
     content_tokens,
     tokenize,
 )
@@ -64,7 +65,6 @@ from app.core.slot_mutation import (  # noqa: E402
 from app.core.text import sanitize_text  # noqa: E402
 from app.infrastructure.database import Database  # noqa: E402
 from app.services.learning_service import (  # noqa: E402
-    content_ngram_windows,
     normalize_for_verbatim,
 )
 from tools.eval_generation import (  # noqa: E402
@@ -72,6 +72,21 @@ from tools.eval_generation import (  # noqa: E402
     distinct_ratio,
     repeated_ngram_ratio,
 )
+
+
+def content_ngram_windows(
+    text: str, size: int = 4
+) -> list[tuple[str, ...]]:
+    """Casefolded content-token ``size``-grams of one message.
+
+    Жила в LearningService, но рантайм строит окна из токенов уже выученного
+    сообщения (``verbatim_ngram_windows``), а этот вариант — из готового
+    текста, и нужен только здесь: eval читает сообщения из базы, а не через
+    путь обучения.
+    """
+    content = [token.casefold() for token in content_tokens(tokenize(text))]
+    return build_windows(content, size)
+
 
 DEFAULT_SEED = 20260622
 # 400 (2026-07-21): the floor for telling a knob's effect from sampling noise.

@@ -59,8 +59,10 @@ from app.services import LearningService, PivoService
 router = Router(name="learning")
 logger = logging.getLogger("chat_markov")
 
-MIN_LEARN_MESSAGE_CHARS = 3
 MAX_LEARN_MESSAGE_CHARS = 2000
+# Нижняя граница длины отдельной константой не задаётся: её обеспечивает
+# требование к числу токенов ниже — сообщение короче него всё равно не
+# проходит гейт обучаемости.
 MIN_LEARN_MESSAGE_TOKENS = 2
 RECENT_SHORT_REPLY_LIMIT = 5
 RECENT_FALLBACK_LIMIT = 3

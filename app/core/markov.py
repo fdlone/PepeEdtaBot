@@ -164,6 +164,15 @@ class GenerationTrace:
 
 
 class _GenerationAttempt(NamedTuple):
+    """Одна попытка генерации: текст плюс её счётчики для трассировки.
+
+    Собирается только по именам: девять из десяти полей — однотипные
+    счётчики, и позиционный вызов держался на памяти о порядке.
+    ``GenerationTrace`` остаётся отдельным типом: это суммарная трассировка
+    по всем попыткам (у неё есть ``attempts_used`` и нет текста), и её
+    форму читают инструменты оценки.
+    """
+
     text: str
     markov_order_used: int
     jump_count: int
@@ -990,6 +999,13 @@ class MarkovGenerator:
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> str:
+        """Текст без трассировки — форма для тестов и инструментов.
+
+        Рабочий путь ходит через ``generate_text_with_trace``: ему нужна
+        трассировка. Обёртка оставлена намеренно (её единственные
+        вызывающие — тесты и харнессы), чтобы им не разбирать кортеж на
+        каждом вызове; это не мёртвый код, а сокращённая форма API.
+        """
         text, _ = await self.generate_text_with_trace(
             chat_id=chat_id,
             max_chars=max_chars,
@@ -1312,16 +1328,16 @@ class MarkovGenerator:
 
         def reject(reason: str) -> _GenerationAttempt:
             return _GenerationAttempt(
-                "",
-                order_used,
-                jump_count,
-                reason,
-                0,
-                start_source,
-                leading_punctuation_stripped,
-                context_exact_matches,
-                context_casefold_matches,
-                hidden_context_fallbacks,
+                text="",
+                markov_order_used=order_used,
+                jump_count=jump_count,
+                rejection_reason=reason,
+                token_count=0,
+                start_source=start_source,
+                leading_punctuation_stripped=leading_punctuation_stripped,
+                context_exact_matches=context_exact_matches,
+                context_casefold_matches=context_casefold_matches,
+                hidden_context_fallbacks=hidden_context_fallbacks,
             )
 
         if len(result) < 5:
@@ -1343,16 +1359,16 @@ class MarkovGenerator:
         elif is_context_heavy_reply(result_tokens, context_tokens):
             return reject(REJECTION_CONTEXT_HEAVY)
         return _GenerationAttempt(
-            result,
-            order_used,
-            jump_count,
-            None,
-            len(result_tokens),
-            start_source,
-            leading_punctuation_stripped,
-            context_exact_matches,
-            context_casefold_matches,
-            hidden_context_fallbacks,
+            text=result,
+            markov_order_used=order_used,
+            jump_count=jump_count,
+            rejection_reason=None,
+            token_count=len(result_tokens),
+            start_source=start_source,
+            leading_punctuation_stripped=leading_punctuation_stripped,
+            context_exact_matches=context_exact_matches,
+            context_casefold_matches=context_casefold_matches,
+            hidden_context_fallbacks=hidden_context_fallbacks,
         )
 
     async def _run_generation_loop(
@@ -1659,7 +1675,14 @@ class MarkovGenerator:
         starts3 = await self._get_starts3(chat_id) if order >= 3 else []
         starts2 = await self._get_starts2(chat_id)
         if not starts3 and not starts2:
-            return _GenerationAttempt("", 0, 0, REJECTION_NO_STARTS, 0, "global")
+            return _GenerationAttempt(
+                text="",
+                markov_order_used=0,
+                jump_count=0,
+                rejection_reason=REJECTION_NO_STARTS,
+                token_count=0,
+                start_source="global",
+            )
 
         start3: tuple[str, str, str] | None = None
         start_source = "global"
@@ -1765,16 +1788,16 @@ class MarkovGenerator:
             )
             if global_start is None:
                 return _GenerationAttempt(
-                    "",
-                    2,
-                    0,
-                    REJECTION_NO_START_TRANSITION,
-                    0,
-                    start_source,
-                    0,
-                    context_exact_matches,
-                    context_casefold_matches,
-                    hidden_context_fallbacks,
+                    text="",
+                    markov_order_used=2,
+                    jump_count=0,
+                    rejection_reason=REJECTION_NO_START_TRANSITION,
+                    token_count=0,
+                    start_source=start_source,
+                    leading_punctuation_stripped=0,
+                    context_exact_matches=context_exact_matches,
+                    context_casefold_matches=context_casefold_matches,
+                    hidden_context_fallbacks=hidden_context_fallbacks,
                 )
             start3, order_used = global_start
 

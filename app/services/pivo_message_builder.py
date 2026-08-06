@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
 
+from app.domain.pivo import PIVO_FALLBACK_MENTIONS
 from app.domain.pivo_templates import (
     PIVO_AUTUMN_BOTTOM_PARTS,
     PIVO_DEFAULT_BODY_PARTS,
@@ -27,7 +28,6 @@ from app.domain.pivo_templates import (
     PIVO_WINTER_BOTTOM_PARTS,
 )
 
-PIVO_FALLBACK_MENTIONS_TEXT = "Господа дегенераты"
 DEFAULT_TARGET_PHRASE = "пиво, игры и коллективная деградация"
 
 
@@ -56,24 +56,6 @@ class PivoMessageContext:
 
     def template_values(self) -> dict[str, object]:
         return asdict(self)
-
-
-def build_pivo_message(
-    mentions: str,
-    *,
-    planned_time: str | None = None,
-    target: str | None = None,
-    has_explicit_mentions: bool = False,
-    rng: random.Random | None = None,
-) -> str:
-    context = build_pivo_message_context(
-        mentions,
-        planned_time=planned_time,
-        target=target,
-        has_explicit_mentions=has_explicit_mentions,
-        rng=rng,
-    )
-    return PivoMessageGenerator().build(context, rng=rng).text
 
 
 def build_pivo_message_context(
@@ -357,7 +339,7 @@ def _build_notification_line(
     mentions: str, *, has_explicit_mentions: bool, rng: random.Random | None = None
 ) -> str:
     value = mentions.strip()
-    if has_explicit_mentions or not value or value == PIVO_FALLBACK_MENTIONS_TEXT:
+    if has_explicit_mentions or not value or value == PIVO_FALLBACK_MENTIONS:
         return ""
     template = _choice(PIVO_NOTIFICATION_LINES, rng)
     return template.format(mentions=value)

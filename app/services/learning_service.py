@@ -4,9 +4,9 @@ import time
 from collections import Counter, deque
 from collections.abc import Callable, Iterable, Mapping, Set
 
-from app.core.candidate_scorer import VERBATIM_NGRAM_SIZE, build_token_idf
+from app.core.candidate_scorer import build_token_idf
 from app.core.intonation import IntonationProfile, build_intonation_profile
-from app.core.markov import MarkovGenerator, build_windows, content_tokens, tokenize
+from app.core.markov import MarkovGenerator, tokenize
 from app.core.slot_mutation import (
     ENDING_MATCH_LEN,
     MIN_MUTABLE_WORD_LEN,
@@ -25,14 +25,6 @@ _VERBATIM_TRAILING_CHARS = " .!?…"
 def normalize_for_verbatim(text: str) -> str:
     """Normalize a text for full-message verbatim comparison."""
     return sanitize_text(text).lower().rstrip(_VERBATIM_TRAILING_CHARS)
-
-
-def content_ngram_windows(
-    text: str, size: int = VERBATIM_NGRAM_SIZE
-) -> list[tuple[str, ...]]:
-    """Casefolded content-token ``size``-grams of one message."""
-    content = [token.casefold() for token in content_tokens(tokenize(text))]
-    return build_windows(content, size)
 
 
 # Сколько выученных сообщений копится, прежде чем тяжёлая статистика чата

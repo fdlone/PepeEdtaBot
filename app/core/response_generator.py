@@ -74,6 +74,10 @@ EXTENSION_MAX_TOKENS = 10
 
 CandidateScorer = Callable[[str, list[str], list[str], str], CandidateScore]
 
+# Пустой контекст для базового скорера: его оценку релевантности конвейер
+# всё равно заменяет вариантом с весами IDF (см. _build_score).
+_NO_CONTEXT: list[str] = []
+
 
 class VerbatimCopyChecker(Protocol):
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool: ...
@@ -174,12 +178,20 @@ def repeats_recent_chat_content(
     is_short_candidate: bool,
 ) -> bool:
     """Single staleness gate: echo of the current message, a short reply from
-    the recent-short window, or an exact repeat of a recently sent reply."""
+    the recent-short window, or an exact repeat of a recently sent reply.
+
+    Нормализации две, и они разные по смыслу: ``candidate_normalized`` — это
+    санитизированный текст в нижнем регистре (та же форма, в которой хранятся
+    короткие ответы), а ``normalize_reply_for_repeat`` дополнительно снимает
+    хвостовые эмодзи и пунктуацию, чтобы кандидат совпал со своей же
+    отправленной формой после вариатора концовки. Первая приходит готовой от
+    вызывающего — раньше она считалась здесь второй раз.
+    """
     if candidate_normalized == current_message_normalized:
         return True
     if is_short_candidate:
         recent_short = runtime_state.recent_short_replies.get(chat_id)
-        if recent_short and sanitize_text(candidate).lower() in recent_short:
+        if recent_short and candidate_normalized in recent_short:
             return True
     recent = runtime_state.recent_replies.get(chat_id)
     if not recent:
@@ -404,9 +416,15 @@ class ResponseGenerator:
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
     ) -> CandidateScore:
-        """Full candidate score with the per-request penalty components."""
+        """Full candidate score with the per-request penalty components.
+
+        Контекст в базовый скорер не передаётся намеренно: его оценку
+        релевантности конвейер всё равно заменяет вариантом с весами IDF (он
+        учитывает редкость совпавших токенов и отсекает пересказ контекста),
+        поэтому считать её дважды незачем.
+        """
         return replace(
-            self.scorer(text, tokens, context_tokens, length_mode),
+            self.scorer(text, tokens, _NO_CONTEXT, length_mode),
             context_relevance=idf_context_relevance(
                 tokens, context_tokens, context_idf
             ),

@@ -284,24 +284,22 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["transitions2"], 0)
         self.assertEqual(stats["transitions3"], 0)
 
-    async def test_message_exists(self) -> None:
-        await self.db.save_message_and_update_model(
-            chat_id=4004,
-            raw_text="hello world",
-            tokens=["hello", "world"],
-        )
-        self.assertTrue(await self.db.message_exists(4004, "hello world"))
-        self.assertFalse(await self.db.message_exists(4004, "hello"))
+    async def test_stored_text_is_normalized_on_write(self) -> None:
+        """Нормализация применяется при записи, а не при чтении.
 
-    async def test_message_exists_uses_normalized_text(self) -> None:
+        Раньше это проверялось через `message_exists`, которая нормализовала и
+        аргумент тоже; проверка сместилась на то, что реально хранится.
+        """
         await self.db.save_message_and_update_model(
             chat_id=4104,
             raw_text="Привеееет   @PepeBot https://example.com",
             tokens=["Привеет"],
         )
 
-        self.assertTrue(await self.db.message_exists(4104, "Привеет"))
-        self.assertTrue(await self.db.message_exists(4104, "Привеееет @AnotherBot"))
+        self.assertEqual(
+            await self.db.get_recent_normalized_messages(4104, 10),
+            ["Привеет"],
+        )
 
     async def test_init_migrates_legacy_messages_without_normalized_text(self) -> None:
         await self.db.close()
@@ -331,7 +329,10 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.db = Database(str(self.db_path))
         await self.db.init()
 
-        self.assertTrue(await self.db.message_exists(4204, "Стаарый текст"))
+        self.assertEqual(
+            await self.db.get_recent_normalized_messages(4204, 10),
+            ["Стаарый текст"],
+        )
         async with aiosqlite.connect(str(self.db_path)) as conn:
             row = await (
                 await conn.execute(
@@ -566,7 +567,6 @@ class TestDatabaseMessageRetention(unittest.IsolatedAsyncioTestCase):
             await self.db.get_recent_normalized_messages(1, 10),
             ["second", "third", "fourth"],
         )
-        self.assertFalse(await self.db.message_exists(1, "first"))
         self.assertEqual((await self.db.get_stats(1))["messages"], 3)
 
     async def test_retention_is_scoped_to_chat(self) -> None:
