@@ -528,12 +528,12 @@ class TestMigratorRealSchemaFixture(unittest.IsolatedAsyncioTestCase):
     async def test_markov_chain_values_intact(self) -> None:
         await migrator.run(self.conn)
         cur = await self.conn.execute(
-            "SELECT cnt FROM starts WHERE chat_id=-1003736119498 AND w1='пойдём' AND w2='пить'"
+            "SELECT cnt FROM starts WHERE chat_id=-1009876543210 AND w1='пойдём' AND w2='пить'"
         )
         self.assertEqual((await cur.fetchone())[0], 1)
 
         cur = await self.conn.execute(
-            "SELECT cnt FROM transitions WHERE chat_id=-1003736119498"
+            "SELECT cnt FROM transitions WHERE chat_id=-1009876543210"
             " AND w1='пойдём' AND w2='пить' AND w3='кофе'"
         )
         self.assertEqual((await cur.fetchone())[0], 1)
