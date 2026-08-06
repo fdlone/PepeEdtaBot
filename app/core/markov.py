@@ -1326,6 +1326,13 @@ class MarkovGenerator:
 
         if len(result) < 5:
             return reject(REJECTION_RESULT_TOO_SHORT)
+        # Без normalize_lower намеренно: текст ответа уже в том регистре, в
+        # котором чат учил модель (флаг применяется на входе, при токенизации
+        # сообщения), и контекст сюда приходит в том же соглашении. Приведение
+        # к нижнему регистру здесь было бы не выравниванием, а сменой правила:
+        # в профиле с сохранением регистра гейты формы стали бы
+        # регистронезависимыми. Проверено: в дефолтном профиле это no-op —
+        # хеш генерации не меняется (tools/generation_hash.py).
         result_tokens = tokenize(result)
         is_short_reply = is_short_generated_reply(result_tokens)
         if not is_short_reply and is_low_diversity_reply(result_tokens):

@@ -152,6 +152,50 @@ class TestChatOverrides(unittest.TestCase):
         self.assertIs(state.effective(100), state)
 
 
+class TestOverlayShareLiveState(unittest.TestCase):
+    """Представление чата не должно уносить с собой служебное состояние.
+
+    ``effective`` возвращает поверхностную копию, и инвариант «живое состояние
+    у всех представлений одно» держался только для словарей. Единственный
+    изменяемый скаляр — счётчик, по которому запускается уборка, — жил на
+    копии-однодневке, и до базового состояния его инкременты не доходили: для
+    чатов с переопределениями периодическая уборка по сроку не запускалась
+    вовсе, а границу держал только предел по числу чатов.
+    """
+
+    def test_activity_through_a_view_advances_the_shared_counter(self) -> None:
+        state = make_runtime_state()
+        state.set_override(100, "reply_probability", 0.5)
+
+        for tick in range(10):
+            # Новое представление на каждое обновление — как в middleware.
+            state.effective(100).note_chat_activity(100, now=float(tick))
+
+        self.assertEqual(state._cleanup.value, 10)
+
+    def test_ttl_eviction_fires_for_a_chat_with_overrides(self) -> None:
+        state = make_runtime_state(runtime_state_ttl_sec=10)
+        state.set_override(100, "reply_probability", 0.5)
+        state.last_reply_ts[100] = 1.0
+        state.effective(100).note_chat_activity(100, now=1.0)
+
+        # 64 обращения — порог запуска уборки; к этому моменту чат 100 давно
+        # неактивен по сроку.
+        for tick in range(64):
+            state.effective(200).note_chat_activity(200, now=100.0 + tick)
+
+        self.assertNotIn(100, state.last_reply_ts)
+        self.assertEqual(state.chat_overrides, {})
+
+    def test_chat_without_overrides_still_gets_the_same_object(self) -> None:
+        state = make_runtime_state()
+
+        self.assertIs(state.effective(100), state)
+
+        state.effective(100).note_chat_activity(100, now=1.0)
+        self.assertEqual(state._cleanup.value, 1)
+
+
 class TestRuntimeState(unittest.TestCase):
     def test_prune_inactive_removes_stale_chat_entries(self) -> None:
         state = make_runtime_state()

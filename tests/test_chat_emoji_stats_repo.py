@@ -75,6 +75,28 @@ class TestChatEmojiStatsRepo(unittest.IsolatedAsyncioTestCase):
         # The clock was re-stamped: an immediate second call is a no-op.
         self.assertFalse(await self.db.decay_flavor_stats_if_due())
 
+    async def test_failed_decay_does_not_postpone_the_next_attempt(self) -> None:
+        """Отметка ставится после выполнения, а не до.
+
+        Иначе сбой внутри decay засчитывался как выполненный прогон: окно
+        «горячести» замирало до следующих суток, хотя ни одна строка не была
+        обработана.
+        """
+        from unittest.mock import patch
+
+        stale = time.monotonic() - FLAVOR_DECAY_INTERVAL_SEC - 1.0
+        self.db._last_flavor_decay_monotonic = stale
+
+        with patch.object(
+            self.db, "decay_chat_hot_ngrams", side_effect=RuntimeError("disk gone")
+        ):
+            with self.assertRaises(RuntimeError):
+                await self.db.decay_flavor_stats_if_due()
+
+        self.assertEqual(self.db._last_flavor_decay_monotonic, stale)
+        # Следующая попытка — сразу, а не через сутки.
+        self.assertTrue(await self.db.decay_flavor_stats_if_due())
+
 
 if __name__ == "__main__":
     unittest.main()

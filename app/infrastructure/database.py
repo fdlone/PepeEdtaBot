@@ -603,10 +603,13 @@ class Database:
             and now - self._last_flavor_decay_monotonic < FLAVOR_DECAY_INTERVAL_SEC
         ):
             return False
-        self._last_flavor_decay_monotonic = now
         await self.decay_chat_emoji_stats()
         await self.decay_chat_hot_ngrams()
         await self.decay_chat_user_interactions()
+        # Отметка ставится после выполнения, а не до: иначе сбой внутри decay
+        # засчитывался как выполненный прогон и откладывал следующую попытку на
+        # сутки — окно «горячести» замирало до конца суток или до рестарта.
+        self._last_flavor_decay_monotonic = now
         return True
 
     async def cleanup_pivo_daily_usage(
