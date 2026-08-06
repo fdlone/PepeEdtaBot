@@ -33,8 +33,8 @@ RANDOM_CHOICE_PATH = "app.services.pivo_message_builder.random.choice"
 
 def make_security() -> PivoSecurity:
     return PivoSecurity(
-        hmac_secret="test-hmac-secret-value",
-        encryption_secret="test-encryption-secret-value",
+        hmac_secret="test-hmac-secret-value-long-enough",
+        encryption_secret="test-encryption-secret-value-long",
     )
 
 
@@ -49,6 +49,7 @@ def make_member(
         encrypted_user_id=security.encrypt_value(user_id),
         encrypted_username=security.encrypt_value(username),
         encrypted_display_name=security.encrypt_value(display_name),
+        user_hash=security.hmac_value(user_id),
     )
 
 
@@ -69,6 +70,7 @@ def make_member_row(
         "encrypted_user_id": member.encrypted_user_id,
         "encrypted_username": member.encrypted_username,
         "encrypted_display_name": member.encrypted_display_name,
+        "user_hash": member.user_hash,
     }
 
 
@@ -196,6 +198,70 @@ class TestPivo(unittest.TestCase):
             "Pepe Tester",
         )
         self.assertEqual(display_name_from_user(SimpleNamespace()), "участник")
+
+    def test_key_is_derived_with_domain_separation(self) -> None:
+        """Один секрет в двух назначениях даёт разные ключи.
+
+        Ключ маскирования `chat_id` выводится из того же секрета с другой
+        доменной меткой; совпадение ключей означало бы, что компрометация
+        одного назначения открывает второе.
+        """
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+        from app.domain.pivo import _derive_fernet_key, _legacy_fernet_key
+
+        secret = "shared-secret-value-long-enough-32ch"
+        pivo_key = _derive_fernet_key(secret)
+        logging_key = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=None,
+            info=b"logging:chat_id",
+        ).derive(secret.encode("utf-8"))
+
+        self.assertNotEqual(pivo_key, logging_key)
+        # И от прежней схемы — тоже: иначе переход не состоялся бы.
+        self.assertNotEqual(pivo_key, _legacy_fernet_key(secret))
+
+    def test_legacy_ciphertext_is_still_readable(self) -> None:
+        """Строки, зашифрованные прежней схемой, читаются после перехода."""
+        import base64
+        import hashlib
+
+        from cryptography.fernet import Fernet
+
+        secret = "test-encryption-secret-value-long"
+        legacy = Fernet(
+            base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
+        )
+        legacy_ciphertext = legacy.encrypt(b"424242").decode()
+
+        security = PivoSecurity(
+            hmac_secret="test-hmac-secret-value-long-enough",
+            encryption_secret=secret,
+        )
+
+        self.assertEqual(security.decrypt_value(legacy_ciphertext), "424242")
+
+    def test_new_ciphertext_is_not_readable_by_the_legacy_key(self) -> None:
+        """Новая запись шифруется актуальным ключом, а не прежним."""
+        import base64
+        import hashlib
+
+        from cryptography.fernet import Fernet, InvalidToken
+
+        secret = "test-encryption-secret-value-long"
+        security = PivoSecurity(
+            hmac_secret="test-hmac-secret-value-long-enough",
+            encryption_secret=secret,
+        )
+        legacy = Fernet(
+            base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
+        )
+
+        with self.assertRaises(InvalidToken):
+            legacy.decrypt(security.encrypt_value("424242").encode())
 
     def test_pivo_privacy_message_has_no_technical_details(self) -> None:
         self.assertIn("/pivo_on", PIVO_PRIVACY_MESSAGE)
@@ -431,6 +497,42 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         self.assertIn("упомянуты не все", text)
         self.assertIn("ещё 1", text)
         db.get_chat_members.assert_awaited_once()
+
+    async def test_caller_is_excluded_without_decrypting_their_user_id(self) -> None:
+        """Вызывающий отсеивается по хранимому хешу, а не расшифровкой.
+
+        Расшифровка нужна там, где идентификатор идёт в ссылку упоминания;
+        для проверки «это я» достаточно того же HMAC, которым строка ключуется
+        в базе.
+        """
+        security = make_security()
+        caller_row = make_member_row(security, user_id=200, username="caller")
+        db = AsyncMock()
+        db.get_chat_members = AsyncMock(
+            return_value=[
+                caller_row,
+                make_member_row(security, user_id=201, username="friend1"),
+            ]
+        )
+        service = self._make_service(db, security)
+
+        decrypted: list[str] = []
+        original_decrypt = security.decrypt_value
+
+        def recording_decrypt(value: str) -> str:
+            decrypted.append(value)
+            return original_decrypt(value)
+
+        with patch.object(security, "decrypt_value", side_effect=recording_decrypt):
+            text, mentions_count, _picks, _paths = await service.build_call_message(
+                chat_id=100,
+                caller_user_id=200,
+            )
+
+        self.assertEqual(mentions_count, 1)
+        self.assertIn("@friend1", text)
+        self.assertNotIn("@caller", text)
+        self.assertNotIn(caller_row["encrypted_user_id"], decrypted)
 
     async def test_subscriber_fanout_at_limit_has_no_truncation_note(self) -> None:
         security = make_security()

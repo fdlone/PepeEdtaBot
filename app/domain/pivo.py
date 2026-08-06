@@ -6,7 +6,9 @@ import hmac
 import html
 from dataclasses import dataclass
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, MultiFernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 PIVO_FALLBACK_MENTIONS = "Господа дегенераты"
 PIVO_PRIVACY_MESSAGE = """Для /pivo я храню только тех пользователей, которые сами
@@ -25,15 +27,57 @@ class PivoMember:
     encrypted_user_id: str
     encrypted_username: str
     encrypted_display_name: str
+    # HMAC подписчика — то же значение, что лежит ключом строки в базе. Нужен,
+    # чтобы исключить вызывающего из списка, не расшифровывая его user_id.
+    user_hash: str = ""
+
+
+# Доменная метка ключа шифрования подписок. Отдельная метка — отдельный ключ:
+# компрометация одного назначения не должна давать ключа к другому (ср.
+# ``logging:chat_id`` в app/log_masking.py).
+_FERNET_DOMAIN = b"pivo:fernet"
+
+
+def _derive_fernet_key(secret: str) -> bytes:
+    """Ключ Fernet из секрета конфигурации через HKDF-SHA256."""
+    derived = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=_FERNET_DOMAIN,
+    ).derive(secret.encode("utf-8"))
+    return base64.urlsafe_b64encode(derived)
+
+
+def _legacy_fernet_key(secret: str) -> bytes:
+    """Прежняя схема: ключ — просто SHA-256 от секрета.
+
+    Оставлена только для чтения уже сохранённых строк. Одиночное хеширование
+    не создаёт барьера для перебора: секрет — парольная фраза из конфигурации,
+    и подбор по украденной базе идёт со скоростью хеширования.
+    """
+    return base64.urlsafe_b64encode(
+        hashlib.sha256(secret.encode("utf-8")).digest()
+    )
 
 
 class PivoSecurity:
+    """HMAC-анонимизация ключей и шифрование персональных полей подписчика.
+
+    Шифрование идёт набором ключей: первый (HKDF) шифрует, второй (прежняя
+    схема) только читает. Поэтому смена схемы не требует ни остановки бота, ни
+    единовременной миграции таблицы — строки переходят на новый ключ при
+    очередной перезаписи профиля (``/pivo_on``, суточное обновление).
+    """
+
     def __init__(self, hmac_secret: str, encryption_secret: str) -> None:
         self._hmac_secret = hmac_secret.encode("utf-8")
-        key = base64.urlsafe_b64encode(
-            hashlib.sha256(encryption_secret.encode("utf-8")).digest()
+        self._fernet = MultiFernet(
+            [
+                Fernet(_derive_fernet_key(encryption_secret)),
+                Fernet(_legacy_fernet_key(encryption_secret)),
+            ]
         )
-        self._fernet = Fernet(key)
 
     def hmac_value(self, value: int | str) -> str:
         payload = str(value).encode("utf-8")
@@ -173,13 +217,25 @@ def collect_pivo_mentions(
     *,
     mention_by_id: bool = True,
 ) -> list[PivoMentionResult]:
+    """Упоминания подписчиков чата, кроме самого вызывающего.
+
+    Вызывающий отсеивается по хранимому ``user_hash`` — тому самому значению,
+    которым строка ключуется в базе. Расшифровка ``encrypted_user_id`` ради
+    этого сравнения не нужна: она делается только там, где идентификатор
+    действительно идёт в ссылку упоминания.
+    """
     caller_hash = security.hmac_value(caller_user_id)
     mentions: list[PivoMentionResult] = []
 
     for member in members:
-        user_id = security.decrypt_value(member.encrypted_user_id)
-        if security.hmac_value(user_id) == caller_hash:
+        if member.user_hash and hmac.compare_digest(member.user_hash, caller_hash):
             continue
+        if not member.user_hash:
+            # Совместимость с вызывающими, которые не передают хеш: тогда
+            # остаётся прежний путь через расшифровку.
+            user_id = security.decrypt_value(member.encrypted_user_id)
+            if hmac.compare_digest(security.hmac_value(user_id), caller_hash):
+                continue
         mentions.append(
             build_pivo_mention(member, security, mention_by_id=mention_by_id)
         )

@@ -88,18 +88,22 @@ class ChatMembersRepo(BaseRepo):
     async def list_members(self, chat_hash: str) -> list[dict[str, object]]:
         rows = await self._fetch_all(
             """
-            SELECT encrypted_user_id, encrypted_username, encrypted_display_name
+            SELECT encrypted_user_id, encrypted_username, encrypted_display_name,
+                   user_hash
             FROM chat_members
             WHERE chat_hash = ?
             ORDER BY created_at, user_hash
             """,
             (chat_hash,),
         )
+        # user_hash отдаётся вместе с профилем: по нему вызывающий исключается
+        # из списка упоминаний без расшифровки его user_id.
         return [
             {
                 "encrypted_user_id": str(row[0]),
                 "encrypted_username": str(row[1]),
                 "encrypted_display_name": str(row[2]),
+                "user_hash": str(row[3]),
             }
             for row in rows
         ]

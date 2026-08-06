@@ -17,6 +17,13 @@ from app.config.registry import (
 )
 from app.core.reply_policy import DEFAULT_BOT_TEXT_ALIASES
 
+# Минимальная длина секретов, из которых выводятся ключи. Функция вывода ключа
+# защищает от перебора ровно настолько, насколько непредсказуем сам секрет:
+# парольная фраза в 16 символов перебирается независимо от схемы вывода.
+# 32 символа — это то, что выдаёт рекомендованный в .env.example
+# `secrets.token_urlsafe(32)` (43 символа), с запасом вниз.
+MIN_SECRET_LENGTH = 32
+
 
 @dataclass(slots=True)
 class Settings:
@@ -172,16 +179,20 @@ def load_settings(load_env: bool = True) -> Settings:
     )
 
     pivo_hmac_secret = os.getenv("PIVO_HMAC_SECRET", "").strip()
-    if len(pivo_hmac_secret) < 16:
-        raise ValueError("PIVO_HMAC_SECRET must be at least 16 characters")
+    if len(pivo_hmac_secret) < MIN_SECRET_LENGTH:
+        raise ValueError(
+            f"PIVO_HMAC_SECRET must be at least {MIN_SECRET_LENGTH} characters"
+        )
     if pivo_hmac_secret.lower().startswith("change_me"):
         raise ValueError(
             "PIVO_HMAC_SECRET still holds the .env.example placeholder; "
             "set a real random secret (see .env.example)"
         )
     pivo_encryption_secret = os.getenv("PIVO_ENCRYPTION_SECRET", "").strip()
-    if len(pivo_encryption_secret) < 16:
-        raise ValueError("PIVO_ENCRYPTION_SECRET must be at least 16 characters")
+    if len(pivo_encryption_secret) < MIN_SECRET_LENGTH:
+        raise ValueError(
+            f"PIVO_ENCRYPTION_SECRET must be at least {MIN_SECRET_LENGTH} characters"
+        )
     if pivo_encryption_secret.lower().startswith("change_me"):
         raise ValueError(
             "PIVO_ENCRYPTION_SECRET still holds the .env.example placeholder; "

@@ -283,6 +283,7 @@ class PivoService:
                 encrypted_user_id=str(row["encrypted_user_id"]),
                 encrypted_username=str(row["encrypted_username"]),
                 encrypted_display_name=str(row["encrypted_display_name"]),
+                user_hash=str(row.get("user_hash", "")),
             )
             for row in rows
         ]

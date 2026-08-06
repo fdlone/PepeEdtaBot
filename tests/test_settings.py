@@ -32,8 +32,8 @@ def minimal_env(db_path: str = "test_settings.db") -> dict[str, str]:
     return {
         "BOT_TOKEN": "123:token",
         "DB_PATH": db_path,
-        "PIVO_HMAC_SECRET": "test-pivo-hmac-secret",
-        "PIVO_ENCRYPTION_SECRET": "test-pivo-encryption-secret",
+        "PIVO_HMAC_SECRET": "test-pivo-hmac-secret-long-enough-32",
+        "PIVO_ENCRYPTION_SECRET": "test-pivo-encryption-secret-long-32",
     }
 
 
@@ -183,10 +183,41 @@ class TestSettings(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "PIVO_ENCRYPTION_SECRET.*placeholder"):
                 load_settings(load_env=False)
 
+    def test_load_settings_rejects_short_pivo_hmac_secret(self) -> None:
+        """Слабый секрет останавливает старт, а не проходит молча.
+
+        Функция вывода ключа защищает ровно настолько, насколько непредсказуем
+        сам секрет: парольная фраза в 16 символов перебирается независимо от
+        схемы вывода.
+        """
+        env = minimal_env()
+        env["PIVO_HMAC_SECRET"] = "short-hmac-16chr"
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "PIVO_HMAC_SECRET.*32"):
+                load_settings(load_env=False)
+
+    def test_load_settings_rejects_short_pivo_encryption_secret(self) -> None:
+        env = minimal_env()
+        env["PIVO_ENCRYPTION_SECRET"] = "short-encryption"
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "PIVO_ENCRYPTION_SECRET.*32"):
+                load_settings(load_env=False)
+
+    def test_load_settings_accepts_secret_at_the_length_floor(self) -> None:
+        from app.config.settings import MIN_SECRET_LENGTH
+
+        env = minimal_env()
+        env["PIVO_HMAC_SECRET"] = "h" * MIN_SECRET_LENGTH
+        env["PIVO_ENCRYPTION_SECRET"] = "e" * MIN_SECRET_LENGTH
+        with patch.dict(os.environ, env, clear=True):
+            settings = load_settings(load_env=False)
+
+        self.assertEqual(len(settings.pivo_hmac_secret), MIN_SECRET_LENGTH)
+
     def test_load_settings_rejects_identical_pivo_secrets(self) -> None:
         env = minimal_env()
-        env["PIVO_HMAC_SECRET"] = "shared-secret-value-123"
-        env["PIVO_ENCRYPTION_SECRET"] = "shared-secret-value-123"
+        env["PIVO_HMAC_SECRET"] = "shared-secret-value-long-enough-32ch"
+        env["PIVO_ENCRYPTION_SECRET"] = "shared-secret-value-long-enough-32ch"
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaisesRegex(ValueError, "must be different"):
                 load_settings(load_env=False)
