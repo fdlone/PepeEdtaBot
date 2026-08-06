@@ -4,7 +4,7 @@ import time
 from collections import Counter, deque
 from collections.abc import Callable, Iterable, Mapping, Set
 
-from app.core.candidate_scorer import build_token_idf
+from app.core.candidate_scorer import build_token_idf, verbatim_ngram_windows
 from app.core.intonation import IntonationProfile, build_intonation_profile
 from app.core.markov import MarkovGenerator, tokenize
 from app.core.slot_mutation import (
@@ -13,7 +13,7 @@ from app.core.slot_mutation import (
     frequencies_by_ending,
 )
 from app.core.text import sanitize_text
-from app.infrastructure.database import Database, verbatim_ngram_windows
+from app.infrastructure.database import Database
 
 # Trailing punctuation stripped before verbatim comparison: the reply pipeline
 # (finalize_reply_ending / reply flavor) only ever rewrites the ending cluster,

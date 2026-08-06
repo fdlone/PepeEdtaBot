@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass
 
-from app.infrastructure.database import Database
+from app.core.markov_port import MarkovReadPort
 
 _MATCH_KIND_PRIORITY = {"exact": 0, "casefold": 1}
 
@@ -22,7 +22,7 @@ class _StateIndex:
 
 
 class ContextStateMatcher:
-    def __init__(self, db: Database, cache_limit: int = 128) -> None:
+    def __init__(self, db: MarkovReadPort, cache_limit: int = 128) -> None:
         self._db = db
         self._cache_limit = max(1, cache_limit)
         self._cache: OrderedDict[tuple[int, int], _StateIndex] = OrderedDict()

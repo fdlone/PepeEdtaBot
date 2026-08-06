@@ -10,8 +10,8 @@ from typing import NamedTuple
 
 from app.core.context_state_matcher import ContextStateMatcher
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
+from app.core.markov_port import MarkovReadPort
 from app.core.morphology import stem_folded, stem_token
-from app.infrastructure.database import Database
 
 logger = logging.getLogger("chat_markov")
 
@@ -711,7 +711,8 @@ def weighted_start3_choice(
 
 @dataclass(slots=True)
 class MarkovGenerator:
-    db: Database
+    # Порт, а не конкретное хранилище: ядру достаточно чтения цепи.
+    db: MarkovReadPort
     max_steps: int = 90
     cache_limit: int = 1024
 

@@ -102,6 +102,19 @@ REPEATED_TRIGRAM_WEIGHT = 1.30
 # loses to recombined candidates in selection.
 VERBATIM_NGRAM_SIZE = 4
 
+def verbatim_ngram_windows(tokens: list[str]) -> list[tuple[str, ...]]:
+    """Casefolded content-token 4-grams of one message.
+
+    Единственная реализация «что считается окном»: по ней и пишется
+    накопительный индекс цитат при обучении, и считается доля совпадений при
+    оценке кандидата. Раньше инфраструктура держала свою копию (вместе с
+    копиями набора пунктуации и размера n-граммы), потому что импорт из ядра
+    замкнул бы цикл — ядро зависело от инфраструктуры. Цикла больше нет.
+    """
+    content = [token.casefold() for token in content_tokens(tokens)]
+    return build_windows(content, VERBATIM_NGRAM_SIZE)
+
+
 @dataclass(frozen=True, slots=True)
 class CandidateScore:
     completion_quality: float

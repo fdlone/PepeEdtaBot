@@ -14,6 +14,7 @@ from app.config.defaults import (
     SQLITE_BUSY_TIMEOUT_MS,
     SQLITE_WAL_AUTOCHECKPOINT_PAGES,
 )
+from app.core.candidate_scorer import verbatim_ngram_windows
 from app.core.text import sanitize_text
 from app.infrastructure import migrator
 from app.repositories import (
@@ -38,35 +39,6 @@ CHAT_USER_INTERACTION_DECAY_DAYS = 30
 # decay_flavor_stats_if_due): при аптайме в недели окно «горячести» продолжает
 # скользить, а не замирает до рестарта.
 FLAVOR_DECAY_INTERVAL_SEC = 86400.0
-
-# Mirrors app.core.markov.PUNCT_SET (importing it would cycle: markov imports
-# Database). Single-char punctuation tokens produced by TOKEN_RE.
-_PUNCT_TOKENS = frozenset({".", ",", "!", "?", ";", ":"})
-# Mirrors app.core.candidate_scorer.VERBATIM_NGRAM_SIZE (same cycle).
-_VERBATIM_NGRAM_SIZE = 4
-
-
-def verbatim_ngram_windows(
-    tokens: list[str],
-) -> list[tuple[str, str, str, str]]:
-    """Casefolded content-token 4-grams of one learned message.
-
-    Matches ``learning_service.content_ngram_windows`` output for the same
-    message so the cumulative index and the scorer agree on window identity.
-
-    Public because the same windows are folded into the in-memory index of
-    ``LearningService`` when a message is learned: two implementations of
-    "what counts as a window" would drift apart silently.
-    """
-    content = [
-        token.casefold() for token in tokens if token not in _PUNCT_TOKENS
-    ]
-    size = _VERBATIM_NGRAM_SIZE
-    return [
-        (content[i], content[i + 1], content[i + 2], content[i + 3])
-        for i in range(len(content) - size + 1)
-    ]
-
 
 _RepoT = TypeVar("_RepoT")
 
