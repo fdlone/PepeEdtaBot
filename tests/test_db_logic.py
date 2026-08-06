@@ -72,6 +72,41 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         # Returned volume mirrors get_stats' "volume" (prefers order-3).
         self.assertEqual(last_volume, sum3 if sum3 > 0 else sum2)
 
+    async def test_transition_rows_are_ordered(self) -> None:
+        """Предусловие горячего пути: строки приходят упорядоченными.
+
+        Функции взвешенного выбора больше не сортируют вход — на живом чате
+        это 4.5 тысячи стартов, пересортируемых на каждой попытке генерации.
+        Порядок обеспечивает источник, и это должно быть проверено здесь, а не
+        подразумеваться в комментарии.
+        """
+        chat_id = 4747
+        for tokens in (
+            ["яблоко", "груша", "слива", "вишня"],
+            ["апельсин", "банан", "манго", "киви"],
+            ["яблоко", "груша", "персик", "нектарин"],
+        ):
+            await self.db.save_message_and_update_model(
+                chat_id=chat_id, raw_text=" ".join(tokens), tokens=tokens
+            )
+
+        starts2 = await self.db.get_starts(chat_id)
+        self.assertEqual(
+            [(w1, w2) for w1, w2, _ in starts2],
+            sorted((w1, w2) for w1, w2, _ in starts2),
+        )
+        starts3 = await self.db.get_starts3(chat_id)
+        self.assertEqual(
+            [(w1, w2, w3) for w1, w2, w3, _ in starts3],
+            sorted((w1, w2, w3) for w1, w2, w3, _ in starts3),
+        )
+        transitions = await self.db.get_transitions(chat_id, "яблоко", "груша")
+        self.assertEqual(
+            [token for token, _ in transitions],
+            sorted(token for token, _ in transitions),
+        )
+        self.assertGreater(len(transitions), 1)
+
     async def test_token_volume_reads_the_counter_not_the_aggregate(self) -> None:
         """Горячий путь чтения объёма не сканирует таблицы переходов.
 

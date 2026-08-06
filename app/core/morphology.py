@@ -56,3 +56,17 @@ def stem_token(token: str) -> str:
         if token.endswith(ending) and len(token) - len(ending) >= _MIN_STEM_LEN:
             return token[: -len(ending)]
     return token
+
+
+@lru_cache(maxsize=100_000)
+def stem_folded(token: str) -> str:
+    """``stem_token`` of the casefolded token — same fold key, memoized whole.
+
+    The context-affine start selection folds every learned start on every
+    generation, and ``stem_token``'s own cache did not cover the ``casefold``
+    in front of it: profiling the prod copy showed 8.6M ``str.casefold`` calls
+    across 160 generations, second only to the selection itself. Caching the
+    pair collapses them to the corpus vocabulary. Pure function of the string,
+    identical output.
+    """
+    return stem_token(token.casefold())

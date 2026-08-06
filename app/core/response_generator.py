@@ -85,7 +85,9 @@ class VerbatimCopyChecker(Protocol):
     async def get_intonation_profile(
         self, chat_id: int
     ) -> IntonationProfile | None: ...
-    async def get_word_frequencies(self, chat_id: int) -> Mapping[str, int]: ...
+    async def get_word_frequencies_by_ending(
+        self, chat_id: int
+    ) -> Mapping[str, Mapping[str, int]]: ...
     async def get_hot_ngrams(
         self, chat_id: int, *, min_count: int, recency_share: float
     ) -> list[tuple[str, ...]]: ...
@@ -241,15 +243,17 @@ class ResponseGenerator:
 
     async def _read_mutation_inputs(
         self, request: GenerationRequest
-    ) -> tuple[Mapping[str, int], frozenset[str]]:
+    ) -> tuple[Mapping[str, Mapping[str, int]], frozenset[str]]:
         """Frequency dictionary and protected hot-ngram words for slot mutations.
 
         Both reads happen once per request and only when the knob is on; the
         hot-ngram read is additionally skipped when the chat has no frequency
         data, because without it no mutation can be proposed anyway.
         """
-        word_frequencies = await self.learning_service.get_word_frequencies(
-            request.chat_id
+        word_frequencies = (
+            await self.learning_service.get_word_frequencies_by_ending(
+                request.chat_id
+            )
         )
         if not word_frequencies:
             return {}, frozenset()
@@ -419,7 +423,7 @@ class ResponseGenerator:
         request: GenerationRequest,
         candidate_tokens: list[str],
         *,
-        frequencies: Mapping[str, int],
+        frequencies: Mapping[str, Mapping[str, int]],
         protected_tokens: frozenset[str],
         rng: random.Random,
     ) -> tuple[str, list[str]] | None:
@@ -502,7 +506,7 @@ class ResponseGenerator:
         # Slot mutations: the frequency dictionary and the protected hot-ngram
         # words are fetched once per request, and only when the knob is on.
         slot_mutation_probability = self.runtime_state.slot_mutation_probability
-        word_frequencies: Mapping[str, int] = {}
+        word_frequencies: Mapping[str, Mapping[str, int]] = {}
         protected_tokens: frozenset[str] = frozenset()
         if slot_mutation_probability > 0.0:
             word_frequencies, protected_tokens = await self._read_mutation_inputs(

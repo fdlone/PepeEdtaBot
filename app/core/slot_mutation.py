@@ -200,15 +200,39 @@ def pick_replacement(
     return rng.choices(pool, weights=weights, k=1)[0]
 
 
+def frequencies_by_ending(
+    frequencies: Mapping[str, int],
+) -> dict[str, dict[str, int]]:
+    """Разложить частотный словарь по двухбуквенному окончанию слова.
+
+    Замена обязана совпадать с оригиналом по окончанию, и этот фильтр отсекает
+    почти весь словарь — но проверялся он внутри полного обхода: 8892 слова на
+    каждый слот, 2.2 мс на копии прода. Раскладка делается один раз на чат.
+
+    Порядок внутри корзины — тот же, что в исходном словаре (dict сохраняет
+    порядок вставки), поэтому набор и порядок кандидатов в ``pick_replacement``
+    не меняются, а с ними не меняется и результат розыгрыша.
+    """
+    index: dict[str, dict[str, int]] = {}
+    for word, count in frequencies.items():
+        bucket = index.setdefault(word.casefold()[-ENDING_MATCH_LEN:], {})
+        bucket[word] = count
+    return index
+
+
 def mutate_candidate_tokens(
     tokens: list[str],
     *,
-    frequencies: Mapping[str, int],
+    frequencies: Mapping[str, Mapping[str, int]],
     protected_tokens: frozenset[str],
     context_tokens: Iterable[str],
     rng: random.Random,
 ) -> list[str] | None:
     """A copy of ``tokens`` with one slot mutated, or None when impossible.
+
+    ``frequencies`` — частоты, разложенные по окончанию (см.
+    ``frequencies_by_ending``): для каждого слота просматривается только
+    корзина его окончания, а не весь словарь чата.
 
     Eligible slots are tried in random order until one yields a replacement;
     the replacement must not already occur in the candidate or the context
@@ -225,9 +249,11 @@ def mutate_candidate_tokens(
     rng.shuffle(slots)
     own_tokens = frozenset(token.casefold() for token in tokens)
     for slot in slots:
+        original = tokens[slot]
+        bucket = frequencies.get(original.casefold()[-ENDING_MATCH_LEN:], {})
         replacement = pick_replacement(
-            tokens[slot],
-            frequencies,
+            original,
+            bucket,
             excluded_tokens=own_tokens | context_folded,
             rng=rng,
         )

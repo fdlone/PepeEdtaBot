@@ -6,6 +6,7 @@ import unittest
 from app.core.slot_mutation import (
     agrees_morphologically,
     eligible_slot_indexes,
+    frequencies_by_ending,
     is_mutable_word,
     mutate_candidate_tokens,
     pick_replacement,
@@ -190,7 +191,7 @@ class TestMutateCandidateTokens(unittest.TestCase):
         tokens = ["завтра", "сегодня", "работа", "опять"]
         mutated = mutate_candidate_tokens(
             tokens,
-            frequencies={"суббота": 10},
+            frequencies=frequencies_by_ending({"суббота": 10}),
             protected_tokens=NO_PROTECTED,
             context_tokens=(),
             rng=random.Random(7),
@@ -207,7 +208,7 @@ class TestMutateCandidateTokens(unittest.TestCase):
         snapshot = list(tokens)
         mutate_candidate_tokens(
             tokens,
-            frequencies={"суббота": 10},
+            frequencies=frequencies_by_ending({"суббота": 10}),
             protected_tokens=NO_PROTECTED,
             context_tokens=(),
             rng=random.Random(7),
@@ -217,7 +218,7 @@ class TestMutateCandidateTokens(unittest.TestCase):
     def test_none_when_no_eligible_slot(self) -> None:
         mutated = mutate_candidate_tokens(
             ["ну", "да", "ок"],
-            frequencies={"погода": 10},
+            frequencies=frequencies_by_ending({"погода": 10}),
             protected_tokens=NO_PROTECTED,
             context_tokens=(),
             rng=random.Random(7),
@@ -227,7 +228,7 @@ class TestMutateCandidateTokens(unittest.TestCase):
     def test_none_when_no_replacement_fits(self) -> None:
         mutated = mutate_candidate_tokens(
             ["завтра", "работа", "опять"],
-            frequencies={"стол": 10},
+            frequencies=frequencies_by_ending({"стол": 10}),
             protected_tokens=NO_PROTECTED,
             context_tokens=(),
             rng=random.Random(7),
@@ -237,7 +238,7 @@ class TestMutateCandidateTokens(unittest.TestCase):
     def test_replacement_never_echoes_context(self) -> None:
         mutated = mutate_candidate_tokens(
             ["завтра", "работа", "опять"],
-            frequencies={"суббота": 10},
+            frequencies=frequencies_by_ending({"суббота": 10}),
             protected_tokens=NO_PROTECTED,
             context_tokens=("суббота",),
             rng=random.Random(7),

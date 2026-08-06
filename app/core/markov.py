@@ -10,7 +10,7 @@ from typing import NamedTuple
 
 from app.core.context_state_matcher import ContextStateMatcher
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
-from app.core.morphology import stem_token
+from app.core.morphology import stem_folded, stem_token
 from app.infrastructure.database import Database
 
 logger = logging.getLogger("chat_markov")
@@ -272,18 +272,27 @@ def extract_best_seed(tokens: list[str], seed_length: int) -> list[str]:
 
 
 def longest_shared_run(tokens_a: list[str], tokens_b: list[str]) -> int:
+    """Длина самой длинной общей непрерывной последовательности токенов.
+
+    Динамика по одной строке: ``run[j]`` — длина общего хвоста, кончающегося
+    на ``tokens_a[i]`` и ``tokens_b[j]``. Прежняя форма досчитывала совпадение
+    заново от каждой пары позиций (кубическая в худшем случае) и вызывается
+    дважды на каждую завершённую попытку генерации.
+    """
+    if not tokens_a or not tokens_b:
+        return 0
+
     best = 0
-    for idx_a in range(len(tokens_a)):
-        for idx_b in range(len(tokens_b)):
-            run = 0
-            while (
-                idx_a + run < len(tokens_a)
-                and idx_b + run < len(tokens_b)
-                and tokens_a[idx_a + run] == tokens_b[idx_b + run]
-            ):
-                run += 1
-            if run > best:
-                best = run
+    previous = [0] * (len(tokens_b) + 1)
+    for token_a in tokens_a:
+        current = [0] * (len(tokens_b) + 1)
+        for index_b, token_b in enumerate(tokens_b):
+            if token_a == token_b:
+                run = previous[index_b] + 1
+                current[index_b + 1] = run
+                if run > best:
+                    best = run
+        previous = current
     return best
 
 
@@ -523,6 +532,28 @@ def exploration_weighted_choice[T](
     return population[index]
 
 
+def weighted_index_choice(
+    weights: list[float],
+    *,
+    exploring: bool,
+    rng: random.Random,
+) -> int:
+    """``weighted_population_choice`` над позициями вместо самих элементов.
+
+    Тот же розыгрыш теми же обращениями к генератору случайных чисел: и
+    ``rng.choices``, и экспоненциальный трюк работают по индексам, а элементы
+    только сопровождают вес. Разница в том, что вызывающему не нужно строить
+    список кандидатов: на живом чате это 4.5 тысячи кортежей, собираемых
+    заново на каждой попытке генерации ради одного победителя.
+    """
+    if exploring:
+        return min(
+            range(len(weights)),
+            key=lambda candidate_index: rng.expovariate(weights[candidate_index]),
+        )
+    return rng.choices(population=range(len(weights)), weights=weights, k=1)[0]
+
+
 def weighted_population_choice[T](
     population: list[T],
     weights: list[float],
@@ -557,8 +588,12 @@ def weighted_next_choice(
     seen_triplets: Container[tuple[str, ...]] | None = None,
     repetition_penalty_strength: float = 1.0,
 ) -> str:
-    ordered_items = sorted(items, key=lambda item: item[0])
-    population = [token for token, _ in ordered_items]
+    # ПРЕДУСЛОВИЕ: items упорядочены по токену. Его обеспечивает источник —
+    # запросы переходов идут с ORDER BY, а фильтрация порядок сохраняет (см.
+    # test_transition_rows_are_ordered). Пересортировка здесь стоила ~3 с на
+    # 160 генераций на копии прода и не меняла ни одного результата: порядок
+    # уже тот же самый.
+    ordered_items = items
     exploring, frequency_power = _roll_exploration(explore_probability, power, rng)
     step_bias = 1.0 + (max(1.0, context_bias) - 1.0) * context_decay(step_index)
     penalty_strength = max(0.0, repetition_penalty_strength)
@@ -595,9 +630,8 @@ def weighted_next_choice(
 
         weight = max(weight, 0.01)
         weights.append(weight)
-    return weighted_population_choice(
-        population, weights, exploring=exploring, rng=rng
-    )
+    index = weighted_index_choice(weights, exploring=exploring, rng=rng)
+    return ordered_items[index][0]
 
 
 def weighted_start2_choice(
@@ -606,13 +640,14 @@ def weighted_start2_choice(
     power: float,
     rng: random.Random,
 ) -> tuple[str, str]:
-    ordered_items = sorted(items, key=lambda item: (item[0], item[1]))
-    population = [(w1, w2) for w1, w2, _ in ordered_items]
+    # Предусловие то же, что у weighted_next_choice: items упорядочены по
+    # (w1, w2) — так их отдаёт запрос стартов.
+    ordered_items = items
     exploring, frequency_power = _roll_exploration(explore_probability, power, rng)
     weights = [max(cnt, 1) ** frequency_power for _, _, cnt in ordered_items]
-    return weighted_population_choice(
-        population, weights, exploring=exploring, rng=rng
-    )
+    index = weighted_index_choice(weights, exploring=exploring, rng=rng)
+    w1, w2, _ = ordered_items[index]
+    return w1, w2
 
 
 def context_start_stems(context_tokens: list[str]) -> frozenset[str]:
@@ -633,8 +668,10 @@ def weighted_start3_choice(
     context_stems: frozenset[str] | None = None,
     context_start_affinity: float = 1.0,
 ) -> tuple[str, str, str]:
-    ordered_items = sorted(items, key=lambda item: (item[0], item[1], item[2]))
-    population = [(w1, w2, w3) for w1, w2, w3, _ in ordered_items]
+    # Предусловие то же: items упорядочены по (w1, w2, w3). На живом чате это
+    # 4.5 тысячи стартов, и сортировка выполнялась на каждой из десяти попыток
+    # генерации — самая дорогая строка горячего пути после самого отбора.
+    ordered_items = items
     exploring, frequency_power = _roll_exploration(explore_probability, power, rng)
     weights = [max(cnt, 1) ** frequency_power for _, _, _, cnt in ordered_items]
     if context_stems and context_start_affinity > 1.0:
@@ -647,20 +684,20 @@ def weighted_start3_choice(
         # («кто гнойный пидор» is itself a learned start and out-boosted the
         # actual answers 10:1 — same parrot problem as the scorer's echo guard).
         boosted: list[float] = []
-        for weight, (w1, w2, w3) in zip(weights, population, strict=True):
+        for weight, (w1, w2, w3, _) in zip(weights, ordered_items, strict=True):
             state_stems = {
-                stem_token(w1.casefold()),
-                stem_token(w2.casefold()),
-                stem_token(w3.casefold()),
+                stem_folded(w1),
+                stem_folded(w2),
+                stem_folded(w3),
             }
             shared = len(state_stems & context_stems)
             if shared and not state_stems <= context_stems:
                 weight *= context_start_affinity**shared
             boosted.append(weight)
         weights = boosted
-    return weighted_population_choice(
-        population, weights, exploring=exploring, rng=rng
-    )
+    index = weighted_index_choice(weights, exploring=exploring, rng=rng)
+    w1, w2, w3, _ = ordered_items[index]
+    return w1, w2, w3
 
 
 @dataclass(slots=True)

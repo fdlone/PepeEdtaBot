@@ -57,7 +57,10 @@ from app.core.response_generator import (  # noqa: E402
     GenerationRequest,
     ResponseGenerator,
 )
-from app.core.slot_mutation import MIN_MUTABLE_WORD_LEN  # noqa: E402
+from app.core.slot_mutation import (  # noqa: E402
+    MIN_MUTABLE_WORD_LEN,
+    frequencies_by_ending,
+)
 from app.core.text import sanitize_text  # noqa: E402
 from app.infrastructure.database import Database  # noqa: E402
 from app.services.learning_service import (  # noqa: E402
@@ -119,6 +122,7 @@ class _ProdVerbatimChecker:
         # LearningService caches too, so per-request cost matches prod).
         self._db = db
         self._word_frequencies: dict[str, int] | None = None
+        self._frequencies_by_ending: dict[str, dict[str, int]] | None = None
         self._hot_ngrams: list[tuple[str, ...]] | None = None
 
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool:
@@ -153,6 +157,15 @@ class _ProdVerbatimChecker:
                 chat_id, min_word_len=MIN_MUTABLE_WORD_LEN
             )
         return self._word_frequencies
+
+    async def get_word_frequencies_by_ending(
+        self, chat_id: int
+    ) -> dict[str, dict[str, int]]:
+        if self._frequencies_by_ending is None:
+            self._frequencies_by_ending = frequencies_by_ending(
+                await self.get_word_frequencies(chat_id)
+            )
+        return self._frequencies_by_ending
 
     async def get_hot_ngrams(
         self, chat_id: int, *, min_count: int, recency_share: float

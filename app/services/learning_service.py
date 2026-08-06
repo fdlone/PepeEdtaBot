@@ -7,7 +7,11 @@ from collections.abc import Callable, Iterable, Mapping, Set
 from app.core.candidate_scorer import VERBATIM_NGRAM_SIZE, build_token_idf
 from app.core.intonation import IntonationProfile, build_intonation_profile
 from app.core.markov import MarkovGenerator, build_windows, content_tokens, tokenize
-from app.core.slot_mutation import MIN_MUTABLE_WORD_LEN
+from app.core.slot_mutation import (
+    ENDING_MATCH_LEN,
+    MIN_MUTABLE_WORD_LEN,
+    frequencies_by_ending,
+)
 from app.core.text import sanitize_text
 from app.infrastructure.database import Database, verbatim_ngram_windows
 
@@ -87,6 +91,10 @@ class LearningService:
         # order-2 цепи (не только окно ретенции messages). Пополняется словами
         # нового сообщения.
         self._word_frequencies: dict[int, dict[str, int]] = {}
+        # Тот же словарь, разложенный по двухбуквенному окончанию: подбор
+        # замены смотрит только корзину своего окончания, а не весь словарь.
+        # Держится в синхроне с плоским словарём в одном месте — _absorb_message.
+        self._frequencies_by_ending: dict[int, dict[str, dict[str, int]]] = {}
         # Монотонное время последнего обращения к кэшам чата — для вытеснения.
         self._last_touch: dict[int, float] = {}
         self._cleanup_tick = 0
@@ -245,7 +253,21 @@ class LearningService:
             chat_id, min_word_len=MIN_MUTABLE_WORD_LEN
         )
         self._word_frequencies[chat_id] = frequencies
+        self._frequencies_by_ending[chat_id] = frequencies_by_ending(frequencies)
         return frequencies
+
+    async def get_word_frequencies_by_ending(
+        self, chat_id: int
+    ) -> Mapping[str, Mapping[str, int]]:
+        """Частоты слов чата, разложенные по окончанию (для слот-мутаций).
+
+        Замена обязана совпадать с оригиналом по окончанию, и раскладка
+        превращает обход всего словаря чата в обход одной корзины. Порядок
+        внутри корзины — тот же, что в плоском словаре, поэтому набор и
+        порядок кандидатов не меняются.
+        """
+        await self.get_word_frequencies(chat_id)
+        return self._frequencies_by_ending[chat_id]
 
     def forget_chat(self, chat_id: int) -> None:
         """Полностью забыть кэши чата.
@@ -262,6 +284,7 @@ class LearningService:
         self._intonation.pop(chat_id, None)
         self._intonation_pending.pop(chat_id, None)
         self._word_frequencies.pop(chat_id, None)
+        self._frequencies_by_ending.pop(chat_id, None)
         self._last_touch.pop(chat_id, None)
 
     # --- приватные методы ---
@@ -327,9 +350,14 @@ class LearningService:
             # Частоты считаются по продолжениям order-2 цепи (w3), то есть по
             # токенам начиная с третьего — ровно то, что записывает
             # save_message_and_update_model.
+            by_ending = self._frequencies_by_ending[chat_id]
             for token in tokens[2:]:
                 if len(token) >= MIN_MUTABLE_WORD_LEN:
                     frequencies[token] = frequencies.get(token, 0) + 1
+                    bucket = by_ending.setdefault(
+                        token.casefold()[-ENDING_MATCH_LEN:], {}
+                    )
+                    bucket[token] = frequencies[token]
 
         if chat_id in self._token_idf:
             self._idf_pending[chat_id] = self._idf_pending.get(chat_id, 0) + 1
