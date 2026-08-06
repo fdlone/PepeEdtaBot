@@ -1,9 +1,16 @@
-# Keep this file in sync with .gitignore: anything untracked because it holds
-# chat data or local state must also stay out of the build context. The
-# Dockerfile does `COPY . .`, so an omission here bakes real data into an
-# image layer, where a runtime bind-mount only hides it — it does not remove it.
+# Второй рубеж защиты плюс размер build-контекста.
+#
+# Первый рубеж — сам Dockerfile: он больше не делает `COPY . .`, а копирует
+# только то, что нужно рантайму (main.py и app/). Поэтому забытая здесь строка
+# уже не запекает данные в слой образа. Но контекст целиком уходит демону при
+# каждой сборке, а на машине разработчика это десятки мегабайт БД и логов, —
+# так что список ниже всё равно поддерживаем.
+#
+# Правило прежнее: всё, что не коммитится из-за чата или локального состояния,
+# должно отсутствовать и здесь.
 
 .git
+.github
 .idea
 .venv
 __pycache__
@@ -36,21 +43,29 @@ db_prod_copy/
 Screenshot_*.jpg
 scrin/
 
-# Eval reports embed a real chat_id and a DB path (see .gitignore).
-tools/eval_prod_baseline.json
-
 # Local test scratch data
 .test_tmp/
 test_*.sqlite
 test_*.sqlite-shm
 test_*.sqlite-wal
 
-# Not needed at runtime
+# Not needed at runtime: dev tooling, tests, docs, specs, agent config.
+# tools/ живёт только в тестах и ручных прогонах (eval, seed, sweeps), в app/
+# и main.py оттуда нет ни одного импорта; в sweeps лежат ещё и прогоны на
+# копии прода с реальным chat_id.
 tests
+tools
 docs
-.github
+openspec
 .claude
 AGENTS.md
 CLAUDE.md
 .mcp.json
 skills-lock.json
+README.md
+LICENSE
+.env.example
+.gitattributes
+pyproject.toml
+requirements.txt
+requirements-dev.txt

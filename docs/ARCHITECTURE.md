@@ -229,6 +229,11 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
 
 - При сборке создаётся пользователь `bot` (UID 1000), `/app` принадлежит ему.
 - `requirements.lock` ставится первым слоем (cache-friendly).
+- В образ копируется белый список — `main.py` и `app/` (вместе с
+  `app/migrations/*.sql`), — а не весь контекст. Данные чата, тесты, `tools/`,
+  `docs/`, `openspec/` физически не попадают в слои, даже если кто-то забыл
+  дописать строку в `.dockerignore`. Сам `.dockerignore` остаётся вторым
+  рубежом и сокращает контекст, уходящий демону.
 - `HEALTHCHECK` каждые 60 секунд проверяет, что Python-интерпретатор жив
   (бот polling-only, HTTP endpoint'а нет — это формальная заглушка).
 - **`docker-entrypoint.sh`** запускается от root: best-effort
@@ -256,6 +261,9 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
   legacy-схемой (`tests/fixtures/legacy_real_schema.sql`).
 - CI: `.github/workflows/ci.yml` — матрица Python 3.12/3.13/3.14, шаги
   `ruff check` → `mypy app/` → `unittest discover` (с coverage) → `bandit` →
-  `pip-audit`; отдельный job выполняет Docker build smoke.
+  `pip-audit`; отдельный job собирает Docker-образ и прогоняет по нему smoke:
+  `import main` внутри контейнера плюс сверка числа миграций в образе с
+  репозиторием (белый список `COPY` иначе молча теряет файлы — сборка
+  останется зелёной, а бот упадёт при первом подключении к БД).
 
 Команды для локального прогона см. в `README.md`.
