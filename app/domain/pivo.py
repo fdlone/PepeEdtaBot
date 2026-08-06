@@ -75,6 +75,10 @@ def display_name_from_user(user: object) -> str:
 MENTION_BY_ID = "by_id"
 MENTION_BY_USERNAME = "by_username"
 MENTION_SKIPPED = "skipped"
+# Не путь упоминания, а счётчик подписчиков, не поместившихся в предел fanout.
+# Живёт в том же агрегате: тому, кто читает лог или отчёт, важно видеть, что
+# упомянуты не все, ровно там же, где он видит остальные числа.
+MENTION_TRUNCATED = "truncated"
 
 
 @dataclass(frozen=True, slots=True)

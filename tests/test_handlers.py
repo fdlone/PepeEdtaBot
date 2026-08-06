@@ -571,10 +571,14 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
 class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         from app.filters import admin_or_owner
+        from app.handlers import pivo as pivo_handlers
 
         # The admin-id cache is process-global; reset it so the shared chat_id
         # across these tests does not leak admin sets between cases.
         admin_or_owner._admin_cache.clear()
+        # Same for the quota-notice throttle: the shared (chat, user) pair would
+        # otherwise silence the notice in every case after the first.
+        pivo_handlers.reset_quota_notice_state()
 
     def test_pivo_router_handlers_are_group_only(self) -> None:
         from app.filters import GroupOnly
@@ -674,7 +678,7 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
 
         msg = _fake_message(text="/pivo @one @two @three")
         pivo_service = AsyncMock()
-        pivo_service.build_call_message = AsyncMock(
+        pivo_service.ensure_explicit_mentions_allowed = AsyncMock(
             side_effect=PivoCallLimitError(
                 "В /pivo можно указывать не больше 2 явных упоминаний за раз."
             )
@@ -685,8 +689,11 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
 
         await cmd_pivo(msg, pivo_service, state, bot, settings)
 
-        pivo_service.build_call_message.assert_awaited_once()
+        # Отказ по явным упоминаниям проверяется до квоты и до базы: список
+        # пришёл из текста команды, и он не должен стоить суточной квоты.
+        pivo_service.ensure_explicit_mentions_allowed.assert_awaited_once()
         pivo_service.consume_daily_call_quota.assert_not_called()
+        pivo_service.build_call_message.assert_not_called()
         msg.reply.assert_awaited_once()
         assert "не больше 2" in msg.reply.call_args[0][0]
 
@@ -710,12 +717,127 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
 
         await cmd_pivo(msg, pivo_service, state, bot, settings)
 
-        pivo_service.build_call_message.assert_awaited_once()
         pivo_service.consume_daily_call_quota.assert_awaited_once()
+        # Квота списывается до сборки: отклонённый вызов не должен оплачивать
+        # чтение подписчиков и расшифровку их данных.
+        pivo_service.build_call_message.assert_not_called()
         # N3: a quota-rejected call must not rotate the anti-repeat pools.
         pivo_service.record_pool_usage.assert_not_called()
         msg.reply.assert_awaited_once()
         assert "Лимит /pivo" in msg.reply.call_args[0][0]
+
+    async def test_pivo_over_quota_explains_once_per_window(self) -> None:
+        """Отказ по квоте не превращается в поток сообщений.
+
+        /pivo выведен из-под общего ограничения частоты, а квота ограничивала
+        только успешные вызовы: отказ отвечался на каждый, и участник,
+        повторяющий команду, получал неограниченный поток ответов бота.
+        """
+        from app.handlers.pivo import cmd_pivo
+        msg = _fake_message()
+        pivo_service = AsyncMock()
+        quota = MagicMock(allowed=False, limit=3, usage_day="2026-08-06")
+        pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
+        state = _fake_state()
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(return_value=[])
+        settings = MagicMock(owner_id=None)
+
+        for _ in range(3):
+            await cmd_pivo(msg, pivo_service, state, bot, settings)
+
+        self.assertEqual(pivo_service.consume_daily_call_quota.await_count, 3)
+        self.assertEqual(msg.reply.await_count, 1)
+
+    async def test_pivo_over_quota_explains_again_after_window(self) -> None:
+        from app.handlers import pivo as pivo_handlers
+        from app.handlers.pivo import cmd_pivo
+        msg = _fake_message()
+        pivo_service = AsyncMock()
+        quota = MagicMock(allowed=False, limit=3, usage_day="2026-08-06")
+        pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
+        state = _fake_state()
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(return_value=[])
+        settings = MagicMock(owner_id=None)
+
+        await cmd_pivo(msg, pivo_service, state, bot, settings)
+        # Сдвигаем отметку в прошлое на всё окно — как если бы оно истекло.
+        for key in list(pivo_handlers._quota_notice_sent):
+            pivo_handlers._quota_notice_sent[key] -= (
+                pivo_handlers.QUOTA_NOTICE_WINDOW_SEC + 1.0
+            )
+        await cmd_pivo(msg, pivo_service, state, bot, settings)
+
+        self.assertEqual(msg.reply.await_count, 2)
+
+    async def test_pivo_over_quota_notice_is_per_user(self) -> None:
+        from app.handlers.pivo import cmd_pivo
+        first = _fake_message(user_id=111)
+        second = _fake_message(user_id=222)
+        pivo_service = AsyncMock()
+        quota = MagicMock(allowed=False, limit=3, usage_day="2026-08-06")
+        pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
+        state = _fake_state()
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(return_value=[])
+        settings = MagicMock(owner_id=None)
+
+        await cmd_pivo(first, pivo_service, state, bot, settings)
+        await cmd_pivo(second, pivo_service, state, bot, settings)
+
+        first.reply.assert_awaited_once()
+        second.reply.assert_awaited_once()
+
+    async def test_pivo_refunds_quota_when_build_fails(self) -> None:
+        from app.handlers.pivo import cmd_pivo
+        msg = _fake_message()
+        pivo_service = AsyncMock()
+        quota = MagicMock(allowed=True, usage_day="2026-08-06")
+        pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
+        pivo_service.build_call_message = AsyncMock(
+            side_effect=RuntimeError("db is gone")
+        )
+        state = _fake_state()
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(return_value=[])
+        settings = MagicMock(owner_id=None)
+
+        with self.assertRaises(RuntimeError):
+            await cmd_pivo(msg, pivo_service, state, bot, settings)
+
+        pivo_service.refund_daily_call_quota.assert_awaited_once_with(
+            chat_id=msg.chat.id,
+            user_id=msg.from_user.id,
+            usage_day=quota.usage_day,
+        )
+
+    async def test_pivo_post_processing_failure_does_not_fail_the_call(self) -> None:
+        """Сбой после доставки не отменяет состоявшийся вызов."""
+        from app.handlers.pivo import cmd_pivo
+        msg = _fake_message()
+        pivo_service = AsyncMock()
+        quota = MagicMock(allowed=True, usage_day="2026-08-06")
+        pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
+        pivo_service.build_call_message = AsyncMock(
+            return_value=PivoCallMessage("Выходи пить!", 2, {}, {})
+        )
+        pivo_service.record_pool_usage = AsyncMock(
+            side_effect=RuntimeError("disk is gone")
+        )
+        state = _fake_state()
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(return_value=[])
+        settings = MagicMock(owner_id=None)
+
+        with self.assertLogs("chat_markov", level="ERROR") as captured:
+            await cmd_pivo(msg, pivo_service, state, bot, settings)
+
+        msg.reply.assert_awaited_once()
+        pivo_service.refund_daily_call_quota.assert_not_called()
+        self.assertTrue(
+            any("post-processing failed" in line for line in captured.output)
+        )
 
     async def test_pivo_uses_admin_daily_quota_path(self) -> None:
         from app.handlers.pivo import cmd_pivo

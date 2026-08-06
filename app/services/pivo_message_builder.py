@@ -31,6 +31,16 @@ PIVO_FALLBACK_MENTIONS_TEXT = "Господа дегенераты"
 DEFAULT_TARGET_PHRASE = "пиво, игры и коллективная деградация"
 
 
+def format_truncated_mentions_note(omitted: int) -> str:
+    """Приписка о том, что упомянуты не все подписчики.
+
+    Предел на число упоминаний защищает чат от рассылки на весь список, но
+    молчаливое усечение выглядело бы как потерянные люди. Формулировка без
+    согласования по числу — числительное здесь произвольное.
+    """
+    return f"(упомянуты не все — ещё {omitted} в списке подписчиков)"
+
+
 @dataclass(frozen=True, slots=True)
 class PivoMessageContext:
     # Optional mention block glued to the vocative a top template already has:

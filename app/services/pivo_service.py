@@ -9,6 +9,7 @@ from aiogram.types import User
 
 from app.domain.pivo import (
     MENTION_SKIPPED,
+    MENTION_TRUNCATED,
     PIVO_FALLBACK_MENTIONS,
     PivoMember,
     PivoMentionResult,
@@ -21,6 +22,7 @@ from app.infrastructure.database import Database
 from app.services.pivo_message_builder import (
     PivoMessageGenerator,
     build_pivo_message_context,
+    format_truncated_mentions_note,
 )
 
 PIVO_DAILY_LIMIT_USER = 3
@@ -39,6 +41,8 @@ class PivoCallMessage(NamedTuple):
     text: str
     mentions_count: int
     picks: dict[str, int]
+    # Числа для лога и отчёта владельцу: пути упоминания плюс, при усечении
+    # списка подписчиков, ключ MENTION_TRUNCATED с числом непоместившихся.
     mention_paths: dict[str, int]
 
 
@@ -187,13 +191,10 @@ class PivoService:
         """
         chat_hash = self._security.hmac_value(chat_id)
         mention_paths: dict[str, int] = {}
+        omitted_mentions = 0
         if explicit_mentions:
+            self.ensure_explicit_mentions_allowed_sync(explicit_mentions)
             mention_items = list(explicit_mentions)
-            if len(mention_items) > self._explicit_mentions_limit:
-                raise PivoCallLimitError(
-                    "В /pivo можно указывать не больше "
-                    f"{self._explicit_mentions_limit} явных упоминаний за раз."
-                )
         else:
             results = await self._collect_subscriber_mentions(
                 chat_hash=chat_hash,
@@ -206,11 +207,13 @@ class PivoService:
             mention_items = [
                 result.text for result in results if result.path != MENTION_SKIPPED
             ]
+            # Превышение предела усекает список, а не отменяет вызов: отказ
+            # ломал команду для всего чата навсегда — достаточно было
+            # подписаться сверх предела, и вернуть /pivo мог только /clear.
             if len(mention_items) > self._subscriber_fanout_limit:
-                raise PivoCallLimitError(
-                    "В списке подписчиков /pivo слишком много людей: "
-                    f"{len(mention_items)} из {self._subscriber_fanout_limit}."
-                )
+                omitted_mentions = len(mention_items) - self._subscriber_fanout_limit
+                mention_items = mention_items[: self._subscriber_fanout_limit]
+                mention_paths[MENTION_TRUNCATED] = omitted_mentions
         mentions = " ".join(mention_items) if mention_items else PIVO_FALLBACK_MENTIONS
         context = build_pivo_message_context(
             mentions,
@@ -229,12 +232,42 @@ class PivoService:
             now=now,
             temporal_flavor_chance=temporal_flavor_chance,
         )
+        text = result.text
+        if omitted_mentions:
+            text = f"{text}\n\n{format_truncated_mentions_note(omitted_mentions)}"
         return PivoCallMessage(
-            text=result.text,
+            text=text,
             mentions_count=len(mention_items),
             picks=result.picks,
             mention_paths=mention_paths,
         )
+
+    def ensure_explicit_mentions_allowed_sync(
+        self, explicit_mentions: Sequence[str]
+    ) -> None:
+        """Бросает ``PivoCallLimitError``, если явных упоминаний больше предела.
+
+        Отдельно от усечения подписчиков: явные упоминания перечислил сам
+        вызывающий, и молчаливое усечение его ввода скрыло бы, что часть
+        названных людей не позвана.
+        """
+        if len(explicit_mentions) > self._explicit_mentions_limit:
+            raise PivoCallLimitError(
+                "В /pivo можно указывать не больше "
+                f"{self._explicit_mentions_limit} явных упоминаний за раз."
+            )
+
+    async def ensure_explicit_mentions_allowed(
+        self, explicit_mentions: Sequence[str]
+    ) -> None:
+        """Асинхронная обёртка проверки для хендлера.
+
+        Проверка чистая и ввода-вывода не делает, но вызывается из хендлера
+        до списания квоты — то есть на том же пути, где все остальные
+        обращения к сервису асинхронные. Единый вид вызова стоит дешевле, чем
+        исключение из правила, о котором нужно помнить.
+        """
+        self.ensure_explicit_mentions_allowed_sync(explicit_mentions)
 
     async def _collect_subscriber_mentions(
         self,

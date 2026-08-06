@@ -11,6 +11,7 @@ from app.domain.pivo import (
     MENTION_BY_ID,
     MENTION_BY_USERNAME,
     MENTION_SKIPPED,
+    MENTION_TRUNCATED,
     PIVO_FALLBACK_MENTIONS,
     PIVO_PRIVACY_MESSAGE,
     PivoMember,
@@ -400,9 +401,14 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         self.assertIn("@friend1", text)
         self.assertIn("@friend2", text)
 
-    async def test_subscriber_fanout_above_limit_is_rejected(self) -> None:
-        from app.services.pivo_service import PivoCallLimitError
+    async def test_subscriber_fanout_above_limit_is_truncated(self) -> None:
+        """Превышение предела усекает список, а не отменяет вызов.
 
+        Отказ ломал команду для всего чата навсегда: достаточно было подписать
+        на одного человека больше предела, и вернуть /pivo мог только
+        `/clear confirm`. Усечение оставляет команду работающей, а пометка в
+        сообщении не даёт молча потерять людей.
+        """
         security = make_security()
         db = AsyncMock()
         db.get_chat_members = AsyncMock(
@@ -414,14 +420,36 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         )
         service = self._make_service(db, security)
 
-        with self.assertRaises(PivoCallLimitError) as ctx:
-            await service.build_call_message(
-                chat_id=100,
-                caller_user_id=200,
-            )
+        text, mentions_count, _picks, paths = await service.build_call_message(
+            chat_id=100,
+            caller_user_id=200,
+        )
 
-        self.assertIn("слишком много людей", str(ctx.exception))
+        # Предел этого сервиса в тестах — 2 (см. _make_service).
+        self.assertEqual(mentions_count, 2)
+        self.assertEqual(paths[MENTION_TRUNCATED], 1)
+        self.assertIn("упомянуты не все", text)
+        self.assertIn("ещё 1", text)
         db.get_chat_members.assert_awaited_once()
+
+    async def test_subscriber_fanout_at_limit_has_no_truncation_note(self) -> None:
+        security = make_security()
+        db = AsyncMock()
+        db.get_chat_members = AsyncMock(
+            return_value=[
+                make_member_row(security, user_id=201, username="friend1"),
+                make_member_row(security, user_id=202, username="friend2"),
+            ]
+        )
+        service = self._make_service(db, security)
+
+        text, _count, _picks, paths = await service.build_call_message(
+            chat_id=100,
+            caller_user_id=200,
+        )
+
+        self.assertNotIn(MENTION_TRUNCATED, paths)
+        self.assertNotIn("упомянуты не все", text)
 
     async def test_build_call_message_builds_contextual_body(self) -> None:
         from app.services.pivo_service import PivoService

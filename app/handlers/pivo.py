@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 
 from aiogram import Bot, Router
@@ -14,6 +15,7 @@ from app.domain.pivo import (
     MENTION_BY_ID,
     MENTION_BY_USERNAME,
     MENTION_SKIPPED,
+    MENTION_TRUNCATED,
     PIVO_PRIVACY_MESSAGE,
     count_mention_paths,
 )
@@ -26,6 +28,70 @@ from app.services.pivo_service import PivoCallLimitError, PivoCallMessage
 
 router = Router(name="pivo")
 logger = logging.getLogger("chat_markov")
+
+# Дросселирование объяснения «квота исчерпана».
+#
+# /pivo намеренно выведен из-под общего ограничения частоты: его суточная
+# квота и есть лимит (см. COOLDOWN_EXEMPT_COMMANDS в main.py). Но квота
+# ограничивает только успешные вызовы — отказ отвечался на каждый, и участник,
+# повторяющий команду, получал неограниченный поток сообщений от бота. Это
+# ровно та амплификация трафика и риск флуд-ограничений Telegram, ради которых
+# кулдауны и вводились. Объяснение остаётся (молчание читается как поломка),
+# но не чаще одного раза в окно на пару «чат — участник».
+QUOTA_NOTICE_WINDOW_SEC = 60.0
+# Пределы роста состояния — как у соседних состояний в памяти
+# (ThrottlingMiddleware._prune_state, _admin_cache): ключи приходят снаружи,
+# списка разрешённых чатов нет.
+QUOTA_NOTICE_MAX_KEYS = 4096
+_QUOTA_NOTICE_CLEANUP_EVERY = 64
+
+_quota_notice_sent: dict[tuple[int, int], float] = {}
+_quota_notice_tick = 0
+
+
+def reset_quota_notice_state() -> None:
+    """Сбрасывает состояние дросселя. Тесты стартуют с известного состояния."""
+    global _quota_notice_tick
+    _quota_notice_sent.clear()
+    _quota_notice_tick = 0
+
+
+def _prune_quota_notice_state(now: float) -> None:
+    """Удаляет отметки старше окна, затем ограничивает объём.
+
+    Вытеснение не меняет решений: забытая отметка означает лишь то, что
+    следующий отказ снова будет объяснён, — как и после истечения окна.
+    """
+    cutoff = now - QUOTA_NOTICE_WINDOW_SEC
+    for key in [k for k, sent_at in _quota_notice_sent.items() if sent_at < cutoff]:
+        _quota_notice_sent.pop(key, None)
+
+    overflow = len(_quota_notice_sent) - QUOTA_NOTICE_MAX_KEYS
+    if overflow > 0:
+        oldest = sorted(_quota_notice_sent.items(), key=lambda item: item[1])[:overflow]
+        for key, _ in oldest:
+            _quota_notice_sent.pop(key, None)
+
+
+def _should_notify_quota_exhausted(chat_id: int, user_id: int) -> bool:
+    """True, если об исчерпанной квоте этому участнику пора сказать вслух."""
+    global _quota_notice_tick
+    now = time.monotonic()
+
+    _quota_notice_tick += 1
+    if (
+        _quota_notice_tick >= _QUOTA_NOTICE_CLEANUP_EVERY
+        or len(_quota_notice_sent) > QUOTA_NOTICE_MAX_KEYS
+    ):
+        _quota_notice_tick = 0
+        _prune_quota_notice_state(now)
+
+    key = (chat_id, user_id)
+    last_sent = _quota_notice_sent.get(key)
+    if last_sent is not None and (now - last_sent) < QUOTA_NOTICE_WINDOW_SEC:
+        return False
+    _quota_notice_sent[key] = now
+    return True
 
 
 def _entity_counts(sent: Message | None) -> dict[str, int]:
@@ -63,7 +129,8 @@ async def _report_mentions_to_owner(
         f"упомянуто: {call.mentions_count}\n"
         f"по user_id: {paths.get(MENTION_BY_ID, 0)}, "
         f"строкой: {paths.get(MENTION_BY_USERNAME, 0)}, "
-        f"пропущено: {paths.get(MENTION_SKIPPED, 0)}\n"
+        f"пропущено: {paths.get(MENTION_SKIPPED, 0)}, "
+        f"не поместилось: {paths.get(MENTION_TRUNCATED, 0)}\n"
         f"entity сервера: text_mention={counts.get('text_mention', 0)}, "
         f"mention={counts.get('mention', 0)}"
     )
@@ -112,10 +179,48 @@ async def cmd_pivo(
     if message.from_user is None:
         return
     command_args = parse_pivo_command(message)
+
+    # Проверяется до квоты и до любого обращения к базе: список упоминаний
+    # пришёл из текста команды, и отказ по нему не должен стоить вызывающему
+    # суточной квоты.
+    try:
+        await pivo_service.ensure_explicit_mentions_allowed(
+            command_args.explicit_mentions
+        )
+    except PivoCallLimitError as exc:
+        await reply_humanized_state(message, str(exc), runtime_state)
+        logger.info("pivo command rejected by call limit: %s", exc)
+        return
+
     is_owner = (
         settings.owner_id is not None and message.from_user.id == settings.owner_id
     )
     quota = None
+
+    # Квота списывается до сборки сообщения: иначе отклонённый вызов всё равно
+    # оплачивался чтением подписчиков и расшифровкой их данных.
+    if not is_owner:
+        is_privileged = await is_admin_or_owner(message, bot, settings)
+        quota = await pivo_service.consume_daily_call_quota(
+            chat_id=message.chat.id,
+            user_id=message.from_user.id,
+            is_admin_or_owner=is_privileged,
+        )
+        if not quota.allowed:
+            if _should_notify_quota_exhausted(
+                message.chat.id, message.from_user.id
+            ):
+                await reply_humanized_state(
+                    message,
+                    f"Лимит /pivo на сегодня исчерпан: {quota.limit} раз(а) в сутки.",
+                    runtime_state,
+                )
+            logger.info(
+                "pivo command rejected by daily quota: limit=%s day=%s",
+                quota.limit,
+                quota.usage_day,
+            )
+            return
 
     try:
         call = await pivo_service.build_call_message(
@@ -129,32 +234,6 @@ async def cmd_pivo(
             now=datetime.now(),
             mention_by_id=runtime_state.pivo_mention_by_id,
         )
-    except PivoCallLimitError as exc:
-        await reply_humanized_state(message, str(exc), runtime_state)
-        logger.info("pivo command rejected by call limit: %s", exc)
-        return
-
-    if not is_owner:
-        is_privileged = await is_admin_or_owner(message, bot, settings)
-        quota = await pivo_service.consume_daily_call_quota(
-            chat_id=message.chat.id,
-            user_id=message.from_user.id,
-            is_admin_or_owner=is_privileged,
-        )
-        if not quota.allowed:
-            await reply_humanized_state(
-                message,
-                f"Лимит /pivo на сегодня исчерпан: {quota.limit} раз(а) в сутки.",
-                runtime_state,
-            )
-            logger.info(
-                "pivo command rejected by daily quota: limit=%s day=%s",
-                quota.limit,
-                quota.usage_day,
-            )
-            return
-
-    try:
         sent = await message.reply(call.text, parse_mode=ParseMode.HTML)
     except Exception:
         if quota is not None:
@@ -170,19 +249,43 @@ async def cmd_pivo(
             logger.exception("pivo command failed")
         raise
 
-    # Anti-repeat state is recorded only after the reply is actually delivered,
-    # so quota-rejected or failed calls do not rotate the template pools.
-    await pivo_service.record_pool_usage(
-        message.chat.id,
-        call.picks,
-        recent_pool_window=runtime_state.pivo_recent_pool_window,
+    await _finish_pivo_call(
+        message, bot, settings, runtime_state, pivo_service, call, sent
     )
 
-    logger.info("pivo command executed")
-    logger.info("mentions count: %s", call.mentions_count)
-    _log_mention_aggregate(message.chat.id, call, sent)
-    if runtime_state.pivo_report_to_owner:
-        await _report_mentions_to_owner(message, bot, settings, call, sent)
+
+async def _finish_pivo_call(
+    message: Message,
+    bot: Bot,
+    settings: Settings,
+    runtime_state: RuntimeState,
+    pivo_service: PivoService,
+    call: PivoCallMessage,
+    sent: Message | None,
+) -> None:
+    """Работа после доставки сообщения: анти-повтор, агрегат, отчёт владельцу.
+
+    Сообщение к этому моменту уже в чате, поэтому любой сбой здесь гасится:
+    он не отменяет состоявшийся вызов, не возвращает квоту и не должен
+    всплывать из обработчика — иначе вызов, который человек видит выполненным,
+    выглядит упавшим в логе и в обработчике ошибок.
+    """
+    try:
+        # Anti-repeat state is recorded only after the reply is actually
+        # delivered, so quota-rejected or failed calls do not rotate the pools.
+        await pivo_service.record_pool_usage(
+            message.chat.id,
+            call.picks,
+            recent_pool_window=runtime_state.pivo_recent_pool_window,
+        )
+
+        logger.info("pivo command executed")
+        logger.info("mentions count: %s", call.mentions_count)
+        _log_mention_aggregate(message.chat.id, call, sent)
+        if runtime_state.pivo_report_to_owner:
+            await _report_mentions_to_owner(message, bot, settings, call, sent)
+    except Exception:
+        logger.exception("pivo post-processing failed; call already delivered")
 
 
 @router.message(Command("pivo_on"), GroupOnly())

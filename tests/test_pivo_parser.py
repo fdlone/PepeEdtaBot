@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from aiogram.types import MessageEntity, User
 
-from app.services.pivo_parser import parse_pivo_command
+from app.services.pivo_parser import MAX_TARGET_CHARS, parse_pivo_command
 
 
 def _message(
@@ -131,6 +131,34 @@ class TestPivoParser(unittest.TestCase):
 
         self.assertEqual(args.planned_time, "завтра")
         self.assertEqual(args.target, "сосать бибу")
+
+    def test_long_target_is_truncated(self) -> None:
+        """Повод режется по длине: без потолка отправка падала бы всегда.
+
+        Сообщение Telegram — до 4096 символов, шаблон /pivo добавляет к поводу
+        ещё несколько сотен. Ввод в 4000 символов делал вызов заведомо
+        недоставляемым, а квота при этом возвращалась — приём был повторяем.
+        """
+        long_target = "го в дотку " * 400
+
+        args = parse_pivo_command(_message(f"/pivo {long_target}"))  # type: ignore[arg-type]
+
+        self.assertIsNotNone(args.target)
+        assert args.target is not None
+        self.assertLessEqual(len(args.target), MAX_TARGET_CHARS)
+        # Режем по границе слова — обрубок посреди слова читается как поломка.
+        self.assertFalse(args.target.endswith("го в дот"))
+
+    def test_short_target_is_untouched(self) -> None:
+        args = parse_pivo_command(_message("/pivo смотреть фильм"))  # type: ignore[arg-type]
+
+        self.assertEqual(args.target, "смотреть фильм")
+
+    def test_target_without_spaces_is_truncated_by_length(self) -> None:
+        args = parse_pivo_command(_message("/pivo " + "я" * 500))  # type: ignore[arg-type]
+
+        assert args.target is not None
+        self.assertEqual(len(args.target), MAX_TARGET_CHARS)
 
     def test_telegram_text_mention_without_username(self) -> None:
         text = "/pivo 20:00 Friend"
