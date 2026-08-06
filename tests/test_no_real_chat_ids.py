@@ -78,14 +78,20 @@ class TestNoRealChatIds(unittest.TestCase):
 
     def test_guard_recognizes_a_foreign_identifier(self) -> None:
         """The guard must actually catch something — a pattern that matches
-        nothing would pass silently forever."""
+        nothing would pass silently forever.
+
+        The sample identifier is assembled from parts on purpose: written as a
+        literal it would be an undeclared chat-id-shaped number in a tracked
+        file, i.e. the very thing the test above forbids.
+        """
+        foreign = "-100" + "7654321098"
         matches = [
             match.group(0)
-            for match in _CHAT_ID_IN_TEXT.finditer("flood in chat -1007654321098")
+            for match in _CHAT_ID_IN_TEXT.finditer(f"flood in chat {foreign}")
         ]
 
-        self.assertEqual(matches, ["-1007654321098"])
-        self.assertNotIn(matches[0], ALLOWED_SYNTHETIC_CHAT_IDS)
+        self.assertEqual(matches, [foreign])
+        self.assertNotIn(foreign, ALLOWED_SYNTHETIC_CHAT_IDS)
 
 
 if __name__ == "__main__":
