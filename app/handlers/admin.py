@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from aiogram import Router
+from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
@@ -16,7 +16,13 @@ from app.config.runtime_config import (
 from app.config.runtime_state import RuntimeState
 from app.config.settings import Settings
 from app.core.markov import MarkovGenerator
-from app.filters import AdminOrOwner, GroupOnly, OwnerOnly, is_owner
+from app.filters import (
+    AdminOrOwner,
+    GroupOnly,
+    OwnerOnly,
+    is_admin_or_owner,
+    is_owner,
+)
 from app.handlers._helpers import reply_humanized_state
 from app.infrastructure.database import Database
 from app.presentation.bot_messages import (
@@ -67,13 +73,27 @@ async def cmd_config(
     message: Message,
     runtime_state: RuntimeState,
     runtime_state_base: RuntimeState,
+    bot: Bot,
+    settings: Settings,
 ) -> None:
     raw = _extract_command_arg(message.text or "")
+    full = raw.strip().lower() == "full"
+    # Краткая форма открыта всем: понимать, почему бот ведёт себя так, вправе
+    # каждый участник. Полная — это карта модерации (пороги, кулдауны, лимиты),
+    # и читать её логично тому же кругу, который может её менять через /set.
+    if full and not await is_admin_or_owner(message, bot, settings):
+        await reply_humanized_state(
+            message,
+            "Полный список настроек доступен админам этого чата и OWNER_ID.\n"
+            "Основные значения: /config",
+            runtime_state,
+        )
+        return
     # runtime_state is already this chat's view, so the values shown are the
     # effective ones; the base state only says which of them were overridden.
     text = format_config_message(
         runtime_state,
-        full=raw.strip().lower() == "full",
+        full=full,
         overridden=runtime_state_base.chat_overrides.get(message.chat.id, {}),
     )
     await reply_humanized_state(message, text, runtime_state)

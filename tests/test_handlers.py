@@ -188,14 +188,30 @@ class TestCommonHandlers(unittest.IsolatedAsyncioTestCase):
 # ---------------------------------------------------------------------------
 
 class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        from app.filters import admin_or_owner
+
+        admin_or_owner._admin_cache.clear()
+
+    @staticmethod
+    def _config_deps(*, admin_ids: tuple[int, ...] = ()) -> tuple[AsyncMock, MagicMock]:
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(
+            return_value=[MagicMock(user=MagicMock(id=uid)) for uid in admin_ids]
+        )
+        return bot, MagicMock(owner_id=None)
+
     async def test_config_replies(self) -> None:
         from app.handlers.admin import cmd_config
         msg = _fake_message(text="/config")
         state = _fake_state()
         base = _real_runtime_state()
+        bot, settings = self._config_deps()
         with patch("app.handlers.admin.format_config_message", return_value="cfg"):
-            await cmd_config(msg, state, base)
+            await cmd_config(msg, state, base, bot, settings)
         msg.reply.assert_awaited_once()
+        # Краткая форма открыта всем: права даже не запрашиваются.
+        bot.get_chat_administrators.assert_not_called()
 
     async def test_config_marks_chat_overrides(self) -> None:
         from app.handlers.admin import cmd_config
@@ -203,11 +219,74 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         msg = _fake_message(text="/config")
         base = _real_runtime_state()
         base.set_override(msg.chat.id, "reply_probability", 0.5)
-        await cmd_config(msg, base.effective(msg.chat.id), base)
+        bot, settings = self._config_deps()
+        await cmd_config(msg, base.effective(msg.chat.id), base, bot, settings)
 
         text = msg.reply.await_args.args[0]
         self.assertIn("Переопределено для этого чата", text)
         self.assertIn("reply_probability", text)
+
+    async def test_config_full_is_denied_to_plain_member(self) -> None:
+        """Полная форма — карта модерации, а не общая справка.
+
+        По ней видно, какие пороги надо обойти, чтобы бот отвечал чаще, и что
+        именно переопределено в этом чате. Читать её логично тому же кругу,
+        который может её менять через /set.
+        """
+        from app.handlers.admin import cmd_config
+
+        msg = _fake_message(text="/config full")
+        base = _real_runtime_state()
+        bot, settings = self._config_deps()
+
+        await cmd_config(msg, base.effective(msg.chat.id), base, bot, settings)
+
+        text = msg.reply.await_args.args[0]
+        self.assertIn("админам этого чата", text)
+        # Отказ, а не тихая подмена краткой формой.
+        self.assertNotIn("max_reply_chars", text)
+
+    async def test_config_full_is_allowed_to_chat_admin(self) -> None:
+        from app.handlers.admin import cmd_config
+
+        msg = _fake_message(text="/config full")
+        base = _real_runtime_state()
+        bot, settings = self._config_deps(admin_ids=(msg.from_user.id,))
+
+        await cmd_config(msg, base.effective(msg.chat.id), base, bot, settings)
+
+        text = msg.reply.await_args.args[0]
+        self.assertIn("max_reply_chars", text)
+
+    async def test_config_full_is_allowed_to_owner(self) -> None:
+        from app.handlers.admin import cmd_config
+
+        msg = _fake_message(text="/config full")
+        base = _real_runtime_state()
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(return_value=[])
+        settings = MagicMock(owner_id=msg.from_user.id)
+
+        await cmd_config(msg, base.effective(msg.chat.id), base, bot, settings)
+
+        text = msg.reply.await_args.args[0]
+        self.assertIn("max_reply_chars", text)
+
+    async def test_config_short_form_is_allowed_to_plain_member(self) -> None:
+        from app.handlers.admin import cmd_config
+
+        msg = _fake_message(text="/config")
+        base = _real_runtime_state()
+        base.set_override(msg.chat.id, "reply_probability", 0.5)
+        bot, settings = self._config_deps()
+
+        await cmd_config(msg, base.effective(msg.chat.id), base, bot, settings)
+
+        text = msg.reply.await_args.args[0]
+        self.assertIn("шанс ответа", text)
+        self.assertNotIn("max_reply_chars", text)
+        # Пометка о переопределениях остаётся и в краткой форме.
+        self.assertIn("Переопределено для этого чата", text)
 
     async def test_set_no_args_shows_usage(self) -> None:
         from app.handlers.admin import cmd_set

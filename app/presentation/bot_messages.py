@@ -63,7 +63,7 @@ def format_help_message() -> str:
         "\n"
         "Настройки:\n"
         "/config - основные настройки\n"
-        "/config full - все runtime-настройки\n"
+        "/config full - все runtime-настройки (админам чата и OWNER_ID)\n"
         "/set help - подсказка по ключам\n"
         "/set <key> <value> - изменить настройку до перезапуска\n"
         "/setprob 0.2 - быстро изменить шанс ответа\n"
