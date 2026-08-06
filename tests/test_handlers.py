@@ -561,10 +561,14 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         generator = MagicMock()
         settings = MagicMock()
         pivo_service = AsyncMock()
+        learning_service = MagicMock()
         with patch("app.handlers.admin.format_clear_confirmation_message", return_value="confirm?"):
-            await cmd_clear(msg, db, state, generator, settings, pivo_service)
+            await cmd_clear(
+                msg, db, state, generator, settings, pivo_service, learning_service
+            )
         db.clear_chat.assert_not_called()
         pivo_service.clear_chat_data.assert_not_called()
+        learning_service.forget_chat.assert_not_called()
         msg.reply.assert_awaited_once()
 
     async def test_clear_with_confirm_clears_chat(self) -> None:
@@ -575,9 +579,15 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         generator = MagicMock()
         settings = MagicMock()
         pivo_service = AsyncMock()
-        await cmd_clear(msg, db, state, generator, settings, pivo_service)
+        learning_service = MagicMock()
+        await cmd_clear(
+            msg, db, state, generator, settings, pivo_service, learning_service
+        )
         db.clear_chat.assert_awaited_once_with(msg.chat.id)
         pivo_service.clear_chat_data.assert_awaited_once_with(msg.chat.id)
+        # Кэши обучения переживали очистку: гейт дословного повтора продолжал
+        # считать цитатой сообщения, которых в базе уже нет.
+        learning_service.forget_chat.assert_called_once_with(msg.chat.id)
         msg.reply.assert_awaited_once()
 
     # --- fallback handlers для unauthorized админ-команд ---

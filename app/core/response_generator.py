@@ -4,6 +4,7 @@ import logging
 import math
 import random
 from collections.abc import Callable, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from typing import Protocol
 
@@ -79,7 +80,7 @@ class VerbatimCopyChecker(Protocol):
     async def get_emoji_stats(self, chat_id: int) -> Mapping[str, int]: ...
     async def get_verbatim_ngram_index(
         self, chat_id: int
-    ) -> frozenset[tuple[str, ...]]: ...
+    ) -> AbstractSet[tuple[str, ...]]: ...
     async def get_context_idf(self, chat_id: int) -> Mapping[str, float]: ...
     async def get_intonation_profile(
         self, chat_id: int
@@ -396,7 +397,7 @@ class ResponseGenerator:
         context_idf: Mapping[str, float],
         recent_trigrams: set[tuple[str, ...]],
         recent_penalty_strength: float,
-        corpus_ngrams: frozenset[tuple[str, ...]],
+        corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
     ) -> CandidateScore:
         """Full candidate score with the per-request penalty components."""
@@ -475,7 +476,7 @@ class ResponseGenerator:
         # corpus are verbatim replays and lose score to recombined candidates.
         # The index read is skipped entirely when the penalty is off.
         verbatim_penalty_strength = self.runtime_state.verbatim_penalty_strength
-        corpus_ngrams: frozenset[tuple[str, ...]] = frozenset()
+        corpus_ngrams: AbstractSet[tuple[str, ...]] = frozenset()
         if verbatim_penalty_strength > 0.0:
             corpus_ngrams = await self.learning_service.get_verbatim_ngram_index(
                 request.chat_id

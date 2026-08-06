@@ -305,6 +305,7 @@ async def cmd_clear(
     generator: MarkovGenerator,
     settings: Settings,
     pivo_service: PivoService,
+    learning_service: LearningService,
 ) -> None:
     raw = _extract_command_arg(message.text or "")
     if raw.strip().lower() != "confirm":
@@ -315,6 +316,9 @@ async def cmd_clear(
     await db.clear_chat(message.chat.id)
     await pivo_service.clear_chat_data(message.chat.id)
     generator.invalidate_chat_cache(message.chat.id)
+    # Кэши обучения переживали очистку: гейт дословного повтора продолжал
+    # считать цитатой сообщения, которых в базе уже нет.
+    learning_service.forget_chat(message.chat.id)
     runtime_state.forget_chat(message.chat.id)
     await reply_humanized_state(
         message, "Данные чата очищены (включая подписки /pivo).", runtime_state

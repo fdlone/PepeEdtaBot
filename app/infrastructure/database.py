@@ -46,13 +46,17 @@ _PUNCT_TOKENS = frozenset({".", ",", "!", "?", ";", ":"})
 _VERBATIM_NGRAM_SIZE = 4
 
 
-def _content_ngram_windows(
+def verbatim_ngram_windows(
     tokens: list[str],
 ) -> list[tuple[str, str, str, str]]:
     """Casefolded content-token 4-grams of one learned message.
 
     Matches ``learning_service.content_ngram_windows`` output for the same
     message so the cumulative index and the scorer agree on window identity.
+
+    Public because the same windows are folded into the in-memory index of
+    ``LearningService`` when a message is learned: two implementations of
+    "what counts as a window" would drift apart silently.
     """
     content = [
         token.casefold() for token in tokens if token not in _PUNCT_TOKENS
@@ -270,7 +274,7 @@ class Database:
             # retention never trims it) so the quote penalty and the
             # near-quote extension see the chain's whole memory, not the
             # last-1000-messages window.
-            verbatim_windows = _content_ngram_windows(tokens)
+            verbatim_windows = verbatim_ngram_windows(tokens)
             if verbatim_windows:
                 await db.executemany(
                     """

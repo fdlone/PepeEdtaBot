@@ -25,6 +25,11 @@ from app.services.pivo_message_builder import (
     format_truncated_mentions_note,
 )
 
+# Предел размера суточного дросселя обновления профилей. Обычный день не даёт
+# и близко такого числа уникальных участников; это страховка от роста, а не
+# рабочий режим.
+REFRESH_THROTTLE_MAX_KEYS = 20_000
+
 PIVO_DAILY_LIMIT_USER = 3
 PIVO_DAILY_LIMIT_ADMIN = 5
 PIVO_DEFAULT_EXPLICIT_MENTIONS_LIMIT = 10
@@ -64,7 +69,11 @@ class PivoService:
         self._subscriber_fanout_limit = PIVO_DEFAULT_SUBSCRIBER_FANOUT_LIMIT
         # Дроссель refresh_member: (chat_hash, user_hash) → день последней
         # записи профиля. Ключи — те же хеши, что и в БД, сырых id в памяти нет.
+        # Записи прошлых дней бесполезны, поэтому словарь сбрасывается при
+        # смене суток целиком: без этого он рос неограниченно, а ключи в него
+        # приходят снаружи — любой участник любого чата.
         self._refreshed_on: dict[tuple[str, str], str] = {}
+        self._refreshed_day: str | None = None
 
     def configure_call_limits(
         self,
@@ -102,6 +111,13 @@ class PivoService:
         chat_hash = self._security.hmac_value(chat_id)
         user_hash = self._security.hmac_value(user.id)
         usage_day = (today or datetime.now(UTC).date()).isoformat()
+        if self._refreshed_day != usage_day:
+            self._refreshed_on.clear()
+            self._refreshed_day = usage_day
+        elif len(self._refreshed_on) > REFRESH_THROTTLE_MAX_KEYS:
+            # Один день с очень большим числом участников: сбрасываем целиком,
+            # цена — повторное обновление профилей в пределах этих же суток.
+            self._refreshed_on.clear()
         if self._refreshed_on.get((chat_hash, user_hash)) == usage_day:
             return
         self._refreshed_on[(chat_hash, user_hash)] = usage_day

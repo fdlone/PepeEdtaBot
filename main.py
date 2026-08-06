@@ -138,6 +138,12 @@ async def run_bot() -> None:
         # L2 user quirks: interaction counters are keyed by the same HMAC as
         # /pivo subscriptions — no reversible identity ever reaches the DB.
         user_hasher=pivo_security.hmac_value,
+        # Кэши обучения ключуются chat_id, как и остальное состояние в памяти,
+        # и живут по той же политике: тот же срок хранения и тот же предел по
+        # числу чатов, что у runtime-состояния. Отдельные ручки не заводятся —
+        # смысл настройки тот же самый: сколько чатов бот помнит и как долго.
+        cache_ttl_sec=settings.runtime_state_ttl_sec,
+        cache_max_chats=settings.runtime_state_max_chats,
     )
     runtime_state = runtime_state_from_settings(settings)
 

@@ -4,6 +4,7 @@ import math
 import random
 from collections import Counter
 from collections.abc import Iterable, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
@@ -328,7 +329,7 @@ def recent_reply_overlap(
 
 def verbatim_ngram_overlap(
     tokens: list[str],
-    corpus_ngrams: frozenset[tuple[str, ...]] | set[tuple[str, ...]],
+    corpus_ngrams: AbstractSet[tuple[str, ...]],
     size: int = VERBATIM_NGRAM_SIZE,
 ) -> float:
     """Share of the candidate's content ``size``-grams found in the corpus index.
