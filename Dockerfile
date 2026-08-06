@@ -14,7 +14,12 @@ RUN useradd --create-home --uid 1000 bot \
 COPY --chown=bot:bot requirements.lock .
 RUN pip install --no-cache-dir -r requirements.lock
 
-COPY --chown=bot:bot . .
+# Копируем ровно то, что нужно рантайму, а не `COPY . .`: белый список нельзя
+# забыть обновить при появлении нового файла с данными в корне репозитория, а
+# чёрный список в .dockerignore — можно (и однажды уже забыли, см. PR #101).
+# app/ включает app/migrations/*.sql — их читает мигратор на старте.
+COPY --chown=bot:bot main.py ./
+COPY --chown=bot:bot app ./app
 
 # The entrypoint chowns /app/data at runtime (necessary for bind-mounted
 # host directories owned by a different UID/GID) and then drops privileges
