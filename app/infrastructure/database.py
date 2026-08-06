@@ -352,7 +352,35 @@ class Database:
         return await self._require(self.markov).get_states(chat_id, order)
 
     async def get_chat_token_volume(self, chat_id: int) -> int:
-        return await self._require(self.markov).get_chat_token_volume(chat_id)
+        """Объём модели чата — то, по чему проверяется готовность отвечать.
+
+        Читается из инкрементального счётчика ``chat_model_volume``, а не
+        агрегатом по таблицам переходов: этот вызов происходит на КАЖДОЕ
+        входящее сообщение, а полный ``SUM(cnt)`` — скан, растущий вместе с
+        корпусом (на живом чате это десятки тысяч строк). Счётчик и заводился
+        под это (миграция 009), но читатель остался на агрегате.
+        """
+        volumes = await self._model_volumes(chat_id, persist=True)
+        volume2, volume3 = volumes
+        return volume3 if volume3 > 0 else volume2
+
+    async def _model_volumes(
+        self, chat_id: int, *, persist: bool
+    ) -> tuple[int, int]:
+        """``(volume2, volume3)`` из счётчика, с падением на полный агрегат.
+
+        ``persist`` заводит недостающую строку счётчика — это делает только
+        горячий путь чтения. Диагностика (``get_stats``) остаётся read-only:
+        побочная запись из диагностического вызова портила бы наблюдаемое
+        состояние таблицы.
+        """
+        markov = self._require(self.markov)
+        volumes = await markov.get_model_volume(chat_id)
+        if volumes is not None:
+            return volumes
+        if persist:
+            return await markov.backfill_model_volume(chat_id)
+        return await markov.sum_model_volume(chat_id)
 
     async def get_word_frequencies(
         self, chat_id: int, *, min_word_len: int
@@ -600,7 +628,16 @@ class Database:
         return int(row[0] or 0) if row else 0
 
     async def get_stats(self, chat_id: int) -> dict[str, int]:
+        """Полный срез по чату — диагностика, а не путь ответа.
+
+        Команда ``/stats`` показывает только объём модели и берёт его через
+        ``get_chat_token_volume``; счётчики строк здесь остаются, потому что
+        по ним проверяется, что записалось в базу. Объёмы читаются из
+        инкрементального счётчика — сравнение с ``SUM(cnt)`` живёт в тесте, а
+        не в каждом вызове.
+        """
         p = (chat_id,)
+        volume2, volume3 = await self._model_volumes(chat_id, persist=False)
         async with self._lock:
             db = await self._get_conn()
             f = self._fetch_int
@@ -610,12 +647,6 @@ class Database:
             starts3      = await f(db, "SELECT COUNT(*) FROM starts3 WHERE chat_id = ?", p)
             trans2_count = await f(db, "SELECT COUNT(*) FROM transitions WHERE chat_id = ?", p)
             trans3_count = await f(db, "SELECT COUNT(*) FROM transitions3 WHERE chat_id = ?", p)
-            volume2 = await f(
-                db, "SELECT COALESCE(SUM(cnt), 0) FROM transitions WHERE chat_id = ?", p
-            )
-            volume3 = await f(
-                db, "SELECT COALESCE(SUM(cnt), 0) FROM transitions3 WHERE chat_id = ?", p
-            )
 
         return {
             "messages":     msg_count,

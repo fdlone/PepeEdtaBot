@@ -4,6 +4,7 @@ import unittest
 import uuid
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 import aiosqlite
 
@@ -70,6 +71,66 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["volume3"], sum3)
         # Returned volume mirrors get_stats' "volume" (prefers order-3).
         self.assertEqual(last_volume, sum3 if sum3 > 0 else sum2)
+
+    async def test_token_volume_reads_the_counter_not_the_aggregate(self) -> None:
+        """Горячий путь чтения объёма не сканирует таблицы переходов.
+
+        Вызов происходит на каждое входящее сообщение, а полный SUM(cnt) — это
+        скан, растущий вместе с корпусом.
+        """
+        chat_id = 4444
+        tokens = ["кофе", "утром", "бодрит", "правда"]
+        await self.db.save_message_and_update_model(
+            chat_id=chat_id, raw_text=" ".join(tokens), tokens=tokens
+        )
+        expected = await self._sum_volume("transitions3", chat_id)
+
+        markov = self.db.markov
+        assert markov is not None
+        with patch.object(
+            markov, "sum_model_volume", side_effect=AssertionError("aggregated")
+        ):
+            volume = await self.db.get_chat_token_volume(chat_id)
+
+        self.assertEqual(volume, expected)
+
+    async def test_token_volume_backfills_a_missing_counter_row(self) -> None:
+        """Чат без строки счётчика получает значение агрегатом — один раз."""
+        chat_id = 4545
+        tokens = ["чай", "вечером", "успокаивает", "тоже"]
+        await self.db.save_message_and_update_model(
+            chat_id=chat_id, raw_text=" ".join(tokens), tokens=tokens
+        )
+        expected = await self._sum_volume("transitions3", chat_id)
+        async with self.db._lock:
+            conn = await self.db._get_conn()
+            await conn.execute(
+                "DELETE FROM chat_model_volume WHERE chat_id = ?", (chat_id,)
+            )
+            await conn.commit()
+
+        first = await self.db.get_chat_token_volume(chat_id)
+
+        self.assertEqual(first, expected)
+        markov = self.db.markov
+        assert markov is not None
+        with patch.object(
+            markov, "sum_model_volume", side_effect=AssertionError("aggregated")
+        ):
+            self.assertEqual(await self.db.get_chat_token_volume(chat_id), expected)
+
+    async def test_stats_does_not_write_a_counter_row(self) -> None:
+        """Диагностика остаётся read-only: побочная запись портила бы состояние."""
+        chat_id = 4646
+        stats = await self.db.get_stats(chat_id)
+
+        self.assertEqual(stats["volume"], 0)
+        async with self.db._lock:
+            conn = await self.db._get_conn()
+            cur = await conn.execute(
+                "SELECT COUNT(*) FROM chat_model_volume WHERE chat_id = ?", (chat_id,)
+            )
+            self.assertEqual((await cur.fetchone())[0], 0)
 
     async def test_clear_chat_resets_model_volume(self) -> None:
         """D2: clear_chat drops the chat_model_volume row so volume restarts at 0."""

@@ -169,18 +169,20 @@ class TestCommonHandlers(unittest.IsolatedAsyncioTestCase):
         await cmd_help(msg, state)
         msg.reply.assert_awaited_once()
 
-    async def test_stats_replies_with_stats(self) -> None:
+    async def test_stats_replies_with_model_volume(self) -> None:
         from app.handlers.common import cmd_stats
         msg = _fake_message()
         db = AsyncMock()
-        db.get_stats = AsyncMock(return_value={
-            "messages": 5, "starts2": 1, "starts3": 1,
-            "transitions2": 2, "transitions3": 1,
-            "volume2": 10, "volume3": 5, "volume": 5,
-        })
+        db.get_chat_token_volume = AsyncMock(return_value=250)
         state = _fake_state(min_tokens_for_model=50)
+
         await cmd_stats(msg, db, state)
+
         msg.reply.assert_awaited_once()
+        self.assertIn("250", msg.reply.await_args.args[0])
+        # Полный срез по чату — пять COUNT-ов, из которых команда не печатает
+        # ни одного; читается только то, что показывается.
+        db.get_stats.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

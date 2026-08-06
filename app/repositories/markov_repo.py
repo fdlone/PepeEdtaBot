@@ -137,14 +137,48 @@ class MarkovRepo(BaseRepo):
         )
         return {str(r[0]): int(r[1]) for r in rows}
 
-    async def get_chat_token_volume(self, chat_id: int) -> int:
-        # Both sums share one lock acquisition: the 2-gram fallback only fires
-        # when the 3-gram table is empty, and this runs on the per-message path.
+    async def get_model_volume(self, chat_id: int) -> tuple[int, int] | None:
+        """``(volume2, volume3)`` из счётчика, или None, если строки ещё нет.
+
+        Счётчик поддерживается инкрементально на записи
+        (``save_message_and_update_model``) и сбрасывается вместе с чатом в
+        ``clear_chat``, поэтому он точно равен ``SUM(cnt)`` по таблицам
+        переходов — что и проверяется тестом.
+        """
+        row = await self._fetch_one(
+            "SELECT volume2, volume3 FROM chat_model_volume WHERE chat_id = ?",
+            (chat_id,),
+        )
+        if row is None:
+            return None
+        return int(row[0] or 0), int(row[1] or 0)
+
+    async def sum_model_volume(self, chat_id: int) -> tuple[int, int]:
+        """``(volume2, volume3)`` полным агрегатом по таблицам переходов."""
         async with self._connection() as db:
+            volume2 = await self._sum_cnt(db, "transitions", chat_id)
             volume3 = await self._sum_cnt(db, "transitions3", chat_id)
-            if volume3 > 0:
-                return volume3
-            return await self._sum_cnt(db, "transitions", chat_id)
+        return volume2, volume3
+
+    async def backfill_model_volume(self, chat_id: int) -> tuple[int, int]:
+        """Считает объём агрегатом и заводит строку счётчика для чата.
+
+        Нужно ровно один раз на чат — для тех, кто набрал данные до появления
+        счётчика (миграция 009 сделала бэкфилл, но чат мог появиться и позже
+        по другому пути) и для чата, у которого строки ещё нет.
+        """
+        async with self._transaction() as db:
+            volume2 = await self._sum_cnt(db, "transitions", chat_id)
+            volume3 = await self._sum_cnt(db, "transitions3", chat_id)
+            await db.execute(
+                """
+                INSERT INTO chat_model_volume (chat_id, volume2, volume3)
+                VALUES (?, ?, ?)
+                ON CONFLICT(chat_id) DO NOTHING
+                """,
+                (chat_id, volume2, volume3),
+            )
+        return volume2, volume3
 
     @staticmethod
     async def _sum_cnt(
