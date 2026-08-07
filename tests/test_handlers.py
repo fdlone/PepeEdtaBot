@@ -1215,20 +1215,20 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
 
 
 # ---------------------------------------------------------------------------
-# learning.py — extract_context_tokens
+# reply_pipeline.py — extract_context_tokens
 # ---------------------------------------------------------------------------
 
 class TestExtractContextTokens(unittest.TestCase):
     def _call(self, **kwargs: object) -> list[str]:
-        from app.handlers.learning import extract_context_tokens
+        from app.services.reply_pipeline import extract_context_tokens
         defaults: dict[str, object] = dict(
-            message=MagicMock(reply_to_message=None),
             current_text="hello world",
+            reply_context_text=None,
+            is_reply=False,
             normalize_lower=False,
             max_tokens=10,
             only_for_replies=False,
             include_current_message=True,
-            bot_id=999,
         )
         defaults.update(kwargs)
         return extract_context_tokens(**defaults)  # type: ignore[arg-type]
@@ -1238,9 +1238,7 @@ class TestExtractContextTokens(unittest.TestCase):
         self.assertGreater(len(tokens), 0)
 
     def test_only_for_replies_returns_empty_when_no_reply(self) -> None:
-        msg = MagicMock()
-        msg.reply_to_message = None
-        tokens = self._call(message=msg, only_for_replies=True)
+        tokens = self._call(is_reply=False, only_for_replies=True)
         self.assertEqual(tokens, [])
 
     def test_max_tokens_respected(self) -> None:
@@ -1251,35 +1249,21 @@ class TestExtractContextTokens(unittest.TestCase):
         self.assertLessEqual(len(tokens), 3)
 
     def test_reply_to_bot_own_message_is_dropped_from_context(self) -> None:
-        # Human replies to the bot: reply_to is the bot's own line. Its text
-        # must NOT enter context (self-echo cause); the human current message
-        # still anchors the reply.
-        from types import SimpleNamespace
-
-        message = SimpleNamespace(
-            reply_to_message=SimpleNamespace(
-                text="например кая скейлила урон",
-                from_user=SimpleNamespace(id=999),
-            )
-        )
+        # Human replies to the bot: the handler passes no reply context for the
+        # bot's own line (self-echo cause); the human current message still
+        # anchors the reply.
         tokens = self._call(
-            message=message,
+            is_reply=True,
+            reply_context_text=None,
             current_text="урон по жопе демида",
             only_for_replies=True,
         )
         self.assertEqual(tokens, ["урон", "по", "жопе", "демида"])
 
     def test_reply_to_human_message_is_kept_in_context(self) -> None:
-        from types import SimpleNamespace
-
-        message = SimpleNamespace(
-            reply_to_message=SimpleNamespace(
-                text="люблю кофе",
-                from_user=SimpleNamespace(id=111),  # a human, not the bot
-            )
-        )
         tokens = self._call(
-            message=message,
+            is_reply=True,
+            reply_context_text="люблю кофе",
             current_text="а я утром",
             only_for_replies=True,
         )
@@ -1288,21 +1272,65 @@ class TestExtractContextTokens(unittest.TestCase):
     def test_reply_to_bot_without_current_yields_empty(self) -> None:
         # Non-default: include_current off + reply is the bot's own -> no
         # context at all (documented degradation for that config).
-        from types import SimpleNamespace
-
-        message = SimpleNamespace(
-            reply_to_message=SimpleNamespace(
-                text="слова бота",
-                from_user=SimpleNamespace(id=999),
-            )
-        )
         tokens = self._call(
-            message=message,
+            is_reply=True,
+            reply_context_text=None,
             current_text="ответ человека",
             only_for_replies=True,
             include_current_message=False,
         )
         self.assertEqual(tokens, [])
+
+
+class TestIncomingMessageFacts(unittest.TestCase):
+    """Фильтр «ответ на собственное сообщение бота» живёт в обработчике.
+
+    Слова бота построены по корпусу, поэтому их n-граммы совпадают с
+    сохранёнными стартовыми состояниями: вернув их в контекст, бот открывает
+    новый ответ дословным повтором предыдущего.
+    """
+
+    def _incoming(self, reply_to: object) -> object:
+        from app.handlers.learning import _incoming_message
+
+        message = SimpleNamespace(
+            chat=SimpleNamespace(id=1),
+            from_user=SimpleNamespace(id=5, first_name="Аня"),
+            text="урон по жопе демида",
+            reply_to_message=reply_to,
+        )
+        with patch(
+            "app.handlers.learning.bot_is_mentioned", return_value=False
+        ):
+            return _incoming_message(
+                message,  # type: ignore[arg-type]
+                bot_username="PepeEdtaBot",
+                bot_id=999,
+                bot_text_aliases=frozenset({"пепе"}),
+                monotonic_now=0.0,
+            )
+
+    def test_reply_to_bot_message_yields_no_reply_context(self) -> None:
+        incoming = self._incoming(
+            SimpleNamespace(
+                text="например кая скейлила урон",
+                from_user=SimpleNamespace(id=999),
+            )
+        )
+        self.assertTrue(incoming.is_reply)  # type: ignore[attr-defined]
+        self.assertIsNone(incoming.reply_context_text)  # type: ignore[attr-defined]
+
+    def test_reply_to_human_message_keeps_reply_context(self) -> None:
+        incoming = self._incoming(
+            SimpleNamespace(
+                text="люблю кофе",
+                from_user=SimpleNamespace(id=111),
+            )
+        )
+        self.assertEqual(
+            incoming.reply_context_text,  # type: ignore[attr-defined]
+            "люблю кофе",
+        )
 
 
 class TestReplyHumanizedResilience(unittest.IsolatedAsyncioTestCase):
@@ -1424,7 +1452,7 @@ class TestReplyHumanizedSequence(unittest.IsolatedAsyncioTestCase):
 
 class TestLearningMessageLength(unittest.TestCase):
     def test_learning_message_length_boundaries(self) -> None:
-        from app.handlers.learning import (
+        from app.services.reply_pipeline import (
             MAX_LEARN_MESSAGE_CHARS,
             is_learnable_message_length,
         )
@@ -1433,7 +1461,7 @@ class TestLearningMessageLength(unittest.TestCase):
         self.assertFalse(is_learnable_message_length("x" * (MAX_LEARN_MESSAGE_CHARS + 1)))
 
     def test_learning_token_boundaries(self) -> None:
-        from app.handlers.learning import has_enough_tokens_for_learning
+        from app.services.reply_pipeline import has_enough_tokens_for_learning
 
         self.assertFalse(has_enough_tokens_for_learning(["один"]))
         self.assertTrue(has_enough_tokens_for_learning(["один", "два"]))
@@ -1443,7 +1471,7 @@ class TestStripLeadingBotVocative(unittest.TestCase):
     aliases = frozenset({"pepe", "пепе"})
 
     def test_strips_leading_alias_with_separators(self) -> None:
-        from app.handlers.learning import strip_leading_bot_vocative
+        from app.services.reply_pipeline import strip_leading_bot_vocative
 
         for text, expected in (
             ("Пепе, расскажи анекдот", "расскажи анекдот"),
@@ -1459,7 +1487,7 @@ class TestStripLeadingBotVocative(unittest.TestCase):
     def test_strips_leading_alias_without_separator(self) -> None:
         # SIM-8: a bare "<alias> ..." address is as common as the comma form;
         # unstripped it taught the corpus the bot's own name.
-        from app.handlers.learning import strip_leading_bot_vocative
+        from app.services.reply_pipeline import strip_leading_bot_vocative
 
         for text, expected in (
             ("Пепе хороший бот", "хороший бот"),
@@ -1472,21 +1500,21 @@ class TestStripLeadingBotVocative(unittest.TestCase):
                 )
 
     def test_preserves_bare_alias_with_no_content(self) -> None:
-        from app.handlers.learning import strip_leading_bot_vocative
+        from app.services.reply_pipeline import strip_leading_bot_vocative
 
         for text in ("Пепе", "пепе  ", " pepe"):
             with self.subTest(text=text):
                 self.assertEqual(strip_leading_bot_vocative(text, self.aliases), text)
 
     def test_preserves_mid_sentence_alias_and_other_vocatives(self) -> None:
-        from app.handlers.learning import strip_leading_bot_vocative
+        from app.services.reply_pipeline import strip_leading_bot_vocative
 
         for text in ("Ребята, привет", "скажи пепе, что делать", "Москва, я люблю"):
             with self.subTest(text=text):
                 self.assertEqual(strip_leading_bot_vocative(text, self.aliases), text)
 
     def test_empty_aliases_is_noop(self) -> None:
-        from app.handlers.learning import strip_leading_bot_vocative
+        from app.services.reply_pipeline import strip_leading_bot_vocative
 
         text = "Пепе, привет"
         self.assertEqual(strip_leading_bot_vocative(text, frozenset()), text)
@@ -1540,7 +1568,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             learned_messages={},
         )
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg,
                 learning_service,
@@ -1570,7 +1598,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         generator.generate_text = AsyncMock(return_value="")
         state = self._reply_state()
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg,
                 learning_service,
@@ -1599,7 +1627,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         generator = _traced_generator()
         state = self._reply_state()
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg,
                 learning_service,
@@ -1644,7 +1672,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         )
         state = self._reply_state()
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg,
                 learning_service,
@@ -1674,7 +1702,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             reply_probability=1.0,
         )
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg,
                 learning_service,
@@ -1702,7 +1730,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         generator.generate_text = AsyncMock(return_value="")
         state = self._reply_state()
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg,
                 learning_service,
@@ -1793,7 +1821,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             enable_backoff=True,
         )
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg,
                 learning_service,
@@ -1844,7 +1872,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             enable_backoff=True,
         )
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg,
                 learning_service,
@@ -1897,7 +1925,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             enable_backoff=True,
         )
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg,
                 learning_service,
@@ -1930,7 +1958,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         )
         state = self._reply_state(recent_replies={})
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg,
                 learning_service,
@@ -1973,8 +2001,8 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
-            patch("app.handlers.learning.ResponseGenerator") as response_gen_cls,
-            patch("app.handlers.learning.mask_chat_id", return_value="chat"),
+            patch("app.services.reply_pipeline.ResponseGenerator") as response_gen_cls,
+            patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"),
         ):
             response_gen_cls.return_value.generate = AsyncMock(return_value="ответ")
             await on_text_message(
@@ -2048,9 +2076,9 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
-            patch("app.handlers.learning.mask_chat_id", return_value="chat"),
+            patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"),
             patch("app.handlers.learning.time.monotonic", return_value=10000.0),
-            patch("app.handlers.learning.random.random", return_value=0.0),
+            patch("app.services.reply_pipeline.random.random", return_value=0.0),
         ):
             await on_text_message(
                 msg,
@@ -2081,9 +2109,9 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         state = self._director_state(recent_reply_times={})
 
         with (
-            patch("app.handlers.learning.mask_chat_id", return_value="chat"),
+            patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"),
             patch("app.handlers.learning.time.monotonic", return_value=10000.0),
-            patch("app.handlers.learning.random.random", return_value=0.0),
+            patch("app.services.reply_pipeline.random.random", return_value=0.0),
         ):
             await on_text_message(
                 msg,
@@ -2112,7 +2140,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         generator.generate_text = AsyncMock(return_value="")
         state = self._reply_state(emoji_append_chance=0.15)
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
@@ -2138,7 +2166,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         generator.generate_text = AsyncMock(return_value="ответ бота готов")
         state = self._reply_state(recent_replies={}, emoji_append_chance=1.0)
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
@@ -2161,7 +2189,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         generator.generate_text = AsyncMock(return_value="")
         state = self._reply_state(hot_ngram_seed_chance=0.05)
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
@@ -2187,7 +2215,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         generator.generate_text = AsyncMock(return_value="")
         state = self._reply_state()  # hot_ngram_seed_chance = 0.0 default
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
@@ -2218,8 +2246,8 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
-            patch("app.handlers.learning.mask_chat_id", return_value="chat"),
-            patch("app.handlers.learning.random.random", return_value=0.0),
+            patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"),
+            patch("app.services.reply_pipeline.random.random", return_value=0.0),
         ):
             await on_text_message(
                 msg, learning_service, generator, state,
@@ -2252,8 +2280,8 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
-            patch("app.handlers.learning.mask_chat_id", return_value="chat"),
-            patch("app.handlers.learning.random.random", return_value=0.0),
+            patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"),
+            patch("app.services.reply_pipeline.random.random", return_value=0.0),
         ):
             await on_text_message(
                 msg, learning_service, generator, state,
@@ -2284,8 +2312,8 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
-            patch("app.handlers.learning.mask_chat_id", return_value="chat"),
-            patch("app.handlers.learning.random.random", return_value=0.0),
+            patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"),
+            patch("app.services.reply_pipeline.random.random", return_value=0.0),
         ):
             await on_text_message(
                 msg, learning_service, generator, state,
@@ -2314,7 +2342,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             rare_events_today={},
         )
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
@@ -2348,7 +2376,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             rare_event_daily_cap=3,
         )
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
@@ -2370,7 +2398,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         generator.generate_text = AsyncMock(return_value="настоящий ответ бота")
         state = self._reply_state(recent_replies={})  # both chances 0.0 default
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg, learning_service, generator, state,
                 "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
@@ -2404,7 +2432,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg,
                 learning_service,
@@ -2465,7 +2493,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             enable_backoff=True,
         )
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg,
                 learning_service,
@@ -2544,7 +2572,7 @@ class TestMentionCooldownGate(unittest.IsolatedAsyncioTestCase):
                         generator: AsyncMock, state: MagicMock) -> None:
         from app.handlers.learning import on_text_message
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg,
                 learning_service,
@@ -2676,7 +2704,7 @@ class TestUserQuirks(unittest.IsolatedAsyncioTestCase):
                         generator: AsyncMock, state: MagicMock) -> None:
         from app.handlers.learning import on_text_message
 
-        with patch("app.handlers.learning.mask_chat_id", return_value="chat"):
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
                 msg,
                 learning_service,

@@ -33,7 +33,7 @@
                   ▼
         ┌────────────────────────────────────────────────────────┐
         │  services/  (бизнес-логика, не знают про aiogram*)     │
-        │   LearningService   PivoService                        │
+        │   ReplyPipeline   LearningService   PivoService         │
         └────────────────────────────────────────────────────────┘
                   │
                   ▼
@@ -99,7 +99,7 @@ verbatim_ngram_windows`); копия в миграции 016 оставлена 
 | `domain/` | `pivo.py`, `pivo_templates.py` |
 | `presentation/` | `bot_messages.py`, `fallback_phrases.py` |
 | `handlers/` | `common.py`, `admin.py`, `pivo.py`, `learning.py`, `errors.py` — `aiogram.Router` per file. `_helpers.py` — `reply_humanized`, `reply_humanized_sequence`. |
-| `services/` | `learning_service.py`, `pivo_service.py`, `pivo_message_builder.py`, `pivo_parser.py` |
+| `services/` | `reply_pipeline.py`, `learning_service.py`, `pivo_service.py`, `pivo_message_builder.py`, `pivo_parser.py` |
 | `repositories/` | `markov_repo.py`, `messages_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py`, `pivo_pool_usage_repo.py`, `chat_emoji_stats_repo.py`, `chat_hot_ngrams_repo.py`, `chat_user_interactions_repo.py` |
 | `filters/` | `group_only.py` (только `GROUP`/`SUPERGROUP`), `admin_or_owner.py` (`OWNER_ID` или админ чата, fail-closed при ошибке Telegram API) |
 | `middlewares/` | `throttling.py` — per-user-per-command cooldown, `clear`=3600 сек; команды из `notify_on_throttle` получают явный ответ при throttle вместо silent drop |
@@ -120,6 +120,7 @@ verbatim_ngram_windows`); копия в миграции 016 оставлена 
 | `app/core/reply_flavor.py` | Вариации финальной пунктуации ответа (QW5); редкие события и фальстарты (L3): ролл и трансформация ответа в последовательность сообщений (вердикт/КАПС/двойное сообщение/филлер). |
 | `app/core/emoji.py` | Эмодзи-канал (M3): извлечение эмодзи из текста (без tone-модификаторов, флаги собираются из пары региональных индикаторов) и частотный сэмплинг для добавления в конец ответа; `strip_trailing_emojis` снимает добавленное эмодзи перед анти-повторным сравнением. |
 | `app/core/hot_ngrams.py` | «Локальные мемы» (L1): извлечение контентных би/триграмм выученного сообщения для окна горячих n-грамм; горячие n-граммы изредка сидируют самостоятельные ответы через seed API генератора. |
+| `app/services/reply_pipeline.py` | Конвейер ответа на обычное сообщение: ритм и настроение чата, эмодзи-канал, гейты обучаемости (`observe`), политика ответа с генерацией, причудами и редкими событиями (`respond`), запись в модель (`learn`). Типов Telegram не знает — обработчик передаёт факты (`IncomingMessage`) и функцию отправки, поэтому ветки политики проверяются без моков Telegram. |
 | `app/presentation/fallback_phrases.py` | Пулы fallback-фраз с анти-повтором, ночными и «heated»-вариантами. |
 | `app/domain/pivo.py` | `PivoSecurity` (HMAC + Fernet), `PivoMember`. |
 | `app/domain/pivo_templates.py` | Контент сообщений `/pivo`. |

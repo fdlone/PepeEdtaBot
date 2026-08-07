@@ -212,7 +212,7 @@ class TestPickFallbackPhrase(unittest.TestCase):
 
 class TestNextFallbackPhrase(unittest.TestCase):
     def test_remembers_recent_per_chat_and_avoids_repeats(self) -> None:
-        from app.handlers.learning import RECENT_FALLBACK_LIMIT, next_fallback_phrase
+        from app.services.reply_pipeline import RECENT_FALLBACK_LIMIT, next_fallback_phrase
 
         state = _make_runtime_state()
         rng = random.Random(5)
@@ -229,7 +229,7 @@ class TestNextFallbackPhrase(unittest.TestCase):
         self.assertEqual(list(recent), picked[-RECENT_FALLBACK_LIMIT:])
 
     def test_forget_chat_drops_fallback_memory(self) -> None:
-        from app.handlers.learning import next_fallback_phrase
+        from app.services.reply_pipeline import next_fallback_phrase
 
         state = _make_runtime_state()
         next_fallback_phrase(state, 100, GENERATION_FAILED_PHRASES, rng=random.Random(1))
@@ -277,7 +277,7 @@ class TestLateNightFallback(unittest.TestCase):
         )
 
     def test_next_fallback_can_return_late_night_phrase(self) -> None:
-        from app.handlers.learning import next_fallback_phrase
+        from app.services.reply_pipeline import next_fallback_phrase
 
         state = _make_runtime_state()
         night = datetime(2026, 7, 1, 2, 0)

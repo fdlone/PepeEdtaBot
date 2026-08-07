@@ -31,8 +31,8 @@ from app.core.markov import (
 )
 from app.core.reply_policy import bot_is_mentioned
 from app.core.text import capitalize_reply_sentences, sanitize_text
-from app.handlers.learning import extract_context_tokens
 from app.infrastructure.database import Database
+from app.services.reply_pipeline import extract_context_tokens
 
 
 class TestCapitalizeReplySentences(unittest.TestCase):
@@ -487,32 +487,26 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(exploration_adjusted_power(1.0, 1.0), 0.0)
 
     def test_extract_context_tokens_uses_reply_and_current_message(self) -> None:
-        message = SimpleNamespace(
-            reply_to_message=SimpleNamespace(
-                text="Люблю кофе!!! @bot", from_user=SimpleNamespace(id=111)
-            )
-        )
         tokens = extract_context_tokens(
-            message=message,
             current_text="А я утром",
+            reply_context_text="Люблю кофе!!! @bot",
+            is_reply=True,
             normalize_lower=False,
             max_tokens=8,
             only_for_replies=True,
             include_current_message=True,
-            bot_id=999,
         )
         self.assertEqual(tokens, ["Люблю", "кофе", "!", "!", "А", "я", "утром"])
 
     def test_extract_context_tokens_skips_non_reply_when_required(self) -> None:
-        message = SimpleNamespace(reply_to_message=None)
         tokens = extract_context_tokens(
-            message=message,
             current_text="случайный текст",
+            reply_context_text=None,
+            is_reply=False,
             normalize_lower=False,
             max_tokens=6,
             only_for_replies=True,
             include_current_message=True,
-            bot_id=999,
         )
         self.assertEqual(tokens, [])
 
