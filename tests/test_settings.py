@@ -27,13 +27,28 @@ SETTINGS_ONLY_ENV_VARS: tuple[str, ...] = (
     "TEXT_CACHE_MAX_MESSAGES",
 )
 
+# Идентичность деплоя: значения у каждого своя, сверять их с дефолтами нечего,
+# но присутствовать в .env.example они обязаны — с них начинается настройка.
+DEPLOYMENT_ENV_VARS: tuple[str, ...] = (
+    "BOT_TOKEN",
+    "OWNER_ID",
+    "DB_PATH",
+    "PIVO_HMAC_SECRET",
+    "PIVO_ENCRYPTION_SECRET",
+)
+
+# Ключи, которые .env.example показывает закомментированными: пустое значение
+# у них означает не «не настроено», а рабочий встроенный дефолт, и раскомментить
+# строку — уже осознанный шаг.
+OPTIONAL_ENV_VARS: tuple[str, ...] = ("BOT_TEXT_ALIASES",)
+
 
 def minimal_env(db_path: str = "test_settings.db") -> dict[str, str]:
     return {
         "BOT_TOKEN": "123:token",
         "DB_PATH": db_path,
-        "PIVO_HMAC_SECRET": "test-pivo-hmac-secret",
-        "PIVO_ENCRYPTION_SECRET": "test-pivo-encryption-secret",
+        "PIVO_HMAC_SECRET": "test-pivo-hmac-secret-long-enough-32",
+        "PIVO_ENCRYPTION_SECRET": "test-pivo-encryption-secret-long-32",
     }
 
 
@@ -97,6 +112,26 @@ class TestSettings(unittest.TestCase):
             drifted, {},
             f".env.example drifted from registry (env, registry): {drifted}",
         )
+
+    def test_env_example_has_no_keys_the_code_does_not_read(self) -> None:
+        # Обратная сторона проверки выше. Ключ, который код не читает, — это
+        # либо опечатка, либо след удалённой настройки; и то и другое выглядит
+        # как рабочая ручка, пока кто-нибудь не попробует ею воспользоваться.
+        known = (
+            {spec.env_var for spec in RUNTIME_FIELDS}
+            | set(SETTINGS_ONLY_ENV_VARS)
+            | set(DEPLOYMENT_ENV_VARS)
+            | set(OPTIONAL_ENV_VARS)
+        )
+        unknown = sorted(set(env_example_values()) - known)
+        self.assertEqual(
+            unknown, [], f".env.example описывает ключи, которых нет в коде: {unknown}"
+        )
+
+    def test_env_example_documents_the_deployment_keys(self) -> None:
+        env_values = env_example_values()
+        missing = [var for var in DEPLOYMENT_ENV_VARS if var not in env_values]
+        self.assertEqual(missing, [], f".env.example misses: {missing}")
 
     def test_env_example_matches_code_defaults_for_settings_only_knobs(self) -> None:
         # The registry drift check above cannot see knobs parsed directly in
@@ -183,10 +218,41 @@ class TestSettings(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "PIVO_ENCRYPTION_SECRET.*placeholder"):
                 load_settings(load_env=False)
 
+    def test_load_settings_rejects_short_pivo_hmac_secret(self) -> None:
+        """Слабый секрет останавливает старт, а не проходит молча.
+
+        Функция вывода ключа защищает ровно настолько, насколько непредсказуем
+        сам секрет: парольная фраза в 16 символов перебирается независимо от
+        схемы вывода.
+        """
+        env = minimal_env()
+        env["PIVO_HMAC_SECRET"] = "short-hmac-16chr"
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "PIVO_HMAC_SECRET.*32"):
+                load_settings(load_env=False)
+
+    def test_load_settings_rejects_short_pivo_encryption_secret(self) -> None:
+        env = minimal_env()
+        env["PIVO_ENCRYPTION_SECRET"] = "short-encryption"
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "PIVO_ENCRYPTION_SECRET.*32"):
+                load_settings(load_env=False)
+
+    def test_load_settings_accepts_secret_at_the_length_floor(self) -> None:
+        from app.config.settings import MIN_SECRET_LENGTH
+
+        env = minimal_env()
+        env["PIVO_HMAC_SECRET"] = "h" * MIN_SECRET_LENGTH
+        env["PIVO_ENCRYPTION_SECRET"] = "e" * MIN_SECRET_LENGTH
+        with patch.dict(os.environ, env, clear=True):
+            settings = load_settings(load_env=False)
+
+        self.assertEqual(len(settings.pivo_hmac_secret), MIN_SECRET_LENGTH)
+
     def test_load_settings_rejects_identical_pivo_secrets(self) -> None:
         env = minimal_env()
-        env["PIVO_HMAC_SECRET"] = "shared-secret-value-123"
-        env["PIVO_ENCRYPTION_SECRET"] = "shared-secret-value-123"
+        env["PIVO_HMAC_SECRET"] = "shared-secret-value-long-enough-32ch"
+        env["PIVO_ENCRYPTION_SECRET"] = "shared-secret-value-long-enough-32ch"
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaisesRegex(ValueError, "must be different"):
                 load_settings(load_env=False)

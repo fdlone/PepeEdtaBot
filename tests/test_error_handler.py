@@ -36,7 +36,7 @@ class TestErrorHandler(unittest.IsolatedAsyncioTestCase):
             method=AsyncMock(),
             message=(
                 "Too Many Requests: retry after 30 (Flood control exceeded "
-                "on method 'SendMessage' in chat -1001147461458)"
+                "on method 'SendMessage' in chat -1001234567890)"
             ),
         )
         event = _fake_error_event(exc)
@@ -49,15 +49,15 @@ class TestErrorHandler(unittest.IsolatedAsyncioTestCase):
             await handle_error(event)
 
         logged = " ".join(str(arg) for arg in mock_logger.error.call_args[0])
-        self.assertNotIn("-1001147461458", logged)
-        self.assertIn(log_masking.mask_chat_id(-1001147461458), logged)
+        self.assertNotIn("-1001234567890", logged)
+        self.assertIn(log_masking.mask_chat_id(-1001234567890), logged)
         # Диагностика остаётся: тип ошибки и время ожидания не тронуты.
         self.assertIn("retry after 30", logged)
 
     async def test_error_is_still_logged_when_masking_is_uninitialised(self) -> None:
         exc = TelegramAPIError(
             method=AsyncMock(),
-            message="Flood control exceeded in chat -1001147461458",
+            message="Flood control exceeded in chat -1001234567890",
         )
         event = _fake_error_event(exc)
 
@@ -68,7 +68,7 @@ class TestErrorHandler(unittest.IsolatedAsyncioTestCase):
 
         mock_logger.error.assert_called_once()
         logged = " ".join(str(arg) for arg in mock_logger.error.call_args[0])
-        self.assertNotIn("-1001147461458", logged)
+        self.assertNotIn("-1001234567890", logged)
 
     async def test_generic_exception_is_logged_with_exc_info(self) -> None:
         exc = ValueError("something went wrong")

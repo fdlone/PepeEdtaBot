@@ -4,16 +4,16 @@ import unittest
 from unittest.mock import AsyncMock
 
 from app.core.context_state_matcher import ContextStateMatcher
-from app.infrastructure.database import Database
+from app.repositories import MarkovRepo
 
 
 class TestContextStateMatcher(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.db = AsyncMock(spec=Database)
+        self.db = AsyncMock(spec=MarkovRepo)
         self.matcher = ContextStateMatcher(self.db, cache_limit=4)
 
     async def test_exact_precedes_casefold_matches(self) -> None:
-        self.db.get_markov_states.return_value = [
+        self.db.get_states.return_value = [
             (("Alpha", "Beta"), 3),
             (("alpha", "beta"), 8),
         ]
@@ -29,7 +29,7 @@ class TestContextStateMatcher(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_casefold_groups_variants_and_orders_deterministically(self) -> None:
-        self.db.get_markov_states.return_value = [
+        self.db.get_states.return_value = [
             (("ALPHA", "BETA", "GAMMA"), 2),
             (("Alpha", "Beta", "Gamma"), 7),
             (("alpha", "beta", "gamma"), 7),
@@ -52,15 +52,15 @@ class TestContextStateMatcher(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(match.match_kind == "casefold" for match in matches))
 
     async def test_repeated_lookup_uses_cached_index(self) -> None:
-        self.db.get_markov_states.return_value = [(("Alpha", "Beta"), 3)]
+        self.db.get_states.return_value = [(("Alpha", "Beta"), 3)]
 
         await self.matcher.match(3, ("alpha", "beta"), 2)
         await self.matcher.match(3, ("ALPHA", "BETA"), 2)
 
-        self.db.get_markov_states.assert_awaited_once_with(3, 2)
+        self.db.get_states.assert_awaited_once_with(3, 2)
 
     async def test_invalidation_rebuilds_all_orders_for_chat(self) -> None:
-        self.db.get_markov_states.side_effect = [
+        self.db.get_states.side_effect = [
             [(("Alpha", "Beta"), 3)],
             [(("Alpha", "Beta", "Gamma"), 4)],
             [(("alpha", "beta"), 5)],
@@ -75,7 +75,7 @@ class TestContextStateMatcher(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(matches2[0].transition_count, 5)
         self.assertEqual(matches3[0].transition_count, 6)
-        self.assertEqual(self.db.get_markov_states.await_count, 4)
+        self.assertEqual(self.db.get_states.await_count, 4)
 
     async def test_rejects_invalid_order_and_window_length(self) -> None:
         with self.assertRaisesRegex(ValueError, "order"):
@@ -87,7 +87,7 @@ class TestContextStateMatcher(unittest.IsolatedAsyncioTestCase):
         # The stem tier was removed 2026-07-14: it produced no starts on prod
         # data (see docs/CLOSED.md). Matching folds case, never morphology --
         # that fold lives in context_start_affinity and IDF relevance instead.
-        self.db.get_markov_states.return_value = [
+        self.db.get_states.return_value = [
             (("тренировка", "помогает"), 10),
         ]
 

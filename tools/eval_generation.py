@@ -27,6 +27,7 @@ from app.core.markov import (  # noqa: E402
     content_tokens,
     tokenize,
 )
+from app.core.markov_port import MarkovReadPort  # noqa: E402
 from app.core.response_generator import (  # noqa: E402
     CANDIDATE_TARGET,
     GENERATION_ATTEMPT_BUDGET,
@@ -82,7 +83,7 @@ def load_synthetic_corpus(*, normalize_lower: bool) -> list[str]:
 
 
 class _InstrumentedMarkovGenerator(MarkovGenerator):
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: MarkovReadPort) -> None:
         super().__init__(db)
         self.leading_punctuation_stripped = 0
         self.context_exact_matches = 0
@@ -207,7 +208,7 @@ async def evaluate_generation(
                     tokens=tokens,
                 )
 
-            generator = _InstrumentedMarkovGenerator(db)
+            generator = _InstrumentedMarkovGenerator(db.markov)
             runtime_state = SimpleNamespace(
                 randomness_strength=2.0,
                 candidate_selection_temperature=1.3,

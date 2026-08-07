@@ -39,8 +39,11 @@ coverage.xml
 .DS_Store
 Thumbs.db
 
-# Local screenshots
+# Local screenshots of the real chat: both the loose form and the folder.
+# Mirrors .dockerignore, where the folder was already excluded — here it was
+# missing, so the directory was untracked only until the first `git add -A`.
 Screenshot_*.jpg
+scrin/
 
 # Local agent instructions
 AGENTS.md

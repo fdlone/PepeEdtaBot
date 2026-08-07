@@ -47,7 +47,7 @@ class _GenerationCharacterizationBase(unittest.IsolatedAsyncioTestCase):
         self.db_path = Path(f"test_markov_char_{uuid.uuid4().hex}.sqlite")
         self.db = Database(str(self.db_path))
         await self.db.init()
-        self.generator = MarkovGenerator(self.db)
+        self.generator = MarkovGenerator(self.db.markov)
         for line in CORPUS:
             await self.db.save_message_and_update_model(
                 chat_id=CHAT_ID, raw_text=line, tokens=line.split()
@@ -64,7 +64,7 @@ class TestGenerateTextOnceCharacterization(_GenerationCharacterizationBase):
         empty_db = Database(str(empty_path))
         await empty_db.init()
         try:
-            gen = MarkovGenerator(empty_db)
+            gen = MarkovGenerator(empty_db.markov)
             attempt = await gen._generate_text_once(
                 chat_id=777, max_chars=100, max_tokens=10, rng=random.Random(1)
             )
@@ -82,7 +82,7 @@ class TestGenerateTextOnceCharacterization(_GenerationCharacterizationBase):
         ns_db = Database(str(ns_path))
         await ns_db.init()
         try:
-            gen = MarkovGenerator(ns_db)
+            gen = MarkovGenerator(ns_db.markov)
             for line in ("альфа бета", "гамма дельта", "эхо фокс"):
                 await ns_db.save_message_and_update_model(
                     chat_id=1, raw_text=line, tokens=line.split()
@@ -535,8 +535,8 @@ class TestCasefoldCandidateBuilders(unittest.IsolatedAsyncioTestCase):
 
     async def test_casefold3_skips_exact_and_weights_by_count(self) -> None:
         matches = [
-            ContextStateMatch(("a", "b", "c"), "exact", similarity=1.0, transition_count=9),
-            ContextStateMatch(("d", "e", "f"), "casefold", similarity=1.0, transition_count=4),
+            ContextStateMatch(("a", "b", "c"), "exact", transition_count=9),
+            ContextStateMatch(("d", "e", "f"), "casefold", transition_count=4),
         ]
         generator = self._generator(matches)
         out = await generator._build_casefold3_candidates(1, [("x", "y", "z")], 1, 1.0)
@@ -550,7 +550,7 @@ class TestCasefoldCandidateBuilders(unittest.IsolatedAsyncioTestCase):
 
     async def test_casefold2_returns_states_with_transitions(self) -> None:
         matches = [
-            ContextStateMatch(("a", "b"), "casefold", similarity=1.0, transition_count=1),
+            ContextStateMatch(("a", "b"), "casefold", transition_count=1),
         ]
         generator = self._generator(matches)
         with patch.object(MarkovGenerator, "_get2", AsyncMock(return_value=[("c", 2)])):
@@ -562,7 +562,7 @@ class TestCasefoldCandidateBuilders(unittest.IsolatedAsyncioTestCase):
 
     async def test_casefold2_skips_states_without_transitions(self) -> None:
         matches = [
-            ContextStateMatch(("a", "b"), "casefold", similarity=1.0, transition_count=3),
+            ContextStateMatch(("a", "b"), "casefold", transition_count=3),
         ]
         generator = self._generator(matches)
         with patch.object(MarkovGenerator, "_get2", AsyncMock(return_value=[])):

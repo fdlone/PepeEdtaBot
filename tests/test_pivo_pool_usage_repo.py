@@ -27,35 +27,35 @@ class TestPivoPoolUsageRepo(unittest.IsolatedAsyncioTestCase):
         self.db_path.unlink(missing_ok=True)
 
     async def test_empty_chat_returns_no_history(self) -> None:
-        self.assertEqual(await self.db.get_pivo_pool_usage("chatA"), {})
+        self.assertEqual(await self.db.pivo_pool_usage.get_recent("chatA"), {})
 
     async def test_record_appends_and_reads_back_per_pool(self) -> None:
-        await self.db.record_pivo_pool_usage(
+        await self.db.pivo_pool_usage.record(
             "chatA", {"default_top": 3, "default_body": 7}, keep=5
         )
-        await self.db.record_pivo_pool_usage("chatA", {"default_top": 4}, keep=5)
+        await self.db.pivo_pool_usage.record("chatA", {"default_top": 4}, keep=5)
 
-        recent = await self.db.get_pivo_pool_usage("chatA")
+        recent = await self.db.pivo_pool_usage.get_recent("chatA")
         self.assertEqual(recent["default_top"], (3, 4))
         self.assertEqual(recent["default_body"], (7,))
 
     async def test_history_is_trimmed_to_keep_most_recent(self) -> None:
         for index in range(6):
-            await self.db.record_pivo_pool_usage(
+            await self.db.pivo_pool_usage.record(
                 "chatA", {"default_top": index}, keep=3
             )
-        recent = await self.db.get_pivo_pool_usage("chatA")
+        recent = await self.db.pivo_pool_usage.get_recent("chatA")
         self.assertEqual(recent["default_top"], (3, 4, 5))
 
     async def test_keep_zero_is_noop(self) -> None:
-        await self.db.record_pivo_pool_usage("chatA", {"default_top": 1}, keep=0)
-        self.assertEqual(await self.db.get_pivo_pool_usage("chatA"), {})
+        await self.db.pivo_pool_usage.record("chatA", {"default_top": 1}, keep=0)
+        self.assertEqual(await self.db.pivo_pool_usage.get_recent("chatA"), {})
 
     async def test_histories_are_isolated_per_chat(self) -> None:
-        await self.db.record_pivo_pool_usage("chatA", {"default_top": 1}, keep=5)
-        await self.db.record_pivo_pool_usage("chatB", {"default_top": 9}, keep=5)
-        self.assertEqual((await self.db.get_pivo_pool_usage("chatA"))["default_top"], (1,))
-        self.assertEqual((await self.db.get_pivo_pool_usage("chatB"))["default_top"], (9,))
+        await self.db.pivo_pool_usage.record("chatA", {"default_top": 1}, keep=5)
+        await self.db.pivo_pool_usage.record("chatB", {"default_top": 9}, keep=5)
+        self.assertEqual((await self.db.pivo_pool_usage.get_recent("chatA"))["default_top"], (1,))
+        self.assertEqual((await self.db.pivo_pool_usage.get_recent("chatB"))["default_top"], (9,))
 
 
 if __name__ == "__main__":

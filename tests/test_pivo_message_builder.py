@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import re
 import unittest
 from collections.abc import Iterable
@@ -19,11 +20,67 @@ from app.domain.pivo_templates import (
 from app.services.pivo_message_builder import (
     PivoMessageContext,
     PivoMessageGenerator,
-    build_pivo_message,
     build_pivo_message_context,
 )
 
+
+def build_pivo_message(
+    mentions: str,
+    *,
+    planned_time: str | None = None,
+    target: str | None = None,
+    has_explicit_mentions: bool = False,
+    rng: random.Random | None = None,
+) -> str:
+    """Сборка сообщения одной строкой — сокращение для тестов.
+
+    В рантайме этой формы нет: сервис собирает контекст и вызывает генератор
+    отдельно, потому что ему нужны ещё и вытянутые индексы шаблонов для
+    анти-повтора. Обёртка жила в продовом модуле, хотя вызывалась только
+    отсюда.
+    """
+    context = build_pivo_message_context(
+        mentions,
+        planned_time=planned_time,
+        target=target,
+        has_explicit_mentions=has_explicit_mentions,
+        rng=rng,
+    )
+    return PivoMessageGenerator().build(context, rng=rng).text
+
 RANDOM_CHOICE_PATH = "app.services.pivo_message_builder.random.choice"
+
+
+class TestFallbackMentionsConstant(unittest.TestCase):
+    """Строка запасного обращения должна быть одна на весь проект.
+
+    Она объявлялась в двух модулях, и сборщик сообщения сравнивал значение со
+    СВОЕЙ копией: расхождение констант тихо сломало бы подавление строки с
+    упоминаниями — бот звал бы «Господа дегенераты» и отдельной строкой ещё раз
+    их же.
+    """
+
+    def test_notification_line_is_suppressed_for_the_fallback(self) -> None:
+        from app.domain.pivo import PIVO_FALLBACK_MENTIONS
+
+        context = build_pivo_message_context(
+            PIVO_FALLBACK_MENTIONS,
+            planned_time=None,
+            target=None,
+            has_explicit_mentions=False,
+        )
+
+        self.assertEqual(context.notification_line, "")
+
+    def test_notification_line_is_built_for_real_mentions(self) -> None:
+        context = build_pivo_message_context(
+            "@friend",
+            planned_time=None,
+            target=None,
+            has_explicit_mentions=False,
+        )
+
+        self.assertIn("@friend", context.notification_line)
 
 FORBIDDEN_TARGET_MODE_TERMS = (
     "СИГейм",

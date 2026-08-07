@@ -6,7 +6,8 @@ Usage:
     python -m tools.seed_db [--chat-id CHAT_ID] [--messages N] [--db PATH]
 
 Defaults:
-    --chat-id  -1001147461458  (existing chat in markov.db)
+    --chat-id  -1001234567890  (synthetic id: seeding must not land in a real
+                                chat by default — pass --chat-id explicitly)
     --messages 120             (~1000 tokens total)
     --db       markov.db
 """
@@ -74,7 +75,7 @@ async def run(db_path: str, chat_id: int, num_messages: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Seed Markov DB with random tokens")
-    parser.add_argument("--chat-id", type=int, default=-1001147461458)
+    parser.add_argument("--chat-id", type=int, default=-1001234567890)
     parser.add_argument("--messages", type=int, default=120)
     parser.add_argument("--db", type=str, default="markov.db")
     args = parser.parse_args()

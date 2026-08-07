@@ -27,7 +27,10 @@ async def cmd_help(message: Message, runtime_state: RuntimeState) -> None:
 async def cmd_stats(
     message: Message, db: Database, runtime_state: RuntimeState
 ) -> None:
-    stats = await db.get_stats(message.chat.id)
+    # Показывается только объём модели, поэтому и читается только он: полный
+    # срез (`get_stats`) — это пять COUNT-ов по чату, из которых команда не
+    # печатает ни одного.
+    volume = await db.get_chat_token_volume(message.chat.id)
     await reply_humanized_state(
-        message, format_stats_message(stats), runtime_state
+        message, format_stats_message({"volume": volume}), runtime_state
     )

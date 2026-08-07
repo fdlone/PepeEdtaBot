@@ -1,8 +1,9 @@
 # Архитектура проекта
 
-Документ описывает текущую слоистую архитектуру `PepeEdtaBot`. Если вы трогаете
-код впервые — читайте его вместе с [GENERATION_PIPELINE.md](GENERATION_PIPELINE.md)
-(конвейер ответа) и [OPEN.md](OPEN.md) (что не закрыто).
+Слои, зависимости, модель данных и то, почему они такие. Конвейер ответа
+описан отдельно — [GENERATION_PIPELINE.md](GENERATION_PIPELINE.md); настройки
+живут в [`.env.example`](../.env.example); операционные процедуры — в
+[OPERATIONS.md](OPERATIONS.md).
 
 ## Слои
 
@@ -18,101 +19,121 @@
         ┌───────────────────┐         ┌─────────────────────────┐
         │  filters/         │         │  middlewares/           │
         │  GroupOnly        │         │  ThrottlingMiddleware   │
-        │  AdminOrOwner     │         │                         │
+        │  AdminOrOwner     │         │  ChatSettingsMiddleware │
+        │  OwnerOnly        │         │                         │
         └───────────────────┘         └─────────────────────────┘
                   │                                │
                   ▼                                ▼
         ┌────────────────────────────────────────────────────────┐
         │  handlers/  (aiogram.Router × 5)                       │
-        │   common  /ping /help /stats                           │
-        │   admin   /config /set /setprob /clear  + denied-fallback │
-        │   pivo    /pivo /pivo_on /pivo_off /pivo_privacy       │
-        │   learning  F.text — обучение и генерация              │
+        │   common / admin / pivo / learning / errors            │
+        │   тонкие: собрать факты, вызвать сервис, ответить      │
         └────────────────────────────────────────────────────────┘
                   │
                   ▼
         ┌────────────────────────────────────────────────────────┐
         │  services/  (бизнес-логика, не знают про aiogram*)     │
-        │   LearningService   PivoService                        │
+        │   ReplyPipeline   LearningService   PivoService         │
         └────────────────────────────────────────────────────────┘
-                  │
-                  ▼
+                  │                                │
+                  ▼                                ▼
+        ┌──────────────────────┐   ┌────────────────────────────┐
+        │  core/  (генерация)  │   │  repositories/ (SQL/домен) │
+        │  порт markov_port.py │◀──│  markov / messages / ...   │
+        └──────────────────────┘   └────────────────────────────┘
+                                                  │
+                                                  ▼
         ┌────────────────────────────────────────────────────────┐
-        │  repositories/  (per-domain SQL)                       │
-        │   markov / messages / chat_members / pivo_usage        │
+        │  infrastructure/database.py                            │
+        │  соединение и блокировка, миграции, настройки SQLite,   │
+        │  доступ к репозиториям, кросс-доменные операции         │
         └────────────────────────────────────────────────────────┘
-                  │
-                  ▼
-        ┌────────────────────────────────────────────────────────┐
-        │  infrastructure/database.py (фасад: соединение +      │
-        │  кросс-доменные транзакции типа                        │
-        │  save_message_and_update_model)                        │
-        └────────────────────────────────────────────────────────┘
-                  │
-                  ▼
+                                                  │
+                                                  ▼
         ┌────────────────────────────────────────────────────────┐
         │  infrastructure/migrator.py  (NNN_*.sql / .py — once)  │
         └────────────────────────────────────────────────────────┘
 ```
 
 \* Исключение — `PivoService.subscribe(chat_id, user)` принимает
-`aiogram.types.User` напрямую: осознанный компромисс — сервису нужны сразу
-несколько полей пользователя (`id`, `username`, `full_name`/`first_name`/
-`last_name`), и промежуточный DTO дублировал бы форму `aiogram.types.User`
-без практической выгоды при текущем размере проекта.
+`aiogram.types.User` напрямую: сервису нужны сразу несколько полей
+пользователя (`id`, `username`, `full_name`/`first_name`), и раскладывать их в
+собственный DTO ради одного вызова дороже, чем признать зависимость.
+
+**Направление зависимостей.** `app/core/` не знает, откуда берутся данные: он
+объявляет порт `app/core/markov_port.py` (семь методов чтения цепи, ровно те,
+что вызываются), а `MarkovRepo` ему удовлетворяет — реализацию подставляет
+`main.py` (`MarkovGenerator(db=db.markov)`). До этого ядро импортировало
+конкретный класс `Database`, и цена была не в чистоте: из-за цикла импортов
+инфраструктура держала собственные копии набора пунктуации, размера контентной
+n-граммы и функции построения окон 4-грамм, а их расхождение молча развело бы
+накопительный индекс цитат с тем, что видит скорер. Определение окна теперь
+одно (`candidate_scorer.verbatim_ngram_windows`); копия в миграции 016
+оставлена намеренно — миграции застывшая история и не должны меняться вместе с
+кодом. Правило проверяется `tests/test_layering.py`.
+
+**Слой доступа к данным.** SQL живёт в репозиториях, и потребители обращаются к
+ним напрямую: `db.markov.get_starts(...)`, `db.chat_emoji_stats.bump(...)`.
+Однострочных методов-делегатов в `Database` нет — раньше их было около сорока,
+и каждый новый метод репозитория приходилось дублировать в фасаде, иначе им
+нельзя было пользоваться. `Database` остаётся владельцем того, что репозиторию
+не принадлежит: соединения и его блокировки, миграций, настроек SQLite, точки
+доступа к репозиториям и кросс-доменных операций. Репозитории отдаются
+свойствами, поэтому обращение до `await db.init()` даёт понятную ошибку, а не
+`None`.
+
+**Тонкие обработчики.** Бизнес-логики в `handlers/` нет: обработчик собирает
+факты, вызывает сервис и отправляет результат. Единственное место, где было
+иначе, — обработчик текста: он держал 430-строчный конвейер ответа, который
+переехал в `ReplyPipeline`.
 
 ## Модули
 
 ### Compose root
-- `main.py` — единственная точка инициализации. `run_bot()` собирает граф
-  зависимостей, `configure_dispatcher()` регистрирует middleware, ключи в
-  `dp[...]` и роутеры. Никакой бизнес-логики.
 
-### `app/`
+`main.py` — единственное место, где создаются объекты: `load_settings()`,
+`Database.init()`, сервисы, `Dispatcher`, middleware, роутеры. Ниже по стеку
+никто ничего не конструирует.
 
-| Подпакет | Содержимое |
+### Пакеты
+
+| Пакет | Содержимое |
 |---|---|
-| `config/` | `registry.py`, `settings.py`, `runtime_config.py`, `runtime_state.py`, `defaults.py` |
-| `core/` | `markov.py`, `response_generator.py`, `candidate_scorer.py`, `context_state_matcher.py`, `morphology.py`, `gen_trace_log.py`, `reply_flavor.py`, `emoji.py`, `hot_ngrams.py`, `mood.py`, `lexicon.py`, `privacy_filter.py`, `reply_policy.py`, `text.py` |
-| `domain/` | `pivo.py`, `pivo_templates.py` |
-| `presentation/` | `bot_messages.py`, `fallback_phrases.py` |
-| `handlers/` | `common.py`, `admin.py`, `pivo.py`, `learning.py`, `errors.py` — `aiogram.Router` per file. `_helpers.py` — `reply_humanized`, `reply_humanized_sequence`. |
-| `services/` | `learning_service.py`, `pivo_service.py`, `pivo_message_builder.py`, `pivo_parser.py` |
+| `core/` | `markov.py`, `markov_port.py`, `response_generator.py`, `candidate_scorer.py`, `context_state_matcher.py`, `morphology.py`, `gen_trace_log.py`, `reply_flavor.py`, `emoji.py`, `hot_ngrams.py`, `mood.py`, `intonation.py`, `slot_mutation.py`, `lexicon.py`, `privacy_filter.py`, `reply_policy.py`, `text.py` |
+| `services/` | `reply_pipeline.py`, `learning_service.py`, `pivo_service.py`, `pivo_message_builder.py`, `pivo_parser.py` |
+| `handlers/` | `common.py`, `admin.py`, `pivo.py`, `learning.py`, `errors.py` — `aiogram.Router` на файл; `_helpers.py` — отправка с имитацией набора |
 | `repositories/` | `markov_repo.py`, `messages_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py`, `pivo_pool_usage_repo.py`, `chat_emoji_stats_repo.py`, `chat_hot_ngrams_repo.py`, `chat_user_interactions_repo.py` |
-| `filters/` | `group_only.py` (только `GROUP`/`SUPERGROUP`), `admin_or_owner.py` (`OWNER_ID` или админ чата, fail-closed при ошибке Telegram API) |
-| `middlewares/` | `throttling.py` — per-user-per-command cooldown, `clear`=3600 сек; команды из `notify_on_throttle` получают явный ответ при throttle вместо silent drop |
-| `infrastructure/` | `database.py` — фасад БД; `migrator.py` — пробегает `app/migrations/NNN_*` ровно один раз. `.sql`-файлы оборачиваются в `BEGIN; ... COMMIT;` и проходят через `executescript`; на исключении вызывается `conn.rollback()` и схема не остаётся в полу-применённом состоянии |
-| `migrations/` | `001_initial.sql` … `015_lowercase_model.py` |
+| `domain/` | `pivo.py` (`PivoSecurity`, `PivoMember`), `pivo_templates.py` |
+| `presentation/` | `bot_messages.py`, `fallback_phrases.py` |
+| `config/` | `settings.py`, `runtime_state.py`, `runtime_config.py`, `registry.py`, `defaults.py` |
+| `filters/` | `group_only.py`, `admin_or_owner.py`, `owner_only.py` (оба проверяющих права — fail-closed при ошибке Telegram API) |
+| `middlewares/` | `throttling.py`, `chat_settings.py` |
+| `infrastructure/` | `database.py`, `migrator.py` |
+| `migrations/` | `001_initial.sql` … `017_strip_list_enumerators.sql` |
 
-### Внутренние модули пакета
+### Модули, чьё назначение не читается по имени
 
 | Файл | Назначение |
 |---|---|
-| `app/infrastructure/database.py` | Фасад над репозиториями: соединение `aiosqlite`, кросс-доменные транзакции (`save_message_and_update_model`, `clear_chat`, `get_stats`), retention `pivo_daily_usage`. |
+| `app/services/reply_pipeline.py` | Конвейер ответа на обычное сообщение: `observe` (ритм и настроение чата, эмодзи-канал, гейты обучаемости), `respond` (политика ответа, генерация, причуды, редкие события) и `learn` (запись в модель). Типов Telegram не знает — обработчик передаёт факты (`IncomingMessage`) и функцию отправки, поэтому ветки политики проверяются без моков Telegram. |
 | `app/core/markov.py` | Variable-order генератор (3 → 2; порядка 1 нет — его блуждания были словесным салатом). Контекстно-аффинные старты, topic-drift jumps. |
-| `app/core/morphology.py` | Приближённый русский стеммер (`stem_token`) — единый fold-ключ для IDF-релевантности и аффинности стартов. Контекст-матчинг стемы не использует: этот тир удалён 2026-07-14 (см. [CLOSED.md](CLOSED.md)). |
-| `app/core/gen_trace_log.py` | Пошаговый лайв-трейс отбора кандидатов (логгер `chat_markov.gen`), включается env-флагом `GEN_TRACE_LOG`; поведения не меняет. |
 | `app/core/response_generator.py` | Конвейер best-of-N: генерация кандидатов, фильтры (verbatim, echo, анти-повтор), softmax-отбор по скорингу, reply flavor. |
-| `app/core/candidate_scorer.py` | Скоринг кандидатов: качество завершения, длина по режимам short/medium/long, IDF-релевантность контексту (по стемам, с echo-гардом), штрафы повторов (включая бывший diversity-компонент) и дословного цитирования (рамп от 60% корпусных 4-грамм). |
-| `app/core/mood.py` | Пер-чатовое настроение (sleepy/calm/lively/heated) из EWMA-сигналов; модулирует поведение генерации (M1). |
-| `app/core/reply_flavor.py` | Вариации финальной пунктуации ответа (QW5); редкие события и фальстарты (L3): ролл и трансформация ответа в последовательность сообщений (вердикт/КАПС/двойное сообщение/филлер). |
-| `app/core/emoji.py` | Эмодзи-канал (M3): извлечение эмодзи из текста (без tone-модификаторов, флаги собираются из пары региональных индикаторов) и частотный сэмплинг для добавления в конец ответа; `strip_trailing_emojis` снимает добавленное эмодзи перед анти-повторным сравнением. |
-| `app/core/hot_ngrams.py` | «Локальные мемы» (L1): извлечение контентных би/триграмм выученного сообщения для окна горячих n-грамм; горячие n-граммы изредка сидируют самостоятельные ответы через seed API генератора. |
-| `app/presentation/fallback_phrases.py` | Пулы fallback-фраз с анти-повтором, ночными и «heated»-вариантами. |
-| `app/domain/pivo.py` | `PivoSecurity` (HMAC + Fernet), `PivoMember`. |
-| `app/domain/pivo_templates.py` | Контент сообщений `/pivo`. |
-| `app/presentation/bot_messages.py` | Форматирование `/help`, `/stats`, `/config`. |
-| `app/core/reply_policy.py` | `bot_is_mentioned`, cooldown, `should_reply` + `DEFAULT_BOT_TEXT_ALIASES` (встроенные «прозвища», на которые бот отзывается). |
-| `app/config/settings.py` | `Settings` dataclass + `load_settings(env)`. |
-| `app/config/runtime_state.py` | `RuntimeState` dataclass + `runtime_state_from_settings`. |
-| `app/config/runtime_config.py` | Тонкая обёртка вокруг `app.config.registry.try_apply` для `/set`. |
-| `app/config/registry.py` | **Единый реестр** runtime-mutable полей (`FieldSpec` на каждый параметр + `validate_cross_fields`). |
-| `app/core/text.py` | `sanitize_text` — убирает `@mention`, схлопывает пробелы. |
+| `app/core/candidate_scorer.py` | Скоринг кандидатов: качество завершения, длина по режимам, IDF-релевантность контексту (по стемам, с echo-гардом), штрафы повторов и дословного цитирования. |
+| `app/core/morphology.py` | Приближённый русский стеммер (`stem_token`) — единый fold-ключ для IDF-релевантности и аффинности стартов. |
+| `app/core/mood.py` | Пер-чатовое настроение (sleepy/calm/lively/heated) из EWMA-сигналов; модулирует поведение генерации. |
+| `app/core/reply_flavor.py` | Вариации финальной пунктуации ответа; редкие события и фальстарты: ролл и трансформация ответа в последовательность сообщений. |
+| `app/core/emoji.py` | Эмодзи-канал: извлечение эмодзи из текста (без tone-модификаторов, флаги из пары региональных индикаторов) и частотный сэмплинг для добавления в конец ответа. |
+| `app/core/hot_ngrams.py` | «Локальные мемы»: извлечение контентных би/триграмм выученного сообщения для окна горячих n-грамм. |
+| `app/core/gen_trace_log.py` | Пошаговый лайв-трейс отбора кандидатов (логгер `chat_markov.gen`), включается `GEN_TRACE_LOG`; поведения не меняет. |
+| `app/core/reply_policy.py` | `bot_is_mentioned`, кулдауны, моментум и вероятность ответа + `DEFAULT_BOT_TEXT_ALIASES`. |
+| `app/core/privacy_filter.py` | Редакция персональных данных в тексте перед обучением. |
+| `app/config/registry.py` | Единый реестр runtime-mutable полей (`FieldSpec` на параметр + `validate_cross_fields`). |
+| `app/middlewares/chat_settings.py` | Подставляет обработчикам представление настроек для конкретного чата (оверлей `/set`). |
 
 ## DI
 
-Зависимости, которые нужны хендлерам, кладутся в `dp[...]` и автоматически
-прокидываются в каждую функцию через `workflow_data` aiogram v3:
+Зависимости кладутся в `dp[...]` и прокидываются в обработчики через
+`workflow_data` aiogram v3:
 
 ```python
 dp["db"] = db
@@ -126,144 +147,215 @@ dp["bot_id"] = bot_id
 dp["bot_text_aliases"] = settings.bot_text_aliases
 ```
 
-Никаких самодельных DI-контейнеров. Размер проекта это не оправдывает.
+Никаких самодельных DI-контейнеров: размер проекта это не оправдывает.
 
-> Ключ для `RuntimeState` — `runtime_state` (не `state`), чтобы не
-> конфликтовать с aiogram-овским `FSMContext`, который под именем `state`
-> подкладывается dispatcher'ом автоматически.
+> Ключ для `RuntimeState` — `runtime_state` (не `state`), чтобы не конфликтовать
+> с aiogram-овским `FSMContext`, который под именем `state` подкладывается
+> dispatcher'ом автоматически.
 
 ## Конфигурация
 
-Single source of truth для runtime-mutable полей — `app/config/registry.py`:
+Единственный источник истины по runtime-mutable полям — `app/config/registry.py`.
+Что именно значит каждый параметр и какой у него дефолт — в
+[`.env.example`](../.env.example); здесь описан только механизм.
 
-```python
-RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
-    FieldSpec("reply_probability", "REPLY_PROBABILITY", "0.08",
-              _float_in_range(0.0, 1.0)),
-    ...
-)
-```
+- `load_settings()` итерируется по реестру и читает значения из env через
+  `spec.parse`.
+- `runtime_state_from_settings()` копирует runtime-mutable значения в
+  `RuntimeState` через тот же реестр.
+- `apply_runtime_setting()` ищет `FieldSpec` по ключу из `/set`, парсит,
+  проверяет `validate_cross_fields` и только потом мутирует живой state.
 
-- `load_settings()` (`app/config/settings.py`) итерируется по реестру и читает
-  значения из env через `spec.parse`.
-- `runtime_state_from_settings()` копирует runtime-mutable значения
-  в `RuntimeState` через тот же реестр.
-- `apply_runtime_setting()` (`app/config/runtime_config.py`) ищет `FieldSpec` по имени
-  ключа из `/set`, парсит, проверяет на shallow copy через
-  `validate_cross_fields`, и только потом мутирует живой state.
+Чтобы добавить новый runtime-mutable параметр: строка в `RUNTIME_FIELDS`, поле в
+`Settings` и `RuntimeState` (нужно для статической типизации) и, если есть
+cross-field инвариант, ветка в `validate_cross_fields`.
 
-Чтобы добавить новый runtime-mutable параметр, нужно:
-1. добавить строчку в `RUNTIME_FIELDS`;
-2. добавить поле в dataclass `Settings` и `RuntimeState` (нужно для
-   статической типизации);
-3. (опционально) при cross-field инварианте — расширить
-   `validate_cross_fields`.
+Поля, которые не должны меняться в runtime (`BOT_TOKEN`, `OWNER_ID`, `DB_PATH`,
+`PIVO_*_SECRET`, `LOG_LEVEL`, `BOT_TEXT_ALIASES`), живут только в `Settings` и
+парсятся вручную в `load_settings`.
 
-Поля, которые не должны быть mutable в runtime (`BOT_TOKEN`, `OWNER_ID`,
-`DB_PATH`, `PIVO_*_SECRET`, `LOG_LEVEL`, `BOT_TEXT_ALIASES`), живут
-только в `Settings` и парсятся вручную в `load_settings`.
+`BOT_TEXT_ALIASES` имеет безопасный fallback: если переменная не задана или
+содержит только разделители, берутся встроенные `DEFAULT_BOT_TEXT_ALIASES`
+(`pepe`, `пепе`) — бот отзывается на свои прозвища даже без редактируемого
+`.env`, например на проде с ограниченным доступом к контейнеру.
 
-`BOT_TEXT_ALIASES` имеет специальное поведение «безопасного fallback'а»:
-если переменная не задана или содержит только разделители — берутся
-встроенные `app.core.reply_policy.DEFAULT_BOT_TEXT_ALIASES = {"pepe", "пепе"}`, чтобы
-бот отвечал на свои стандартные прозвища даже без редактируемого
-`.env` (например, на проде с ограниченным доступом к контейнеру).
+**Оверлей по чатам.** `/set` пишет в оверлей конкретного чата, а не в
+глобальный state; `ChatSettingsMiddleware` подставляет обработчикам
+представление для их чата. Чат без переопределений получает **тот же объект**,
+а не копию, поэтому 58 мест чтения настроек не пришлось править. Живое
+состояние (анти-повтор, настроение, счётчики) при этом не разделяется: поля
+состояния словарные, поверхностная копия делит их по ссылке. Оверлей
+вытесняется вместе с остальным состоянием чата.
 
 ## Модель данных
 
 | Таблица | Назначение |
 |---|---|
 | `messages` | `chat_id`, `author_id` (анонимизирован), `normalized_text`, `created_at`. Сырой `text` удалён миграцией 005. |
-| `starts3` / `transitions3` | Основная цепь порядка 3: состояние `(w1, w2, w3)` → `w4`. Токены в нижнем регистре (`NORMALIZE_LOWER=true`); накопленную модель разово привела к нему миграция 015. |
-| `starts` / `transitions` | Бэкофф порядка 2: состояние `(w1, w2)` → `w3`. Цепь порядка 1 (`transitions1`) удалена миграцией 013. |
-| `chat_members` | Каноническая таблица участников чата. PK `(chat_hash, user_hash)`, payload зашифрован Fernet. Сейчас единственный потребитель — `/pivo` (присутствие в таблице ≡ подписка); будущие фичи, которым нужно персистентное состояние участника, ходят сюда же. Профиль (`@username`, имя) освежается по сообщениям подписчика, но не чаще раза в сутки (`PivoService.refresh_member`) — иначе устаревший ник в упоминании никого не тегает. |
+| `starts3` / `transitions3` | Основная цепь порядка 3: состояние `(w1, w2, w3)` → `w4`. Токены в нижнем регистре; накопленную модель разово привела к нему миграция 015. |
+| `starts` / `transitions` | Бэкофф порядка 2: `(w1, w2)` → `w3`. Цепь порядка 1 удалена миграцией 013. |
+| `chat_model_volume` | Инкрементальный счётчик объёма модели чата (`volume2`, `volume3`). Читается на каждое входящее сообщение, поэтому не агрегатом `SUM(cnt)` по таблицам переходов. Миграция 009. |
+| `chat_verbatim_ngrams` | Накопительный индекс контентных 4-грамм чата для штрафа за цитирование: живёт по тому же циклу, что таблицы переходов, и не обрезается ретенцией сообщений. Миграция 016. |
+| `chat_members` | Каноническая таблица участников. PK `(chat_hash, user_hash)`, payload зашифрован Fernet. Единственный потребитель — `/pivo` (присутствие в таблице ≡ подписка). Профиль (`@username`, имя) освежается по сообщениям подписчика, но не чаще раза в сутки — иначе устаревший ник в упоминании никого не тегает. |
 | `pivo_daily_usage` | Суточная квота `/pivo` (`chat_hash`, `user_hash`, `usage_day`, `used_count`). Retention 7 дней. |
-| `pivo_pool_usage` | Анти-повтор шаблонов `/pivo`: последние использованные индексы top/body/bottom per chat per pool (`chat_hash`, `pool_name`, `recent_indices`). Миграция 010. |
-| `chat_emoji_stats` | Частоты эмодзи per chat для эмодзи-канала (`chat_id`, `emoji`, `cnt`, `updated_at`); ключ — сырой `chat_id`, как у таблиц модели; чистится в `clear_chat`, стареющие строки затухают. Миграция 011 (M3). |
-| `chat_hot_ngrams` | Скользящее окно контентных n-грамм per chat (`chat_id`, `w1`, `w2`, `w3` (`''` для биграмм), `cnt`, `updated_at`); «горячесть» = доля оконного счётчика от всевременного в `transitions` (для биграмм — SUM по `w3`). Ключ — сырой `chat_id`; чистится в `clear_chat`, затухает при старте. Миграция 012 (L1). |
-| `chat_user_interactions` | Счётчик отвеченных обращений per user per chat для L2-причуд (`chat_id`, `user_hash`, `cnt`, `updated_at`); `user_hash` — HMAC-SHA256 под `PIVO_HMAC_SECRET` (как у `/pivo`), никаких имён/username. Ключ — сырой `chat_id`; чистится в `clear_chat`, затухает за ~30 дней тишины (медленнее мемных таблиц). Миграция 014 (L2). |
+| `pivo_pool_usage` | Анти-повтор шаблонов `/pivo`: последние использованные индексы top/body/bottom per chat per pool. Миграция 010. |
+| `chat_emoji_stats` | Частоты эмодзи per chat для эмодзи-канала. Ключ — сырой `chat_id`, как у таблиц модели; чистится в `clear_chat`, стареющие строки затухают. Миграция 011. |
+| `chat_hot_ngrams` | Скользящее окно контентных n-грамм per chat; «горячесть» = доля оконного счётчика от всевременного в `transitions`. Миграция 012. |
+| `chat_user_interactions` | Счётчик отвеченных обращений per user per chat для причуд завсегдатаев; `user_hash` — HMAC-SHA256, никаких имён и username. Миграция 014. |
 | `schema_migrations` | Учёт применённых миграций. |
+
+Затухание «личностных» таблиц (`chat_emoji_stats`, `chat_hot_ngrams`,
+`chat_user_interactions`) идёт на старте и потом лениво примерно раз в сутки с
+learn-пути: планировщика в проекте нет, а окно «горячести» должно ехать и без
+рестартов. Окна и операционная сторона — в [OPERATIONS.md](OPERATIONS.md).
+
+Обслуживание вызывается **отдельным шагом конвейера**, после записи сообщения,
+и его сбой не пробрасывается вызывающему: логируется и откладывает следующую
+попытку на короткий интервал. Пока вызов стоял первой строкой внутри
+`save_message_and_update_model`, занятая база (бэкап, `VACUUM`, внешний клиент)
+означала не отложенное затухание, а остановку обучения во всех чатах сразу —
+условие «пора» оставалось истинным, и каждое следующее сообщение падало там же.
+Молча: единственным признаком была строка в логе. Откладывать на сутки тоже
+нельзя — одна занятая база заморозила бы окно на день; повторять на каждом
+сообщении нельзя — при `SQLITE_BUSY` это стоило бы `busy_timeout` на каждом
+statement под общей блокировкой соединения. Прямые вызовы `decay_*` и `init()`
+остаются строгими: на старте fail-fast уместнее тихой деградации.
+
+### Кэши в памяти
+
+`LearningService` держит по чату производные структуры, чтобы путь ответа не
+перечитывал базу: окно последних нормализованных текстов (гейт дословного
+повтора), кумулятивный индекс контентных 4-грамм (штраф за цитирование), IDF
+контент-токенов, интонационный профиль и частотный словарь чата (слот-мутации).
+
+- **Пополнение, а не сброс.** Выученное сообщение добавляется в окно текстов, в
+  индекс 4-грамм и в частоты. Раньше эти кэши сбрасывались целиком на каждом
+  сообщении, из-за чего в активном чате почти каждый ответ шёл по холодному
+  пути — на копии прода это ~95 мс полной пересборки против ~0.04 мс тёплого
+  чтения.
+- **Отсрочка для тяжёлой статистики.** IDF и интонационный профиль считаются по
+  выборке в сотни сообщений и пересобираются не чаще, чем раз в
+  `STATS_REBUILD_EVERY_MESSAGES` выученных сообщений: одно сообщение сдвигает
+  доли на доли процента.
+- **Вытеснение.** Кэши ключуются `chat_id` и подчиняются той же политике, что
+  остальное состояние в памяти: тот же срок хранения и предел по числу чатов.
+  Вытеснение не меняет решений — данные перечитываются из базы.
+- **`/clear` забывает кэши чата**: иначе гейт дословного повтора продолжал бы
+  считать цитатой сообщения, которых в базе уже нет.
+
+Тем же правилом ограничен суточный дроссель обновления профилей `/pivo`: при
+смене суток словарь сбрасывается целиком, потому что записи прошлых дней
+бесполезны.
 
 ## Миграции
 
-`app/infrastructure/migrator.py`:
+`app/infrastructure/migrator.py` сканирует `app/migrations/NNN_<name>.{sql,py}`,
+сравнивает с `schema_migrations` и применяет недостающие в порядке имён.
 
-- сканирует `app/migrations/NNN_<name>.{sql,py}`;
-- сравнивает с записями в `schema_migrations`;
-- применяет недостающие в порядке имён;
-- `.sql` оборачивается в `BEGIN; <тело>; COMMIT;` и пропускается через
-  `conn.executescript(...)` — это даёт **атомарность**: stdlib
-  `sqlite3.executescript` неявно делает `COMMIT` перед запуском, и без
-  явного `BEGIN` каждый DDL внутри файла авто-коммитился бы по мере
-  выполнения. Теперь при падении в середине файла `run()` ловит
-  исключение, делает `conn.rollback()`, in-flight-транзакция
-  откатывается, и `schema_migrations` не получает запись о
-  половинчатой миграции;
-- `.py` импортирует и вызывает `await mod.apply(conn)`;
-- на исключении `await conn.rollback()` и raise — запись в
-  `schema_migrations` не появится для не до конца применённой миграции.
+`.sql` оборачивается в `BEGIN; <тело>; COMMIT;` и пропускается через
+`conn.executescript(...)` — это и даёт атомарность: stdlib `executescript`
+неявно делает `COMMIT` перед запуском, и без явного `BEGIN` каждый DDL внутри
+файла авто-коммитился бы по мере выполнения. При падении в середине файла
+`run()` ловит исключение, делает `conn.rollback()`, и запись о половинчатой
+миграции в `schema_migrations` не появляется. `.py` импортируется и вызывается
+как `await mod.apply(conn)` с тем же поведением на исключении.
 
-**Конвенция:** файлы `app/migrations/*.sql` НЕ должны содержать собственных
+**Конвенция:** файлы `app/migrations/*.sql` не должны содержать собственных
 `BEGIN`/`COMMIT` — runner добавляет их сам.
 
-## Безопасность
+## Приватность и безопасность
 
-- `OWNER_ID` или admin чата → `AdminOrOwner` filter (fail-closed при
-  ошибке Telegram API).
-- `/pivo` / `/clear` → `ThrottlingMiddleware`.
-- `chat_members` (и зависящий от неё `/pivo`-flow): HMAC-индексированный
-  `chat_hash`/`user_hash` под `PIVO_HMAC_SECRET`, Fernet-шифрование
-  payload под `PIVO_ENCRYPTION_SECRET`. Прежняя HKDF-инфраструктура с
-  доменными метками (`members:hmac` / `members:encryption`) и
-  `chat_member_profiles` была удалена в миграции 007 как
-  «заготовка под несуществующие домены». Если в будущем появится
-  независимый домен, HKDF можно подключить отдельным сервисом.
-- Все SQL-запросы параметризованы.
-- `messages.text` больше не хранится; только `normalized_text` после
-  `sanitize_text`.
+Что видит пользователь — в [README](../README.md#данные-и-приватность); здесь
+механизмы.
+
+**Текст сообщений.** Колонка `messages.text` удалена миграцией
+`005_drop_messages_text.py`; хранится только `normalized_text` — результат
+`sanitize_text`: удаление ссылок → редакция персональных данных
+(`privacy_filter.redact_sensitive_data`) → удаление `@mentions` → сжатие
+повторов символов → нормализация пробелов. Строки живут в пределах окна
+ретенции; агрегированные таблицы цепи хранят счётчики, а не тексты.
+`author_id` принудительно анонимизируется миграцией `003_anonymize_authors.py`.
+
+**Идентификаторы `/pivo`.** Подписки индексируются HMAC-SHA256-хэшами
+`chat_hash`/`user_hash` под `PIVO_HMAC_SECRET`, payload шифруется Fernet.
+Ключ Fernet выводится из `PIVO_ENCRYPTION_SECRET` через HKDF-SHA256 с доменной
+меткой `pivo:fernet` — так же, как ключ маскирования `chat_id` выводится с
+меткой `logging:chat_id`: отдельная метка означает отдельный ключ. Чтение идёт
+набором ключей (`MultiFernet`): актуальный шифрует, прежний (голый SHA-256 от
+секрета) только читает, и уже сохранённые строки переходят на новый ключ при
+очередной перезаписи профиля — без остановки бота и без единовременной миграции
+таблицы. Оба секрета обязаны быть не короче 32 символов, иначе бот не стартует:
+функция вывода ключа защищает ровно настолько, насколько непредсказуем сам
+секрет.
+
+**Счётчики завсегдатаев.** Хранится только `user_hash` (та же схема HMAC, что у
+`/pivo`) и число отвеченных обращений — без имён, username и обратимых
+идентификаторов. Счётчик затухает после ~30 дней тишины и стирается
+`/clear confirm`; `USER_QUIRK_CHANCE=0` отключает и запись, и чтение.
+
+**`chat_id` в логах** маскируется HKDF-derived ключом и коротким HMAC-mask; не
+добавляйте сырой `chat_id` в новые лог-сообщения. Инвариант распространяется и
+на чужой текст: aiogram зашивает сырой `chat_id` внутрь сообщения части
+исключений (`TelegramRetryAfter`, `TelegramMigrateToChat`), поэтому такой текст
+перед логированием проходит через `mask_chat_ids_in_text` — маскировать
+аргументы там недостаточно.
+
+**Тот же инвариант — для артефактов репозитория:** тестов, фикстур,
+документации, сохранённых результатов прогонов. Идентификаторы в них
+синтетические, проверяет это `tests/test_no_real_chat_ids.py`; новый
+синтетический идентификатор объявляется в списке этого теста.
+
+**Права и лимиты.** Доступ к изменяющим командам — фильтр `AdminOrOwner`
+(fail-closed при ошибке Telegram API), частота — `ThrottlingMiddleware`. Все
+SQL-запросы параметризованы. Кто и что может — в
+[README](../README.md#команды).
 
 ## Docker
 
-Контейнер собран из `python:3.14.0-slim` (pin минорной версии, осознанный
-апгрейд при изменении). Внутри:
+Образ собирается из `python:3.14.0-slim` (pin минорной версии, осознанный
+апгрейд при изменении).
 
 - При сборке создаётся пользователь `bot` (UID 1000), `/app` принадлежит ему.
 - `requirements.lock` ставится первым слоем (cache-friendly).
-- В образ копируется белый список — `main.py` и `app/` (вместе с
-  `app/migrations/*.sql`), — а не весь контекст. Данные чата, тесты, `tools/`,
+- В образ копируется белый список — `main.py` и `app/` вместе с
+  `app/migrations/*`, — а не весь контекст. Данные чата, тесты, `tools/`,
   `docs/`, `openspec/` физически не попадают в слои, даже если кто-то забыл
-  дописать строку в `.dockerignore`. Сам `.dockerignore` остаётся вторым
+  дописать строку в `.dockerignore`; сам `.dockerignore` остаётся вторым
   рубежом и сокращает контекст, уходящий демону.
-- `HEALTHCHECK` каждые 60 секунд проверяет, что Python-интерпретатор жив
-  (бот polling-only, HTTP endpoint'а нет — это формальная заглушка).
-- **`docker-entrypoint.sh`** запускается от root: best-effort
+- `docker-entrypoint.sh` запускается от root: best-effort
   `chown -R bot:bot /app/data`, затем `exec runuser -u bot -- "$@"`. Это
-  защищает от «host bind-mount принадлежит другому UID/GID, бот не может
-  писать в `/app/data`». `runuser` входит в `util-linux` в slim-образе,
-  ничего доустанавливать не нужно.
-- Если оператор гарантирует владельца хост-директории, можно запустить
-  контейнер с `--user 1000:1000` — тогда entrypoint пропустит команду без
-  изменений.
-- `.gitattributes` фиксирует LF-окончания для `*.sh`, чтобы Windows-клон
-  не сделал CRLF и не сломал shebang в Linux-контейнере.
+  защищает от «host bind-mount принадлежит другому UID/GID, бот не может писать
+  в `/app/data`». `runuser` входит в `util-linux` в slim-образе.
+- `HEALTHCHECK` раз в 60 секунд — формальная smoke-проба; что он на самом деле
+  доказывает, а что нет, описано в [OPERATIONS.md](OPERATIONS.md).
+- `.gitattributes` фиксирует LF-окончания для `*.sh`, чтобы Windows-клон не
+  сделал CRLF и не сломал shebang в Linux-контейнере.
 
 ## Окружения БД
 
-- `data/markov.db` — runtime-база по умолчанию, проброшена в Docker
-  volume `./data:/app/data`.
-- `markov.db` в корне репозитория — локальная тестовая БД (не боевая).
+- `data/markov.db` — runtime-база по умолчанию, проброшена в volume
+  `./data:/app/data`.
+- `markov.db` в корне репозитория — локальная тестовая БД, не боевая.
 - Существующие БД мигрируются автоматически при `Database.init()`.
 
 ## Тесты и CI
 
-- `tests/` — широкий набор unit-тестов (`unittest`), включая smoke на
-  `configure_dispatcher`, атомарность миграций, фикстуру с реальной
-  legacy-схемой (`tests/fixtures/legacy_real_schema.sql`).
-- CI: `.github/workflows/ci.yml` — матрица Python 3.12/3.13/3.14, шаги
-  `ruff check` → `mypy app/` → `unittest discover` (с coverage) → `bandit` →
-  `pip-audit`; отдельный job собирает Docker-образ и прогоняет по нему smoke:
-  `import main` внутри контейнера плюс сверка числа миграций в образе с
-  репозиторием (белый список `COPY` иначе молча теряет файлы — сборка
-  останется зелёной, а бот упадёт при первом подключении к БД).
+`tests/` — набор unit-тестов на стандартном `unittest`, включая smoke на
+`configure_dispatcher`, атомарность миграций и фикстуру с реальной
+legacy-схемой (`tests/fixtures/legacy_real_schema.sql`).
 
-Команды для локального прогона см. в `README.md`.
+CI (`.github/workflows/ci.yml`) на матрице Python 3.12/3.13/3.14:
+`ruff check` → `mypy app/` → `unittest discover` с coverage → `bandit` →
+`pip-audit`. Отдельный job собирает Docker-образ и прогоняет по нему smoke:
+`import main` внутри контейнера плюс сверка числа миграций в образе с
+репозиторием — белый список `COPY` иначе молча теряет файлы, сборка остаётся
+зелёной, а бот падает при первом подключении к БД.
+
+Порог покрытия задан в `pyproject.toml` (`fail_under`) и работает как
+храповик: его поднимают, а не опускают.
+
+Проверка типов охватывает только `app/`. Это принятое ограничение: прогон
+`mypy` по `tests/` и `tools/` даёт сотни ошибок и является самостоятельной
+задачей, а не побочным эффектом правки кода.
+
+Команды для локального прогона — в [README](../README.md#разработка-и-тесты).

@@ -26,8 +26,8 @@ class TestLogMasking(unittest.TestCase):
     def test_mask_is_deterministic_within_same_secret(self) -> None:
         log_masking.init_masking("secret-a")
         self.assertEqual(
-            log_masking.mask_chat_id(-1003736119498),
-            log_masking.mask_chat_id(-1003736119498),
+            log_masking.mask_chat_id(-1009876543210),
+            log_masking.mask_chat_id(-1009876543210),
         )
 
     def test_different_chat_ids_yield_different_masks(self) -> None:
@@ -64,13 +64,13 @@ class TestMaskChatIdsInText(unittest.TestCase):
         text = (
             "Telegram server says - Too Many Requests: retry after 30 "
             "(Flood control exceeded on method 'SendMessage' in chat "
-            "-1001147461458)"
+            "-1001234567890)"
         )
 
         masked = log_masking.mask_chat_ids_in_text(text)
 
-        self.assertNotIn("-1001147461458", masked)
-        self.assertIn(log_masking.mask_chat_id(-1001147461458), masked)
+        self.assertNotIn("-1001234567890", masked)
+        self.assertIn(log_masking.mask_chat_id(-1001234567890), masked)
 
     def test_masks_migrate_to_chat_id(self) -> None:
         text = "Bad Request: group chat was upgraded to a supergroup chat -1002233445566"
@@ -95,8 +95,8 @@ class TestMaskChatIdsInText(unittest.TestCase):
         self.assertEqual(log_masking.mask_chat_ids_in_text(text), text)
 
     def test_same_chat_masks_identically_across_texts(self) -> None:
-        first = log_masking.mask_chat_ids_in_text("flood in chat -1001147461458")
-        second = log_masking.mask_chat_ids_in_text("migrate to chat -1001147461458")
+        first = log_masking.mask_chat_ids_in_text("flood in chat -1001234567890")
+        second = log_masking.mask_chat_ids_in_text("migrate to chat -1001234567890")
 
         self.assertEqual(
             first.removeprefix("flood in chat "),
@@ -104,19 +104,19 @@ class TestMaskChatIdsInText(unittest.TestCase):
         )
 
     def test_masks_every_identifier_in_one_text(self) -> None:
-        text = "moved from -1001147461458 to -1002233445566"
+        text = "moved from -1001234567890 to -1002233445566"
 
         masked = log_masking.mask_chat_ids_in_text(text)
 
-        self.assertNotIn("-1001147461458", masked)
+        self.assertNotIn("-1001234567890", masked)
         self.assertNotIn("-1002233445566", masked)
 
     def test_uninitialised_masking_yields_placeholder_without_raising(self) -> None:
         log_masking.reset_masking()
 
-        masked = log_masking.mask_chat_ids_in_text("flood in chat -1001147461458")
+        masked = log_masking.mask_chat_ids_in_text("flood in chat -1001234567890")
 
-        self.assertNotIn("-1001147461458", masked)
+        self.assertNotIn("-1001234567890", masked)
         self.assertIn(log_masking.UNMASKED_PLACEHOLDER, masked)
 
 

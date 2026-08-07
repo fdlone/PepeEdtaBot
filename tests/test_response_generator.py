@@ -16,6 +16,7 @@ from app.core.response_generator import (
     GenerationRequest,
     ResponseGenerator,
 )
+from app.core.slot_mutation import frequencies_by_ending
 
 
 def _runtime_state() -> MagicMock:
@@ -67,7 +68,7 @@ def _learning_service() -> AsyncMock:
     service = AsyncMock()
     service.get_verbatim_ngram_index = AsyncMock(return_value=frozenset())
     service.get_context_idf = AsyncMock(return_value={})
-    service.get_word_frequencies = AsyncMock(return_value={})
+    service.get_word_frequencies_by_ending = AsyncMock(return_value={})
     service.get_hot_ngrams = AsyncMock(return_value=[])
     service.get_intonation_profile = AsyncMock(return_value=None)
     return service
@@ -657,8 +658,8 @@ class TestResponseGeneratorSlotMutation(unittest.IsolatedAsyncioTestCase):
         generator.generate_text = AsyncMock(return_value=self._ORIGINAL)
         learning_service = _learning_service()
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        learning_service.get_word_frequencies = AsyncMock(
-            return_value={"суббота": 10}
+        learning_service.get_word_frequencies_by_ending = AsyncMock(
+            return_value=frequencies_by_ending({"суббота": 10})
         )
         return state, generator, learning_service
 
@@ -683,7 +684,7 @@ class TestResponseGeneratorSlotMutation(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.text, self._MUTATED)
         self.assertEqual(result.candidates_scored, 2)
-        learning_service.get_word_frequencies.assert_awaited_once_with(123)
+        learning_service.get_word_frequencies_by_ending.assert_awaited_once_with(123)
         learning_service.get_hot_ngrams.assert_awaited_once()
         # One real walk produced both candidates.
         self.assertEqual(generator.generate_text.await_count, 1)
@@ -705,7 +706,7 @@ class TestResponseGeneratorSlotMutation(unittest.IsolatedAsyncioTestCase):
             _request(), rng=random.Random(67), candidate_target=1
         )
 
-        learning_service.get_word_frequencies.assert_not_awaited()
+        learning_service.get_word_frequencies_by_ending.assert_not_awaited()
         learning_service.get_hot_ngrams.assert_not_awaited()
 
     async def test_mutated_copy_failing_gates_is_dropped(self) -> None:

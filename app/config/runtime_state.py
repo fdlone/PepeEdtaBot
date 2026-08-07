@@ -10,6 +10,21 @@ from app.config.settings import Settings
 from app.core.mood import ChatMoodState, MoodConfig
 
 
+@dataclass(slots=True)
+class _MaintenanceCounter:
+    """Счётчик обращений, по которому запускается периодическая уборка.
+
+    Существует ради того, чтобы быть изменяемым объектом. Представление чата
+    (см. ``RuntimeState.effective``) — поверхностная копия, и любое скалярное
+    поле в ней своё: инкремент на копии-однодневке до базового состояния не
+    доходит. Все остальные накопители — словари, поэтому общие; этот счётчик
+    был единственным изменяемым скаляром и единственным исключением из
+    инварианта «живое состояние у всех представлений одно».
+    """
+
+    value: int = 0
+
+
 def get_recent_deque(
     store: dict[int, deque[str]], chat_id: int, maxlen: int
 ) -> deque[str]:
@@ -112,7 +127,7 @@ class RuntimeState:
     # is keyed by HMAC).
     last_user_quirk_day: dict[tuple[int, int], str] = field(default_factory=dict)
     _last_chat_activity: dict[int, float] = field(default_factory=dict)
-    _cleanup_tick: int = 0
+    _cleanup: _MaintenanceCounter = field(default_factory=_MaintenanceCounter)
     # Per-chat setting overrides on top of the global values above:
     # chat_id -> {field name: value}. Only settings live here; the live
     # per-chat state (the dicts above) is never split — see ``effective``.
@@ -213,9 +228,9 @@ class RuntimeState:
 
     def note_chat_activity(self, chat_id: int, now: float) -> None:
         self._last_chat_activity[chat_id] = now
-        self._cleanup_tick += 1
+        self._cleanup.value += 1
         if (
-            self._cleanup_tick >= 64
+            self._cleanup.value >= 64
             or len(self._last_chat_activity) > self.runtime_state_max_chats
         ):
             self.prune_inactive(now)
@@ -257,7 +272,7 @@ class RuntimeState:
             for chat_id, _ in oldest_chat_ids:
                 self.forget_chat(chat_id)
 
-        self._cleanup_tick = 0
+        self._cleanup.value = 0
 
 
 def runtime_state_from_settings(settings: Settings) -> RuntimeState:

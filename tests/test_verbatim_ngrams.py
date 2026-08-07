@@ -1,6 +1,9 @@
 """Tests for the cumulative verbatim 4-gram index (O4 fix, migration 016)."""
 from __future__ import annotations
 
+# Единственная реализация «что считается окном» живёт в ядре: по ней пишется
+# накопительный индекс при обучении и считается доля совпадений при оценке
+# кандидата. Раньше копий было три, и расхождение развело бы их молча.
 import importlib.util
 import unittest
 import uuid
@@ -65,7 +68,7 @@ class TestCumulativeVerbatimIndex(unittest.IsolatedAsyncioTestCase):
                 raw_text="совсем другое",
                 tokens=["совсем", "другое"],
             )
-            texts = await db.get_recent_normalized_messages(1, 10)
+            texts = await db.messages.get_recent_normalized(1, 10)
             self.assertEqual(len(texts), 1)  # retention trimmed the first text
             ngrams = set(await db.get_verbatim_ngrams(1))
             self.assertIn(
@@ -118,6 +121,43 @@ class TestCumulativeVerbatimIndex(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(rows), 2)  # punctuation quadruple skipped
         finally:
             path.unlink(missing_ok=True)
+
+
+class TestWindowDefinitionIsShared(unittest.IsolatedAsyncioTestCase):
+    """Индекс при обучении и оценка кандидата видят одни и те же окна.
+
+    Определений было три (инфраструктура, сервис, миграция), и они обязаны были
+    совпадать «по договорённости»: расхождение развело бы накопительный индекс
+    цитат с тем, что считает штраф за цитирование, и заметить это было бы
+    нечем. Копия в миграции остаётся намеренно — миграции застывшая история.
+    """
+
+    async def test_stored_windows_match_the_scorer_definition(self) -> None:
+        import uuid
+        from pathlib import Path
+
+        from app.core.candidate_scorer import verbatim_ngram_windows
+        from app.core.markov import tokenize
+        from app.infrastructure.database import Database
+
+        db_path = Path(f"test_windows_{uuid.uuid4().hex}.sqlite")
+        db = Database(str(db_path))
+        await db.init()
+        try:
+            text = "кот опять уронил ёлку, а потом смотрел невинными глазами"
+            tokens = tokenize(text, normalize_lower=True)
+            await db.save_message_and_update_model(
+                chat_id=77, raw_text=text, tokens=tokens
+            )
+
+            stored = {tuple(row) for row in await db.get_verbatim_ngrams(77)}
+            expected = {tuple(w) for w in verbatim_ngram_windows(tokens)}
+
+            self.assertEqual(stored, expected)
+            self.assertTrue(stored)
+        finally:
+            await db.close()
+            db_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

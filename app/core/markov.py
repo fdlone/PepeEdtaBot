@@ -10,8 +10,8 @@ from typing import NamedTuple
 
 from app.core.context_state_matcher import ContextStateMatcher
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
-from app.core.morphology import stem_token
-from app.infrastructure.database import Database
+from app.core.markov_port import MarkovReadPort
+from app.core.morphology import stem_folded, stem_token
 
 logger = logging.getLogger("chat_markov")
 
@@ -164,6 +164,15 @@ class GenerationTrace:
 
 
 class _GenerationAttempt(NamedTuple):
+    """Одна попытка генерации: текст плюс её счётчики для трассировки.
+
+    Собирается только по именам: девять из десяти полей — однотипные
+    счётчики, и позиционный вызов держался на памяти о порядке.
+    ``GenerationTrace`` остаётся отдельным типом: это суммарная трассировка
+    по всем попыткам (у неё есть ``attempts_used`` и нет текста), и её
+    форму читают инструменты оценки.
+    """
+
     text: str
     markov_order_used: int
     jump_count: int
@@ -272,18 +281,27 @@ def extract_best_seed(tokens: list[str], seed_length: int) -> list[str]:
 
 
 def longest_shared_run(tokens_a: list[str], tokens_b: list[str]) -> int:
+    """Длина самой длинной общей непрерывной последовательности токенов.
+
+    Динамика по одной строке: ``run[j]`` — длина общего хвоста, кончающегося
+    на ``tokens_a[i]`` и ``tokens_b[j]``. Прежняя форма досчитывала совпадение
+    заново от каждой пары позиций (кубическая в худшем случае) и вызывается
+    дважды на каждую завершённую попытку генерации.
+    """
+    if not tokens_a or not tokens_b:
+        return 0
+
     best = 0
-    for idx_a in range(len(tokens_a)):
-        for idx_b in range(len(tokens_b)):
-            run = 0
-            while (
-                idx_a + run < len(tokens_a)
-                and idx_b + run < len(tokens_b)
-                and tokens_a[idx_a + run] == tokens_b[idx_b + run]
-            ):
-                run += 1
-            if run > best:
-                best = run
+    previous = [0] * (len(tokens_b) + 1)
+    for token_a in tokens_a:
+        current = [0] * (len(tokens_b) + 1)
+        for index_b, token_b in enumerate(tokens_b):
+            if token_a == token_b:
+                run = previous[index_b] + 1
+                current[index_b + 1] = run
+                if run > best:
+                    best = run
+        previous = current
     return best
 
 
@@ -523,6 +541,28 @@ def exploration_weighted_choice[T](
     return population[index]
 
 
+def weighted_index_choice(
+    weights: list[float],
+    *,
+    exploring: bool,
+    rng: random.Random,
+) -> int:
+    """``weighted_population_choice`` над позициями вместо самих элементов.
+
+    Тот же розыгрыш теми же обращениями к генератору случайных чисел: и
+    ``rng.choices``, и экспоненциальный трюк работают по индексам, а элементы
+    только сопровождают вес. Разница в том, что вызывающему не нужно строить
+    список кандидатов: на живом чате это 4.5 тысячи кортежей, собираемых
+    заново на каждой попытке генерации ради одного победителя.
+    """
+    if exploring:
+        return min(
+            range(len(weights)),
+            key=lambda candidate_index: rng.expovariate(weights[candidate_index]),
+        )
+    return rng.choices(population=range(len(weights)), weights=weights, k=1)[0]
+
+
 def weighted_population_choice[T](
     population: list[T],
     weights: list[float],
@@ -557,8 +597,12 @@ def weighted_next_choice(
     seen_triplets: Container[tuple[str, ...]] | None = None,
     repetition_penalty_strength: float = 1.0,
 ) -> str:
-    ordered_items = sorted(items, key=lambda item: item[0])
-    population = [token for token, _ in ordered_items]
+    # ПРЕДУСЛОВИЕ: items упорядочены по токену. Его обеспечивает источник —
+    # запросы переходов идут с ORDER BY, а фильтрация порядок сохраняет (см.
+    # test_transition_rows_are_ordered). Пересортировка здесь стоила ~3 с на
+    # 160 генераций на копии прода и не меняла ни одного результата: порядок
+    # уже тот же самый.
+    ordered_items = items
     exploring, frequency_power = _roll_exploration(explore_probability, power, rng)
     step_bias = 1.0 + (max(1.0, context_bias) - 1.0) * context_decay(step_index)
     penalty_strength = max(0.0, repetition_penalty_strength)
@@ -595,9 +639,8 @@ def weighted_next_choice(
 
         weight = max(weight, 0.01)
         weights.append(weight)
-    return weighted_population_choice(
-        population, weights, exploring=exploring, rng=rng
-    )
+    index = weighted_index_choice(weights, exploring=exploring, rng=rng)
+    return ordered_items[index][0]
 
 
 def weighted_start2_choice(
@@ -606,13 +649,14 @@ def weighted_start2_choice(
     power: float,
     rng: random.Random,
 ) -> tuple[str, str]:
-    ordered_items = sorted(items, key=lambda item: (item[0], item[1]))
-    population = [(w1, w2) for w1, w2, _ in ordered_items]
+    # Предусловие то же, что у weighted_next_choice: items упорядочены по
+    # (w1, w2) — так их отдаёт запрос стартов.
+    ordered_items = items
     exploring, frequency_power = _roll_exploration(explore_probability, power, rng)
     weights = [max(cnt, 1) ** frequency_power for _, _, cnt in ordered_items]
-    return weighted_population_choice(
-        population, weights, exploring=exploring, rng=rng
-    )
+    index = weighted_index_choice(weights, exploring=exploring, rng=rng)
+    w1, w2, _ = ordered_items[index]
+    return w1, w2
 
 
 def context_start_stems(context_tokens: list[str]) -> frozenset[str]:
@@ -633,8 +677,10 @@ def weighted_start3_choice(
     context_stems: frozenset[str] | None = None,
     context_start_affinity: float = 1.0,
 ) -> tuple[str, str, str]:
-    ordered_items = sorted(items, key=lambda item: (item[0], item[1], item[2]))
-    population = [(w1, w2, w3) for w1, w2, w3, _ in ordered_items]
+    # Предусловие то же: items упорядочены по (w1, w2, w3). На живом чате это
+    # 4.5 тысячи стартов, и сортировка выполнялась на каждой из десяти попыток
+    # генерации — самая дорогая строка горячего пути после самого отбора.
+    ordered_items = items
     exploring, frequency_power = _roll_exploration(explore_probability, power, rng)
     weights = [max(cnt, 1) ** frequency_power for _, _, _, cnt in ordered_items]
     if context_stems and context_start_affinity > 1.0:
@@ -647,25 +693,26 @@ def weighted_start3_choice(
         # («кто гнойный пидор» is itself a learned start and out-boosted the
         # actual answers 10:1 — same parrot problem as the scorer's echo guard).
         boosted: list[float] = []
-        for weight, (w1, w2, w3) in zip(weights, population, strict=True):
+        for weight, (w1, w2, w3, _) in zip(weights, ordered_items, strict=True):
             state_stems = {
-                stem_token(w1.casefold()),
-                stem_token(w2.casefold()),
-                stem_token(w3.casefold()),
+                stem_folded(w1),
+                stem_folded(w2),
+                stem_folded(w3),
             }
             shared = len(state_stems & context_stems)
             if shared and not state_stems <= context_stems:
                 weight *= context_start_affinity**shared
             boosted.append(weight)
         weights = boosted
-    return weighted_population_choice(
-        population, weights, exploring=exploring, rng=rng
-    )
+    index = weighted_index_choice(weights, exploring=exploring, rng=rng)
+    w1, w2, w3, _ = ordered_items[index]
+    return w1, w2, w3
 
 
 @dataclass(slots=True)
 class MarkovGenerator:
-    db: Database
+    # Порт, а не конкретное хранилище: ядру достаточно чтения цепи.
+    db: MarkovReadPort
     max_steps: int = 90
     cache_limit: int = 1024
 
@@ -953,6 +1000,13 @@ class MarkovGenerator:
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> str:
+        """Текст без трассировки — форма для тестов и инструментов.
+
+        Рабочий путь ходит через ``generate_text_with_trace``: ему нужна
+        трассировка. Обёртка оставлена намеренно (её единственные
+        вызывающие — тесты и харнессы), чтобы им не разбирать кортеж на
+        каждом вызове; это не мёртвый код, а сокращённая форма API.
+        """
         text, _ = await self.generate_text_with_trace(
             chat_id=chat_id,
             max_chars=max_chars,
@@ -1275,20 +1329,27 @@ class MarkovGenerator:
 
         def reject(reason: str) -> _GenerationAttempt:
             return _GenerationAttempt(
-                "",
-                order_used,
-                jump_count,
-                reason,
-                0,
-                start_source,
-                leading_punctuation_stripped,
-                context_exact_matches,
-                context_casefold_matches,
-                hidden_context_fallbacks,
+                text="",
+                markov_order_used=order_used,
+                jump_count=jump_count,
+                rejection_reason=reason,
+                token_count=0,
+                start_source=start_source,
+                leading_punctuation_stripped=leading_punctuation_stripped,
+                context_exact_matches=context_exact_matches,
+                context_casefold_matches=context_casefold_matches,
+                hidden_context_fallbacks=hidden_context_fallbacks,
             )
 
         if len(result) < 5:
             return reject(REJECTION_RESULT_TOO_SHORT)
+        # Без normalize_lower намеренно: текст ответа уже в том регистре, в
+        # котором чат учил модель (флаг применяется на входе, при токенизации
+        # сообщения), и контекст сюда приходит в том же соглашении. Приведение
+        # к нижнему регистру здесь было бы не выравниванием, а сменой правила:
+        # в профиле с сохранением регистра гейты формы стали бы
+        # регистронезависимыми. Проверено: в дефолтном профиле это no-op —
+        # хеш генерации не меняется (tools/generation_hash.py).
         result_tokens = tokenize(result)
         is_short_reply = is_short_generated_reply(result_tokens)
         if not is_short_reply and is_low_diversity_reply(result_tokens):
@@ -1299,16 +1360,16 @@ class MarkovGenerator:
         elif is_context_heavy_reply(result_tokens, context_tokens):
             return reject(REJECTION_CONTEXT_HEAVY)
         return _GenerationAttempt(
-            result,
-            order_used,
-            jump_count,
-            None,
-            len(result_tokens),
-            start_source,
-            leading_punctuation_stripped,
-            context_exact_matches,
-            context_casefold_matches,
-            hidden_context_fallbacks,
+            text=result,
+            markov_order_used=order_used,
+            jump_count=jump_count,
+            rejection_reason=None,
+            token_count=len(result_tokens),
+            start_source=start_source,
+            leading_punctuation_stripped=leading_punctuation_stripped,
+            context_exact_matches=context_exact_matches,
+            context_casefold_matches=context_casefold_matches,
+            hidden_context_fallbacks=hidden_context_fallbacks,
         )
 
     async def _run_generation_loop(
@@ -1615,7 +1676,14 @@ class MarkovGenerator:
         starts3 = await self._get_starts3(chat_id) if order >= 3 else []
         starts2 = await self._get_starts2(chat_id)
         if not starts3 and not starts2:
-            return _GenerationAttempt("", 0, 0, REJECTION_NO_STARTS, 0, "global")
+            return _GenerationAttempt(
+                text="",
+                markov_order_used=0,
+                jump_count=0,
+                rejection_reason=REJECTION_NO_STARTS,
+                token_count=0,
+                start_source="global",
+            )
 
         start3: tuple[str, str, str] | None = None
         start_source = "global"
@@ -1721,16 +1789,16 @@ class MarkovGenerator:
             )
             if global_start is None:
                 return _GenerationAttempt(
-                    "",
-                    2,
-                    0,
-                    REJECTION_NO_START_TRANSITION,
-                    0,
-                    start_source,
-                    0,
-                    context_exact_matches,
-                    context_casefold_matches,
-                    hidden_context_fallbacks,
+                    text="",
+                    markov_order_used=2,
+                    jump_count=0,
+                    rejection_reason=REJECTION_NO_START_TRANSITION,
+                    token_count=0,
+                    start_source=start_source,
+                    leading_punctuation_stripped=0,
+                    context_exact_matches=context_exact_matches,
+                    context_casefold_matches=context_casefold_matches,
+                    hidden_context_fallbacks=hidden_context_fallbacks,
                 )
             start3, order_used = global_start
 

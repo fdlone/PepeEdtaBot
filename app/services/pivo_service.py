@@ -9,6 +9,7 @@ from aiogram.types import User
 
 from app.domain.pivo import (
     MENTION_SKIPPED,
+    MENTION_TRUNCATED,
     PIVO_FALLBACK_MENTIONS,
     PivoMember,
     PivoMentionResult,
@@ -21,7 +22,13 @@ from app.infrastructure.database import Database
 from app.services.pivo_message_builder import (
     PivoMessageGenerator,
     build_pivo_message_context,
+    format_truncated_mentions_note,
 )
+
+# Предел размера суточного дросселя обновления профилей. Обычный день не даёт
+# и близко такого числа уникальных участников; это страховка от роста, а не
+# рабочий режим.
+REFRESH_THROTTLE_MAX_KEYS = 20_000
 
 PIVO_DAILY_LIMIT_USER = 3
 PIVO_DAILY_LIMIT_ADMIN = 5
@@ -39,6 +46,8 @@ class PivoCallMessage(NamedTuple):
     text: str
     mentions_count: int
     picks: dict[str, int]
+    # Числа для лога и отчёта владельцу: пути упоминания плюс, при усечении
+    # списка подписчиков, ключ MENTION_TRUNCATED с числом непоместившихся.
     mention_paths: dict[str, int]
 
 
@@ -60,7 +69,11 @@ class PivoService:
         self._subscriber_fanout_limit = PIVO_DEFAULT_SUBSCRIBER_FANOUT_LIMIT
         # Дроссель refresh_member: (chat_hash, user_hash) → день последней
         # записи профиля. Ключи — те же хеши, что и в БД, сырых id в памяти нет.
+        # Записи прошлых дней бесполезны, поэтому словарь сбрасывается при
+        # смене суток целиком: без этого он рос неограниченно, а ключи в него
+        # приходят снаружи — любой участник любого чата.
         self._refreshed_on: dict[tuple[str, str], str] = {}
+        self._refreshed_day: str | None = None
 
     def configure_call_limits(
         self,
@@ -72,7 +85,7 @@ class PivoService:
         self._subscriber_fanout_limit = subscriber_fanout_limit
 
     async def subscribe(self, chat_id: int, user: User) -> None:
-        await self._db.upsert_chat_member(
+        await self._db.chat_members.upsert(
             chat_hash=self._security.hmac_value(chat_id),
             user_hash=self._security.hmac_value(user.id),
             encrypted_user_id=self._security.encrypt_value(user.id),
@@ -98,10 +111,17 @@ class PivoService:
         chat_hash = self._security.hmac_value(chat_id)
         user_hash = self._security.hmac_value(user.id)
         usage_day = (today or datetime.now(UTC).date()).isoformat()
+        if self._refreshed_day != usage_day:
+            self._refreshed_on.clear()
+            self._refreshed_day = usage_day
+        elif len(self._refreshed_on) > REFRESH_THROTTLE_MAX_KEYS:
+            # Один день с очень большим числом участников: сбрасываем целиком,
+            # цена — повторное обновление профилей в пределах этих же суток.
+            self._refreshed_on.clear()
         if self._refreshed_on.get((chat_hash, user_hash)) == usage_day:
             return
         self._refreshed_on[(chat_hash, user_hash)] = usage_day
-        await self._db.refresh_chat_member(
+        await self._db.chat_members.refresh_profile(
             chat_hash=chat_hash,
             user_hash=user_hash,
             encrypted_username=self._security.encrypt_value(user.username or ""),
@@ -111,9 +131,9 @@ class PivoService:
         )
 
     async def unsubscribe(self, chat_id: int, user_id: int) -> None:
-        await self._db.remove_chat_member(
-            chat_hash=self._security.hmac_value(chat_id),
-            user_hash=self._security.hmac_value(user_id),
+        await self._db.chat_members.remove(
+            self._security.hmac_value(chat_id),
+            self._security.hmac_value(user_id),
         )
 
     async def clear_chat_data(self, chat_id: int) -> None:
@@ -135,7 +155,7 @@ class PivoService:
         """Списывает одну суточную квоту /pivo для пользователя в чате."""
         usage_day = (today or datetime.now(UTC).date()).isoformat()
         limit = PIVO_DAILY_LIMIT_ADMIN if is_admin_or_owner else PIVO_DAILY_LIMIT_USER
-        allowed, used_count = await self._db.consume_pivo_daily_call(
+        allowed, used_count = await self._db.pivo_usage.consume_daily_call(
             chat_hash=self._security.hmac_value(chat_id),
             user_hash=self._security.hmac_value(user_id),
             usage_day=usage_day,
@@ -156,7 +176,7 @@ class PivoService:
         usage_day: str,
     ) -> None:
         """Возвращает списанную квоту /pivo после сбоя до доставки ответа."""
-        await self._db.refund_pivo_daily_call(
+        await self._db.pivo_usage.refund_daily_call(
             chat_hash=self._security.hmac_value(chat_id),
             user_hash=self._security.hmac_value(user_id),
             usage_day=usage_day,
@@ -187,13 +207,10 @@ class PivoService:
         """
         chat_hash = self._security.hmac_value(chat_id)
         mention_paths: dict[str, int] = {}
+        omitted_mentions = 0
         if explicit_mentions:
+            self.ensure_explicit_mentions_allowed_sync(explicit_mentions)
             mention_items = list(explicit_mentions)
-            if len(mention_items) > self._explicit_mentions_limit:
-                raise PivoCallLimitError(
-                    "В /pivo можно указывать не больше "
-                    f"{self._explicit_mentions_limit} явных упоминаний за раз."
-                )
         else:
             results = await self._collect_subscriber_mentions(
                 chat_hash=chat_hash,
@@ -206,11 +223,13 @@ class PivoService:
             mention_items = [
                 result.text for result in results if result.path != MENTION_SKIPPED
             ]
+            # Превышение предела усекает список, а не отменяет вызов: отказ
+            # ломал команду для всего чата навсегда — достаточно было
+            # подписаться сверх предела, и вернуть /pivo мог только /clear.
             if len(mention_items) > self._subscriber_fanout_limit:
-                raise PivoCallLimitError(
-                    "В списке подписчиков /pivo слишком много людей: "
-                    f"{len(mention_items)} из {self._subscriber_fanout_limit}."
-                )
+                omitted_mentions = len(mention_items) - self._subscriber_fanout_limit
+                mention_items = mention_items[: self._subscriber_fanout_limit]
+                mention_paths[MENTION_TRUNCATED] = omitted_mentions
         mentions = " ".join(mention_items) if mention_items else PIVO_FALLBACK_MENTIONS
         context = build_pivo_message_context(
             mentions,
@@ -219,7 +238,7 @@ class PivoService:
             has_explicit_mentions=bool(explicit_mentions),
         )
         recent_indices = (
-            await self._db.get_pivo_pool_usage(chat_hash)
+            await self._db.pivo_pool_usage.get_recent(chat_hash)
             if recent_pool_window > 0
             else {}
         )
@@ -229,12 +248,42 @@ class PivoService:
             now=now,
             temporal_flavor_chance=temporal_flavor_chance,
         )
+        text = result.text
+        if omitted_mentions:
+            text = f"{text}\n\n{format_truncated_mentions_note(omitted_mentions)}"
         return PivoCallMessage(
-            text=result.text,
+            text=text,
             mentions_count=len(mention_items),
             picks=result.picks,
             mention_paths=mention_paths,
         )
+
+    def ensure_explicit_mentions_allowed_sync(
+        self, explicit_mentions: Sequence[str]
+    ) -> None:
+        """Бросает ``PivoCallLimitError``, если явных упоминаний больше предела.
+
+        Отдельно от усечения подписчиков: явные упоминания перечислил сам
+        вызывающий, и молчаливое усечение его ввода скрыло бы, что часть
+        названных людей не позвана.
+        """
+        if len(explicit_mentions) > self._explicit_mentions_limit:
+            raise PivoCallLimitError(
+                "В /pivo можно указывать не больше "
+                f"{self._explicit_mentions_limit} явных упоминаний за раз."
+            )
+
+    async def ensure_explicit_mentions_allowed(
+        self, explicit_mentions: Sequence[str]
+    ) -> None:
+        """Асинхронная обёртка проверки для хендлера.
+
+        Проверка чистая и ввода-вывода не делает, но вызывается из хендлера
+        до списания квоты — то есть на том же пути, где все остальные
+        обращения к сервису асинхронные. Единый вид вызова стоит дешевле, чем
+        исключение из правила, о котором нужно помнить.
+        """
+        self.ensure_explicit_mentions_allowed_sync(explicit_mentions)
 
     async def _collect_subscriber_mentions(
         self,
@@ -244,12 +293,13 @@ class PivoService:
         mention_by_id: bool,
     ) -> list[PivoMentionResult]:
         """Строит упоминания подписчиков чата вместе с выбранным путём."""
-        rows = await self._db.get_chat_members(chat_hash)
+        rows = await self._db.chat_members.list_members(chat_hash)
         members = [
             PivoMember(
                 encrypted_user_id=str(row["encrypted_user_id"]),
                 encrypted_username=str(row["encrypted_username"]),
                 encrypted_display_name=str(row["encrypted_display_name"]),
+                user_hash=str(row.get("user_hash", "")),
             )
             for row in rows
         ]
@@ -288,7 +338,7 @@ class PivoService:
         """Фиксирует анти-повтор шаблонов после успешной отправки /pivo."""
         if recent_pool_window <= 0 or not picks:
             return
-        await self._db.record_pivo_pool_usage(
+        await self._db.pivo_pool_usage.record(
             self._security.hmac_value(chat_id),
             picks,
             keep=recent_pool_window,

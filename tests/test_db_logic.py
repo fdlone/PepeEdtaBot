@@ -4,6 +4,7 @@ import unittest
 import uuid
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 import aiosqlite
 
@@ -71,6 +72,101 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         # Returned volume mirrors get_stats' "volume" (prefers order-3).
         self.assertEqual(last_volume, sum3 if sum3 > 0 else sum2)
 
+    async def test_transition_rows_are_ordered(self) -> None:
+        """Предусловие горячего пути: строки приходят упорядоченными.
+
+        Функции взвешенного выбора больше не сортируют вход — на живом чате
+        это 4.5 тысячи стартов, пересортируемых на каждой попытке генерации.
+        Порядок обеспечивает источник, и это должно быть проверено здесь, а не
+        подразумеваться в комментарии.
+        """
+        chat_id = 4747
+        for tokens in (
+            ["яблоко", "груша", "слива", "вишня"],
+            ["апельсин", "банан", "манго", "киви"],
+            ["яблоко", "груша", "персик", "нектарин"],
+        ):
+            await self.db.save_message_and_update_model(
+                chat_id=chat_id, raw_text=" ".join(tokens), tokens=tokens
+            )
+
+        starts2 = await self.db.markov.get_starts(chat_id)
+        self.assertEqual(
+            [(w1, w2) for w1, w2, _ in starts2],
+            sorted((w1, w2) for w1, w2, _ in starts2),
+        )
+        starts3 = await self.db.markov.get_starts3(chat_id)
+        self.assertEqual(
+            [(w1, w2, w3) for w1, w2, w3, _ in starts3],
+            sorted((w1, w2, w3) for w1, w2, w3, _ in starts3),
+        )
+        transitions = await self.db.markov.get_transitions(chat_id, "яблоко", "груша")
+        self.assertEqual(
+            [token for token, _ in transitions],
+            sorted(token for token, _ in transitions),
+        )
+        self.assertGreater(len(transitions), 1)
+
+    async def test_token_volume_reads_the_counter_not_the_aggregate(self) -> None:
+        """Горячий путь чтения объёма не сканирует таблицы переходов.
+
+        Вызов происходит на каждое входящее сообщение, а полный SUM(cnt) — это
+        скан, растущий вместе с корпусом.
+        """
+        chat_id = 4444
+        tokens = ["кофе", "утром", "бодрит", "правда"]
+        await self.db.save_message_and_update_model(
+            chat_id=chat_id, raw_text=" ".join(tokens), tokens=tokens
+        )
+        expected = await self._sum_volume("transitions3", chat_id)
+
+        markov = self.db.markov
+        assert markov is not None
+        with patch.object(
+            markov, "sum_model_volume", side_effect=AssertionError("aggregated")
+        ):
+            volume = await self.db.get_chat_token_volume(chat_id)
+
+        self.assertEqual(volume, expected)
+
+    async def test_token_volume_backfills_a_missing_counter_row(self) -> None:
+        """Чат без строки счётчика получает значение агрегатом — один раз."""
+        chat_id = 4545
+        tokens = ["чай", "вечером", "успокаивает", "тоже"]
+        await self.db.save_message_and_update_model(
+            chat_id=chat_id, raw_text=" ".join(tokens), tokens=tokens
+        )
+        expected = await self._sum_volume("transitions3", chat_id)
+        async with self.db._lock:
+            conn = await self.db._get_conn()
+            await conn.execute(
+                "DELETE FROM chat_model_volume WHERE chat_id = ?", (chat_id,)
+            )
+            await conn.commit()
+
+        first = await self.db.get_chat_token_volume(chat_id)
+
+        self.assertEqual(first, expected)
+        markov = self.db.markov
+        assert markov is not None
+        with patch.object(
+            markov, "sum_model_volume", side_effect=AssertionError("aggregated")
+        ):
+            self.assertEqual(await self.db.get_chat_token_volume(chat_id), expected)
+
+    async def test_stats_does_not_write_a_counter_row(self) -> None:
+        """Диагностика остаётся read-only: побочная запись портила бы состояние."""
+        chat_id = 4646
+        stats = await self.db.get_stats(chat_id)
+
+        self.assertEqual(stats["volume"], 0)
+        async with self.db._lock:
+            conn = await self.db._get_conn()
+            cur = await conn.execute(
+                "SELECT COUNT(*) FROM chat_model_volume WHERE chat_id = ?", (chat_id,)
+            )
+            self.assertEqual((await cur.fetchone())[0], 0)
+
     async def test_clear_chat_resets_model_volume(self) -> None:
         """D2: clear_chat drops the chat_model_volume row so volume restarts at 0."""
         chat_id = 4343
@@ -122,14 +218,14 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(volume, 2)  # two trigram transitions
 
-        starts2 = await self.db.get_starts(2002)
+        starts2 = await self.db.markov.get_starts(2002)
         self.assertEqual(starts2, [("Я", "очень", 1)])
-        starts3 = await self.db.get_starts3(2002)
+        starts3 = await self.db.markov.get_starts3(2002)
         self.assertEqual(starts3, [("Я", "очень", "люблю", 1)])
 
-        transitions2 = await self.db.get_transitions(2002, "Я", "очень")
+        transitions2 = await self.db.markov.get_transitions(2002, "Я", "очень")
         self.assertEqual(transitions2, [("люблю", 1)])
-        transitions3 = await self.db.get_transitions3(2002, "Я", "очень", "люблю")
+        transitions3 = await self.db.markov.get_transitions3(2002, "Я", "очень", "люблю")
         self.assertEqual(transitions3, [("чат", 1)])
 
         stats = await self.db.get_stats(2002)
@@ -153,21 +249,21 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(
-            await self.db.get_starts(2003),
+            await self.db.markov.get_starts(2003),
             [
                 ("alpha", "start", 1),
                 ("zeta", "start", 2),
             ],
         )
         self.assertEqual(
-            await self.db.get_starts3(2003),
+            await self.db.markov.get_starts3(2003),
             [
                 ("alpha", "start", "shared", 1),
                 ("zeta", "start", "shared", 2),
             ],
         )
         self.assertEqual(
-            await self.db.get_transitions3(2003, "zeta", "start", "shared"),
+            await self.db.markov.get_transitions3(2003, "zeta", "start", "shared"),
             [("alpha", 1), ("omega", 1)],
         )
 
@@ -188,24 +284,22 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["transitions2"], 0)
         self.assertEqual(stats["transitions3"], 0)
 
-    async def test_message_exists(self) -> None:
-        await self.db.save_message_and_update_model(
-            chat_id=4004,
-            raw_text="hello world",
-            tokens=["hello", "world"],
-        )
-        self.assertTrue(await self.db.message_exists(4004, "hello world"))
-        self.assertFalse(await self.db.message_exists(4004, "hello"))
+    async def test_stored_text_is_normalized_on_write(self) -> None:
+        """Нормализация применяется при записи, а не при чтении.
 
-    async def test_message_exists_uses_normalized_text(self) -> None:
+        Раньше это проверялось через `message_exists`, которая нормализовала и
+        аргумент тоже; проверка сместилась на то, что реально хранится.
+        """
         await self.db.save_message_and_update_model(
             chat_id=4104,
             raw_text="Привеееет   @PepeBot https://example.com",
             tokens=["Привеет"],
         )
 
-        self.assertTrue(await self.db.message_exists(4104, "Привеет"))
-        self.assertTrue(await self.db.message_exists(4104, "Привеееет @AnotherBot"))
+        self.assertEqual(
+            await self.db.messages.get_recent_normalized(4104, 10),
+            ["Привеет"],
+        )
 
     async def test_init_migrates_legacy_messages_without_normalized_text(self) -> None:
         await self.db.close()
@@ -235,7 +329,10 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.db = Database(str(self.db_path))
         await self.db.init()
 
-        self.assertTrue(await self.db.message_exists(4204, "Стаарый текст"))
+        self.assertEqual(
+            await self.db.messages.get_recent_normalized(4204, 10),
+            ["Стаарый текст"],
+        )
         async with aiosqlite.connect(str(self.db_path)) as conn:
             row = await (
                 await conn.execute(
@@ -265,7 +362,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
             self.db = reopened
 
     async def test_chat_member_upsert_get_and_remove(self) -> None:
-        await self.db.upsert_chat_member(
+        await self.db.chat_members.upsert(
             chat_hash="chat-hash",
             user_hash="user-hash",
             encrypted_user_id="encrypted-user-id",
@@ -273,7 +370,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
             encrypted_display_name="encrypted-display-name",
         )
 
-        members = await self.db.get_chat_members("chat-hash")
+        members = await self.db.chat_members.list_members("chat-hash")
         self.assertEqual(len(members), 1)
         self.assertEqual(members[0]["encrypted_user_id"], "encrypted-user-id")
         self.assertEqual(members[0]["encrypted_username"], "encrypted-username")
@@ -281,22 +378,22 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
             members[0]["encrypted_display_name"], "encrypted-display-name"
         )
 
-        await self.db.upsert_chat_member(
+        await self.db.chat_members.upsert(
             chat_hash="chat-hash",
             user_hash="user-hash",
             encrypted_user_id="encrypted-user-id-2",
             encrypted_username="encrypted-username-2",
             encrypted_display_name="encrypted-display-name-2",
         )
-        members = await self.db.get_chat_members("chat-hash")
+        members = await self.db.chat_members.list_members("chat-hash")
         self.assertEqual(len(members), 1)
         self.assertEqual(members[0]["encrypted_user_id"], "encrypted-user-id-2")
 
-        await self.db.remove_chat_member("chat-hash", "user-hash")
-        self.assertEqual(await self.db.get_chat_members("chat-hash"), [])
+        await self.db.chat_members.remove("chat-hash", "user-hash")
+        self.assertEqual(await self.db.chat_members.list_members("chat-hash"), [])
 
     async def test_refresh_chat_member_updates_profile_only(self) -> None:
-        await self.db.upsert_chat_member(
+        await self.db.chat_members.upsert(
             chat_hash="chat-hash",
             user_hash="user-hash",
             encrypted_user_id="encrypted-user-id",
@@ -304,28 +401,28 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
             encrypted_display_name="old-display-name",
         )
 
-        await self.db.refresh_chat_member(
+        await self.db.chat_members.refresh_profile(
             chat_hash="chat-hash",
             user_hash="user-hash",
             encrypted_username="new-username",
             encrypted_display_name="new-display-name",
         )
 
-        members = await self.db.get_chat_members("chat-hash")
+        members = await self.db.chat_members.list_members("chat-hash")
         self.assertEqual(len(members), 1)
         self.assertEqual(members[0]["encrypted_username"], "new-username")
         self.assertEqual(members[0]["encrypted_display_name"], "new-display-name")
         self.assertEqual(members[0]["encrypted_user_id"], "encrypted-user-id")
 
     async def test_refresh_chat_member_does_not_subscribe_anyone(self) -> None:
-        await self.db.refresh_chat_member(
+        await self.db.chat_members.refresh_profile(
             chat_hash="chat-hash",
             user_hash="stranger-hash",
             encrypted_username="username",
             encrypted_display_name="display-name",
         )
 
-        self.assertEqual(await self.db.get_chat_members("chat-hash"), [])
+        self.assertEqual(await self.db.chat_members.list_members("chat-hash"), [])
 
     async def test_schema_contains_expected_tables(self) -> None:
         await self.db.close()
@@ -364,7 +461,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         await self.db.init()
 
     async def test_pivo_daily_usage_limit(self) -> None:
-        result = await self.db.consume_pivo_daily_call(
+        result = await self.db.pivo_usage.consume_daily_call(
             chat_hash="chat-hash",
             user_hash="user-hash",
             usage_day="2026-05-08",
@@ -372,7 +469,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result, (True, 1))
 
-        result = await self.db.consume_pivo_daily_call(
+        result = await self.db.pivo_usage.consume_daily_call(
             chat_hash="chat-hash",
             user_hash="user-hash",
             usage_day="2026-05-08",
@@ -380,7 +477,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result, (False, 1))
 
-        result = await self.db.consume_pivo_daily_call(
+        result = await self.db.pivo_usage.consume_daily_call(
             chat_hash="chat-hash",
             user_hash="user-hash",
             usage_day="2026-05-09",
@@ -389,7 +486,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, (True, 1))
 
     async def test_pivo_daily_usage_refund_restores_quota(self) -> None:
-        result = await self.db.consume_pivo_daily_call(
+        result = await self.db.pivo_usage.consume_daily_call(
             chat_hash="chat-hash",
             user_hash="user-hash",
             usage_day="2026-05-08",
@@ -397,13 +494,13 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result, (True, 1))
 
-        await self.db.refund_pivo_daily_call(
+        await self.db.pivo_usage.refund_daily_call(
             chat_hash="chat-hash",
             user_hash="user-hash",
             usage_day="2026-05-08",
         )
 
-        result = await self.db.consume_pivo_daily_call(
+        result = await self.db.pivo_usage.consume_daily_call(
             chat_hash="chat-hash",
             user_hash="user-hash",
             usage_day="2026-05-08",
@@ -418,7 +515,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
             ("chat-hash", "recent-user", "2026-05-08"),
         ]
         for chat_hash, user_hash, usage_day in rows:
-            await self.db.consume_pivo_daily_call(
+            await self.db.pivo_usage.consume_daily_call(
                 chat_hash=chat_hash,
                 user_hash=user_hash,
                 usage_day=usage_day,
@@ -467,10 +564,9 @@ class TestDatabaseMessageRetention(unittest.IsolatedAsyncioTestCase):
             await self._record(1, text)
 
         self.assertEqual(
-            await self.db.get_recent_normalized_messages(1, 10),
+            await self.db.messages.get_recent_normalized(1, 10),
             ["second", "third", "fourth"],
         )
-        self.assertFalse(await self.db.message_exists(1, "first"))
         self.assertEqual((await self.db.get_stats(1))["messages"], 3)
 
     async def test_retention_is_scoped_to_chat(self) -> None:
@@ -479,7 +575,7 @@ class TestDatabaseMessageRetention(unittest.IsolatedAsyncioTestCase):
             await self._record(1, text)
 
         self.assertEqual(
-            await self.db.get_recent_normalized_messages(2, 10),
+            await self.db.messages.get_recent_normalized(2, 10),
             ["other chat message"],
         )
 

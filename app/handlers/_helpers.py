@@ -38,26 +38,6 @@ def compute_typing_delay_ms(
     return min(delay, max(TYPING_HARD_CAP_MS, typing_max_ms))
 
 
-async def reply_humanized(
-    message: Message,
-    text: str,
-    typing_min_ms: int,
-    typing_max_ms: int,
-    *,
-    typing_per_char_ms: int = 0,
-    rng: random.Random | None = None,
-) -> None:
-    """Имитация «печатает...»: chat action + случайная пауза, затем reply."""
-    await reply_humanized_sequence(
-        message,
-        [text],
-        typing_min_ms,
-        typing_max_ms,
-        typing_per_char_ms=typing_per_char_ms,
-        rng=rng,
-    )
-
-
 async def reply_humanized_state(
     message: Message,
     text: str,

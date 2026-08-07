@@ -4,6 +4,7 @@ import math
 import random
 from collections import Counter
 from collections.abc import Iterable, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
@@ -100,6 +101,19 @@ REPEATED_TRIGRAM_WEIGHT = 1.30
 # A candidate whose 4-grams all come from one training message is a quote and
 # loses to recombined candidates in selection.
 VERBATIM_NGRAM_SIZE = 4
+
+def verbatim_ngram_windows(tokens: list[str]) -> list[tuple[str, ...]]:
+    """Casefolded content-token 4-grams of one message.
+
+    Единственная реализация «что считается окном»: по ней и пишется
+    накопительный индекс цитат при обучении, и считается доля совпадений при
+    оценке кандидата. Раньше инфраструктура держала свою копию (вместе с
+    копиями набора пунктуации и размера n-граммы), потому что импорт из ядра
+    замкнул бы цикл — ядро зависело от инфраструктуры. Цикла больше нет.
+    """
+    content = [token.casefold() for token in content_tokens(tokens)]
+    return build_windows(content, VERBATIM_NGRAM_SIZE)
+
 
 @dataclass(frozen=True, slots=True)
 class CandidateScore:
@@ -328,7 +342,7 @@ def recent_reply_overlap(
 
 def verbatim_ngram_overlap(
     tokens: list[str],
-    corpus_ngrams: frozenset[tuple[str, ...]] | set[tuple[str, ...]],
+    corpus_ngrams: AbstractSet[tuple[str, ...]],
     size: int = VERBATIM_NGRAM_SIZE,
 ) -> float:
     """Share of the candidate's content ``size``-grams found in the corpus index.

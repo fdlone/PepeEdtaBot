@@ -49,19 +49,23 @@ from app.core.markov import (  # noqa: E402
     JUMP_CONNECTIVE_TOKENS,
     PUNCT_SET,
     MarkovGenerator,
+    build_windows,
     content_tokens,
     tokenize,
 )
+from app.core.markov_port import MarkovReadPort  # noqa: E402
 from app.core.response_generator import (  # noqa: E402
     CANDIDATE_TARGET,
     GenerationRequest,
     ResponseGenerator,
 )
-from app.core.slot_mutation import MIN_MUTABLE_WORD_LEN  # noqa: E402
+from app.core.slot_mutation import (  # noqa: E402
+    MIN_MUTABLE_WORD_LEN,
+    frequencies_by_ending,
+)
 from app.core.text import sanitize_text  # noqa: E402
 from app.infrastructure.database import Database  # noqa: E402
 from app.services.learning_service import (  # noqa: E402
-    content_ngram_windows,
     normalize_for_verbatim,
 )
 from tools.eval_generation import (  # noqa: E402
@@ -69,6 +73,21 @@ from tools.eval_generation import (  # noqa: E402
     distinct_ratio,
     repeated_ngram_ratio,
 )
+
+
+def content_ngram_windows(
+    text: str, size: int = 4
+) -> list[tuple[str, ...]]:
+    """Casefolded content-token ``size``-grams of one message.
+
+    Жила в LearningService, но рантайм строит окна из токенов уже выученного
+    сообщения (``verbatim_ngram_windows``), а этот вариант — из готового
+    текста, и нужен только здесь: eval читает сообщения из базы, а не через
+    путь обучения.
+    """
+    content = [token.casefold() for token in content_tokens(tokenize(text))]
+    return build_windows(content, size)
+
 
 DEFAULT_SEED = 20260622
 # 400 (2026-07-21): the floor for telling a knob's effect from sampling noise.
@@ -119,6 +138,7 @@ class _ProdVerbatimChecker:
         # LearningService caches too, so per-request cost matches prod).
         self._db = db
         self._word_frequencies: dict[str, int] | None = None
+        self._frequencies_by_ending: dict[str, dict[str, int]] | None = None
         self._hot_ngrams: list[tuple[str, ...]] | None = None
 
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool:
@@ -149,10 +169,19 @@ class _ProdVerbatimChecker:
         if self._db is None:
             return {}
         if self._word_frequencies is None:
-            self._word_frequencies = await self._db.get_word_frequencies(
+            self._word_frequencies = await self._db.markov.get_word_frequencies(
                 chat_id, min_word_len=MIN_MUTABLE_WORD_LEN
             )
         return self._word_frequencies
+
+    async def get_word_frequencies_by_ending(
+        self, chat_id: int
+    ) -> dict[str, dict[str, int]]:
+        if self._frequencies_by_ending is None:
+            self._frequencies_by_ending = frequencies_by_ending(
+                await self.get_word_frequencies(chat_id)
+            )
+        return self._frequencies_by_ending
 
     async def get_hot_ngrams(
         self, chat_id: int, *, min_count: int, recency_share: float
@@ -160,7 +189,7 @@ class _ProdVerbatimChecker:
         if self._db is None:
             return []
         if self._hot_ngrams is None:
-            self._hot_ngrams = await self._db.get_hot_chat_ngrams(
+            self._hot_ngrams = await self._db.chat_hot_ngrams.get_hot(
                 chat_id, min_count=min_count, recency_share=recency_share
             )
         return self._hot_ngrams
@@ -176,7 +205,7 @@ class _TraceCapturingGenerator(MarkovGenerator):
     keep texts from colliding across them.
     """
 
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: MarkovReadPort) -> None:
         super().__init__(db)
         self.order_used: Counter[int] = Counter()
         self.rejections: Counter[str] = Counter()
@@ -447,7 +476,7 @@ async def evaluate(
             tuple(row) for row in await db.get_verbatim_ngrams(resolved_chat)
         )
         verbatim_index[VERBATIM_MIN_N] |= set(alltime_ngrams)
-        generator = _TraceCapturingGenerator(db)
+        generator = _TraceCapturingGenerator(db.markov)
         pool = _PoolCollector(generator.attempt_sources)
         gen_trace_log.log_selection = (  # type: ignore[assignment]
             lambda _chat_id, candidates, *, selected=None, **_kw: pool.on_selection(

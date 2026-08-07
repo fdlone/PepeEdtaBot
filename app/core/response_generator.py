@@ -4,6 +4,7 @@ import logging
 import math
 import random
 from collections.abc import Callable, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from typing import Protocol
 
@@ -73,18 +74,24 @@ EXTENSION_MAX_TOKENS = 10
 
 CandidateScorer = Callable[[str, list[str], list[str], str], CandidateScore]
 
+# Пустой контекст для базового скорера: его оценку релевантности конвейер
+# всё равно заменяет вариантом с весами IDF (см. _build_score).
+_NO_CONTEXT: list[str] = []
+
 
 class VerbatimCopyChecker(Protocol):
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool: ...
     async def get_emoji_stats(self, chat_id: int) -> Mapping[str, int]: ...
     async def get_verbatim_ngram_index(
         self, chat_id: int
-    ) -> frozenset[tuple[str, ...]]: ...
+    ) -> AbstractSet[tuple[str, ...]]: ...
     async def get_context_idf(self, chat_id: int) -> Mapping[str, float]: ...
     async def get_intonation_profile(
         self, chat_id: int
     ) -> IntonationProfile | None: ...
-    async def get_word_frequencies(self, chat_id: int) -> Mapping[str, int]: ...
+    async def get_word_frequencies_by_ending(
+        self, chat_id: int
+    ) -> Mapping[str, Mapping[str, int]]: ...
     async def get_hot_ngrams(
         self, chat_id: int, *, min_count: int, recency_share: float
     ) -> list[tuple[str, ...]]: ...
@@ -171,12 +178,20 @@ def repeats_recent_chat_content(
     is_short_candidate: bool,
 ) -> bool:
     """Single staleness gate: echo of the current message, a short reply from
-    the recent-short window, or an exact repeat of a recently sent reply."""
+    the recent-short window, or an exact repeat of a recently sent reply.
+
+    Нормализации две, и они разные по смыслу: ``candidate_normalized`` — это
+    санитизированный текст в нижнем регистре (та же форма, в которой хранятся
+    короткие ответы), а ``normalize_reply_for_repeat`` дополнительно снимает
+    хвостовые эмодзи и пунктуацию, чтобы кандидат совпал со своей же
+    отправленной формой после вариатора концовки. Первая приходит готовой от
+    вызывающего — раньше она считалась здесь второй раз.
+    """
     if candidate_normalized == current_message_normalized:
         return True
     if is_short_candidate:
         recent_short = runtime_state.recent_short_replies.get(chat_id)
-        if recent_short and sanitize_text(candidate).lower() in recent_short:
+        if recent_short and candidate_normalized in recent_short:
             return True
     recent = runtime_state.recent_replies.get(chat_id)
     if not recent:
@@ -240,15 +255,17 @@ class ResponseGenerator:
 
     async def _read_mutation_inputs(
         self, request: GenerationRequest
-    ) -> tuple[Mapping[str, int], frozenset[str]]:
+    ) -> tuple[Mapping[str, Mapping[str, int]], frozenset[str]]:
         """Frequency dictionary and protected hot-ngram words for slot mutations.
 
         Both reads happen once per request and only when the knob is on; the
         hot-ngram read is additionally skipped when the chat has no frequency
         data, because without it no mutation can be proposed anyway.
         """
-        word_frequencies = await self.learning_service.get_word_frequencies(
-            request.chat_id
+        word_frequencies = (
+            await self.learning_service.get_word_frequencies_by_ending(
+                request.chat_id
+            )
         )
         if not word_frequencies:
             return {}, frozenset()
@@ -396,12 +413,18 @@ class ResponseGenerator:
         context_idf: Mapping[str, float],
         recent_trigrams: set[tuple[str, ...]],
         recent_penalty_strength: float,
-        corpus_ngrams: frozenset[tuple[str, ...]],
+        corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
     ) -> CandidateScore:
-        """Full candidate score with the per-request penalty components."""
+        """Full candidate score with the per-request penalty components.
+
+        Контекст в базовый скорер не передаётся намеренно: его оценку
+        релевантности конвейер всё равно заменяет вариантом с весами IDF (он
+        учитывает редкость совпавших токенов и отсекает пересказ контекста),
+        поэтому считать её дважды незачем.
+        """
         return replace(
-            self.scorer(text, tokens, context_tokens, length_mode),
+            self.scorer(text, tokens, _NO_CONTEXT, length_mode),
             context_relevance=idf_context_relevance(
                 tokens, context_tokens, context_idf
             ),
@@ -418,7 +441,7 @@ class ResponseGenerator:
         request: GenerationRequest,
         candidate_tokens: list[str],
         *,
-        frequencies: Mapping[str, int],
+        frequencies: Mapping[str, Mapping[str, int]],
         protected_tokens: frozenset[str],
         rng: random.Random,
     ) -> tuple[str, list[str]] | None:
@@ -475,7 +498,7 @@ class ResponseGenerator:
         # corpus are verbatim replays and lose score to recombined candidates.
         # The index read is skipped entirely when the penalty is off.
         verbatim_penalty_strength = self.runtime_state.verbatim_penalty_strength
-        corpus_ngrams: frozenset[tuple[str, ...]] = frozenset()
+        corpus_ngrams: AbstractSet[tuple[str, ...]] = frozenset()
         if verbatim_penalty_strength > 0.0:
             corpus_ngrams = await self.learning_service.get_verbatim_ngram_index(
                 request.chat_id
@@ -501,7 +524,7 @@ class ResponseGenerator:
         # Slot mutations: the frequency dictionary and the protected hot-ngram
         # words are fetched once per request, and only when the knob is on.
         slot_mutation_probability = self.runtime_state.slot_mutation_probability
-        word_frequencies: Mapping[str, int] = {}
+        word_frequencies: Mapping[str, Mapping[str, int]] = {}
         protected_tokens: frozenset[str] = frozenset()
         if slot_mutation_probability > 0.0:
             word_frequencies, protected_tokens = await self._read_mutation_inputs(

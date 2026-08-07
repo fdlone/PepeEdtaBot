@@ -16,6 +16,14 @@ class PivoCommandArgs:
     explicit_mentions: tuple[str, ...]
 
 
+# Пределы пользовательского ввода. Сообщение Telegram — до 4096 символов, и
+# шаблон /pivo добавляет к аргументам ещё несколько сотен: без потолка человек,
+# отправивший «/pivo <4000 символов>», получает вызов, отправка которого падает
+# всегда. Повод режется до 200 символов (длиннее — уже не повод, а сообщение),
+# строка времени — до 40, хотя её распознаватель и так не даёт длинных значений.
+MAX_TARGET_CHARS = 200
+MAX_PLANNED_TIME_CHARS = 40
+
 _USERNAME_RE = re.compile(r"(?<!\S)@([A-Za-z][A-Za-z0-9_]{4,31})(?![A-Za-z0-9_])")
 _TIME_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
@@ -55,10 +63,24 @@ def parse_pivo_command(message: Message) -> PivoCommandArgs:
 
     planned_time, target = _extract_leading_time(args_text.strip())
     return PivoCommandArgs(
-        planned_time=planned_time,
-        target=target or None,
+        planned_time=_truncate(planned_time, MAX_PLANNED_TIME_CHARS),
+        target=_truncate(target, MAX_TARGET_CHARS) or None,
         explicit_mentions=tuple(explicit_mentions),
     )
+
+
+def _truncate(text: str | None, limit: int) -> str | None:
+    """Обрезает текст до ``limit`` символов по границе слова.
+
+    Обрезка молчаливая и без многоточия: финальная нормализация повода всё
+    равно срезает хвостовую пунктуацию, так что маркер до сообщения не дошёл
+    бы. Если в пределах лимита границы слова нет — режем по лимиту.
+    """
+    if text is None or len(text) <= limit:
+        return text
+    head = text[:limit]
+    boundary = head.rfind(" ")
+    return (head[:boundary] if boundary > 0 else head).rstrip()
 
 
 def _find_args_start(text: str) -> int:

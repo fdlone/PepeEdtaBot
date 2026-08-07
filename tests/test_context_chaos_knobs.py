@@ -67,7 +67,7 @@ class TestContextJumpBoost(unittest.IsolatedAsyncioTestCase):
             await self.db.save_message_and_update_model(
                 chat_id=1, raw_text=text, tokens=tokenize(text)
             )
-        self.generator = _LoopSpyGenerator(self.db)
+        self.generator = _LoopSpyGenerator(self.db.markov)
 
     async def asyncTearDown(self) -> None:
         await self.db.close()
@@ -120,7 +120,7 @@ class TestOrderMix(unittest.IsolatedAsyncioTestCase):
             await self.db.save_message_and_update_model(
                 chat_id=1, raw_text=text, tokens=tokenize(text)
             )
-        self.generator = MarkovGenerator(self.db)
+        self.generator = MarkovGenerator(self.db.markov)
 
     async def asyncTearDown(self) -> None:
         await self.db.close()

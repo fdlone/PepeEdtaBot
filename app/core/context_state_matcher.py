@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass
 
-from app.infrastructure.database import Database
+from app.core.markov_port import MarkovReadPort
 
 _MATCH_KIND_PRIORITY = {"exact": 0, "casefold": 1}
 
@@ -12,7 +12,6 @@ _MATCH_KIND_PRIORITY = {"exact": 0, "casefold": 1}
 class ContextStateMatch:
     state: tuple[str, ...]
     match_kind: str
-    similarity: float
     transition_count: int
 
 
@@ -23,7 +22,7 @@ class _StateIndex:
 
 
 class ContextStateMatcher:
-    def __init__(self, db: Database, cache_limit: int = 128) -> None:
+    def __init__(self, db: MarkovReadPort, cache_limit: int = 128) -> None:
         self._db = db
         self._cache_limit = max(1, cache_limit)
         self._cache: OrderedDict[tuple[int, int], _StateIndex] = OrderedDict()
@@ -51,7 +50,6 @@ class ContextStateMatcher:
                 ContextStateMatch(
                     state=context_window,
                     match_kind="exact",
-                    similarity=1.0,
                     transition_count=exact_count,
                 )
             )
@@ -64,7 +62,6 @@ class ContextStateMatcher:
                 ContextStateMatch(
                     state=state,
                     match_kind="casefold",
-                    similarity=1.0,
                     transition_count=transition_count,
                 )
             )
@@ -73,7 +70,6 @@ class ContextStateMatcher:
             matches,
             key=lambda match: (
                 _MATCH_KIND_PRIORITY[match.match_kind],
-                -match.similarity,
                 -match.transition_count,
                 match.state,
             ),
@@ -86,7 +82,7 @@ class ContextStateMatcher:
             self._cache.move_to_end(key)
             return cached
 
-        rows = await self._db.get_markov_states(chat_id, order)
+        rows = await self._db.get_states(chat_id, order)
         exact = {state: transition_count for state, transition_count in rows}
         grouped: dict[
             tuple[str, ...],

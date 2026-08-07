@@ -4,6 +4,7 @@ from __future__ import annotations
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from app.core.markov import MarkovGenerator
 from app.infrastructure.database import Database
@@ -45,14 +46,14 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
     async def test_get_recent_normalized_returns_stored_texts(self) -> None:
         await self._record("кофе утром бодрит")
         await self._record("привет всем")
-        result = await self.db.get_recent_normalized_messages(self.chat, 10)
+        result = await self.db.messages.get_recent_normalized(self.chat, 10)
         self.assertEqual(len(result), 2)
 
     async def test_get_recent_normalized_excludes_other_chats(self) -> None:
         await self._record("кофе утром бодрит")
         other = Database(str(self.db_path))
         await other.init()
-        result = await other.get_recent_normalized_messages(999, 10)
+        result = await other.messages.get_recent_normalized(999, 10)
         self.assertEqual(result, [])
         await other.close()
 
@@ -61,23 +62,42 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         await self._record("второе сообщение")
         await self._record("третье сообщение")
         await self._record("четвертое сообщение")
-        result = await self.db.get_recent_normalized_messages(self.chat, 2)
+        result = await self.db.messages.get_recent_normalized(self.chat, 2)
         self.assertEqual(result, ["третье сообщение", "четвертое сообщение"])
 
     # --- text cache build and lookup ---
 
     async def test_text_cache_built_on_first_check(self) -> None:
         await self._record("пойдём пить кофе вечером")
-        self.assertNotIn(self.chat, self.svc._text_cache)
+        self.assertNotIn(self.chat, self.svc._text_counts)
         await self.svc.is_verbatim_copy(self.chat, "пойдём пить кофе вечером")
-        self.assertIn(self.chat, self.svc._text_cache)
+        self.assertIn(self.chat, self.svc._text_counts)
 
-    async def test_cache_invalidated_after_record(self) -> None:
+    async def test_new_message_updates_the_cache_instead_of_dropping_it(self) -> None:
+        """Кэш пополняется сообщением, а не сбрасывается им.
+
+        Сброс на каждое сообщение означал, что в активном чате почти каждый
+        ответ шёл по холодному пути: следующий же ответ перечитывал выборку
+        целиком. Кэш, гарантированно холодный к моменту использования, своей
+        задачи не выполняет.
+        """
+        from unittest.mock import patch
+
         await self._record("кофе утром бодрит")
         await self.svc.is_verbatim_copy(self.chat, "кофе утром бодрит")
-        self.assertIn(self.chat, self.svc._text_cache)
+
         await self._record("новое сообщение")
-        self.assertNotIn(self.chat, self.svc._text_cache)
+
+        self.assertIn(self.chat, self.svc._text_counts)
+        with patch.object(
+            self.svc, "_get_recent_texts", side_effect=AssertionError("rebuilt")
+        ):
+            self.assertTrue(
+                await self.svc.is_verbatim_copy(self.chat, "новое сообщение")
+            )
+            self.assertTrue(
+                await self.svc.is_verbatim_copy(self.chat, "кофе утром бодрит")
+            )
 
     async def test_text_cache_uses_only_recent_window(self) -> None:
         await self._record("старое сообщение давно было")
@@ -150,11 +170,16 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         hot = await self.svc.get_hot_ngrams(self.chat, min_count=1, recency_share=0.0)
         self.assertEqual(hot, [])
 
-    async def test_invalidate_clears_cache(self) -> None:
+    async def test_forget_chat_clears_caches(self) -> None:
         await self._record("кофе утром бодрит")
         await self.svc.is_verbatim_copy(self.chat, "кофе утром бодрит")
-        self.svc._invalidate_text_cache(self.chat)
-        self.assertNotIn(self.chat, self.svc._text_cache)
+        await self.svc.get_word_frequencies(self.chat)
+
+        self.svc.forget_chat(self.chat)
+
+        self.assertNotIn(self.chat, self.svc._text_counts)
+        self.assertNotIn(self.chat, self.svc._word_frequencies)
+        self.assertNotIn(self.chat, self.svc._ngram_index)
 
     # --- intonation profile (P4) ---
 
@@ -177,8 +202,11 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
             # Cached: a second read must not rebuild.
             await self.svc.get_intonation_profile(self.chat)
             builder.assert_called_once()
-        await self._record("новое сообщение")
-        self.assertNotIn(self.chat, self.svc._intonation)
+            # Одно новое сообщение не двигает статистику по выборке в сотни
+            # сообщений — пересборка откладывается.
+            await self._record("новое сообщение")
+            await self.svc.get_intonation_profile(self.chat)
+            builder.assert_called_once()
     # --- word frequencies (slot mutations) ---
 
     async def test_word_frequencies_counted_from_model(self) -> None:
@@ -194,12 +222,134 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("да", frequencies)
         self.assertNotIn("и", frequencies)
 
-    async def test_word_frequencies_cached_and_invalidated(self) -> None:
+    async def test_word_frequencies_absorb_new_message(self) -> None:
+        from unittest.mock import patch
+
         await self._record("сегодня хорошая погода")
         await self.svc.get_word_frequencies(self.chat)
-        self.assertIn(self.chat, self.svc._word_frequencies)
-        await self._record("новое сообщение пришло")
-        self.assertNotIn(self.chat, self.svc._word_frequencies)
+
+        await self._record("завтра хорошая погода")
+
+        with patch.object(
+            self.svc._db.markov,
+            "get_word_frequencies",
+            side_effect=AssertionError("re-read"),
+        ):
+            frequencies = await self.svc.get_word_frequencies(self.chat)
+        self.assertEqual(frequencies.get("погода"), 2)
+
+    # --- эквивалентность инкрементального обновления и полной сборки ---
+
+    async def _fresh_service(self):
+        """Сервис с пустыми кэшами на той же базе — эталон полной сборки."""
+        from app.services.learning_service import LearningService
+
+        return LearningService(
+            self.db, _make_generator(), text_cache_max_messages=3
+        )
+
+    async def test_incremental_text_window_matches_full_rebuild(self) -> None:
+        texts = ["первое сообщение", "второе сообщение", "третье", "четвёртое"]
+        for text in texts:
+            await self._record(text)
+            await self.svc.is_verbatim_copy(self.chat, text)
+
+        fresh = await self._fresh_service()
+        for text in texts:
+            self.assertEqual(
+                await self.svc.is_verbatim_copy(self.chat, text),
+                await fresh.is_verbatim_copy(self.chat, text),
+                text,
+            )
+
+    async def test_incremental_ngram_index_matches_full_rebuild(self) -> None:
+        await self.svc.get_verbatim_ngram_index(self.chat)
+        for text in ("кофе утром бодрит очень", "чай вечером успокаивает тоже"):
+            await self._record(text)
+
+        fresh = await self._fresh_service()
+
+        self.assertEqual(
+            set(await self.svc.get_verbatim_ngram_index(self.chat)),
+            set(await fresh.get_verbatim_ngram_index(self.chat)),
+        )
+
+    async def test_incremental_frequencies_match_full_rebuild(self) -> None:
+        await self.svc.get_word_frequencies(self.chat)
+        for text in (
+            "сегодня хорошая погода правда",
+            "завтра хорошая погода тоже",
+            "вчера была хорошая погода",
+        ):
+            await self._record(text)
+
+        fresh = await self._fresh_service()
+
+        self.assertEqual(
+            dict(await self.svc.get_word_frequencies(self.chat)),
+            dict(await fresh.get_word_frequencies(self.chat)),
+        )
+
+    # --- отсрочка тяжёлой статистики ---
+
+    async def test_idf_rebuilds_after_the_deferred_threshold(self) -> None:
+        from app.services.learning_service import STATS_REBUILD_EVERY_MESSAGES
+
+        await self.svc.get_context_idf(self.chat)
+        for index in range(STATS_REBUILD_EVERY_MESSAGES):
+            await self._record(f"сообщение номер {index} здесь")
+
+        reads: list[int] = []
+        original = self.svc._get_recent_texts
+
+        async def counting(chat_id: int) -> list[str]:
+            reads.append(chat_id)
+            return await original(chat_id)
+
+        self.svc._get_recent_texts = counting  # type: ignore[method-assign]
+        await self.svc.get_context_idf(self.chat)
+
+        self.assertEqual(len(reads), 1)
+
+    async def test_idf_is_not_rebuilt_on_every_message(self) -> None:
+        await self.svc.get_context_idf(self.chat)
+        await self._record("одно новое сообщение здесь")
+
+        with patch.object(
+            self.svc, "_get_recent_texts", side_effect=AssertionError("rebuilt")
+        ):
+            await self.svc.get_context_idf(self.chat)
+
+    # --- вытеснение ---
+
+    async def test_caches_of_a_quiet_chat_are_evicted_by_ttl(self) -> None:
+        from app.services.learning_service import LearningService
+
+        svc = LearningService(
+            self.db, _make_generator(), text_cache_max_messages=3, cache_ttl_sec=0
+        )
+        await svc.record_message(self.chat, "кофе утром бодрит", ["кофе", "утром"])
+        await svc.is_verbatim_copy(self.chat, "кофе утром бодрит")
+
+        svc._prune(svc._last_touch[self.chat] + 1.0)
+
+        self.assertNotIn(self.chat, svc._text_counts)
+
+    async def test_caches_are_capped_by_chat_count(self) -> None:
+        from app.services.learning_service import LearningService
+
+        svc = LearningService(
+            self.db, _make_generator(), text_cache_max_messages=3, cache_max_chats=2
+        )
+        for chat_id in (1, 2, 3):
+            await svc.record_message(chat_id, "кофе утром бодрит", ["кофе", "утром"])
+            await svc.is_verbatim_copy(chat_id, "кофе утром бодрит")
+
+        svc._prune(max(svc._last_touch.values()))
+
+        self.assertLessEqual(len(svc._last_touch), 2)
+        # Вытеснение не меняет ответа: данные читаются заново из базы.
+        self.assertTrue(await svc.is_verbatim_copy(1, "кофе утром бодрит"))
 
     # --- user-interaction passthroughs (L2) ---
 
@@ -231,5 +381,5 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         # Every DB touch went through the hasher — raw ids never reach the DB.
         self.assertEqual(hashed, [1001, 1001, 2002, 1001, 2002])
         self.assertEqual(
-            await self.db.get_user_interaction_count(self.chat, "hash-1001"), 2
+            await self.db.chat_user_interactions.get_count(self.chat, "hash-1001"), 2
         )
