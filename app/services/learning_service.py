@@ -112,23 +112,23 @@ class LearningService:
 
     async def record_emojis(self, chat_id: int, counts: Mapping[str, int]) -> None:
         """Fold a message's emoji frequencies into the chat's emoji stats (M3)."""
-        await self._db.record_chat_emojis(chat_id, counts)
+        await self._db.chat_emoji_stats.bump(chat_id, counts)
 
     async def get_emoji_stats(self, chat_id: int) -> dict[str, int]:
         """Per-chat emoji frequencies for the emoji-append channel (M3)."""
-        return await self._db.get_chat_emoji_stats(chat_id)
+        return await self._db.chat_emoji_stats.get_stats(chat_id)
 
     async def record_hot_ngrams(
         self, chat_id: int, ngrams: Iterable[tuple[str, ...]]
     ) -> None:
         """Fold a learned message's content n-grams into the hot-ngram window (L1)."""
-        await self._db.record_chat_hot_ngrams(chat_id, ngrams)
+        await self._db.chat_hot_ngrams.bump(chat_id, ngrams)
 
     async def get_hot_ngrams(
         self, chat_id: int, *, min_count: int, recency_share: float
     ) -> list[tuple[str, ...]]:
         """Currently-hot n-grams for unprompted-reply seeding (L1)."""
-        return await self._db.get_hot_chat_ngrams(
+        return await self._db.chat_hot_ngrams.get_hot(
             chat_id, min_count=min_count, recency_share=recency_share
         )
 
@@ -142,11 +142,11 @@ class LearningService:
 
     async def record_user_interaction(self, chat_id: int, user_id: int) -> None:
         """Count one answered mention for the user (L2, anonymized)."""
-        await self._db.record_user_interaction(chat_id, self._hash_user(user_id))
+        await self._db.chat_user_interactions.bump(chat_id, self._hash_user(user_id))
 
     async def get_user_interaction_count(self, chat_id: int, user_id: int) -> int:
         """Answered-mention count for the user in the chat (L2, anonymized)."""
-        return await self._db.get_user_interaction_count(
+        return await self._db.chat_user_interactions.get_count(
             chat_id, self._hash_user(user_id)
         )
 
@@ -158,7 +158,7 @@ class LearningService:
         Answers "is the regulars threshold reachable in this chat?" without
         touching the anonymity of the counters themselves.
         """
-        return await self._db.get_user_interaction_stats(chat_id, threshold)
+        return await self._db.chat_user_interactions.get_stats(chat_id, threshold)
 
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool:
         """True если текст дословно совпадает с одним из последних обучающих сообщений.
@@ -241,7 +241,7 @@ class LearningService:
         cached = self._word_frequencies.get(chat_id)
         if cached is not None:
             return cached
-        frequencies = await self._db.get_word_frequencies(
+        frequencies = await self._db.markov.get_word_frequencies(
             chat_id, min_word_len=MIN_MUTABLE_WORD_LEN
         )
         self._word_frequencies[chat_id] = frequencies
@@ -370,7 +370,7 @@ class LearningService:
         counts[text] += 1
 
     async def _get_recent_texts(self, chat_id: int) -> list[str]:
-        return await self._db.get_recent_normalized_messages(
+        return await self._db.messages.get_recent_normalized(
             chat_id,
             self._text_cache_max_messages,
         )

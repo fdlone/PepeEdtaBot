@@ -85,7 +85,7 @@ class PivoService:
         self._subscriber_fanout_limit = subscriber_fanout_limit
 
     async def subscribe(self, chat_id: int, user: User) -> None:
-        await self._db.upsert_chat_member(
+        await self._db.chat_members.upsert(
             chat_hash=self._security.hmac_value(chat_id),
             user_hash=self._security.hmac_value(user.id),
             encrypted_user_id=self._security.encrypt_value(user.id),
@@ -121,7 +121,7 @@ class PivoService:
         if self._refreshed_on.get((chat_hash, user_hash)) == usage_day:
             return
         self._refreshed_on[(chat_hash, user_hash)] = usage_day
-        await self._db.refresh_chat_member(
+        await self._db.chat_members.refresh_profile(
             chat_hash=chat_hash,
             user_hash=user_hash,
             encrypted_username=self._security.encrypt_value(user.username or ""),
@@ -131,9 +131,9 @@ class PivoService:
         )
 
     async def unsubscribe(self, chat_id: int, user_id: int) -> None:
-        await self._db.remove_chat_member(
-            chat_hash=self._security.hmac_value(chat_id),
-            user_hash=self._security.hmac_value(user_id),
+        await self._db.chat_members.remove(
+            self._security.hmac_value(chat_id),
+            self._security.hmac_value(user_id),
         )
 
     async def clear_chat_data(self, chat_id: int) -> None:
@@ -155,7 +155,7 @@ class PivoService:
         """Списывает одну суточную квоту /pivo для пользователя в чате."""
         usage_day = (today or datetime.now(UTC).date()).isoformat()
         limit = PIVO_DAILY_LIMIT_ADMIN if is_admin_or_owner else PIVO_DAILY_LIMIT_USER
-        allowed, used_count = await self._db.consume_pivo_daily_call(
+        allowed, used_count = await self._db.pivo_usage.consume_daily_call(
             chat_hash=self._security.hmac_value(chat_id),
             user_hash=self._security.hmac_value(user_id),
             usage_day=usage_day,
@@ -176,7 +176,7 @@ class PivoService:
         usage_day: str,
     ) -> None:
         """Возвращает списанную квоту /pivo после сбоя до доставки ответа."""
-        await self._db.refund_pivo_daily_call(
+        await self._db.pivo_usage.refund_daily_call(
             chat_hash=self._security.hmac_value(chat_id),
             user_hash=self._security.hmac_value(user_id),
             usage_day=usage_day,
@@ -238,7 +238,7 @@ class PivoService:
             has_explicit_mentions=bool(explicit_mentions),
         )
         recent_indices = (
-            await self._db.get_pivo_pool_usage(chat_hash)
+            await self._db.pivo_pool_usage.get_recent(chat_hash)
             if recent_pool_window > 0
             else {}
         )
@@ -293,7 +293,7 @@ class PivoService:
         mention_by_id: bool,
     ) -> list[PivoMentionResult]:
         """Строит упоминания подписчиков чата вместе с выбранным путём."""
-        rows = await self._db.get_chat_members(chat_hash)
+        rows = await self._db.chat_members.list_members(chat_hash)
         members = [
             PivoMember(
                 encrypted_user_id=str(row["encrypted_user_id"]),
@@ -338,7 +338,7 @@ class PivoService:
         """Фиксирует анти-повтор шаблонов после успешной отправки /pivo."""
         if recent_pool_window <= 0 or not picks:
             return
-        await self._db.record_pivo_pool_usage(
+        await self._db.pivo_pool_usage.record(
             self._security.hmac_value(chat_id),
             picks,
             keep=recent_pool_window,

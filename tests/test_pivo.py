@@ -284,7 +284,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
     async def test_explicit_mentions_below_limit_are_used_directly(self) -> None:
         security = make_security()
         db = AsyncMock()
-        db.get_chat_members = AsyncMock()
+        db.chat_members.list_members = AsyncMock()
         service = self._make_service(db, security)
 
         text, mentions_count, _picks, _paths = await service.build_call_message(
@@ -295,12 +295,12 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(mentions_count, 1)
         self.assertIn("@friend", text)
-        db.get_chat_members.assert_not_called()
+        db.chat_members.list_members.assert_not_called()
 
     async def test_explicit_mentions_exactly_at_limit_are_allowed(self) -> None:
         security = make_security()
         db = AsyncMock()
-        db.get_chat_members = AsyncMock()
+        db.chat_members.list_members = AsyncMock()
         service = self._make_service(db, security)
 
         text, mentions_count, _picks, _paths = await service.build_call_message(
@@ -311,14 +311,14 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(mentions_count, 2)
         self.assertIn("@one @two", text)
-        db.get_chat_members.assert_not_called()
+        db.chat_members.list_members.assert_not_called()
 
     async def test_explicit_mentions_above_limit_are_rejected(self) -> None:
         from app.services.pivo_service import PivoCallLimitError
 
         security = make_security()
         db = AsyncMock()
-        db.get_chat_members = AsyncMock()
+        db.chat_members.list_members = AsyncMock()
         service = self._make_service(db, security)
 
         with self.assertRaises(PivoCallLimitError) as ctx:
@@ -329,14 +329,14 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIn("не больше 2", str(ctx.exception))
-        db.get_chat_members.assert_not_called()
+        db.chat_members.list_members.assert_not_called()
 
     async def test_regular_user_has_three_daily_calls(self) -> None:
         from app.services.pivo_service import PIVO_DAILY_LIMIT_USER, PivoService
 
         security = make_security()
         db = AsyncMock()
-        db.consume_pivo_daily_call = AsyncMock(return_value=(True, 1))
+        db.pivo_usage.consume_daily_call = AsyncMock(return_value=(True, 1))
         service = PivoService(db=db, security=security)
 
         result = await service.consume_daily_call_quota(
@@ -349,7 +349,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.allowed)
         self.assertEqual(result.limit, PIVO_DAILY_LIMIT_USER)
         self.assertEqual(result.usage_day, "2026-05-08")
-        db.consume_pivo_daily_call.assert_awaited_once_with(
+        db.pivo_usage.consume_daily_call.assert_awaited_once_with(
             chat_hash=security.hmac_value(100),
             user_hash=security.hmac_value(200),
             usage_day="2026-05-08",
@@ -361,7 +361,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
 
         security = make_security()
         db = AsyncMock()
-        db.consume_pivo_daily_call = AsyncMock(return_value=(True, 5))
+        db.pivo_usage.consume_daily_call = AsyncMock(return_value=(True, 5))
         service = PivoService(db=db, security=security)
 
         result = await service.consume_daily_call_quota(
@@ -380,7 +380,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
 
         security = make_security()
         db = AsyncMock()
-        db.refund_pivo_daily_call = AsyncMock()
+        db.pivo_usage.refund_daily_call = AsyncMock()
         service = PivoService(db=db, security=security)
 
         await service.refund_daily_call_quota(
@@ -389,7 +389,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
             usage_day="2026-05-08",
         )
 
-        db.refund_pivo_daily_call.assert_awaited_once_with(
+        db.pivo_usage.refund_daily_call.assert_awaited_once_with(
             chat_hash=security.hmac_value(100),
             user_hash=security.hmac_value(200),
             usage_day="2026-05-08",
@@ -400,7 +400,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
 
         security = make_security()
         db = AsyncMock()
-        db.get_chat_members = AsyncMock()
+        db.chat_members.list_members = AsyncMock()
         service = PivoService(db=db, security=security)
 
         choices = iter(
@@ -420,7 +420,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
                 explicit_mentions=("@friend",),
             )
 
-        db.get_chat_members.assert_not_called()
+        db.chat_members.list_members.assert_not_called()
         self.assertEqual(mentions_count, 1)
         self.assertIn("общий сбор в 20:00 в Discord.", text)
         self.assertIn("watch movie", text)
@@ -429,7 +429,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
     async def test_subscriber_fanout_below_limit_is_used(self) -> None:
         security = make_security()
         db = AsyncMock()
-        db.get_chat_members = AsyncMock(
+        db.chat_members.list_members = AsyncMock(
             return_value=[
                 make_member_row(security, user_id=201, username="friend1"),
                 make_member_row(security, user_id=202, username="friend2"),
@@ -445,12 +445,12 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mentions_count, 2)
         self.assertIn("@friend1", text)
         self.assertIn("@friend2", text)
-        db.get_chat_members.assert_awaited_once()
+        db.chat_members.list_members.assert_awaited_once()
 
     async def test_subscriber_fanout_exactly_at_limit_is_allowed(self) -> None:
         security = make_security()
         db = AsyncMock()
-        db.get_chat_members = AsyncMock(
+        db.chat_members.list_members = AsyncMock(
             return_value=[
                 make_member_row(security, user_id=201, username="friend1"),
                 make_member_row(security, user_id=202, username="friend2"),
@@ -477,7 +477,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         """
         security = make_security()
         db = AsyncMock()
-        db.get_chat_members = AsyncMock(
+        db.chat_members.list_members = AsyncMock(
             return_value=[
                 make_member_row(security, user_id=201, username="friend1"),
                 make_member_row(security, user_id=202, username="friend2"),
@@ -496,7 +496,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(paths[MENTION_TRUNCATED], 1)
         self.assertIn("упомянуты не все", text)
         self.assertIn("ещё 1", text)
-        db.get_chat_members.assert_awaited_once()
+        db.chat_members.list_members.assert_awaited_once()
 
     async def test_caller_is_excluded_without_decrypting_their_user_id(self) -> None:
         """Вызывающий отсеивается по хранимому хешу, а не расшифровкой.
@@ -508,7 +508,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
         security = make_security()
         caller_row = make_member_row(security, user_id=200, username="caller")
         db = AsyncMock()
-        db.get_chat_members = AsyncMock(
+        db.chat_members.list_members = AsyncMock(
             return_value=[
                 caller_row,
                 make_member_row(security, user_id=201, username="friend1"),
@@ -537,7 +537,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
     async def test_subscriber_fanout_at_limit_has_no_truncation_note(self) -> None:
         security = make_security()
         db = AsyncMock()
-        db.get_chat_members = AsyncMock(
+        db.chat_members.list_members = AsyncMock(
             return_value=[
                 make_member_row(security, user_id=201, username="friend1"),
                 make_member_row(security, user_id=202, username="friend2"),
@@ -558,7 +558,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
 
         security = make_security()
         db = AsyncMock()
-        db.get_chat_members = AsyncMock(return_value=[])
+        db.chat_members.list_members = AsyncMock(return_value=[])
         service = PivoService(db=db, security=security)
 
         choices = iter(
@@ -584,7 +584,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
     async def test_no_explicit_mentions_uses_subscribers(self) -> None:
         security = make_security()
         db = AsyncMock()
-        db.get_chat_members = AsyncMock(
+        db.chat_members.list_members = AsyncMock(
             return_value=[
                 make_member_row(security, user_id=201, username="friend"),
             ]
@@ -598,7 +598,7 @@ class TestPivoServiceQuota(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(mentions_count, 1)
         self.assertIn("@friend", text)
-        db.get_chat_members.assert_awaited_once()
+        db.chat_members.list_members.assert_awaited_once()
 
 
 class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
@@ -697,10 +697,10 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
             recent_pool_window=5,
         )
         chat_hash = self.security.hmac_value(700)
-        self.assertEqual(await self.db.get_pivo_pool_usage(chat_hash), {})
+        self.assertEqual(await self.db.pivo_pool_usage.get_recent(chat_hash), {})
 
         await self.service.record_pool_usage(700, picks, recent_pool_window=5)
-        recent = await self.db.get_pivo_pool_usage(chat_hash)
+        recent = await self.db.pivo_pool_usage.get_recent(chat_hash)
         self.assertEqual(set(recent), {"default_top", "default_body", "default_bottom"})
         self.assertTrue(all(len(v) == 1 for v in recent.values()))
 
@@ -713,7 +713,7 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
         )
         await self.service.record_pool_usage(701, picks, recent_pool_window=0)
         chat_hash = self.security.hmac_value(701)
-        self.assertEqual(await self.db.get_pivo_pool_usage(chat_hash), {})
+        self.assertEqual(await self.db.pivo_pool_usage.get_recent(chat_hash), {})
 
     async def test_repeated_calls_rotate_top_index(self) -> None:
         # Over several calls with a window, the recorded top-index history should
@@ -727,7 +727,7 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
                 recent_pool_window=3,
             )
             await self.service.record_pool_usage(702, picks, recent_pool_window=3)
-        recent = await self.db.get_pivo_pool_usage(chat_hash)
+        recent = await self.db.pivo_pool_usage.get_recent(chat_hash)
         top_history = recent["default_top"]
         self.assertLessEqual(len(top_history), 3)
         self.assertEqual(len(top_history), len(set(top_history)))
@@ -746,13 +746,13 @@ class TestPivoServiceFlow(unittest.IsolatedAsyncioTestCase):
         )
         await self.service.record_pool_usage(800, picks, recent_pool_window=5)
         chat_hash = self.security.hmac_value(800)
-        self.assertTrue(await self.db.get_chat_members(chat_hash))
-        self.assertTrue(await self.db.get_pivo_pool_usage(chat_hash))
+        self.assertTrue(await self.db.chat_members.list_members(chat_hash))
+        self.assertTrue(await self.db.pivo_pool_usage.get_recent(chat_hash))
 
         await self.service.clear_chat_data(800)
 
-        self.assertEqual(await self.db.get_chat_members(chat_hash), [])
-        self.assertEqual(await self.db.get_pivo_pool_usage(chat_hash), {})
+        self.assertEqual(await self.db.chat_members.list_members(chat_hash), [])
+        self.assertEqual(await self.db.pivo_pool_usage.get_recent(chat_hash), {})
         quota = await self.service.consume_daily_call_quota(
             chat_id=800, user_id=300, is_admin_or_owner=False, today=date(2026, 5, 9)
         )
@@ -781,7 +781,7 @@ class TestPivoMemberRefresh(unittest.IsolatedAsyncioTestCase):
 
         await service.refresh_member(100, self._user("new_nick"), today=date(2026, 7, 14))
 
-        kwargs = db.refresh_chat_member.await_args.kwargs
+        kwargs = db.chat_members.refresh_profile.await_args.kwargs
         self.assertEqual(kwargs["chat_hash"], security.hmac_value(100))
         self.assertEqual(kwargs["user_hash"], security.hmac_value(200))
         self.assertEqual(
@@ -799,7 +799,7 @@ class TestPivoMemberRefresh(unittest.IsolatedAsyncioTestCase):
         await service.refresh_member(100, user, today=date(2026, 7, 14))
         await service.refresh_member(100, user, today=date(2026, 7, 14))
 
-        db.refresh_chat_member.assert_awaited_once()
+        db.chat_members.refresh_profile.assert_awaited_once()
 
     async def test_next_day_writes_again(self) -> None:
         db = AsyncMock()
@@ -809,7 +809,7 @@ class TestPivoMemberRefresh(unittest.IsolatedAsyncioTestCase):
         await service.refresh_member(100, user, today=date(2026, 7, 14))
         await service.refresh_member(100, user, today=date(2026, 7, 15))
 
-        self.assertEqual(db.refresh_chat_member.await_count, 2)
+        self.assertEqual(db.chat_members.refresh_profile.await_count, 2)
 
     async def test_throttle_is_per_user_and_chat(self) -> None:
         db = AsyncMock()
@@ -822,4 +822,4 @@ class TestPivoMemberRefresh(unittest.IsolatedAsyncioTestCase):
         )
         await service.refresh_member(101, self._user("nick"), today=today)
 
-        self.assertEqual(db.refresh_chat_member.await_count, 3)
+        self.assertEqual(db.chat_members.refresh_profile.await_count, 3)

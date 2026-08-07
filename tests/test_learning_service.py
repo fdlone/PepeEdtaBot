@@ -46,14 +46,14 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
     async def test_get_recent_normalized_returns_stored_texts(self) -> None:
         await self._record("кофе утром бодрит")
         await self._record("привет всем")
-        result = await self.db.get_recent_normalized_messages(self.chat, 10)
+        result = await self.db.messages.get_recent_normalized(self.chat, 10)
         self.assertEqual(len(result), 2)
 
     async def test_get_recent_normalized_excludes_other_chats(self) -> None:
         await self._record("кофе утром бодрит")
         other = Database(str(self.db_path))
         await other.init()
-        result = await other.get_recent_normalized_messages(999, 10)
+        result = await other.messages.get_recent_normalized(999, 10)
         self.assertEqual(result, [])
         await other.close()
 
@@ -62,7 +62,7 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         await self._record("второе сообщение")
         await self._record("третье сообщение")
         await self._record("четвертое сообщение")
-        result = await self.db.get_recent_normalized_messages(self.chat, 2)
+        result = await self.db.messages.get_recent_normalized(self.chat, 2)
         self.assertEqual(result, ["третье сообщение", "четвертое сообщение"])
 
     # --- text cache build and lookup ---
@@ -231,7 +231,9 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         await self._record("завтра хорошая погода")
 
         with patch.object(
-            self.svc._db, "get_word_frequencies", side_effect=AssertionError("re-read")
+            self.svc._db.markov,
+            "get_word_frequencies",
+            side_effect=AssertionError("re-read"),
         ):
             frequencies = await self.svc.get_word_frequencies(self.chat)
         self.assertEqual(frequencies.get("погода"), 2)
@@ -379,5 +381,5 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         # Every DB touch went through the hasher — raw ids never reach the DB.
         self.assertEqual(hashed, [1001, 1001, 2002, 1001, 2002])
         self.assertEqual(
-            await self.db.get_user_interaction_count(self.chat, "hash-1001"), 2
+            await self.db.chat_user_interactions.get_count(self.chat, "hash-1001"), 2
         )

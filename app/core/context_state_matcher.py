@@ -82,7 +82,7 @@ class ContextStateMatcher:
             self._cache.move_to_end(key)
             return cached
 
-        rows = await self._db.get_markov_states(chat_id, order)
+        rows = await self._db.get_states(chat_id, order)
         exact = {state: transition_count for state, transition_count in rows}
         grouped: dict[
             tuple[str, ...],

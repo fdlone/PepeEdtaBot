@@ -58,7 +58,7 @@ class TestCoreDoesNotDependOnInfrastructure(unittest.TestCase):
             "а не через конкретное хранилище",
         )
 
-    def test_database_satisfies_the_read_port(self) -> None:
+    def test_markov_repo_satisfies_the_read_port(self) -> None:
         """Реализация подходит порту без изменений сигнатур.
 
         Проверяется в рантайме, потому что Protocol без ``runtime_checkable``
@@ -66,12 +66,12 @@ class TestCoreDoesNotDependOnInfrastructure(unittest.TestCase):
         фактического использования, а не отдельной абстракцией.
         """
         from app.core.markov_port import MarkovReadPort
-        from app.infrastructure.database import Database
+        from app.repositories import MarkovRepo
 
         for name in MarkovReadPort.__protocol_attrs__:  # type: ignore[attr-defined]
             self.assertTrue(
-                callable(getattr(Database, name, None)),
-                f"Database не реализует метод порта: {name}",
+                callable(getattr(MarkovRepo, name, None)),
+                f"MarkovRepo не реализует метод порта: {name}",
             )
 
 

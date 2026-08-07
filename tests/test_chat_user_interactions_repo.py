@@ -93,53 +93,53 @@ class TestDatabaseUserInteractionDelegates(unittest.IsolatedAsyncioTestCase):
         self.db_path.unlink(missing_ok=True)
 
     async def test_record_and_get_roundtrip(self) -> None:
-        await self.db.record_user_interaction(CHAT, USER_HASH)
-        await self.db.record_user_interaction(CHAT, USER_HASH)
+        await self.db.chat_user_interactions.bump(CHAT, USER_HASH)
+        await self.db.chat_user_interactions.bump(CHAT, USER_HASH)
 
         self.assertEqual(
-            await self.db.get_user_interaction_count(CHAT, USER_HASH), 2
+            await self.db.chat_user_interactions.get_count(CHAT, USER_HASH), 2
         )
         self.assertEqual(
-            await self.db.get_user_interaction_count(CHAT, OTHER_HASH), 0
+            await self.db.chat_user_interactions.get_count(CHAT, OTHER_HASH), 0
         )
 
     async def test_decay_window_is_30_days(self) -> None:
         self.assertEqual(CHAT_USER_INTERACTION_DECAY_DAYS, 30)
-        await self.db.record_user_interaction(CHAT, USER_HASH)
-        await self.db.record_user_interaction(CHAT, USER_HASH)
+        await self.db.chat_user_interactions.bump(CHAT, USER_HASH)
+        await self.db.chat_user_interactions.bump(CHAT, USER_HASH)
 
         # 29 days later the row is still fresh; at 31 days it halves.
         fresh = datetime.now(UTC) + timedelta(days=29)
         self.assertEqual(await self.db.decay_chat_user_interactions(now=fresh), 0)
         self.assertEqual(
-            await self.db.get_user_interaction_count(CHAT, USER_HASH), 2
+            await self.db.chat_user_interactions.get_count(CHAT, USER_HASH), 2
         )
 
         stale = datetime.now(UTC) + timedelta(days=31)
         await self.db.decay_chat_user_interactions(now=stale)
         self.assertEqual(
-            await self.db.get_user_interaction_count(CHAT, USER_HASH), 1
+            await self.db.chat_user_interactions.get_count(CHAT, USER_HASH), 1
         )
 
     async def test_clear_chat_removes_interactions(self) -> None:
-        await self.db.record_user_interaction(CHAT, USER_HASH)
-        await self.db.record_user_interaction(OTHER_CHAT, USER_HASH)
+        await self.db.chat_user_interactions.bump(CHAT, USER_HASH)
+        await self.db.chat_user_interactions.bump(OTHER_CHAT, USER_HASH)
 
         await self.db.clear_chat(CHAT)
 
         self.assertEqual(
-            await self.db.get_user_interaction_count(CHAT, USER_HASH), 0
+            await self.db.chat_user_interactions.get_count(CHAT, USER_HASH), 0
         )
         self.assertEqual(
-            await self.db.get_user_interaction_count(OTHER_CHAT, USER_HASH), 1
+            await self.db.chat_user_interactions.get_count(OTHER_CHAT, USER_HASH), 1
         )
 
     async def test_lazy_decay_covers_interactions(self) -> None:
         # decay_flavor_stats_if_due must run the interactions decay too: with
         # the monotonic stamp aged past the interval and rows made stale via
         # a rewound updated_at, one lazy call halves them.
-        await self.db.record_user_interaction(CHAT, USER_HASH)
-        await self.db.record_user_interaction(CHAT, USER_HASH)
+        await self.db.chat_user_interactions.bump(CHAT, USER_HASH)
+        await self.db.chat_user_interactions.bump(CHAT, USER_HASH)
         assert self.db._conn is not None
         await self.db._conn.execute(
             "UPDATE chat_user_interactions SET updated_at = ?",
@@ -152,21 +152,21 @@ class TestDatabaseUserInteractionDelegates(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(await self.db.decay_flavor_stats_if_due())
         self.assertEqual(
-            await self.db.get_user_interaction_count(CHAT, USER_HASH), 1
+            await self.db.chat_user_interactions.get_count(CHAT, USER_HASH), 1
         )
 
     async def test_stats_aggregate_counts_people_max_and_threshold(self) -> None:
         # Three people with 1, 3 and 5 answered mentions; threshold 3.
         for _ in range(1):
-            await self.db.record_user_interaction(CHAT, "b" * 64)
+            await self.db.chat_user_interactions.bump(CHAT, "b" * 64)
         for _ in range(3):
-            await self.db.record_user_interaction(CHAT, "c" * 64)
+            await self.db.chat_user_interactions.bump(CHAT, "c" * 64)
         for _ in range(5):
-            await self.db.record_user_interaction(CHAT, "d" * 64)
+            await self.db.chat_user_interactions.bump(CHAT, "d" * 64)
         # A neighbouring chat must not leak into the aggregate.
-        await self.db.record_user_interaction(OTHER_CHAT, "e" * 64)
+        await self.db.chat_user_interactions.bump(OTHER_CHAT, "e" * 64)
 
-        people, max_count, at_or_above = await self.db.get_user_interaction_stats(
+        people, max_count, at_or_above = await self.db.chat_user_interactions.get_stats(
             CHAT, 3
         )
 
@@ -176,14 +176,14 @@ class TestDatabaseUserInteractionDelegates(unittest.IsolatedAsyncioTestCase):
 
     async def test_stats_on_empty_chat_are_zeros_not_an_error(self) -> None:
         self.assertEqual(
-            await self.db.get_user_interaction_stats(OTHER_CHAT, 25), (0, 0, 0)
+            await self.db.chat_user_interactions.get_stats(OTHER_CHAT, 25), (0, 0, 0)
         )
 
     async def test_stats_do_not_change_the_counters(self) -> None:
-        await self.db.record_user_interaction(CHAT, USER_HASH)
+        await self.db.chat_user_interactions.bump(CHAT, USER_HASH)
 
-        before = await self.db.get_user_interaction_count(CHAT, USER_HASH)
-        await self.db.get_user_interaction_stats(CHAT, 1)
-        after = await self.db.get_user_interaction_count(CHAT, USER_HASH)
+        before = await self.db.chat_user_interactions.get_count(CHAT, USER_HASH)
+        await self.db.chat_user_interactions.get_stats(CHAT, 1)
+        after = await self.db.chat_user_interactions.get_count(CHAT, USER_HASH)
 
         self.assertEqual(before, after)

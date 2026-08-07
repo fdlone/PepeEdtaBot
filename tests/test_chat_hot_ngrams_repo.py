@@ -36,72 +36,72 @@ class TestChatHotNgramsRepo(unittest.IsolatedAsyncioTestCase):
         await conn.commit()
 
     async def test_empty_chat_has_no_hot_ngrams(self) -> None:
-        hot = await self.db.get_hot_chat_ngrams(CHAT, min_count=1, recency_share=0.0)
+        hot = await self.db.chat_hot_ngrams.get_hot(CHAT, min_count=1, recency_share=0.0)
         self.assertEqual(hot, [])
 
     async def test_bump_accumulates_and_high_share_is_hot(self) -> None:
         await self._seed_long_term_counts(CHAT, 10)
         # Window count 8 of 10 all-time -> share 0.8, hot at threshold 0.5.
         for _ in range(8):
-            await self.db.record_chat_hot_ngrams(CHAT, [BIGRAM, TRIGRAM])
-        hot = await self.db.get_hot_chat_ngrams(CHAT, min_count=3, recency_share=0.5)
+            await self.db.chat_hot_ngrams.bump(CHAT, [BIGRAM, TRIGRAM])
+        hot = await self.db.chat_hot_ngrams.get_hot(CHAT, min_count=3, recency_share=0.5)
         self.assertIn(BIGRAM, hot)
         self.assertIn(TRIGRAM, hot)
 
     async def test_low_share_is_not_hot(self) -> None:
         await self._seed_long_term_counts(CHAT, 10)
         # Window count 3 of 10 all-time -> share 0.3 < 0.5.
-        await self.db.record_chat_hot_ngrams(CHAT, [BIGRAM] * 3)
-        hot = await self.db.get_hot_chat_ngrams(CHAT, min_count=3, recency_share=0.5)
+        await self.db.chat_hot_ngrams.bump(CHAT, [BIGRAM] * 3)
+        hot = await self.db.chat_hot_ngrams.get_hot(CHAT, min_count=3, recency_share=0.5)
         self.assertEqual(hot, [])
 
     async def test_below_min_count_is_not_hot(self) -> None:
-        await self.db.record_chat_hot_ngrams(CHAT, [BIGRAM] * 2)
-        hot = await self.db.get_hot_chat_ngrams(CHAT, min_count=3, recency_share=0.5)
+        await self.db.chat_hot_ngrams.bump(CHAT, [BIGRAM] * 2)
+        hot = await self.db.chat_hot_ngrams.get_hot(CHAT, min_count=3, recency_share=0.5)
         self.assertEqual(hot, [])
 
     async def test_new_ngram_without_long_term_row_qualifies(self) -> None:
         # No transitions row at all -> share falls back to 1.0 (brand-new meme).
-        await self.db.record_chat_hot_ngrams(CHAT, [TRIGRAM] * 4)
-        hot = await self.db.get_hot_chat_ngrams(CHAT, min_count=3, recency_share=0.5)
+        await self.db.chat_hot_ngrams.bump(CHAT, [TRIGRAM] * 4)
+        hot = await self.db.chat_hot_ngrams.get_hot(CHAT, min_count=3, recency_share=0.5)
         self.assertEqual(hot, [TRIGRAM])
 
     async def test_hot_ngrams_are_per_chat(self) -> None:
-        await self.db.record_chat_hot_ngrams(CHAT, [BIGRAM] * 5)
-        hot_other = await self.db.get_hot_chat_ngrams(999, min_count=1, recency_share=0.0)
+        await self.db.chat_hot_ngrams.bump(CHAT, [BIGRAM] * 5)
+        hot_other = await self.db.chat_hot_ngrams.get_hot(999, min_count=1, recency_share=0.0)
         self.assertEqual(hot_other, [])
 
     async def test_bump_ignores_empty_and_wrong_sizes(self) -> None:
-        await self.db.record_chat_hot_ngrams(CHAT, [])
-        await self.db.record_chat_hot_ngrams(CHAT, [("одно",), ("а", "б", "в", "г")])
-        hot = await self.db.get_hot_chat_ngrams(CHAT, min_count=1, recency_share=0.0)
+        await self.db.chat_hot_ngrams.bump(CHAT, [])
+        await self.db.chat_hot_ngrams.bump(CHAT, [("одно",), ("а", "б", "в", "г")])
+        hot = await self.db.chat_hot_ngrams.get_hot(CHAT, min_count=1, recency_share=0.0)
         self.assertEqual(hot, [])
 
     async def test_clear_chat_wipes_hot_ngrams(self) -> None:
-        await self.db.record_chat_hot_ngrams(CHAT, [BIGRAM] * 4)
+        await self.db.chat_hot_ngrams.bump(CHAT, [BIGRAM] * 4)
         await self.db.clear_chat(CHAT)
-        hot = await self.db.get_hot_chat_ngrams(CHAT, min_count=1, recency_share=0.0)
+        hot = await self.db.chat_hot_ngrams.get_hot(CHAT, min_count=1, recency_share=0.0)
         self.assertEqual(hot, [])
 
     async def test_decay_halves_stale_rows_and_drops_zeros(self) -> None:
-        await self.db.record_chat_hot_ngrams(CHAT, [BIGRAM] * 4)
-        await self.db.record_chat_hot_ngrams(CHAT, [TRIGRAM])
+        await self.db.chat_hot_ngrams.bump(CHAT, [BIGRAM] * 4)
+        await self.db.chat_hot_ngrams.bump(CHAT, [TRIGRAM])
         # Decay as if 30 days have passed: 4→2 (kept), 1→0 (purged).
         future = datetime.now(UTC) + timedelta(days=30)
         deleted = await self.db.decay_chat_hot_ngrams(now=future)
         self.assertEqual(deleted, 1)
-        hot = await self.db.get_hot_chat_ngrams(CHAT, min_count=1, recency_share=0.0)
+        hot = await self.db.chat_hot_ngrams.get_hot(CHAT, min_count=1, recency_share=0.0)
         self.assertEqual(hot, [BIGRAM])
 
     async def test_decay_leaves_fresh_rows_untouched(self) -> None:
-        await self.db.record_chat_hot_ngrams(CHAT, [BIGRAM] * 4)
+        await self.db.chat_hot_ngrams.bump(CHAT, [BIGRAM] * 4)
         await self.db.decay_chat_hot_ngrams()
-        hot = await self.db.get_hot_chat_ngrams(CHAT, min_count=4, recency_share=0.0)
+        hot = await self.db.chat_hot_ngrams.get_hot(CHAT, min_count=4, recency_share=0.0)
         self.assertEqual(hot, [BIGRAM])
 
     async def test_get_hot_uses_indexes_not_full_scans(self) -> None:
         """Perf guard: every lookup in get_hot must ride a PK/index search."""
-        await self.db.record_chat_hot_ngrams(CHAT, [BIGRAM, TRIGRAM])
+        await self.db.chat_hot_ngrams.bump(CHAT, [BIGRAM, TRIGRAM])
         conn = await self.db._get_conn()
         cursor = await conn.execute(
             """
@@ -157,16 +157,16 @@ class TestPlantedSpikeEndToEnd(unittest.IsolatedAsyncioTestCase):
             )
             ngrams = extract_content_ngrams(tokens)
             if ngrams:
-                await self.db.record_chat_hot_ngrams(CHAT, ngrams)
+                await self.db.chat_hot_ngrams.bump(CHAT, ngrams)
 
-        hot = await self.db.get_hot_chat_ngrams(CHAT, min_count=3, recency_share=0.5)
+        hot = await self.db.chat_hot_ngrams.get_hot(CHAT, min_count=3, recency_share=0.5)
         planted_hot = [ng for ng in hot if ng[:2] == ("крутой", "бобёр")]
         self.assertTrue(
             planted_hot,
             f"planted n-gram not detected as hot; hot={hot!r}",
         )
 
-        generator = MarkovGenerator(self.db)
+        generator = MarkovGenerator(self.db.markov)
         text = await generator.generate_text(
             chat_id=CHAT,
             max_chars=280,

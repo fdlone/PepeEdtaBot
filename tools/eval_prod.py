@@ -53,6 +53,7 @@ from app.core.markov import (  # noqa: E402
     content_tokens,
     tokenize,
 )
+from app.core.markov_port import MarkovReadPort  # noqa: E402
 from app.core.response_generator import (  # noqa: E402
     CANDIDATE_TARGET,
     GenerationRequest,
@@ -168,7 +169,7 @@ class _ProdVerbatimChecker:
         if self._db is None:
             return {}
         if self._word_frequencies is None:
-            self._word_frequencies = await self._db.get_word_frequencies(
+            self._word_frequencies = await self._db.markov.get_word_frequencies(
                 chat_id, min_word_len=MIN_MUTABLE_WORD_LEN
             )
         return self._word_frequencies
@@ -188,7 +189,7 @@ class _ProdVerbatimChecker:
         if self._db is None:
             return []
         if self._hot_ngrams is None:
-            self._hot_ngrams = await self._db.get_hot_chat_ngrams(
+            self._hot_ngrams = await self._db.chat_hot_ngrams.get_hot(
                 chat_id, min_count=min_count, recency_share=recency_share
             )
         return self._hot_ngrams
@@ -204,7 +205,7 @@ class _TraceCapturingGenerator(MarkovGenerator):
     keep texts from colliding across them.
     """
 
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: MarkovReadPort) -> None:
         super().__init__(db)
         self.order_used: Counter[int] = Counter()
         self.rejections: Counter[str] = Counter()
@@ -475,7 +476,7 @@ async def evaluate(
             tuple(row) for row in await db.get_verbatim_ngrams(resolved_chat)
         )
         verbatim_index[VERBATIM_MIN_N] |= set(alltime_ngrams)
-        generator = _TraceCapturingGenerator(db)
+        generator = _TraceCapturingGenerator(db.markov)
         pool = _PoolCollector(generator.attempt_sources)
         gen_trace_log.log_selection = (  # type: ignore[assignment]
             lambda _chat_id, candidates, *, selected=None, **_kw: pool.on_selection(

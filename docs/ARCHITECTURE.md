@@ -44,9 +44,9 @@
                   │
                   ▼
         ┌────────────────────────────────────────────────────────┐
-        │  infrastructure/database.py (фасад: соединение +      │
-        │  кросс-доменные транзакции типа                        │
-        │  save_message_and_update_model)                        │
+        │  infrastructure/database.py (соединение, миграции,     │
+        │  доступ к репозиториям и кросс-доменные транзакции      │
+        │  типа save_message_and_update_model)                    │
         └────────────────────────────────────────────────────────┘
                   │
                   ▼
@@ -57,8 +57,8 @@
 
 **Направление зависимостей.** `app/core/` не знает, откуда берутся данные: он
 объявляет порт `app/core/markov_port.py` (семь методов чтения цепи, ровно те,
-что вызываются), а `Database` ему удовлетворяет — реализацию подставляет
-`main.py`. До этого ядро импортировало конкретный класс `Database`, и цена
+что вызываются), а `MarkovRepo` ему удовлетворяет — реализацию подставляет
+`main.py` (`MarkovGenerator(db=db.markov)`). До этого ядро импортировало конкретный класс `Database`, и цена
 была не в чистоте: из-за цикла импортов инфраструктура держала собственные
 копии набора пунктуации, размера контентной n-граммы и функции построения
 окон 4-грамм, а их расхождение молча развело бы накопительный индекс цитат с
@@ -66,6 +66,16 @@
 verbatim_ngram_windows`); копия в миграции 016 оставлена намеренно — миграции
 застывшая история и не должны меняться вместе с кодом. Правило проверяется
 `tests/test_layering.py`.
+
+**Слой доступа к данным.** SQL живёт в репозиториях, и сервисы обращаются к
+ним напрямую: `db.markov.get_starts(...)`, `db.chat_emoji_stats.bump(...)`.
+Однострочных методов-делегатов в `Database` нет — раньше их было около сорока,
+и каждый новый метод репозитория приходилось дублировать в фасаде, иначе им
+нельзя было пользоваться. `Database` остаётся владельцем того, что репозиторию
+не принадлежит: соединения и его блокировки, миграций, настроек SQLite, точки
+доступа к репозиториям и кросс-доменных операций. Репозитории отдаются
+свойствами, поэтому обращение до `await db.init()` даёт понятную ошибку, а не
+`None`.
 
 \* Исключение — `PivoService.subscribe(chat_id, user)` принимает
 `aiogram.types.User` напрямую: осознанный компромисс — сервису нужны сразу
@@ -93,14 +103,14 @@ verbatim_ngram_windows`); копия в миграции 016 оставлена 
 | `repositories/` | `markov_repo.py`, `messages_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py`, `pivo_pool_usage_repo.py`, `chat_emoji_stats_repo.py`, `chat_hot_ngrams_repo.py`, `chat_user_interactions_repo.py` |
 | `filters/` | `group_only.py` (только `GROUP`/`SUPERGROUP`), `admin_or_owner.py` (`OWNER_ID` или админ чата, fail-closed при ошибке Telegram API) |
 | `middlewares/` | `throttling.py` — per-user-per-command cooldown, `clear`=3600 сек; команды из `notify_on_throttle` получают явный ответ при throttle вместо silent drop |
-| `infrastructure/` | `database.py` — фасад БД; `migrator.py` — пробегает `app/migrations/NNN_*` ровно один раз. `.sql`-файлы оборачиваются в `BEGIN; ... COMMIT;` и проходят через `executescript`; на исключении вызывается `conn.rollback()` и схема не остаётся в полу-применённом состоянии |
+| `infrastructure/` | `database.py` — соединение, миграции и кросс-доменные операции; `migrator.py` — пробегает `app/migrations/NNN_*` ровно один раз. `.sql`-файлы оборачиваются в `BEGIN; ... COMMIT;` и проходят через `executescript`; на исключении вызывается `conn.rollback()` и схема не остаётся в полу-применённом состоянии |
 | `migrations/` | `001_initial.sql` … `015_lowercase_model.py` |
 
 ### Внутренние модули пакета
 
 | Файл | Назначение |
 |---|---|
-| `app/infrastructure/database.py` | Фасад над репозиториями: соединение `aiosqlite`, кросс-доменные транзакции (`save_message_and_update_model`, `clear_chat`, `get_stats`), retention `pivo_daily_usage`. |
+| `app/infrastructure/database.py` | Соединение `aiosqlite` и его блокировка, миграции, настройки SQLite, доступ к репозиториям (`db.markov`, `db.chat_members`, …) и кросс-доменные операции: `save_message_and_update_model`, `clear_chat`, `clear_pivo_chat_data`, `get_stats`, суточные затухания и retention `pivo_daily_usage`. Однострочных делегатов в репозитории не держит — потребители ходят в репозиторий напрямую. |
 | `app/core/markov.py` | Variable-order генератор (3 → 2; порядка 1 нет — его блуждания были словесным салатом). Контекстно-аффинные старты, topic-drift jumps. |
 | `app/core/morphology.py` | Приближённый русский стеммер (`stem_token`) — единый fold-ключ для IDF-релевантности и аффинности стартов. Контекст-матчинг стемы не использует: этот тир удалён 2026-07-14 (см. [CLOSED.md](CLOSED.md)). |
 | `app/core/gen_trace_log.py` | Пошаговый лайв-трейс отбора кандидатов (логгер `chat_markov.gen`), включается env-флагом `GEN_TRACE_LOG`; поведения не меняет. |

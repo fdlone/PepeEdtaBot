@@ -92,7 +92,7 @@ async def run(db_path: Path, seeds: tuple[int, ...], per_seed: int) -> str:
         alltime = frozenset(tuple(row) for row in await db.get_verbatim_ngrams(chat))
         verbatim_index[VERBATIM_MIN_N] |= set(alltime)
 
-        generator = _TraceCapturingGenerator(db)
+        generator = _TraceCapturingGenerator(db.markov)
         state = _runtime_state()
         response_generator = ResponseGenerator(
             generator=generator,

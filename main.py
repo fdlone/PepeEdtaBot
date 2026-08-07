@@ -121,7 +121,9 @@ async def run_bot() -> None:
         wal_autocheckpoint_pages=settings.sqlite_wal_autocheckpoint_pages,
     )
     await db.init()
-    generator = MarkovGenerator(db=db)
+    # Генератору отдаётся репозиторий цепи, а не фасад: ядру нужен только
+    # порт чтения (app/core/markov_port.py), и реализует его именно репозиторий.
+    generator = MarkovGenerator(db=db.markov)
     pivo_security = PivoSecurity(
         hmac_secret=settings.pivo_hmac_secret,
         encryption_secret=settings.pivo_encryption_secret,

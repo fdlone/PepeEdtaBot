@@ -34,7 +34,7 @@ class _AnchorSpliceBase(unittest.IsolatedAsyncioTestCase):
             await self.db.save_message_and_update_model(
                 chat_id=1, raw_text=text, tokens=tokenize(text)
             )
-        self.generator = MarkovGenerator(self.db)
+        self.generator = MarkovGenerator(self.db.markov)
 
     async def asyncTearDown(self) -> None:
         await self.db.close()
@@ -131,7 +131,7 @@ class TestAnchorNotSpliced(_AnchorSpliceBase):
     async def test_token_limit_before_target_reports_no_splice(self) -> None:
         # Direct loop call: a target beyond the token budget is never reached,
         # the walk exits on the limit and reports the anchor as not spliced.
-        starts3 = await self.db.get_starts3(1)
+        starts3 = await self.db.markov.get_starts3(1)
         generated, _, jump_count, anchor_spliced = (
             await self.generator._run_generation_loop(
                     1,

@@ -174,7 +174,7 @@ class TestHiddenStartGeneration(unittest.IsolatedAsyncioTestCase):
         self.db_path = Path(f"test_hidden_start_{uuid.uuid4().hex}.sqlite")
         self.db = Database(str(self.db_path))
         await self.db.init()
-        self.generator = MarkovGenerator(self.db)
+        self.generator = MarkovGenerator(self.db.markov)
 
     async def asyncTearDown(self) -> None:
         await self.db.close()
@@ -222,7 +222,7 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.db_path = Path(f"test_markov_{uuid.uuid4().hex}.sqlite")
         self.db = Database(str(self.db_path))
         await self.db.init()
-        self.generator = MarkovGenerator(self.db)
+        self.generator = MarkovGenerator(self.db.markov)
 
     async def asyncTearDown(self) -> None:
         await self.db.close()

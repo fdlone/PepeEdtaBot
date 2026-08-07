@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import Counter
-from collections.abc import Iterable, Mapping
 from datetime import UTC, date, datetime, timedelta
 from typing import TypeVar
 
@@ -66,14 +65,14 @@ class Database:
         self.wal_autocheckpoint_pages = wal_autocheckpoint_pages
         self._conn: aiosqlite.Connection | None = None
         self._lock = asyncio.Lock()
-        self.markov: MarkovRepo | None = None
-        self.messages: MessagesRepo | None = None
-        self.chat_members: ChatMembersRepo | None = None
-        self.pivo_usage: PivoUsageRepo | None = None
-        self.pivo_pool_usage: PivoPoolUsageRepo | None = None
-        self.chat_emoji_stats: ChatEmojiStatsRepo | None = None
-        self.chat_hot_ngrams: ChatHotNgramsRepo | None = None
-        self.chat_user_interactions: ChatUserInteractionsRepo | None = None
+        self._markov: MarkovRepo | None = None
+        self._messages: MessagesRepo | None = None
+        self._chat_members: ChatMembersRepo | None = None
+        self._pivo_usage: PivoUsageRepo | None = None
+        self._pivo_pool_usage: PivoPoolUsageRepo | None = None
+        self._chat_emoji_stats: ChatEmojiStatsRepo | None = None
+        self._chat_hot_ngrams: ChatHotNgramsRepo | None = None
+        self._chat_user_interactions: ChatUserInteractionsRepo | None = None
         # Monotonic-время последнего decay эмодзи/n-грамм (None до init()).
         self._last_flavor_decay_monotonic: float | None = None
 
@@ -91,6 +90,42 @@ class Database:
             )
         return repo
 
+    # Репозитории отдаются свойствами, а не полями: проверка «init() вызван»
+    # живёт в одной точке доступа, а тип остаётся неопциональным — вызывающему
+    # не нужно ни assert, ни защита от None на каждом обращении.
+
+    @property
+    def markov(self) -> MarkovRepo:
+        return self._require(self._markov)
+
+    @property
+    def messages(self) -> MessagesRepo:
+        return self._require(self._messages)
+
+    @property
+    def chat_members(self) -> ChatMembersRepo:
+        return self._require(self._chat_members)
+
+    @property
+    def pivo_usage(self) -> PivoUsageRepo:
+        return self._require(self._pivo_usage)
+
+    @property
+    def pivo_pool_usage(self) -> PivoPoolUsageRepo:
+        return self._require(self._pivo_pool_usage)
+
+    @property
+    def chat_emoji_stats(self) -> ChatEmojiStatsRepo:
+        return self._require(self._chat_emoji_stats)
+
+    @property
+    def chat_hot_ngrams(self) -> ChatHotNgramsRepo:
+        return self._require(self._chat_hot_ngrams)
+
+    @property
+    def chat_user_interactions(self) -> ChatUserInteractionsRepo:
+        return self._require(self._chat_user_interactions)
+
     async def init(self) -> None:
         if self._conn is not None:
             return
@@ -107,14 +142,14 @@ class Database:
 
         await migrator.run(db)
 
-        self.markov = MarkovRepo(self._get_conn, self._lock)
-        self.messages = MessagesRepo(self._get_conn, self._lock)
-        self.chat_members = ChatMembersRepo(self._get_conn, self._lock)
-        self.pivo_usage = PivoUsageRepo(self._get_conn, self._lock)
-        self.pivo_pool_usage = PivoPoolUsageRepo(self._get_conn, self._lock)
-        self.chat_emoji_stats = ChatEmojiStatsRepo(self._get_conn, self._lock)
-        self.chat_hot_ngrams = ChatHotNgramsRepo(self._get_conn, self._lock)
-        self.chat_user_interactions = ChatUserInteractionsRepo(
+        self._markov = MarkovRepo(self._get_conn, self._lock)
+        self._messages = MessagesRepo(self._get_conn, self._lock)
+        self._chat_members = ChatMembersRepo(self._get_conn, self._lock)
+        self._pivo_usage = PivoUsageRepo(self._get_conn, self._lock)
+        self._pivo_pool_usage = PivoPoolUsageRepo(self._get_conn, self._lock)
+        self._chat_emoji_stats = ChatEmojiStatsRepo(self._get_conn, self._lock)
+        self._chat_hot_ngrams = ChatHotNgramsRepo(self._get_conn, self._lock)
+        self._chat_user_interactions = ChatUserInteractionsRepo(
             self._get_conn, self._lock
         )
         await self.cleanup_pivo_daily_usage()
@@ -127,14 +162,14 @@ class Database:
         if self._conn is not None:
             await self._conn.close()
             self._conn = None
-        self.markov = None
-        self.messages = None
-        self.chat_members = None
-        self.pivo_usage = None
-        self.pivo_pool_usage = None
-        self.chat_emoji_stats = None
-        self.chat_hot_ngrams = None
-        self.chat_user_interactions = None
+        self._markov = None
+        self._messages = None
+        self._chat_members = None
+        self._pivo_usage = None
+        self._pivo_pool_usage = None
+        self._chat_emoji_stats = None
+        self._chat_hot_ngrams = None
+        self._chat_user_interactions = None
 
     async def save_message_and_update_model(
         self, chat_id: int, raw_text: str, tokens: list[str]
@@ -289,43 +324,7 @@ class Database:
             await db.commit()
             return volume3 if volume3 > 0 else volume2
 
-    # --- Делегаты к MarkovRepo (сохраняем публичный API) ---
-
-    async def get_starts(self, chat_id: int) -> list[tuple[str, str, int]]:
-        return await self._require(self.markov).get_starts(chat_id)
-
-    async def get_starts3(self, chat_id: int) -> list[tuple[str, str, str, int]]:
-        return await self._require(self.markov).get_starts3(chat_id)
-
-    async def get_start_if_exists(
-        self, chat_id: int, w1: str, w2: str
-    ) -> tuple[str, str, int] | None:
-        return await self._require(self.markov).get_start_if_exists(chat_id, w1, w2)
-
-    async def get_start3_if_exists(
-        self, chat_id: int, w1: str, w2: str, w3: str
-    ) -> tuple[str, str, str, int] | None:
-        return await self._require(self.markov).get_start3_if_exists(
-            chat_id, w1, w2, w3
-        )
-
-    async def get_transitions(
-        self, chat_id: int, w1: str, w2: str
-    ) -> list[tuple[str, int]]:
-        return await self._require(self.markov).get_transitions(chat_id, w1, w2)
-
-    async def get_transitions3(
-        self, chat_id: int, w1: str, w2: str, w3: str
-    ) -> list[tuple[str, int]]:
-        return await self._require(self.markov).get_transitions3(chat_id, w1, w2, w3)
-
-
-    async def get_markov_states(
-        self,
-        chat_id: int,
-        order: int,
-    ) -> list[tuple[tuple[str, ...], int]]:
-        return await self._require(self.markov).get_states(chat_id, order)
+    # --- Объём модели чата ---
 
     async def get_chat_token_volume(self, chat_id: int) -> int:
         """Объём модели чата — то, по чему проверяется готовность отвечать.
@@ -350,123 +349,14 @@ class Database:
         побочная запись из диагностического вызова портила бы наблюдаемое
         состояние таблицы.
         """
-        markov = self._require(self.markov)
-        volumes = await markov.get_model_volume(chat_id)
+        volumes = await self.markov.get_model_volume(chat_id)
         if volumes is not None:
             return volumes
         if persist:
-            return await markov.backfill_model_volume(chat_id)
-        return await markov.sum_model_volume(chat_id)
+            return await self.markov.backfill_model_volume(chat_id)
+        return await self.markov.sum_model_volume(chat_id)
 
-    async def get_word_frequencies(
-        self, chat_id: int, *, min_word_len: int
-    ) -> dict[str, int]:
-        return await self._require(self.markov).get_word_frequencies(
-            chat_id, min_word_len=min_word_len
-        )
-
-    # --- Делегаты к MessagesRepo ---
-
-    async def get_recent_normalized_messages(
-        self, chat_id: int, limit: int
-    ) -> list[str]:
-        return await self._require(self.messages).get_recent_normalized(chat_id, limit)
-
-    # --- Делегаты к ChatMembersRepo ---
-
-    async def upsert_chat_member(
-        self,
-        *,
-        chat_hash: str,
-        user_hash: str,
-        encrypted_user_id: str,
-        encrypted_username: str,
-        encrypted_display_name: str,
-    ) -> None:
-        await self._require(self.chat_members).upsert(
-            chat_hash=chat_hash,
-            user_hash=user_hash,
-            encrypted_user_id=encrypted_user_id,
-            encrypted_username=encrypted_username,
-            encrypted_display_name=encrypted_display_name,
-        )
-
-    async def refresh_chat_member(
-        self,
-        *,
-        chat_hash: str,
-        user_hash: str,
-        encrypted_username: str,
-        encrypted_display_name: str,
-    ) -> None:
-        await self._require(self.chat_members).refresh_profile(
-            chat_hash=chat_hash,
-            user_hash=user_hash,
-            encrypted_username=encrypted_username,
-            encrypted_display_name=encrypted_display_name,
-        )
-
-    async def remove_chat_member(self, chat_hash: str, user_hash: str) -> None:
-        await self._require(self.chat_members).remove(chat_hash, user_hash)
-
-    async def get_chat_members(self, chat_hash: str) -> list[dict[str, object]]:
-        return await self._require(self.chat_members).list_members(chat_hash)
-
-    async def consume_pivo_daily_call(
-        self,
-        *,
-        chat_hash: str,
-        user_hash: str,
-        usage_day: str,
-        limit: int,
-    ) -> tuple[bool, int]:
-        return await self._require(self.pivo_usage).consume_daily_call(
-            chat_hash=chat_hash,
-            user_hash=user_hash,
-            usage_day=usage_day,
-            limit=limit,
-        )
-
-    async def refund_pivo_daily_call(
-        self,
-        *,
-        chat_hash: str,
-        user_hash: str,
-        usage_day: str,
-    ) -> None:
-        await self._require(self.pivo_usage).refund_daily_call(
-            chat_hash=chat_hash,
-            user_hash=user_hash,
-            usage_day=usage_day,
-        )
-
-    async def clear_pivo_chat_data(self, chat_hash: str) -> None:
-        """Удаляет все /pivo-данные чата: подписки, квоты, анти-повтор пулов."""
-        await self._require(self.chat_members).remove_chat(chat_hash)
-        await self._require(self.pivo_usage).delete_chat_usage(chat_hash)
-        await self._require(self.pivo_pool_usage).delete_chat(chat_hash)
-
-    async def get_pivo_pool_usage(self, chat_hash: str) -> dict[str, tuple[int, ...]]:
-        return await self._require(self.pivo_pool_usage).get_recent(chat_hash)
-
-    async def record_pivo_pool_usage(
-        self,
-        chat_hash: str,
-        picks: Mapping[str, int],
-        *,
-        keep: int,
-    ) -> None:
-        await self._require(self.pivo_pool_usage).record(chat_hash, picks, keep=keep)
-
-    # --- Делегаты к ChatEmojiStatsRepo (M3 emoji channel) ---
-
-    async def record_chat_emojis(
-        self, chat_id: int, counts: Mapping[str, int]
-    ) -> None:
-        await self._require(self.chat_emoji_stats).bump(chat_id, counts)
-
-    async def get_chat_emoji_stats(self, chat_id: int) -> dict[str, int]:
-        return await self._require(self.chat_emoji_stats).get_stats(chat_id)
+    # --- Суточные затухания ---
 
     async def decay_chat_emoji_stats(
         self,
@@ -482,21 +372,9 @@ class Database:
         Returns the number of rows deleted.
         """
         cutoff = self._decay_cutoff(decay_days, now)
-        return await self._require(self.chat_emoji_stats).decay_stale(cutoff)
+        return await self.chat_emoji_stats.decay_stale(cutoff)
 
     # --- Делегаты к ChatHotNgramsRepo (L1 running jokes) ---
-
-    async def record_chat_hot_ngrams(
-        self, chat_id: int, ngrams: Iterable[tuple[str, ...]]
-    ) -> None:
-        await self._require(self.chat_hot_ngrams).bump(chat_id, ngrams)
-
-    async def get_hot_chat_ngrams(
-        self, chat_id: int, *, min_count: int, recency_share: float
-    ) -> list[tuple[str, ...]]:
-        return await self._require(self.chat_hot_ngrams).get_hot(
-            chat_id, min_count=min_count, recency_share=recency_share
-        )
 
     async def decay_chat_hot_ngrams(
         self,
@@ -511,26 +389,7 @@ class Database:
         purged rows.
         """
         cutoff = self._decay_cutoff(decay_days, now)
-        return await self._require(self.chat_hot_ngrams).decay_stale(cutoff)
-
-    # --- Делегаты к ChatUserInteractionsRepo (L2 user quirks) ---
-
-    async def record_user_interaction(self, chat_id: int, user_hash: str) -> None:
-        await self._require(self.chat_user_interactions).bump(chat_id, user_hash)
-
-    async def get_user_interaction_count(
-        self, chat_id: int, user_hash: str
-    ) -> int:
-        return await self._require(self.chat_user_interactions).get_count(
-            chat_id, user_hash
-        )
-
-    async def get_user_interaction_stats(
-        self, chat_id: int, threshold: int
-    ) -> tuple[int, int, int]:
-        return await self._require(self.chat_user_interactions).get_stats(
-            chat_id, threshold
-        )
+        return await self.chat_hot_ngrams.decay_stale(cutoff)
 
     async def decay_chat_user_interactions(
         self,
@@ -546,7 +405,7 @@ class Database:
         Returns the number of purged rows.
         """
         cutoff = self._decay_cutoff(decay_days, now)
-        return await self._require(self.chat_user_interactions).decay_stale(cutoff)
+        return await self.chat_user_interactions.decay_stale(cutoff)
 
     @staticmethod
     def _decay_cutoff(decay_days: int, now: datetime | None) -> str:
@@ -590,12 +449,17 @@ class Database:
         """Deletes /pivo daily quota rows older than retention_days."""
         if retention_days < 0:
             raise ValueError("retention_days must be non-negative")
-        pivo_usage = self._require(self.pivo_usage)
         current_day = today or datetime.now(UTC).date()
         cutoff_day = (current_day - timedelta(days=retention_days)).isoformat()
-        return await pivo_usage.delete_usage_before(cutoff_day)
+        return await self.pivo_usage.delete_usage_before(cutoff_day)
 
     # --- Кросс-доменные операции ---
+
+    async def clear_pivo_chat_data(self, chat_hash: str) -> None:
+        """Удаляет все /pivo-данные чата: подписки, квоты, анти-повтор пулов."""
+        await self.chat_members.remove_chat(chat_hash)
+        await self.pivo_usage.delete_chat_usage(chat_hash)
+        await self.pivo_pool_usage.delete_chat(chat_hash)
 
     async def _fetch_int(
         self, db: aiosqlite.Connection, sql: str, params: tuple[object, ...]
