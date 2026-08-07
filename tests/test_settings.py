@@ -27,6 +27,21 @@ SETTINGS_ONLY_ENV_VARS: tuple[str, ...] = (
     "TEXT_CACHE_MAX_MESSAGES",
 )
 
+# Идентичность деплоя: значения у каждого своя, сверять их с дефолтами нечего,
+# но присутствовать в .env.example они обязаны — с них начинается настройка.
+DEPLOYMENT_ENV_VARS: tuple[str, ...] = (
+    "BOT_TOKEN",
+    "OWNER_ID",
+    "DB_PATH",
+    "PIVO_HMAC_SECRET",
+    "PIVO_ENCRYPTION_SECRET",
+)
+
+# Ключи, которые .env.example показывает закомментированными: пустое значение
+# у них означает не «не настроено», а рабочий встроенный дефолт, и раскомментить
+# строку — уже осознанный шаг.
+OPTIONAL_ENV_VARS: tuple[str, ...] = ("BOT_TEXT_ALIASES",)
+
 
 def minimal_env(db_path: str = "test_settings.db") -> dict[str, str]:
     return {
@@ -97,6 +112,26 @@ class TestSettings(unittest.TestCase):
             drifted, {},
             f".env.example drifted from registry (env, registry): {drifted}",
         )
+
+    def test_env_example_has_no_keys_the_code_does_not_read(self) -> None:
+        # Обратная сторона проверки выше. Ключ, который код не читает, — это
+        # либо опечатка, либо след удалённой настройки; и то и другое выглядит
+        # как рабочая ручка, пока кто-нибудь не попробует ею воспользоваться.
+        known = (
+            {spec.env_var for spec in RUNTIME_FIELDS}
+            | set(SETTINGS_ONLY_ENV_VARS)
+            | set(DEPLOYMENT_ENV_VARS)
+            | set(OPTIONAL_ENV_VARS)
+        )
+        unknown = sorted(set(env_example_values()) - known)
+        self.assertEqual(
+            unknown, [], f".env.example описывает ключи, которых нет в коде: {unknown}"
+        )
+
+    def test_env_example_documents_the_deployment_keys(self) -> None:
+        env_values = env_example_values()
+        missing = [var for var in DEPLOYMENT_ENV_VARS if var not in env_values]
+        self.assertEqual(missing, [], f".env.example misses: {missing}")
 
     def test_env_example_matches_code_defaults_for_settings_only_knobs(self) -> None:
         # The registry drift check above cannot see knobs parsed directly in
