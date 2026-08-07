@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from collections import Counter, deque
 from collections.abc import Callable, Iterable, Mapping, Set
+from dataclasses import dataclass
 
 from app.core.candidate_scorer import build_token_idf, verbatim_ngram_windows
 from app.core.intonation import IntonationProfile, build_intonation_profile
@@ -13,7 +14,7 @@ from app.core.slot_mutation import (
     frequencies_by_ending,
 )
 from app.core.text import sanitize_text
-from app.infrastructure.database import Database
+from app.infrastructure.database import Database, MaintenanceOutcome
 
 # Trailing punctuation stripped before verbatim comparison: the reply pipeline
 # (finalize_reply_ending / reply flavor) only ever rewrites the ending cluster,
@@ -34,6 +35,29 @@ def normalize_for_verbatim(text: str) -> str:
 # кэши (тексты, 4-граммы, частоты) обновляются инкрементально и этой отсрочки
 # не знают.
 STATS_REBUILD_EVERY_MESSAGES = 50
+
+# Сколько сбой обслуживания должен продержаться, прежде чем о нём стоит
+# беспокоить владельца. Разовая неудача — это обычная занятая база (бэкап,
+# VACUUM, внешний клиент); она проходит сама и ничего не стоит. Час непрерывных
+# неудач — это уже не окно обслуживания.
+MAINTENANCE_ALERT_AFTER_SEC = 3600.0
+# Как часто напоминать, пока не починили. Сигнал не должен сам стать потоком
+# сообщений от бота — та же осторожность, что с отказом /pivo по квоте.
+MAINTENANCE_ALERT_REPEAT_SEC = 86400.0
+
+
+@dataclass(frozen=True, slots=True)
+class MaintenanceAlert:
+    """Сигнал владельцу о состоянии отложенного обслуживания базы.
+
+    ``recovered=False`` — обслуживание не проходит уже ``failing_for_sec``;
+    ``recovered=True`` — снова проходит, и об этом стоит сказать, потому что о
+    поломке уже сообщали.
+    """
+
+    recovered: bool
+    failing_for_sec: float
+    reason: str | None
 
 
 class LearningService:
@@ -90,11 +114,16 @@ class LearningService:
         # Монотонное время последнего обращения к кэшам чата — для вытеснения.
         self._last_touch: dict[int, float] = {}
         self._cleanup_tick = 0
+        # Состояние сигнала владельцу об обслуживании: когда сбой начался и
+        # когда о нём в последний раз сообщали. Живёт здесь, а не в конвейере:
+        # конвейер собирается заново на каждое сообщение.
+        self._maintenance_failing_since: float | None = None
+        self._maintenance_alerted_at: float | None = None
 
     async def get_token_volume(self, chat_id: int) -> int:
         return await self._db.get_chat_token_volume(chat_id)
 
-    async def run_due_maintenance(self) -> bool:
+    async def run_due_maintenance(self) -> MaintenanceAlert | None:
         """Прокручивает отложенное обслуживание базы, если подошёл срок.
 
         Планировщика в проекте нет, и learn-путь — единственное место, куда
@@ -102,8 +131,47 @@ class LearningService:
         а не изнутри записи сообщения: его сбой не должен стоить выученного
         текста. Само обслуживание сбоев не пробрасывает (см.
         ``Database.decay_flavor_stats_if_due``).
+
+        Возвращает сигнал, если о состоянии обслуживания пора сказать
+        владельцу, иначе ``None``. Отправку делает вызывающий: сервис не знает
+        про Telegram.
         """
-        return await self._db.decay_flavor_stats_if_due()
+        outcome = await self._db.decay_flavor_stats_if_due()
+        now = time.monotonic()
+
+        if outcome is MaintenanceOutcome.SKIPPED:
+            return None
+
+        if outcome is MaintenanceOutcome.DONE:
+            failing_since = self._maintenance_failing_since
+            alerted = self._maintenance_alerted_at is not None
+            self._maintenance_failing_since = None
+            self._maintenance_alerted_at = None
+            if not alerted:
+                # О поломке не сообщали — сообщать о починке нечего.
+                return None
+            return MaintenanceAlert(
+                recovered=True,
+                failing_for_sec=now - (failing_since or now),
+                reason=None,
+            )
+
+        if self._maintenance_failing_since is None:
+            self._maintenance_failing_since = now
+        failing_for = now - self._maintenance_failing_since
+        if failing_for < MAINTENANCE_ALERT_AFTER_SEC:
+            return None
+        if (
+            self._maintenance_alerted_at is not None
+            and now - self._maintenance_alerted_at < MAINTENANCE_ALERT_REPEAT_SEC
+        ):
+            return None
+        self._maintenance_alerted_at = now
+        return MaintenanceAlert(
+            recovered=False,
+            failing_for_sec=failing_for,
+            reason=self._db.last_maintenance_error,
+        )
 
     async def record_message(
         self, chat_id: int, raw_text: str, tokens: list[str]

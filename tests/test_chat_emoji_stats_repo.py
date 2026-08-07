@@ -10,6 +10,7 @@ from app.infrastructure.database import (
     FLAVOR_DECAY_INTERVAL_SEC,
     FLAVOR_DECAY_RETRY_INTERVAL_SEC,
     Database,
+    MaintenanceOutcome,
 )
 
 CHAT = 4242
@@ -68,14 +69,20 @@ class TestChatEmojiStatsRepo(unittest.IsolatedAsyncioTestCase):
 
     async def test_lazy_decay_not_due_right_after_init(self) -> None:
         # init() already ran the decay and stamped the clock.
-        self.assertFalse(await self.db.decay_flavor_stats_if_due())
+        self.assertIs(
+            await self.db.decay_flavor_stats_if_due(), MaintenanceOutcome.SKIPPED
+        )
 
     async def test_lazy_decay_runs_once_after_interval(self) -> None:
         # Pretend the last decay happened more than a day ago.
         self.db._next_flavor_decay_monotonic = time.monotonic() - 1.0
-        self.assertTrue(await self.db.decay_flavor_stats_if_due())
+        self.assertIs(
+            await self.db.decay_flavor_stats_if_due(), MaintenanceOutcome.DONE
+        )
         # The clock was re-stamped: an immediate second call is a no-op.
-        self.assertFalse(await self.db.decay_flavor_stats_if_due())
+        self.assertIs(
+            await self.db.decay_flavor_stats_if_due(), MaintenanceOutcome.SKIPPED
+        )
 
     async def test_failed_decay_is_swallowed_and_retried_soon(self) -> None:
         """Сбой обслуживания не пробрасывается и не откладывается на сутки.
@@ -92,7 +99,10 @@ class TestChatEmojiStatsRepo(unittest.IsolatedAsyncioTestCase):
             self.db, "decay_chat_hot_ngrams", side_effect=RuntimeError("disk gone")
         ):
             with self.assertLogs("chat_markov", level="ERROR"):
-                self.assertFalse(await self.db.decay_flavor_stats_if_due())
+                self.assertIs(
+                    await self.db.decay_flavor_stats_if_due(),
+                    MaintenanceOutcome.FAILED,
+                )
 
         assert self.db._next_flavor_decay_monotonic is not None
         wait = self.db._next_flavor_decay_monotonic - time.monotonic()
@@ -101,7 +111,9 @@ class TestChatEmojiStatsRepo(unittest.IsolatedAsyncioTestCase):
         self.assertLess(wait, FLAVOR_DECAY_INTERVAL_SEC)
         # Повтора на следующем же вызове нет — иначе занятая база стоила бы
         # busy_timeout на каждом сообщении.
-        self.assertFalse(await self.db.decay_flavor_stats_if_due())
+        self.assertIs(
+            await self.db.decay_flavor_stats_if_due(), MaintenanceOutcome.SKIPPED
+        )
 
     async def test_saving_a_message_does_not_run_maintenance(self) -> None:
         """Обслуживание отвязано от записи по устройству кода.
@@ -146,7 +158,9 @@ class TestChatEmojiStatsRepo(unittest.IsolatedAsyncioTestCase):
     async def test_successful_decay_postpones_by_the_daily_interval(self) -> None:
         self.db._next_flavor_decay_monotonic = time.monotonic() - 1.0
 
-        self.assertTrue(await self.db.decay_flavor_stats_if_due())
+        self.assertIs(
+            await self.db.decay_flavor_stats_if_due(), MaintenanceOutcome.DONE
+        )
 
         assert self.db._next_flavor_decay_monotonic is not None
         wait = self.db._next_flavor_decay_monotonic - time.monotonic()

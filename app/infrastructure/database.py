@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import enum
 import logging
 import time
 from collections import Counter
@@ -17,6 +18,7 @@ from app.config.defaults import (
 from app.core.candidate_scorer import verbatim_ngram_windows
 from app.core.text import sanitize_text
 from app.infrastructure import migrator
+from app.log_masking import mask_chat_ids_in_text
 from app.repositories import (
     ChatEmojiStatsRepo,
     ChatHotNgramsRepo,
@@ -49,6 +51,18 @@ FLAVOR_DECAY_RETRY_INTERVAL_SEC = 600.0
 _RepoT = TypeVar("_RepoT")
 
 logger = logging.getLogger("chat_markov")
+
+
+class MaintenanceOutcome(enum.StrEnum):
+    """Чем закончился вызов отложенного обслуживания.
+
+    «Срок не подошёл» и «попытались и не смогли» — разные вещи для того, кто
+    решает, пора ли беспокоить владельца, поэтому это не bool.
+    """
+
+    SKIPPED = "skipped"
+    DONE = "done"
+    FAILED = "failed"
 
 
 class Database:
@@ -85,6 +99,7 @@ class Database:
         # Monotonic-время, раньше которого следующий прогон decay не начинается
         # (None до init()).
         self._next_flavor_decay_monotonic: float | None = None
+        self._last_maintenance_error: str | None = None
 
     async def _get_conn(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -426,7 +441,16 @@ class Database:
         current = now or datetime.now(UTC)
         return (current - timedelta(days=decay_days)).strftime("%Y-%m-%d %H:%M:%S")
 
-    async def decay_flavor_stats_if_due(self) -> bool:
+    @property
+    def last_maintenance_error(self) -> str | None:
+        """Текст последней ошибки обслуживания — для сигнала владельцу.
+
+        Логи владельцу недоступны, а «база занята» и «диск кончился» требуют
+        разных действий, поэтому причина доходит до него вместе с сигналом.
+        """
+        return self._last_maintenance_error
+
+    async def decay_flavor_stats_if_due(self) -> MaintenanceOutcome:
         """Прокручивает decay эмодзи/n-грамм, если подошёл срок.
 
         Заменяет планировщик, которого в проекте нет: дешёвая монотонная
@@ -453,22 +477,24 @@ class Database:
             self._next_flavor_decay_monotonic is not None
             and now < self._next_flavor_decay_monotonic
         ):
-            return False
+            return MaintenanceOutcome.SKIPPED
         try:
             await self.decay_chat_emoji_stats()
             await self.decay_chat_hot_ngrams()
             await self.decay_chat_user_interactions()
-        except Exception:
+        except Exception as error:
             self._next_flavor_decay_monotonic = (
                 now + FLAVOR_DECAY_RETRY_INTERVAL_SEC
             )
+            self._last_maintenance_error = mask_chat_ids_in_text(str(error))
             logger.exception(
                 "Суточное затухание статистики не выполнено; повтор через %.0f с",
                 FLAVOR_DECAY_RETRY_INTERVAL_SEC,
             )
-            return False
+            return MaintenanceOutcome.FAILED
         self._next_flavor_decay_monotonic = now + FLAVOR_DECAY_INTERVAL_SEC
-        return True
+        self._last_maintenance_error = None
+        return MaintenanceOutcome.DONE
 
     async def cleanup_pivo_daily_usage(
         self,

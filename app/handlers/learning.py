@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Sequence
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.types import Message
 
 from app.config.runtime_state import RuntimeState
+from app.config.settings import Settings
 from app.core.markov import MarkovGenerator
 from app.core.reply_policy import bot_is_mentioned
 from app.handlers._helpers import (
@@ -14,9 +16,49 @@ from app.handlers._helpers import (
     reply_humanized_sequence_state,
 )
 from app.services import LearningService, PivoService
+from app.services.learning_service import MaintenanceAlert
 from app.services.reply_pipeline import IncomingMessage, ReplyPipeline
 
 router = Router(name="learning")
+logger = logging.getLogger("chat_markov")
+
+
+def _format_maintenance_alert(alert: MaintenanceAlert) -> str:
+    hours = alert.failing_for_sec / 3600.0
+    if alert.recovered:
+        return (
+            "✅ Обслуживание базы снова проходит "
+            f"(не проходило ~{hours:.0f} ч).\n"
+            "Затухание счётчиков возобновлено."
+        )
+    reason = alert.reason or "причина неизвестна"
+    return (
+        f"⚠️ Обслуживание базы не проходит уже ~{hours:.0f} ч.\n"
+        "Ответы и обучение работают, но счётчики перестали стареть: "
+        "«горячие» n-граммы и эмодзи чата больше не выветриваются.\n"
+        f"Причина: {reason}\n"
+        "Бот продолжает пробовать; следующее напоминание — не раньше чем "
+        "через сутки."
+    )
+
+
+async def _report_maintenance_to_owner(
+    alert: MaintenanceAlert, bot: Bot | None, settings: Settings | None
+) -> None:
+    """Шлёт владельцу сигнал о состоянии обслуживания базы.
+
+    Логи владельцу недоступны, а сбой обслуживания снаружи выглядит как
+    «бот жив, просто мемы перестали выветриваться» — без сигнала это
+    замечается через недели. Ошибка доставки гасится: сигнал не может
+    отменить ни ответ, ни обучение.
+    """
+    if bot is None or settings is None or settings.owner_id is None:
+        return
+    try:
+        await bot.send_message(settings.owner_id, _format_maintenance_alert(alert))
+    except Exception:
+        # Самый вероятный случай — владелец не начинал диалог с ботом.
+        logger.warning("maintenance alert not delivered", exc_info=True)
 
 
 def _reply_to_authored_by_bot(reply_to: object, bot_id: int) -> bool:
@@ -65,6 +107,12 @@ async def on_text_message(
     bot_id: int,
     bot_text_aliases: frozenset[str],
     pivo_service: PivoService,
+    *,
+    # Только для сигнала владельцу об обслуживании. Keyword-only и с
+    # умолчанием: aiogram подставляет оба всегда, а «некому и нечем сигналить»
+    # — то же самое, что незаданный OWNER_ID, то есть штатная конфигурация.
+    bot: Bot | None = None,
+    settings: Settings | None = None,
 ) -> None:
     if not is_group_message(message):
         return
@@ -109,4 +157,6 @@ async def on_text_message(
         await pipeline.learn(incoming, observation)
         # Обслуживание — после обучения и отдельным вызовом: планировщика в
         # проекте нет, а его сбой не должен стоить выученного сообщения.
-        await pipeline.run_due_maintenance()
+        maintenance_alert = await pipeline.run_due_maintenance()
+        if maintenance_alert is not None:
+            await _report_maintenance_to_owner(maintenance_alert, bot, settings)
