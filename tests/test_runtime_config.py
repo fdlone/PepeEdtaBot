@@ -8,7 +8,6 @@ from app.config.runtime_config import (
     InvalidRuntimeSettingValueError,
     UnknownRuntimeSettingError,
     apply_runtime_setting,
-    parse_bool,
 )
 
 
@@ -78,13 +77,6 @@ def make_state() -> SimpleNamespace:
 
 
 class TestRuntimeConfig(unittest.TestCase):
-    def test_parse_bool_accepts_supported_values(self) -> None:
-        self.assertTrue(parse_bool("yes"))
-        self.assertTrue(parse_bool("ON"))
-        self.assertFalse(parse_bool("0"))
-        self.assertFalse(parse_bool("false"))
-        self.assertIsNone(parse_bool("maybe"))
-
     def test_apply_runtime_setting_updates_float_key(self) -> None:
         state = make_state()
         apply_runtime_setting(state, "reply_probability", "0.25")

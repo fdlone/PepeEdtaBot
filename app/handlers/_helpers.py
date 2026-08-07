@@ -45,14 +45,14 @@ async def reply_humanized_state(
     *,
     per_char: bool = False,
 ) -> None:
-    """``reply_humanized`` sourcing the typing pause from ``runtime_state``.
+    """Single-message ``reply_humanized_sequence`` sourcing the pause from state.
 
     Every handler sends its reply with the same runtime typing knobs; this
     wrapper keeps them from reaching into ``runtime_state`` at each call site.
     Command replies keep the flat pause (``per_char=False``); generated and
     fallback replies opt into per-char scaling with ``per_char=True``.
-    ``reply_humanized`` itself stays knob-typed for tests and callers that
-    pass explicit timings.
+    ``reply_humanized_sequence`` itself stays knob-typed for tests and callers
+    that pass explicit timings.
     """
     await reply_humanized_sequence_state(
         message, [text], runtime_state, per_char=per_char
@@ -66,7 +66,11 @@ async def reply_humanized_sequence_state(
     *,
     per_char: bool = False,
 ) -> None:
-    """``reply_humanized_sequence`` sourcing the typing pause from ``runtime_state``."""
+    """``reply_humanized_sequence`` sourcing the typing pause from ``runtime_state``.
+
+    The single point that resolves the runtime typing knobs: the single-message
+    ``reply_humanized_state`` delegates here rather than reading them itself.
+    """
     await reply_humanized_sequence(
         message,
         texts,

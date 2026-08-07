@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from app.config.registry import (
-    _parse_bool,
     get_spec,
     runtime_field_names,
     try_apply,
@@ -21,14 +20,6 @@ class UnknownRuntimeSettingError(ValueError):
 
 class InvalidRuntimeSettingValueError(ValueError):
     pass
-
-
-def parse_bool(value: str) -> bool | None:
-    """Lenient variant of the registry boolean parser: None instead of raising."""
-    try:
-        return _parse_bool(value)
-    except ValueError:
-        return None
 
 
 def apply_runtime_setting(

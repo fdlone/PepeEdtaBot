@@ -270,16 +270,6 @@ def is_short_generated_reply(tokens: list[str]) -> bool:
     return 0 < len(content) <= SHORT_REPLY_MAX_CONTENT_TOKENS
 
 
-def extract_best_seed(tokens: list[str], seed_length: int) -> list[str]:
-    """Return up to seed_length tokens from the end, skipping trailing punctuation."""
-    trimmed = tokens[:]
-    while trimmed and trimmed[-1] in PUNCT_SET:
-        trimmed.pop()
-    if len(trimmed) >= seed_length:
-        return trimmed[-seed_length:]
-    return tokens[-seed_length:] if len(tokens) >= seed_length else tokens[:]
-
-
 def longest_shared_run(tokens_a: list[str], tokens_b: list[str]) -> int:
     """Длина самой длинной общей непрерывной последовательности токенов.
 
