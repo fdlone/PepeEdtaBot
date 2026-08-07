@@ -9,6 +9,7 @@ from pathlib import Path
 from app.infrastructure.database import (
     CHAT_USER_INTERACTION_DECAY_DAYS,
     Database,
+    MaintenanceOutcome,
 )
 from app.repositories import ChatUserInteractionsRepo
 
@@ -147,7 +148,9 @@ class TestDatabaseUserInteractionDelegates(unittest.IsolatedAsyncioTestCase):
         await self.db._conn.commit()
         self.db._next_flavor_decay_monotonic = time.monotonic() - 1.0
 
-        self.assertTrue(await self.db.decay_flavor_stats_if_due())
+        self.assertIs(
+            await self.db.decay_flavor_stats_if_due(), MaintenanceOutcome.DONE
+        )
         self.assertEqual(
             await self.db.chat_user_interactions.get_count(CHAT, USER_HASH), 1
         )

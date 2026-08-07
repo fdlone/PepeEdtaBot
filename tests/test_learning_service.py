@@ -383,3 +383,94 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             await self.db.chat_user_interactions.get_count(self.chat, "hash-1001"), 2
         )
+
+
+class TestMaintenanceAlerts(unittest.IsolatedAsyncioTestCase):
+    """Когда сбой обслуживания стоит того, чтобы беспокоить владельца.
+
+    Логи владельцу недоступны, а сбой снаружи выглядит как «бот жив, просто
+    мемы перестали выветриваться». Но и сигнал не должен стать потоком: разовая
+    неудача — это обычная занятая база.
+    """
+
+    def setUp(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from app.services.learning_service import LearningService
+
+        self.db = MagicMock()
+        self.db.decay_flavor_stats_if_due = AsyncMock()
+        self.db.last_maintenance_error = "database is locked"
+        self.svc = LearningService(self.db, _make_generator())
+
+    def _returns(self, name: str) -> None:
+        from app.infrastructure.database import MaintenanceOutcome
+
+        self.db.decay_flavor_stats_if_due.return_value = MaintenanceOutcome[name]
+
+    def _failing_since(self, seconds_ago: float) -> None:
+        import time
+
+        self.svc._maintenance_failing_since = time.monotonic() - seconds_ago
+
+    async def test_skipped_run_says_nothing(self) -> None:
+        self._returns("SKIPPED")
+        self.assertIsNone(await self.svc.run_due_maintenance())
+
+    async def test_single_failure_is_not_worth_a_message(self) -> None:
+        self._returns("FAILED")
+        self.assertIsNone(await self.svc.run_due_maintenance())
+
+    async def test_sustained_failure_alerts_once(self) -> None:
+        from app.services.learning_service import MAINTENANCE_ALERT_AFTER_SEC
+
+        self._returns("FAILED")
+        await self.svc.run_due_maintenance()
+        self._failing_since(MAINTENANCE_ALERT_AFTER_SEC + 1.0)
+
+        alert = await self.svc.run_due_maintenance()
+
+        assert alert is not None
+        self.assertFalse(alert.recovered)
+        self.assertEqual(alert.reason, "database is locked")
+        self.assertGreater(alert.failing_for_sec, MAINTENANCE_ALERT_AFTER_SEC)
+        # Повторный сигнал не уходит, пока не пройдут сутки: отказ не должен
+        # сам стать потоком сообщений от бота.
+        self.assertIsNone(await self.svc.run_due_maintenance())
+
+    async def test_reminder_returns_after_the_repeat_window(self) -> None:
+        import time
+
+        from app.services.learning_service import (
+            MAINTENANCE_ALERT_AFTER_SEC,
+            MAINTENANCE_ALERT_REPEAT_SEC,
+        )
+
+        self._returns("FAILED")
+        self._failing_since(MAINTENANCE_ALERT_AFTER_SEC + 1.0)
+        self.assertIsNotNone(await self.svc.run_due_maintenance())
+
+        self.svc._maintenance_alerted_at = (
+            time.monotonic() - MAINTENANCE_ALERT_REPEAT_SEC - 1.0
+        )
+        self.assertIsNotNone(await self.svc.run_due_maintenance())
+
+    async def test_recovery_is_reported_only_if_the_breakage_was(self) -> None:
+        from app.services.learning_service import MAINTENANCE_ALERT_AFTER_SEC
+
+        # Починка без предшествующего сигнала — не новость.
+        self._returns("DONE")
+        self.assertIsNone(await self.svc.run_due_maintenance())
+
+        self._returns("FAILED")
+        self._failing_since(MAINTENANCE_ALERT_AFTER_SEC + 1.0)
+        self.assertIsNotNone(await self.svc.run_due_maintenance())
+
+        self._returns("DONE")
+        alert = await self.svc.run_due_maintenance()
+
+        assert alert is not None
+        self.assertTrue(alert.recovered)
+        # Состояние сброшено: следующая поломка снова копит свой час.
+        self._returns("FAILED")
+        self.assertIsNone(await self.svc.run_due_maintenance())

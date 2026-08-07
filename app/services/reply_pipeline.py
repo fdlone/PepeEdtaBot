@@ -66,7 +66,7 @@ from app.presentation.fallback_phrases import (
     next_quirk_vocative,
     pick_fallback_phrase,
 )
-from app.services.learning_service import LearningService
+from app.services.learning_service import LearningService, MaintenanceAlert
 
 logger = logging.getLogger("chat_markov")
 
@@ -486,15 +486,18 @@ class ReplyPipeline:
                 learned_token_volume,
             )
 
-    async def run_due_maintenance(self) -> None:
+    async def run_due_maintenance(self) -> MaintenanceAlert | None:
         """Отложенное обслуживание базы — отдельным шагом от обучения.
 
         Планировщика в проекте нет, поэтому суточное затухание «личностных»
         счётчиков крутится отсюда. Отдельный шаг, а не часть записи сообщения:
         обслуживание не должно стоить выученного текста, и это свойство должно
         держаться устройством кода, а не аккуратностью вызывающего.
+
+        Возвращает сигнал владельцу, если о состоянии обслуживания пора
+        сказать; отправляет его вызывающий.
         """
-        await self._learning_service.run_due_maintenance()
+        return await self._learning_service.run_due_maintenance()
 
     # --- шаги политики ответа ---
 

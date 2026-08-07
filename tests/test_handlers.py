@@ -2903,3 +2903,106 @@ class TestUserQuirks(unittest.IsolatedAsyncioTestCase):
 
         learning_service.record_user_interaction.assert_not_awaited()
         msg.reply.assert_not_awaited()
+
+
+class TestMaintenanceOwnerAlert(unittest.IsolatedAsyncioTestCase):
+    """Сигнал владельцу о сбое обслуживания базы.
+
+    Логи владельцу недоступны: без этого сигнала «счётчики перестали стареть»
+    замечается через недели.
+    """
+
+    def _learning_service(self, alert: object | None) -> AsyncMock:
+        service = AsyncMock()
+        service.get_token_volume.return_value = 0
+        service.run_due_maintenance.return_value = alert
+        return service
+
+    async def _run(
+        self, service: AsyncMock, bot: object | None, settings: object | None
+    ) -> None:
+        from app.handlers.learning import on_text_message
+
+        with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
+            await on_text_message(
+                _fake_message(text="сегодня хорошая погода в городе"),
+                service,
+                _traced_generator(),
+                _fake_state(
+                    normalize_lower=False,
+                    learned_messages={},
+                    min_tokens_for_model=1_000_000,
+                ),
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
+                bot=bot,  # type: ignore[arg-type]
+                settings=settings,  # type: ignore[arg-type]
+            )
+
+    async def test_alert_is_delivered_to_the_owner(self) -> None:
+        from app.services.learning_service import MaintenanceAlert
+
+        alert = MaintenanceAlert(
+            recovered=False, failing_for_sec=7200.0, reason="database is locked"
+        )
+        bot = AsyncMock()
+
+        await self._run(
+            self._learning_service(alert), bot, SimpleNamespace(owner_id=555)
+        )
+
+        bot.send_message.assert_awaited_once()
+        chat_id, text = bot.send_message.await_args.args
+        self.assertEqual(chat_id, 555)
+        self.assertIn("database is locked", text)
+        self.assertIn("2 ч", text)
+
+    async def test_recovery_is_delivered_too(self) -> None:
+        from app.services.learning_service import MaintenanceAlert
+
+        alert = MaintenanceAlert(recovered=True, failing_for_sec=3600.0, reason=None)
+        bot = AsyncMock()
+
+        await self._run(
+            self._learning_service(alert), bot, SimpleNamespace(owner_id=555)
+        )
+
+        text = bot.send_message.await_args.args[1]
+        self.assertIn("снова проходит", text)
+
+    async def test_no_owner_means_no_message(self) -> None:
+        from app.services.learning_service import MaintenanceAlert
+
+        alert = MaintenanceAlert(recovered=False, failing_for_sec=7200.0, reason=None)
+        bot = AsyncMock()
+
+        await self._run(
+            self._learning_service(alert), bot, SimpleNamespace(owner_id=None)
+        )
+
+        bot.send_message.assert_not_awaited()
+
+    async def test_delivery_failure_does_not_break_the_message_path(self) -> None:
+        from app.services.learning_service import MaintenanceAlert
+
+        alert = MaintenanceAlert(recovered=False, failing_for_sec=7200.0, reason=None)
+        bot = AsyncMock()
+        # Самый вероятный случай — владелец не начинал диалог с ботом.
+        bot.send_message.side_effect = RuntimeError("chat not found")
+        service = self._learning_service(alert)
+
+        with self.assertLogs("chat_markov", level="WARNING"):
+            await self._run(service, bot, SimpleNamespace(owner_id=555))
+
+        service.record_message.assert_awaited_once()
+
+    async def test_quiet_maintenance_sends_nothing(self) -> None:
+        bot = AsyncMock()
+
+        await self._run(
+            self._learning_service(None), bot, SimpleNamespace(owner_id=555)
+        )
+
+        bot.send_message.assert_not_awaited()
