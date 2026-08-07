@@ -6,7 +6,11 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from app.infrastructure.database import FLAVOR_DECAY_INTERVAL_SEC, Database
+from app.infrastructure.database import (
+    FLAVOR_DECAY_INTERVAL_SEC,
+    FLAVOR_DECAY_RETRY_INTERVAL_SEC,
+    Database,
+)
 
 CHAT = 4242
 
@@ -68,34 +72,86 @@ class TestChatEmojiStatsRepo(unittest.IsolatedAsyncioTestCase):
 
     async def test_lazy_decay_runs_once_after_interval(self) -> None:
         # Pretend the last decay happened more than a day ago.
-        self.db._last_flavor_decay_monotonic = (
-            time.monotonic() - FLAVOR_DECAY_INTERVAL_SEC - 1.0
-        )
+        self.db._next_flavor_decay_monotonic = time.monotonic() - 1.0
         self.assertTrue(await self.db.decay_flavor_stats_if_due())
         # The clock was re-stamped: an immediate second call is a no-op.
         self.assertFalse(await self.db.decay_flavor_stats_if_due())
 
-    async def test_failed_decay_does_not_postpone_the_next_attempt(self) -> None:
-        """Отметка ставится после выполнения, а не до.
+    async def test_failed_decay_is_swallowed_and_retried_soon(self) -> None:
+        """Сбой обслуживания не пробрасывается и не откладывается на сутки.
 
-        Иначе сбой внутри decay засчитывался как выполненный прогон: окно
-        «горячести» замирало до следующих суток, хотя ни одна строка не была
-        обработана.
+        Пробрасывать нельзя: вызывающий — learn-путь, и исключение стоило бы
+        выученного сообщения. Откладывать на сутки тоже нельзя: одна занятая
+        база заморозила бы окно «горячести» на день. Отсюда короткая пауза.
         """
         from unittest.mock import patch
 
-        stale = time.monotonic() - FLAVOR_DECAY_INTERVAL_SEC - 1.0
-        self.db._last_flavor_decay_monotonic = stale
+        self.db._next_flavor_decay_monotonic = time.monotonic() - 1.0
 
         with patch.object(
             self.db, "decay_chat_hot_ngrams", side_effect=RuntimeError("disk gone")
         ):
-            with self.assertRaises(RuntimeError):
+            with self.assertLogs("chat_markov", level="ERROR"):
+                self.assertFalse(await self.db.decay_flavor_stats_if_due())
+
+        assert self.db._next_flavor_decay_monotonic is not None
+        wait = self.db._next_flavor_decay_monotonic - time.monotonic()
+        self.assertGreater(wait, 0.0)
+        self.assertLessEqual(wait, FLAVOR_DECAY_RETRY_INTERVAL_SEC)
+        self.assertLess(wait, FLAVOR_DECAY_INTERVAL_SEC)
+        # Повтора на следующем же вызове нет — иначе занятая база стоила бы
+        # busy_timeout на каждом сообщении.
+        self.assertFalse(await self.db.decay_flavor_stats_if_due())
+
+    async def test_saving_a_message_does_not_run_maintenance(self) -> None:
+        """Обслуживание отвязано от записи по устройству кода.
+
+        Пока вызов затухания стоял первой строкой внутри
+        ``save_message_and_update_model``, сбой обслуживания останавливал
+        обучение во всех чатах сразу.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        self.db._next_flavor_decay_monotonic = time.monotonic() - 1.0
+        with patch.object(
+            self.db, "decay_flavor_stats_if_due", new=AsyncMock()
+        ) as maintenance:
+            await self.db.save_message_and_update_model(
+                CHAT, "привет всем в этом чате", ["привет", "всем", "в", "этом", "чате"]
+            )
+
+        maintenance.assert_not_awaited()
+
+    async def test_broken_maintenance_does_not_cost_the_message(self) -> None:
+        """Сообщение выучивается, даже когда обслуживание падает."""
+        from unittest.mock import patch
+
+        self.db._next_flavor_decay_monotonic = time.monotonic() - 1.0
+        tokens = ["сегодня", "хорошая", "погода", "в", "городе"]
+
+        with patch.object(
+            self.db, "decay_chat_emoji_stats", side_effect=RuntimeError("disk gone")
+        ):
+            # Тот же порядок, что у конвейера: сначала обучение, потом
+            # обслуживание отдельным шагом.
+            volume = await self.db.save_message_and_update_model(
+                CHAT, "сегодня хорошая погода в городе", tokens
+            )
+            with self.assertLogs("chat_markov", level="ERROR"):
                 await self.db.decay_flavor_stats_if_due()
 
-        self.assertEqual(self.db._last_flavor_decay_monotonic, stale)
-        # Следующая попытка — сразу, а не через сутки.
+        self.assertGreater(volume, 0)
+        self.assertEqual((await self.db.get_stats(CHAT))["messages"], 1)
+
+    async def test_successful_decay_postpones_by_the_daily_interval(self) -> None:
+        self.db._next_flavor_decay_monotonic = time.monotonic() - 1.0
+
         self.assertTrue(await self.db.decay_flavor_stats_if_due())
+
+        assert self.db._next_flavor_decay_monotonic is not None
+        wait = self.db._next_flavor_decay_monotonic - time.monotonic()
+        self.assertGreater(wait, FLAVOR_DECAY_RETRY_INTERVAL_SEC)
+        self.assertLessEqual(wait, FLAVOR_DECAY_INTERVAL_SEC)
 
 
 if __name__ == "__main__":

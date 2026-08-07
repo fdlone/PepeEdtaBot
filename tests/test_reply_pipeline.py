@@ -20,9 +20,10 @@ from app.services.reply_pipeline import IncomingMessage, ReplyPipeline
 def _state(**overrides: object) -> RuntimeState:
     """Реестровые дефолты — та же конфигурация, с которой бот запускается.
 
-    Каналы, которые роллят кубик поверх решения (редкие события, фальстарт),
-    по умолчанию выключены: иначе почти каждый тест иногда получал бы лишнюю
-    часть ответа. Проверяющие их тесты включают чанс явно.
+    Каналы, которые роллят кубик поверх решения (редкие события, фальстарт,
+    причуды завсегдатаев), по умолчанию выключены: иначе почти каждый тест
+    иногда получал бы лишнюю часть ответа. Проверяющие их тесты включают чанс
+    явно.
     """
     state = RuntimeState(
         **{spec.name: spec.parse(spec.default) for spec in RUNTIME_FIELDS},
@@ -31,6 +32,7 @@ def _state(**overrides: object) -> RuntimeState:
     )
     state.rare_event_chance = 0.0
     state.false_start_chance = 0.0
+    state.user_quirk_chance = 0.0
     for name, value in overrides.items():
         setattr(state, name, value)
     return state
@@ -67,6 +69,7 @@ class ReplyPipelineTestCase(unittest.IsolatedAsyncioTestCase):
         self.learning_service = AsyncMock()
         self.learning_service.get_token_volume.return_value = 10_000
         self.learning_service.get_hot_ngrams.return_value = []
+        self.learning_service.get_user_interaction_count.return_value = 0
         self.generator = AsyncMock()
         self.outbox = _Outbox()
         self.masking = patch(
@@ -304,6 +307,18 @@ class TestLearn(ReplyPipelineTestCase):
 
         self.learning_service.record_message.assert_awaited_once()
         self.assertEqual(state.learned_messages[1], 1)
+
+    async def test_maintenance_is_a_step_of_its_own(self) -> None:
+        """Обслуживание не спрятано внутри записи сообщения.
+
+        Пока оно было там, сбой обслуживания стоил выученного текста.
+        """
+        state = _state()
+        pipeline = self._pipeline(state)
+
+        await pipeline.run_due_maintenance()
+
+        self.learning_service.run_due_maintenance.assert_awaited_once_with()
 
     async def test_unlearnable_message_is_not_recorded(self) -> None:
         state = _state()

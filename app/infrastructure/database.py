@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import Counter
 from datetime import UTC, date, datetime, timedelta
@@ -38,8 +39,16 @@ CHAT_USER_INTERACTION_DECAY_DAYS = 30
 # decay_flavor_stats_if_due): при аптайме в недели окно «горячести» продолжает
 # скользить, а не замирает до рестарта.
 FLAVOR_DECAY_INTERVAL_SEC = 86400.0
+# Пауза после неудачного прогона. Промежуточная величина выбрана намеренно:
+# сутки заморозили бы окно «горячести» на день из-за одной занятой базы, а
+# повтор на следующем же сообщении при типичной причине сбоя (SQLITE_BUSY)
+# стоил бы до busy_timeout на каждом statement — и всё это под общей
+# блокировкой соединения.
+FLAVOR_DECAY_RETRY_INTERVAL_SEC = 600.0
 
 _RepoT = TypeVar("_RepoT")
+
+logger = logging.getLogger("chat_markov")
 
 
 class Database:
@@ -73,8 +82,9 @@ class Database:
         self._chat_emoji_stats: ChatEmojiStatsRepo | None = None
         self._chat_hot_ngrams: ChatHotNgramsRepo | None = None
         self._chat_user_interactions: ChatUserInteractionsRepo | None = None
-        # Monotonic-время последнего decay эмодзи/n-грамм (None до init()).
-        self._last_flavor_decay_monotonic: float | None = None
+        # Monotonic-время, раньше которого следующий прогон decay не начинается
+        # (None до init()).
+        self._next_flavor_decay_monotonic: float | None = None
 
     async def _get_conn(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -156,7 +166,9 @@ class Database:
         await self.decay_chat_emoji_stats()
         await self.decay_chat_hot_ngrams()
         await self.decay_chat_user_interactions()
-        self._last_flavor_decay_monotonic = time.monotonic()
+        self._next_flavor_decay_monotonic = (
+            time.monotonic() + FLAVOR_DECAY_INTERVAL_SEC
+        )
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -175,9 +187,6 @@ class Database:
         self, chat_id: int, raw_text: str, tokens: list[str]
     ) -> int:
         """Атомарно сохраняет raw-сообщение и обновляет счётчики переходов n=3/n=2/n=1."""
-        # Ленивый суточный decay эмодзи/n-грамм: learn-путь — единственное
-        # регулярное место, где Database получает управление (планировщика нет).
-        await self.decay_flavor_stats_if_due()
         starts2_pair: tuple[str, str] | None = None
         starts3_triplet: tuple[str, str, str] | None = None
 
@@ -418,26 +427,47 @@ class Database:
         return (current - timedelta(days=decay_days)).strftime("%Y-%m-%d %H:%M:%S")
 
     async def decay_flavor_stats_if_due(self) -> bool:
-        """Перезапускает decay эмодзи/n-грамм, если прошёл суточный интервал.
+        """Прокручивает decay эмодзи/n-грамм, если подошёл срок.
 
-        Дешёвая монотонная проверка на каждом learn-вызове; сам decay
-        выполняется не чаще раза в ``FLAVOR_DECAY_INTERVAL_SEC``, так что
-        скользящее окно «горячести» продолжает двигаться и без рестартов.
-        Возвращает True, если decay действительно выполнялся.
+        Заменяет планировщик, которого в проекте нет: дешёвая монотонная
+        проверка вызывается с learn-пути, а сам decay выполняется не чаще раза
+        в ``FLAVOR_DECAY_INTERVAL_SEC``, так что окно «горячести» продолжает
+        скользить и без рестартов. Возвращает True, если decay выполнился.
+
+        Сбой не пробрасывается вызывающему. Обслуживание не должно стоить
+        сообщения: пока этот вызов стоял внутри
+        ``save_message_and_update_model``, занятая база (бэкап, ``VACUUM``,
+        внешний клиент) означала не отложенное затухание, а остановку обучения
+        во всех чатах сразу — и молчаливую, потому что единственным сигналом
+        была строка в логе. Затухание же переживает пропущенный прогон без
+        последствий: мемы поблёкнут позже.
+
+        Следующая попытка после сбоя откладывается на
+        ``FLAVOR_DECAY_RETRY_INTERVAL_SEC``, а не на сутки и не на следующее
+        сообщение: сутки заморозили бы окно из-за одной занятой базы, а повтор
+        на каждом сообщении при типичной причине (``SQLITE_BUSY``) стоил бы до
+        busy_timeout на каждом statement под общей блокировкой соединения.
         """
         now = time.monotonic()
         if (
-            self._last_flavor_decay_monotonic is not None
-            and now - self._last_flavor_decay_monotonic < FLAVOR_DECAY_INTERVAL_SEC
+            self._next_flavor_decay_monotonic is not None
+            and now < self._next_flavor_decay_monotonic
         ):
             return False
-        await self.decay_chat_emoji_stats()
-        await self.decay_chat_hot_ngrams()
-        await self.decay_chat_user_interactions()
-        # Отметка ставится после выполнения, а не до: иначе сбой внутри decay
-        # засчитывался как выполненный прогон и откладывал следующую попытку на
-        # сутки — окно «горячести» замирало до конца суток или до рестарта.
-        self._last_flavor_decay_monotonic = now
+        try:
+            await self.decay_chat_emoji_stats()
+            await self.decay_chat_hot_ngrams()
+            await self.decay_chat_user_interactions()
+        except Exception:
+            self._next_flavor_decay_monotonic = (
+                now + FLAVOR_DECAY_RETRY_INTERVAL_SEC
+            )
+            logger.exception(
+                "Суточное затухание статистики не выполнено; повтор через %.0f с",
+                FLAVOR_DECAY_RETRY_INTERVAL_SEC,
+            )
+            return False
+        self._next_flavor_decay_monotonic = now + FLAVOR_DECAY_INTERVAL_SEC
         return True
 
     async def cleanup_pivo_daily_usage(

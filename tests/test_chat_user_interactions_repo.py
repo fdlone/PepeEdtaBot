@@ -8,7 +8,6 @@ from pathlib import Path
 
 from app.infrastructure.database import (
     CHAT_USER_INTERACTION_DECAY_DAYS,
-    FLAVOR_DECAY_INTERVAL_SEC,
     Database,
 )
 from app.repositories import ChatUserInteractionsRepo
@@ -146,9 +145,7 @@ class TestDatabaseUserInteractionDelegates(unittest.IsolatedAsyncioTestCase):
             ((datetime.now(UTC) - timedelta(days=45)).strftime("%Y-%m-%d %H:%M:%S"),),
         )
         await self.db._conn.commit()
-        self.db._last_flavor_decay_monotonic = (
-            time.monotonic() - FLAVOR_DECAY_INTERVAL_SEC - 1.0
-        )
+        self.db._next_flavor_decay_monotonic = time.monotonic() - 1.0
 
         self.assertTrue(await self.db.decay_flavor_stats_if_due())
         self.assertEqual(

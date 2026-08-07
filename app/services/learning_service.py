@@ -94,6 +94,17 @@ class LearningService:
     async def get_token_volume(self, chat_id: int) -> int:
         return await self._db.get_chat_token_volume(chat_id)
 
+    async def run_due_maintenance(self) -> bool:
+        """Прокручивает отложенное обслуживание базы, если подошёл срок.
+
+        Планировщика в проекте нет, и learn-путь — единственное место, куда
+        регулярно приходит управление. Обслуживание вызывается отдельным шагом,
+        а не изнутри записи сообщения: его сбой не должен стоить выученного
+        текста. Само обслуживание сбоев не пробрасывает (см.
+        ``Database.decay_flavor_stats_if_due``).
+        """
+        return await self._db.decay_flavor_stats_if_due()
+
     async def record_message(
         self, chat_id: int, raw_text: str, tokens: list[str]
     ) -> int:
