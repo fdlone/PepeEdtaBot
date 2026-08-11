@@ -17,7 +17,7 @@ from __future__ import annotations
 import random
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -68,6 +68,11 @@ class ConfigRun:
     config_id: str
     records: list[GenRecord]
     shared_with: str | None = None  # set when records are aliased, not re-run
+    # Per-seed generator telemetry snapshots (cache hit-rate, shadow order-4);
+    # deliberately kept out of metrics_summary — telemetry describes the
+    # machinery, not the content, and must not break cross-revision
+    # content-identity comparisons.
+    telemetry: list[dict[str, float | int | None]] = field(default_factory=list)
 
 
 def _content_cf(text: str) -> tuple[str, ...]:
@@ -90,8 +95,12 @@ async def run_config_seed(
     prompt_set: PromptSet,
     seed: int,
     generations: int,
-) -> list[GenRecord]:
-    """One (configuration, seed) protocol run — fresh DB copy, cold process state."""
+) -> tuple[list[GenRecord], dict[str, float | int | None]]:
+    """One (configuration, seed) protocol run — fresh DB copy, cold process state.
+
+    Returns the generation records plus the generator's telemetry snapshot
+    (cache hit-rate, shadow order-4 counters) for the report's machinery
+    section."""
     log_masking.init_masking("markov2r-eval-protocol")
     per_category = max(1, generations // len(prompt_set.categories))
     db_copy, temp_dir = copy_database(db_source)
@@ -221,7 +230,7 @@ async def run_config_seed(
         temp_dir.cleanup()
         gen_trace_log.log_selection = saved_log_selection  # type: ignore[assignment]
         gen_trace_log.log_attempt_rejected = saved_log_rejected  # type: ignore[assignment]
-    return records
+    return records, generator.telemetry.snapshot()
 
 
 async def run_matrix(
@@ -259,17 +268,20 @@ async def run_matrix(
             )
             continue
         records: list[GenRecord] = []
+        snapshots: list[dict[str, float | int | None]] = []
         for seed in seeds:
-            records.extend(
-                await run_config_seed(
-                    db_source=db_source,
-                    chat_id=chat_id,
-                    overrides=resolved,
-                    prompt_set=prompt_set,
-                    seed=seed,
-                    generations=generations,
-                )
+            seed_records, snapshot = await run_config_seed(
+                db_source=db_source,
+                chat_id=chat_id,
+                overrides=resolved,
+                prompt_set=prompt_set,
+                seed=seed,
+                generations=generations,
             )
-        runs[config_id] = ConfigRun(config_id=config_id, records=records)
+            records.extend(seed_records)
+            snapshots.append(snapshot)
+        runs[config_id] = ConfigRun(
+            config_id=config_id, records=records, telemetry=snapshots
+        )
         resolved_cache[config_id] = resolved
     return runs, skipped
