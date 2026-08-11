@@ -170,13 +170,15 @@ class TestCommonHandlers(unittest.IsolatedAsyncioTestCase):
         msg.reply.assert_awaited_once()
 
     async def test_stats_replies_with_model_volume(self) -> None:
+        from app.core.markov import MarkovGenerator
         from app.handlers.common import cmd_stats
         msg = _fake_message()
         db = AsyncMock()
         db.get_chat_token_volume = AsyncMock(return_value=250)
         state = _fake_state(min_tokens_for_model=50)
+        generator = MarkovGenerator(db=AsyncMock())
 
-        await cmd_stats(msg, db, state)
+        await cmd_stats(msg, db, state, generator)
 
         msg.reply.assert_awaited_once()
         self.assertIn("250", msg.reply.await_args.args[0])
