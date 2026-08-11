@@ -16,6 +16,7 @@ class GenerationTelemetry:
     entropy_bits_sum: float = 0.0
     normalized_entropy_sum: float = 0.0
     branching_sum: float = 0.0
+    applied_temperature_sum: float = 0.0
     diagnostic_steps: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
@@ -35,11 +36,13 @@ class GenerationTelemetry:
         normalized_entropy_sum: float,
         branching_sum: float,
         steps: int,
+        applied_temperature_sum: float = 0.0,
     ) -> None:
         self.generations += 1
         self.entropy_bits_sum += entropy_bits_sum
         self.normalized_entropy_sum += normalized_entropy_sum
         self.branching_sum += branching_sum
+        self.applied_temperature_sum += applied_temperature_sum
         self.diagnostic_steps += steps
 
     def note_shadow(self, *, eligible: int, selected: int) -> None:
@@ -58,6 +61,9 @@ class GenerationTelemetry:
                 self.normalized_entropy_sum / steps if steps else None
             ),
             "mean_branching": self.branching_sum / steps if steps else None,
+            "mean_applied_temperature": (
+                self.applied_temperature_sum / steps if steps else None
+            ),
             "cache_hit_rate": self.cache_hits / lookups if lookups else None,
             "shadow_order4_eligible": eligible,
             "shadow_order4_selected_share": (

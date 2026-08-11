@@ -646,6 +646,40 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class TestEntropySamplingSettings(unittest.TestCase):
+    """M2R-100: the rollback path is a /set away, with no restart."""
+
+    def _generator(self) -> ResponseGenerator:
+        return ResponseGenerator(
+            generator=_traced_generator(),
+            learning_service=_learning_service(),
+            runtime_state=_runtime_state(),
+        )
+
+    def test_settings_follow_the_runtime_state(self) -> None:
+        response_generator = self._generator()
+        self.assertEqual(response_generator.entropy_sampling.gain, 0.0)
+
+        response_generator.runtime_state.markov_entropy_temp_gain = 0.6
+        self.assertEqual(response_generator.entropy_sampling.gain, 0.6)
+
+        # Reverting is the same path in reverse: no restart, no rebuild.
+        response_generator.runtime_state.markov_entropy_temp_gain = 0.0
+        self.assertEqual(response_generator.entropy_sampling.gain, 0.0)
+
+    def test_clamp_and_pivot_come_from_the_state_too(self) -> None:
+        response_generator = self._generator()
+        state = response_generator.runtime_state
+        state.markov_entropy_pivot = 0.42
+        state.markov_entropy_temp_min = 1.0
+        state.markov_entropy_temp_max = 8.0
+        sampling = response_generator.entropy_sampling
+        self.assertEqual(
+            (sampling.pivot, sampling.temp_min, sampling.temp_max),
+            (0.42, 1.0, 8.0),
+        )
+
+
 class TestBranchingAwareCandidateTarget(unittest.IsolatedAsyncioTestCase):
     """M2R-110: how much choice the walk had decides how many candidates to ask
     for. The unit-level rule lives in tests/test_markov2r_phase2.py; this checks

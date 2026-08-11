@@ -105,7 +105,11 @@ def _route(trace: GenerationTrace) -> str:
         f"entropy={trace.mean_entropy_bits:.2f} "
         f"norm_entropy={trace.mean_normalized_entropy:.2f} "
         f"branching={trace.mean_branching:.1f} "
-        f"conf_min={trace.min_confidence:.2f}"
+        f"conf_min={trace.min_confidence:.2f} "
+        # M2R-100: the temperature actually sampled at, next to the entropy it
+        # was derived from — a neutral knob is then visible as a flat number
+        # rather than something to look up in the config.
+        f"temperature={trace.mean_applied_temperature:.2f}"
     )
 
 

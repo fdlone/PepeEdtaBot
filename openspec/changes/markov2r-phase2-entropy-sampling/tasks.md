@@ -36,20 +36,20 @@ No schema change and no migration in this phase (TZ §6 is sampling-only).
 ## 6. Property / invariant tests (TZ §19)
 
 - [x] 6.1 For any pool and any legal knob values: weights stay ≥ 0, finite, and at least one candidate keeps positive weight
-- [ ] 6.2 Determinism: same seed + same settings ⇒ identical output across runs
+- [x] 6.2 Determinism: same seed + same settings ⇒ identical output across runs
 - [x] 6.3 Monotonicity of the mapping in `H_norm` for a fixed sign of gain (the direction the design claims is the direction the code produces)
 
 ## 7. Neutrality proof (the phase's hard contract)
 
-- [ ] 7.1 `python -m tools.generation_hash --db db_prod_copy/markov.db` — identical hash with the feature off, with gain 0, and against the frozen baseline
-- [ ] 7.2 Characterization tests (`test_markov_generation_characterization.py`) green unchanged at neutral settings
-- [ ] 7.3 Runtime revert check: gain set back to 0 via `/set` restores baseline output without a restart
+- [x] 7.1 `python -m tools.generation_hash --db db_prod_copy/markov.db` — identical hash with the feature off, with gain 0, and against the frozen baseline
+- [x] 7.2 Characterization tests (`test_markov_generation_characterization.py`) green unchanged at neutral settings
+- [x] 7.3 Runtime revert check: gain set back to 0 via `/set` restores baseline output without a restart
 
 ## 8. Telemetry and trace
 
-- [ ] 8.1 Mean applied temperature accumulated per generation alongside the entropy it came from; exposed in `GenerationTrace`
-- [ ] 8.2 `gen_trace_log` line and `/stats` reporting; numbers only, chat ids masked (existing `log-privacy` rules)
-- [ ] 8.3 Neutral configuration reads as neutral in the numbers (spec scenario)
+- [x] 8.1 Mean applied temperature accumulated per generation alongside the entropy it came from; exposed in `GenerationTrace`
+- [x] 8.2 `gen_trace_log` line and `/stats` reporting; numbers only, chat ids masked (existing `log-privacy` rules)
+- [x] 8.3 Neutral configuration reads as neutral in the numbers (spec scenario)
 
 ## 9. Eval — ablation and calibration (doc 05)
 

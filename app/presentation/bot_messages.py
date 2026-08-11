@@ -94,6 +94,9 @@ def format_stats_message(
                 f"энтропия шага (норм.): {mean_entropy:.2f}, "
                 f"ветвление: {mean_branching:.1f}"
             )
+        temperature = telemetry.get("mean_applied_temperature")
+        if temperature is not None:
+            lines.append(f"температура шага: {temperature:.2f}")
         hit_rate = telemetry.get("cache_hit_rate")
         if hit_rate is not None:
             lines.append(f"кэш распределений: {hit_rate:.0%} попаданий")

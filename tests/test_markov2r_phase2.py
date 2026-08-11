@@ -15,13 +15,17 @@ import unittest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from app.core.generation_telemetry import GenerationTelemetry
 from app.core.markov import (
     _MIN_SAMPLING_TEMPERATURE,
     EntropySampling,
+    _DiagnosticsAccumulator,
+    _step_power,
     pool_diagnostics,
     weighted_next_choice,
 )
 from app.core.response_generator import CANDIDATE_TARGET, branching_aware_target
+from app.presentation.bot_messages import format_stats_message
 
 # Registry bounds (app/config/registry.py) — "any legal knob values" below
 # means these, not arbitrary floats.
@@ -190,6 +194,61 @@ class TestSamplingStaysInsideThePool(unittest.TestCase):
             for seed in range(200)
         }
         return len(winners)
+
+
+class TestAppliedTemperatureIsObservable(unittest.TestCase):
+    """Spec: the temperature actually applied has to be readable, or the knob
+    is invisible in the live chat."""
+
+    def test_accumulator_records_the_temperature_it_sampled_at(self) -> None:
+        diagnostics = _DiagnosticsAccumulator()
+        pool = [("а", 9), ("б", 1)]
+        neutral = _step_power(diagnostics, pool, 0.4, EntropySampling())
+        self.assertEqual(neutral, 0.4)
+        self.assertAlmostEqual(diagnostics.applied_temperature_sum, 2.5, places=12)
+        self.assertEqual(diagnostics.steps, 1)
+
+    def test_non_zero_gain_shows_up_as_a_different_temperature(self) -> None:
+        neutral_diag = _DiagnosticsAccumulator()
+        tuned_diag = _DiagnosticsAccumulator()
+        pool = [("а", 5), ("б", 5), ("в", 5), ("г", 5)]  # maximal entropy
+        _step_power(neutral_diag, pool, 0.4, EntropySampling())
+        _step_power(tuned_diag, pool, 0.4, EntropySampling(gain=0.6, pivot=0.5))
+        self.assertGreater(
+            tuned_diag.applied_temperature_sum, neutral_diag.applied_temperature_sum
+        )
+
+    def test_telemetry_publishes_the_mean(self) -> None:
+        telemetry = GenerationTelemetry()
+        telemetry.note_generation(
+            entropy_bits_sum=2.0,
+            normalized_entropy_sum=1.0,
+            branching_sum=6.0,
+            applied_temperature_sum=5.0,
+            steps=2,
+        )
+        self.assertAlmostEqual(
+            telemetry.snapshot()["mean_applied_temperature"], 2.5, places=12
+        )
+
+    def test_stats_shows_the_temperature(self) -> None:
+        telemetry = GenerationTelemetry()
+        telemetry.note_generation(
+            entropy_bits_sum=2.0,
+            normalized_entropy_sum=1.0,
+            branching_sum=6.0,
+            applied_temperature_sum=5.0,
+            steps=2,
+        )
+        message = format_stats_message(
+            {"volume": "1 000 слов"}, telemetry=telemetry.snapshot()
+        )
+        self.assertIn("температура шага: 2.50", message)
+
+    def test_nothing_measured_publishes_nothing(self) -> None:
+        self.assertIsNone(
+            GenerationTelemetry().snapshot()["mean_applied_temperature"]
+        )
 
 
 class TestBranchingAwareTarget(unittest.TestCase):
