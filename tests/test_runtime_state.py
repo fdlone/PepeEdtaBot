@@ -29,6 +29,8 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
         "intonation_profile_strength": 0.0,
         "length_context_adaptation": 0.0,
         "markov_order": 3,
+        "markov_cache_incremental": True,
+        "markov_shadow_order4_enabled": True,
         "enable_backoff": True,
         "markov_jump_probability": 0.04,
         "context_jump_boost": 1.0,

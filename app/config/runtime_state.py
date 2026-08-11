@@ -59,6 +59,8 @@ class RuntimeState:
     intonation_profile_strength: float
     length_context_adaptation: float
     markov_order: int
+    markov_cache_incremental: bool
+    markov_shadow_order4_enabled: bool
     enable_backoff: bool
     markov_jump_probability: float
     context_jump_boost: float

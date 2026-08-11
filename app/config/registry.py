@@ -250,6 +250,18 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("length_context_adaptation", "LENGTH_CONTEXT_ADAPTATION", "1.0",
               _float_in_range(0.0, 3.0)),
     FieldSpec("markov_order", "MARKOV_ORDER", "3", _int_in_set({2, 3})),
+    # Markov 2.0R Phase 1 (M2R-030): incremental distribution-cache updates.
+    # true — a learned message folds its exact deltas into the cached
+    # distributions; false — the pre-2.0R policy (full per-chat cache wipe on
+    # every learned message). The kill switch exists for rollback without a
+    # redeploy; both positions produce byte-identical generation output.
+    FieldSpec("markov_cache_incremental", "MARKOV_CACHE_INCREMENTAL", "true",
+              _bool()),
+    # Markov 2.0R Phase 1 (M2R-020): shadow order-4 selector. Pure
+    # measurement for the Phase 7 gate (estimator over the retained message
+    # window); generation output does not depend on the knob position.
+    FieldSpec("markov_shadow_order4_enabled", "MARKOV_SHADOW_ORDER4_ENABLED",
+              "true", _bool()),
     # Backoff bottoms out at order 2: the order-1 chain was removed entirely
     # (2026-07-12) after eval_prod showed order-1 walks are word salad — the
     # 2026-07-09 default already forbade them and nothing regressed.

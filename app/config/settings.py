@@ -54,6 +54,8 @@ class Settings:
     intonation_profile_strength: float
     length_context_adaptation: float
     markov_order: int
+    markov_cache_incremental: bool
+    markov_shadow_order4_enabled: bool
     enable_backoff: bool
     markov_jump_probability: float
     context_jump_boost: float
@@ -108,6 +110,7 @@ class Settings:
     throttle_state_ttl_sec: int
     throttle_state_max_keys: int
     text_cache_max_messages: int
+    markov_cache_max_entries: int
     log_level: str
     gen_trace_log: bool
     bot_text_aliases: frozenset[str]
@@ -214,6 +217,7 @@ def load_settings(load_env: bool = True) -> Settings:
     throttle_state_ttl_sec = _load_int("THROTTLE_STATE_TTL_SEC", 21600, minimum=1)
     throttle_state_max_keys = _load_int("THROTTLE_STATE_MAX_KEYS", 4096, minimum=1)
     text_cache_max_messages = _load_int("TEXT_CACHE_MAX_MESSAGES", 1000, minimum=1)
+    markov_cache_max_entries = _load_int("MARKOV_CACHE_MAX_ENTRIES", 1024, minimum=64)
     if messages_retention_per_chat < text_cache_max_messages:
         raise ValueError(
             "MESSAGES_RETENTION_PER_CHAT must be greater than or equal to "
@@ -266,6 +270,7 @@ def load_settings(load_env: bool = True) -> Settings:
         throttle_state_ttl_sec=throttle_state_ttl_sec,
         throttle_state_max_keys=throttle_state_max_keys,
         text_cache_max_messages=text_cache_max_messages,
+        markov_cache_max_entries=markov_cache_max_entries,
         log_level=log_level,
         gen_trace_log=gen_trace_log,
         bot_text_aliases=bot_text_aliases,
