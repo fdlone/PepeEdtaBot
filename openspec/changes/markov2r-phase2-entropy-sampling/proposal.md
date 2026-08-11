@@ -34,10 +34,13 @@ a `GAIN = 0` identity contract that keeps the door open.
   latency; on a wide-branching chain, more candidates give the scorer something
   to choose between. Expected direction of the latency effect is **downward**,
   and that is part of the acceptance check, not an assumption.
-- **Knobs (TZ §18 names), all runtime-settable via `/set`:**
-  `markov_entropy_enabled`, `markov_entropy_temp_gain`, plus the pivot and
-  clamp bounds; `markov_branching_candidates_enabled`. Every knob off ⇒ the
-  generator is byte-identical to the frozen 1.x baseline.
+- **Knobs, all runtime-settable via `/set`:** `markov_entropy_temp_gain`,
+  `markov_entropy_pivot`, `markov_entropy_temp_min`, `markov_entropy_temp_max`,
+  `markov_branching_degenerate_max`, `markov_branching_candidate_floor`. Both
+  features neutral ⇒ the generator is byte-identical to the frozen 1.x
+  baseline. TZ §18's two `*_ENABLED` booleans are deliberately not shipped —
+  `0 disables` is this registry's established convention and TZ §6 already
+  defines `GAIN = 0` as the identity (design D9).
 - **Identity contract.** `GAIN = 0` (or the knob off) SHALL reproduce 1.x
   output bit-for-bit, proven with `tools/generation_hash.py`, not argued. The
   entropy path consumes no random draws, so the RNG stream is untouched.

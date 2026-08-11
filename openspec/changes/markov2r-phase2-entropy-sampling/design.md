@@ -141,6 +141,34 @@ change and belongs in the report, not in a footnote.
 `C1a`/`C1b` satisfy the "one arm per knob" rule this change adds to
 `generation-eval`; `C1` is what the default would ship.
 
+### D9 — No `*_ENABLED` booleans (deviation from TZ §18)
+
+TZ §18 names `MARKOV_ENTROPY_ENABLED` alongside `MARKOV_ENTROPY_TEMP_GAIN`, and
+`MARKOV_BRANCHING_CANDIDATES_ENABLED` for M2R-110. Both booleans are dropped.
+
+TZ §6 itself defines `GAIN = 0` as the 1.x identity, so the boolean would be a
+second switch for the state the gain already expresses — and two switches for
+one behavior is how "why is it off? oh, the *other* knob" happens at 3am. The
+same holds for M2R-110: `markov_branching_degenerate_max = 0` means no pool ever
+counts as degenerate, which is exactly "disabled". This matches the registry's
+established convention, stated in its own comments for
+`markov_jump_probability`, `slot_mutation_probability`,
+`context_anchor_splice_probability` and others: **0 disables**.
+
+Shipped knobs: `markov_entropy_temp_gain`, `markov_entropy_pivot`,
+`markov_entropy_temp_min`, `markov_entropy_temp_max`,
+`markov_branching_degenerate_max`, `markov_branching_candidate_floor` — six
+instead of eight, with the same reachable states.
+
+The clamp bounds default to `[0.5, 12.0]`, chosen to bracket the *reachable*
+`T_base` range with margin: `next_power` spans `[0.24, 0.72]` for
+`randomness_strength ∈ [0, 3]` (`markov.py:1863`), so `T_base = 1/power` spans
+roughly `[1.4, 4.2]`. At the grid's gains the clamp never binds; it exists so no
+knob combination can produce a degenerate or exploding temperature. Because a
+user can set `T_min > T_max` through two individually-valid `/set` calls, the
+helper orders the pair before clamping instead of pinning the temperature to a
+nonsense constant.
+
 ### D8 — Thresholds are registered before the run
 
 Added to `eval_thresholds.yaml` in the first commit of the implementation, with

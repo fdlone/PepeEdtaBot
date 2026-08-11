@@ -35,6 +35,9 @@ def make_state() -> SimpleNamespace:
         intonation_profile_strength=0.0,
         length_context_adaptation=0.0,
         markov_order=3,
+        markov_entropy_temp_gain=0.0,
+        markov_entropy_pivot=0.5,
+        markov_branching_degenerate_max=0.0,
         enable_backoff=True,
         markov_jump_probability=0.04,
         context_jump_boost=1.0,
@@ -128,6 +131,7 @@ class TestBotMessages(unittest.TestCase):
 
         self.assertIn("Дополнительно:", text)
         self.assertIn("reply_context_start_bias=2.2", text)
+        self.assertIn("markov_entropy_temp_gain=0.0", text)
 
     def test_set_help_message_shows_common_keys(self) -> None:
         text = format_set_help_message()

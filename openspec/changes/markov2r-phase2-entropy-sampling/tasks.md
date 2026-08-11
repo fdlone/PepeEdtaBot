@@ -9,9 +9,9 @@ No schema change and no migration in this phase (TZ §6 is sampling-only).
 
 ## 2. Knobs
 
-- [ ] 2.1 Registry entries + `Settings`/`RuntimeState` fields + `.env.example` (established 5-step pattern; registry drift tests must stay green): `markov_entropy_enabled`, `markov_entropy_temp_gain`, `markov_entropy_pivot`, `markov_entropy_temp_min`, `markov_entropy_temp_max`, `markov_branching_candidates_enabled`, `markov_branching_degenerate_max`, `markov_branching_candidate_floor`
-- [ ] 2.2 All defaults neutral at merge time: gain 0, branching-target disabled — bounds validated on both paths (env and `/set`), per `runtime-knob-validation`
-- [ ] 2.3 `/config` surfaces the new knobs the way the existing generation knobs are surfaced
+- [x] 2.1 Registry entries + `Settings`/`RuntimeState` fields + `.env.example` (established 5-step pattern; registry drift tests must stay green): `markov_entropy_temp_gain`, `markov_entropy_pivot`, `markov_entropy_temp_min`, `markov_entropy_temp_max`, `markov_branching_degenerate_max`, `markov_branching_candidate_floor` — TZ §18's `*_ENABLED` booleans dropped, see design D9
+- [x] 2.2 All defaults neutral at merge time: gain 0, branching-target disabled — bounds validated on both paths (env and `/set`), per `runtime-knob-validation`
+- [x] 2.3 `/config full` surfaces the two decision knobs and the pivot (clamps stay out — they are a safety net, not a voice setting)
 
 ## 3. M2R-100 — Entropy → temperature (core)
 
