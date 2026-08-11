@@ -22,8 +22,8 @@ No schema change and no migration in this phase (TZ §6 is sampling-only).
 
 ## 4. M2R-110 — Branching-aware candidate target (core)
 
-- [ ] 4.1 Running mean of accepted candidates' `mean_branching` in the response generator; target recomputed after each accepted candidate, never below the floor, never above `CANDIDATE_TARGET`, attempt budget untouched (design D6)
-- [ ] 4.2 Disabled knob ⇒ target is exactly the previous constant
+- [x] 4.1 Running mean of accepted candidates' `mean_branching` in the response generator; target recomputed after each accepted candidate, never below the floor, never above `CANDIDATE_TARGET`, attempt budget untouched (design D6)
+- [x] 4.2 Disabled knob ⇒ target is exactly the previous constant
 - [ ] 4.3 Record the second-order effect on slot mutation (`target` also caps mutations) so it is visible in the report, not discovered later
 
 ## 5. Unit tests

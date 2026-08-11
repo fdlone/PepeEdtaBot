@@ -55,6 +55,14 @@ def _runtime_state() -> MagicMock:
     state.hot_ngram_min_count = 3
     state.hot_ngram_recency_share = 0.5
     state.intonation_profile_strength = 0.0
+    # Phase 2 knobs neutral, for the same reason as slot_mutation_probability
+    # above: a bare MagicMock would silently turn both features on.
+    state.markov_entropy_temp_gain = 0.0
+    state.markov_entropy_pivot = 0.5
+    state.markov_entropy_temp_min = 0.5
+    state.markov_entropy_temp_max = 12.0
+    state.markov_branching_degenerate_max = 0.0
+    state.markov_branching_candidate_floor = 2
     return state
 
 

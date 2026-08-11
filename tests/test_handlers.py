@@ -98,6 +98,15 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.verbatim_extension_share = 0.0
     s.order_mix_probability = 0.0
     s.slot_mutation_probability = 0.0
+    # Phase 2 knobs neutral by default: gain 0 is the 1.x sampler and a
+    # degenerate bound of 0 leaves the candidate target fixed, so handler tests
+    # keep asserting the pre-Phase-2 candidate flow.
+    s.markov_entropy_temp_gain = 0.0
+    s.markov_entropy_pivot = 0.5
+    s.markov_entropy_temp_min = 0.5
+    s.markov_entropy_temp_max = 12.0
+    s.markov_branching_degenerate_max = 0.0
+    s.markov_branching_candidate_floor = 2
     # L1 hot-ngram channel off by default so learn/reply tests stay
     # deterministic; dedicated hot-ngram tests enable it explicitly.
     s.hot_ngram_seed_chance = 0.0
