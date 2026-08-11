@@ -232,6 +232,13 @@ python -m unittest discover tests -v
 `tools/eval_prod.py` дают синтетический и продовый eval конвейера (см.
 [`docs/GENERATION_PIPELINE.md`](docs/GENERATION_PIPELINE.md)).
 
+Эволюция генератора (Markov 2.0R) идёт по нормативному пакету
+[`docs/v2/`](docs/v2/) через eval-протокол: `python -m tools.eval` — ablation-
+матрица C0–CF, метрики с доверительными интервалами, предрегистрированные
+гейты фаз ([`tools/eval/README.md`](tools/eval/README.md)); отчёты — в
+`docs/eval_reports/`. Property-тесты инвариантов пишутся на `hypothesis`
+(dev-зависимость).
+
 ## Документация
 
 - [`.env.example`](.env.example) — все параметры: назначение, дефолт, границы.
