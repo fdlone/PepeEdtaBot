@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import bisect
 import logging
+import math
 import random
 import re
 from collections import Counter, OrderedDict
 from collections.abc import Container, Iterable
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import Any, NamedTuple, cast
 
 from app.core.context_state_matcher import ContextStateMatcher
+from app.core.generation_telemetry import GenerationTelemetry
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
 from app.core.markov_port import MarkovReadPort
 from app.core.morphology import stem_folded, stem_token
@@ -149,6 +152,52 @@ def context_emission_tokens(state: tuple[str, str, str]) -> list[str]:
         tail.pop(0)
     return tail
 
+def pool_diagnostics(counts: list[int]) -> tuple[float, float, int, float]:
+    """Distribution diagnostics of one transition pool (M2R-010, TZ §6).
+
+    Returns ``(entropy_bits, normalized_entropy, branching_factor,
+    confidence)`` computed over the raw-count proportions — the *model's*
+    distribution, deliberately not the temperature-adjusted sampling weights.
+    ``normalized_entropy`` is 0 when branching <= 1 (no uncertainty to
+    normalize); ``confidence = 1 - normalized_entropy``. Pure math on the
+    pool list: no SQL, no RNG.
+    """
+    branching = len(counts)
+    if branching <= 1:
+        return 0.0, 0.0, branching, 1.0
+    total = 0
+    for count in counts:
+        total += max(count, 1)
+    entropy = 0.0
+    for count in counts:
+        p = max(count, 1) / total
+        entropy -= p * math.log2(p)
+    normalized = entropy / math.log2(branching)
+    # Float rounding can push H marginally past log2(B); clamp keeps the
+    # confidence invariant 0 <= C <= 1 exact for property tests.
+    normalized = max(0.0, min(1.0, normalized))
+    return entropy, normalized, branching, 1.0 - normalized
+
+
+@dataclass(slots=True)
+class _DiagnosticsAccumulator:
+    """Per-attempt sums of step-pool diagnostics (M2R-010)."""
+
+    entropy_bits_sum: float = 0.0
+    normalized_entropy_sum: float = 0.0
+    branching_sum: float = 0.0
+    steps: int = 0
+    min_confidence: float = 1.0
+
+    def note_pool(self, counts: list[int]) -> None:
+        entropy, normalized, branching, confidence = pool_diagnostics(counts)
+        self.entropy_bits_sum += entropy
+        self.normalized_entropy_sum += normalized
+        self.branching_sum += branching
+        self.steps += 1
+        self.min_confidence = min(self.min_confidence, confidence)
+
+
 @dataclass(frozen=True, slots=True)
 class GenerationTrace:
     attempts_used: int
@@ -161,6 +210,13 @@ class GenerationTrace:
     context_exact_matches: int = 0
     context_casefold_matches: int = 0
     hidden_context_fallbacks: int = 0
+    # M2R-010: diagnostics of the winning attempt's step pools (walk steps
+    # only; start pools are not sampled per step and stay uninstrumented).
+    mean_entropy_bits: float = 0.0
+    mean_normalized_entropy: float = 0.0
+    mean_branching: float = 0.0
+    min_confidence: float = 1.0
+    diagnostic_steps: int = 0
 
 
 class _GenerationAttempt(NamedTuple):
@@ -183,6 +239,11 @@ class _GenerationAttempt(NamedTuple):
     context_exact_matches: int = 0
     context_casefold_matches: int = 0
     hidden_context_fallbacks: int = 0
+    mean_entropy_bits: float = 0.0
+    mean_normalized_entropy: float = 0.0
+    mean_branching: float = 0.0
+    min_confidence: float = 1.0
+    diagnostic_steps: int = 0
 
 
 class _ContextualStateSelection(NamedTuple):
@@ -699,6 +760,46 @@ def weighted_start3_choice(
     return w1, w2, w3
 
 
+def _fold_transition(
+    rows: list[tuple[str, int]], token: str, delta: int
+) -> list[tuple[str, int]]:
+    """A copy of a cached transition list with ``(token, +delta)`` upserted.
+
+    Copy-on-write on purpose: a walk holds its fetched pool across awaits, and
+    the old wipe policy gave it snapshot semantics — mutating the shared list
+    would let an interleaved learn change a pool mid-generation. The copy
+    mirrors a SQL read with ``ORDER BY <token column>``; sampling relies on
+    that order, so inserts go through bisection. Python's str comparison
+    (code points) agrees with SQLite's default BINARY collation (UTF-8 bytes)
+    — UTF-8 preserves code-point order.
+    """
+    updated = rows.copy()
+    index = bisect.bisect_left(updated, token, key=lambda row: row[0])
+    if index < len(updated) and updated[index][0] == token:
+        updated[index] = (token, updated[index][1] + delta)
+    else:
+        updated.insert(index, (token, delta))
+    return updated
+
+
+def _fold_start_row[T: tuple[Any, ...]](
+    rows: list[T], words: tuple[str, ...]
+) -> list[T]:
+    """A copy of a cached starts list with the start row upserted.
+
+    Ordered by the word prefix, same collation and copy-on-write arguments as
+    :func:`_fold_transition`. A learned message contributes exactly one
+    observation of its start state.
+    """
+    updated = rows.copy()
+    index = bisect.bisect_left(updated, words, key=lambda row: tuple(row[:-1]))
+    if index < len(updated) and tuple(updated[index][:-1]) == words:
+        updated[index] = cast("T", (*words, updated[index][-1] + 1))
+    else:
+        updated.insert(index, cast("T", (*words, 1)))
+    return updated
+
+
 @dataclass(slots=True)
 class MarkovGenerator:
     # Порт, а не конкретное хранилище: ядру достаточно чтения цепи.
@@ -719,6 +820,9 @@ class MarkovGenerator:
         default_factory=OrderedDict, init=False
     )
     _context_state_matcher: ContextStateMatcher = field(init=False)
+    telemetry: GenerationTelemetry = field(
+        default_factory=GenerationTelemetry, init=False
+    )
 
     def __post_init__(self) -> None:
         self._context_state_matcher = ContextStateMatcher(
@@ -737,6 +841,58 @@ class MarkovGenerator:
         self._cache_starts2.pop(chat_id, None)
         self._context_state_matcher.invalidate_chat_cache(chat_id)
 
+    def apply_learning_deltas(self, chat_id: int, tokens: list[str]) -> None:
+        """Fold one learned message into the cached distributions (M2R-030).
+
+        Mirrors the delta construction of ``save_message_and_update_model``
+        (same n-gram counters, same start tuples) so a folded cache equals a
+        fresh SQL read — the equivalence is enforced by tests, and the
+        ``markov_cache_incremental=false`` knob falls back to
+        :meth:`invalidate_chat_cache` entirely. Only cached keys are touched;
+        cold keys stay cold and read fresh rows on demand.
+        """
+        if len(tokens) < 2:
+            return
+        trans3: Counter[tuple[str, str, str, str]] = Counter(
+            (tokens[i], tokens[i + 1], tokens[i + 2], tokens[i + 3])
+            for i in range(len(tokens) - 3)
+        )
+        trans2: Counter[tuple[str, str, str]] = Counter(
+            (tokens[i], tokens[i + 1], tokens[i + 2])
+            for i in range(len(tokens) - 2)
+        )
+        for (w1, w2, w3, w4), delta in trans3.items():
+            key3 = (chat_id, w1, w2, w3)
+            cached3 = self._cache3.get(key3)
+            if cached3 is not None:
+                self._cache3[key3] = _fold_transition(cached3, w4, delta)
+        for (w1, w2, w3), delta in trans2.items():
+            key2 = (chat_id, w1, w2)
+            cached2 = self._cache2.get(key2)
+            if cached2 is not None:
+                self._cache2[key2] = _fold_transition(cached2, w3, delta)
+        starts2 = self._cache_starts2.get(chat_id)
+        if starts2 is not None:
+            self._cache_starts2[chat_id] = _fold_start_row(
+                starts2, (tokens[0], tokens[1])
+            )
+        if len(tokens) >= 3:
+            starts3 = self._cache_starts3.get(chat_id)
+            if starts3 is not None:
+                self._cache_starts3[chat_id] = _fold_start_row(
+                    starts3, (tokens[0], tokens[1], tokens[2])
+                )
+        state3_deltas: dict[tuple[str, ...], int] = {}
+        for (w1, w2, w3, _w4), delta in trans3.items():
+            state = (w1, w2, w3)
+            state3_deltas[state] = state3_deltas.get(state, 0) + delta
+        state2_deltas: dict[tuple[str, ...], int] = {}
+        for (w1, w2, _w3), delta in trans2.items():
+            state2 = (w1, w2)
+            state2_deltas[state2] = state2_deltas.get(state2, 0) + delta
+        self._context_state_matcher.apply_state_deltas(chat_id, 3, state3_deltas)
+        self._context_state_matcher.apply_state_deltas(chat_id, 2, state2_deltas)
+
     def _touch_cache[K, V](
         self,
         cache: OrderedDict[K, V],
@@ -750,14 +906,18 @@ class MarkovGenerator:
 
     async def _get_starts3(self, chat_id: int) -> list[tuple[str, str, str, int]]:
         if chat_id in self._cache_starts3:
+            self.telemetry.note_cache(hit=True)
             return self._cache_starts3[chat_id]
+        self.telemetry.note_cache(hit=False)
         rows = await self.db.get_starts3(chat_id)
         self._touch_cache(self._cache_starts3, chat_id, rows)
         return rows
 
     async def _get_starts2(self, chat_id: int) -> list[tuple[str, str, int]]:
         if chat_id in self._cache_starts2:
+            self.telemetry.note_cache(hit=True)
             return self._cache_starts2[chat_id]
+        self.telemetry.note_cache(hit=False)
         rows = await self.db.get_starts(chat_id)
         self._touch_cache(self._cache_starts2, chat_id, rows)
         return rows
@@ -767,8 +927,10 @@ class MarkovGenerator:
     ) -> list[tuple[str, int]]:
         key = (chat_id, w1, w2, w3)
         if key in self._cache3:
+            self.telemetry.note_cache(hit=True)
             self._cache3.move_to_end(key)
             return self._cache3[key]
+        self.telemetry.note_cache(hit=False)
         rows = await self.db.get_transitions3(chat_id, w1, w2, w3)
         self._touch_cache(self._cache3, key, rows)
         return rows
@@ -776,8 +938,10 @@ class MarkovGenerator:
     async def _get2(self, chat_id: int, w1: str, w2: str) -> list[tuple[str, int]]:
         key = (chat_id, w1, w2)
         if key in self._cache2:
+            self.telemetry.note_cache(hit=True)
             self._cache2.move_to_end(key)
             return self._cache2[key]
+        self.telemetry.note_cache(hit=False)
         rows = await self.db.get_transitions(chat_id, w1, w2)
         self._touch_cache(self._cache2, key, rows)
         return rows
@@ -1103,6 +1267,21 @@ class MarkovGenerator:
             hidden_context_fallbacks=sum(
                 a.hidden_context_fallbacks for a in attempts
             ),
+            # M2R-010: the winning (last) attempt's step-pool diagnostics; a
+            # rejected final attempt still carries its own measured steps.
+            mean_entropy_bits=last.mean_entropy_bits,
+            mean_normalized_entropy=last.mean_normalized_entropy,
+            mean_branching=last.mean_branching,
+            min_confidence=last.min_confidence,
+            diagnostic_steps=last.diagnostic_steps,
+        )
+        self.telemetry.note_generation(
+            entropy_bits_sum=last.mean_entropy_bits * last.diagnostic_steps,
+            normalized_entropy_sum=(
+                last.mean_normalized_entropy * last.diagnostic_steps
+            ),
+            branching_sum=last.mean_branching * last.diagnostic_steps,
+            steps=last.diagnostic_steps,
         )
         self._log_trace(trace)
         return last.text, trace
@@ -1111,7 +1290,9 @@ class MarkovGenerator:
         logger.debug(
             "Generation trace: attempts=%s order=%s jumps=%s rejection=%s tokens=%s "
             "start_source=%s leading_punctuation_stripped=%s context_exact=%s "
-            "context_casefold=%s hidden_context_fallbacks=%s",
+            "context_casefold=%s hidden_context_fallbacks=%s "
+            "entropy=%.3f norm_entropy=%.3f branching=%.1f confidence_min=%.3f "
+            "diag_steps=%s",
             trace.attempts_used,
             trace.markov_order_used,
             trace.jump_count,
@@ -1122,6 +1303,11 @@ class MarkovGenerator:
             trace.context_exact_matches,
             trace.context_casefold_matches,
             trace.hidden_context_fallbacks,
+            trace.mean_entropy_bits,
+            trace.mean_normalized_entropy,
+            trace.mean_branching,
+            trace.min_confidence,
+            trace.diagnostic_steps,
         )
 
     async def _pick_seed_start(
@@ -1301,6 +1487,7 @@ class MarkovGenerator:
         context_exact_matches: int,
         context_casefold_matches: int,
         hidden_context_fallbacks: int,
+        diagnostics: _DiagnosticsAccumulator | None = None,
     ) -> _GenerationAttempt:
         """Trim, strip and quality-gate generated tokens into an attempt.
 
@@ -1317,6 +1504,9 @@ class MarkovGenerator:
         leading_punctuation_stripped = finalized_token_count - len(generated)
         result = detokenize(generated, max_chars=max_chars)
 
+        diag = diagnostics or _DiagnosticsAccumulator()
+        steps = diag.steps
+
         def reject(reason: str) -> _GenerationAttempt:
             return _GenerationAttempt(
                 text="",
@@ -1329,6 +1519,13 @@ class MarkovGenerator:
                 context_exact_matches=context_exact_matches,
                 context_casefold_matches=context_casefold_matches,
                 hidden_context_fallbacks=hidden_context_fallbacks,
+                mean_entropy_bits=diag.entropy_bits_sum / steps if steps else 0.0,
+                mean_normalized_entropy=(
+                    diag.normalized_entropy_sum / steps if steps else 0.0
+                ),
+                mean_branching=diag.branching_sum / steps if steps else 0.0,
+                min_confidence=diag.min_confidence,
+                diagnostic_steps=steps,
             )
 
         if len(result) < 5:
@@ -1360,6 +1557,13 @@ class MarkovGenerator:
             context_exact_matches=context_exact_matches,
             context_casefold_matches=context_casefold_matches,
             hidden_context_fallbacks=hidden_context_fallbacks,
+            mean_entropy_bits=diag.entropy_bits_sum / steps if steps else 0.0,
+            mean_normalized_entropy=(
+                diag.normalized_entropy_sum / steps if steps else 0.0
+            ),
+            mean_branching=diag.branching_sum / steps if steps else 0.0,
+            min_confidence=diag.min_confidence,
+            diagnostic_steps=steps,
         )
 
     async def _run_generation_loop(
@@ -1389,6 +1593,7 @@ class MarkovGenerator:
         anchor_emit_tokens: list[str] | None = None,
         anchor_target_tokens: int = 0,
         rng: random.Random,
+        diagnostics: _DiagnosticsAccumulator | None = None,
     ) -> tuple[list[str], int, int, bool]:
         """Walk the Markov chain from ``start3`` until a stop condition.
 
@@ -1549,6 +1754,10 @@ class MarkovGenerator:
                     if (w2, w3, cand) not in visited_triplets
                 ]
                 pool = candidates or pool3
+                if diagnostics is not None:
+                    # M2R-010: diagnostics of the pool actually sampled from,
+                    # after dedup filtering and the order-mix decision.
+                    diagnostics.note_pool([cnt for _, cnt in pool])
                 w4 = weighted_next_choice(
                     pool,
                     next_explore,
@@ -1574,6 +1783,8 @@ class MarkovGenerator:
 
                 pool2 = await self._get2(chat_id, w2, w3)
                 if pool2:
+                    if diagnostics is not None:
+                        diagnostics.note_pool([cnt for _, cnt in pool2])
                     w4 = weighted_next_choice(
                         pool2,
                         next_explore,
@@ -1814,6 +2025,7 @@ class MarkovGenerator:
             anchor_target_tokens = generation_rng.randint(
                 JUMP_MIN_GENERATED_TOKENS, latest
             )
+        diagnostics = _DiagnosticsAccumulator()
         generated, order_used, jump_count, anchor_spliced = (
             await self._run_generation_loop(
                 chat_id,
@@ -1842,6 +2054,7 @@ class MarkovGenerator:
                 anchor_emit_tokens=deferred_anchor_emit,
                 anchor_target_tokens=anchor_target_tokens,
                 rng=generation_rng,
+                diagnostics=diagnostics,
             )
         )
         if deferred_anchor is not None:
@@ -1862,4 +2075,5 @@ class MarkovGenerator:
             context_exact_matches=context_exact_matches,
             context_casefold_matches=context_casefold_matches,
             hidden_context_fallbacks=hidden_context_fallbacks,
+            diagnostics=diagnostics,
         )

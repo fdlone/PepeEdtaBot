@@ -31,6 +31,41 @@ class ContextStateMatcher:
         for key in [key for key in self._cache if key[0] == chat_id]:
             self._cache.pop(key, None)
 
+    def apply_state_deltas(
+        self,
+        chat_id: int,
+        order: int,
+        deltas: dict[tuple[str, ...], int],
+    ) -> None:
+        """Fold learned-message state deltas into a cached index (M2R-030).
+
+        Only an already-cached ``(chat, order)`` index is updated — a cold one
+        rebuilds from SQL on demand. The affected casefolded buckets are
+        re-sorted with the same key the builder uses, so a folded index equals
+        a freshly built one (enforced by tests).
+        """
+        index = self._cache.get((chat_id, order))
+        if index is None or not deltas:
+            return
+        touched_folded: dict[tuple[str, ...], list[tuple[str, ...]]] = {}
+        for state, delta in deltas.items():
+            index.exact[state] = index.exact.get(state, 0) + delta
+            folded = tuple(token.casefold() for token in state)
+            touched_folded.setdefault(folded, []).append(state)
+        for folded, delta_states in touched_folded.items():
+            # Rebuild the bucket from its previous members plus the delta
+            # states — O(bucket + deltas), not a scan over the whole index.
+            members = {
+                state: index.exact[state]
+                for state, _ in index.casefolded.get(folded, ())
+                if state in index.exact
+            }
+            for state in delta_states:
+                members[state] = index.exact[state]
+            index.casefolded[folded] = tuple(
+                sorted(members.items(), key=lambda item: (-item[1], item[0]))
+            )
+
     async def match(
         self,
         chat_id: int,
