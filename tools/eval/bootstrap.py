@@ -10,6 +10,8 @@ from __future__ import annotations
 import random
 from statistics import mean
 
+from .metrics import distinct_n
+
 RESAMPLES = 1000
 _CI_SEED = 5_0913  # fixed: CIs must not change between identical runs
 
@@ -54,3 +56,40 @@ def delta_ci(
     hi = deltas[min(resamples - 1, round(0.975 * (resamples - 1)))]
     significant = lo > 0 or hi < 0
     return point, lo, hi, significant
+
+
+def distinct_delta_ci(
+    replies_a: list[tuple[str, ...]],
+    replies_b: list[tuple[str, ...]],
+    n: int,
+    *,
+    resamples: int = RESAMPLES,
+) -> tuple[float, float, float, bool] | None:
+    """Delta (b - a) of distinct-N with a 95% bootstrap CI and significance.
+
+    distinct-N is a configuration-level ratio (unique n-grams / all n-grams),
+    not a per-generation sample, so it is resampled over whole replies: each
+    resample draws ``len(replies)`` replies with replacement and recomputes the
+    ratio. This is what makes "distinct-2/3 rose" a checkable claim rather than
+    a comparison of two point estimates whose noise is unknown.
+
+    Returns ``None`` when either side has no n-grams to count.
+    """
+    point_a, _ = distinct_n(replies_a, n)
+    point_b, _ = distinct_n(replies_b, n)
+    if point_a is None or point_b is None:
+        return None
+    rng = random.Random(_CI_SEED + 2 + n)
+    deltas: list[float] = []
+    for _ in range(resamples):
+        sample_a, _ = distinct_n(rng.choices(replies_a, k=len(replies_a)), n)
+        sample_b, _ = distinct_n(rng.choices(replies_b, k=len(replies_b)), n)
+        if sample_a is None or sample_b is None:
+            continue
+        deltas.append(sample_b - sample_a)
+    if not deltas:
+        return None
+    deltas.sort()
+    lo = deltas[max(0, round(0.025 * (len(deltas) - 1)))]
+    hi = deltas[min(len(deltas) - 1, round(0.975 * (len(deltas) - 1)))]
+    return point_b - point_a, lo, hi, (lo > 0 or hi < 0)
