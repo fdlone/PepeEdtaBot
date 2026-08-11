@@ -100,7 +100,12 @@ def _route(trace: GenerationTrace) -> str:
         f"start_source={trace.start_source} "
         f"markov_order_used={trace.markov_order_used} "
         f"{ctx} jumps={trace.jump_count} "
-        f"lead_punct_stripped={trace.leading_punctuation_stripped}"
+        f"lead_punct_stripped={trace.leading_punctuation_stripped} "
+        # M2R-010: step-pool diagnostics of the walk (means over its steps).
+        f"entropy={trace.mean_entropy_bits:.2f} "
+        f"norm_entropy={trace.mean_normalized_entropy:.2f} "
+        f"branching={trace.mean_branching:.1f} "
+        f"conf_min={trace.min_confidence:.2f}"
     )
 
 

@@ -140,6 +140,9 @@ class _ProdVerbatimChecker:
         self._word_frequencies: dict[str, int] | None = None
         self._frequencies_by_ending: dict[str, dict[str, int]] | None = None
         self._hot_ngrams: list[tuple[str, ...]] | None = None
+        self._shadow_order4: (
+            dict[tuple[str, str, str, str], dict[str, int]] | None
+        ) = None
 
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool:
         normalized = normalize_for_verbatim(text)
@@ -193,6 +196,29 @@ class _ProdVerbatimChecker:
                 chat_id, min_count=min_count, recency_share=recency_share
             )
         return self._hot_ngrams
+
+    async def get_order4_shadow_index(
+        self, chat_id: int
+    ) -> dict[tuple[str, str, str, str], dict[str, int]]:
+        # M2R-020 (Phase 1): window-estimated order-4 support, mirroring
+        # LearningService.get_order4_shadow_index over the same message set —
+        # eval runs are where the Phase 7 gate data comes from.
+        if self._shadow_order4 is None:
+            index: dict[tuple[str, str, str, str], dict[str, int]] = {}
+            for message in self._messages:
+                folded = [token.casefold() for token in tokenize(message)]
+                for i in range(len(folded) - 4):
+                    state = (
+                        folded[i],
+                        folded[i + 1],
+                        folded[i + 2],
+                        folded[i + 3],
+                    )
+                    bucket = index.setdefault(state, {})
+                    continuation = folded[i + 4]
+                    bucket[continuation] = bucket.get(continuation, 0) + 1
+            self._shadow_order4 = index
+        return self._shadow_order4
 
 
 class _TraceCapturingGenerator(MarkovGenerator):

@@ -466,6 +466,7 @@ class ReplyPipeline:
             chat_id=msg.chat_id,
             raw_text=obs.learn_source,
             tokens=obs.tokens,
+            incremental_cache=state.markov_cache_incremental,
         )
         # L1 running jokes: fold the learned message's content n-grams into the
         # sliding hot-ngram window. Gated on the channel knob so a zero chance

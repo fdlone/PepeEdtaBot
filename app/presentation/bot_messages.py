@@ -75,8 +75,36 @@ def format_help_message() -> str:
     )
 
 
-def format_stats_message(stats: dict[str, int]) -> str:
-    return f"объём модели: {stats['volume']}"
+def format_stats_message(
+    stats: dict[str, int],
+    telemetry: dict[str, float | int | None] | None = None,
+) -> str:
+    """Объём модели плюс телеметрия генерации (Markov 2.0R Phase 1).
+
+    Телеметрия — счётчики за время жизни процесса; до первой генерации после
+    рестарта показывать нечего, и блок опускается целиком.
+    """
+    lines = [f"объём модели: {stats['volume']}"]
+    if telemetry and telemetry.get("generations"):
+        lines.append(f"генераций с рестарта: {telemetry['generations']}")
+        mean_entropy = telemetry.get("mean_normalized_entropy")
+        mean_branching = telemetry.get("mean_branching")
+        if mean_entropy is not None and mean_branching is not None:
+            lines.append(
+                f"энтропия шага (норм.): {mean_entropy:.2f}, "
+                f"ветвление: {mean_branching:.1f}"
+            )
+        hit_rate = telemetry.get("cache_hit_rate")
+        if hit_rate is not None:
+            lines.append(f"кэш распределений: {hit_rate:.0%} попаданий")
+        eligible = telemetry.get("shadow_order4_eligible")
+        share = telemetry.get("shadow_order4_selected_share")
+        if eligible and share is not None:
+            lines.append(
+                f"order-4 (тень, оценка по окну): выбрался бы в {share:.0%} "
+                f"из {eligible} шагов"
+            )
+    return "\n".join(lines)
 
 
 def format_config_message(

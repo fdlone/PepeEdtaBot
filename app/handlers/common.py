@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 from app.config.runtime_state import RuntimeState
+from app.core.markov import MarkovGenerator
 from app.filters import GroupOnly
 from app.handlers._helpers import reply_humanized_state
 from app.infrastructure.database import Database
@@ -25,12 +26,20 @@ async def cmd_help(message: Message, runtime_state: RuntimeState) -> None:
 
 @router.message(Command("stats"), GroupOnly())
 async def cmd_stats(
-    message: Message, db: Database, runtime_state: RuntimeState
+    message: Message,
+    db: Database,
+    runtime_state: RuntimeState,
+    generator: MarkovGenerator,
 ) -> None:
     # Показывается только объём модели, поэтому и читается только он: полный
     # срез (`get_stats`) — это пять COUNT-ов по чату, из которых команда не
-    # печатает ни одного.
+    # печатает ни одного. Телеметрия генерации — счётчики процесса, без
+    # обращений к базе.
     volume = await db.get_chat_token_volume(message.chat.id)
     await reply_humanized_state(
-        message, format_stats_message({"volume": volume}), runtime_state
+        message,
+        format_stats_message(
+            {"volume": volume}, telemetry=generator.telemetry.snapshot()
+        ),
+        runtime_state,
     )

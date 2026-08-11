@@ -107,13 +107,44 @@ def evaluate_gates(
         detail = "no baseline run"
     rows.append(("phase6_anticycle", INSUFFICIENT, detail))
 
-    rows.append(
-        (
-            "phase7_order4",
-            INSUFFICIENT,
-            "shadow order selector lands in Phase 1; no shadow data yet",
+    phase7 = thresholds.get("phase7_order4", {})
+    shadow_eligible = 0
+    shadow_selected_share: float | None = None
+    if baseline is not None and baseline.telemetry:
+        eligible_counts = [
+            int(snapshot.get("shadow_order4_eligible") or 0)
+            for snapshot in baseline.telemetry
+        ]
+        shares = [
+            float(share)
+            for snapshot in baseline.telemetry
+            if (share := snapshot.get("shadow_order4_selected_share")) is not None
+        ]
+        shadow_eligible = sum(eligible_counts)
+        if shares:
+            shadow_selected_share = mean(shares)
+    if shadow_selected_share is None or shadow_eligible < 1000:
+        rows.append(
+            (
+                "phase7_order4",
+                INSUFFICIENT,
+                f"shadow data: {shadow_eligible} eligible steps "
+                "(need >= 1000 for a verdict; estimator=window)",
+            )
         )
-    )
+    else:
+        threshold = float(phase7.get("order4_selected_share_min", 0.10))
+        verdict = "pass" if shadow_selected_share >= threshold else "fail"
+        rows.append(
+            (
+                "phase7_order4",
+                verdict,
+                f"shadow order-4 share {shadow_selected_share:.1%} vs "
+                f"threshold {threshold:.0%} over {shadow_eligible} eligible "
+                "steps (estimator=window — conservative lower bound); the "
+                "exact-copy condition is checked at Phase 7 proposal time",
+            )
+        )
 
     perf = thresholds.get("performance", {})
     budget = float(perf.get("generation_p95_ms_max", 150))
@@ -201,18 +232,40 @@ def build_report(
                 cells.append(_delta_cell(baseline_values.get(metric), samples))
         lines.append(f"| {metric} | " + " | ".join(cells) + " |")
     for config_id in ordered:
-        replies = [r.reply_content for r in runs[config_id].records if r.success]
+        run = runs[config_id]
+        replies = [r.reply_content for r in run.records if r.success]
         d2, basis2 = distinct_n(replies, 2)
         d3, basis3 = distinct_n(replies, 3)
-        latencies = latency_percentiles(runs[config_id].records)
+        latencies = latency_percentiles(run.records)
+        hit_rates = [
+            snapshot["cache_hit_rate"]
+            for snapshot in run.telemetry
+            if snapshot.get("cache_hit_rate") is not None
+        ]
+        hit_line = (
+            f"{mean([float(rate) for rate in hit_rates]):.0%}"
+            if hit_rates
+            else INSUFFICIENT
+        )
+        shadow_shares = [
+            snapshot["shadow_order4_selected_share"]
+            for snapshot in run.telemetry
+            if snapshot.get("shadow_order4_selected_share") is not None
+        ]
+        shadow_line = (
+            f"{mean([float(share) for share in shadow_shares]):.1%} "
+            "(estimator=window)"
+            if shadow_shares
+            else INSUFFICIENT
+        )
         lines.append("")
         lines.append(
             f"{config_id}: distinct-2 = {d2 and _fmt(d2)} (basis {basis2}), "
             f"distinct-3 = {d3 and _fmt(d3)} (basis {basis3}) — type/token ratios, "
             "comparable only at equal basis; "
             f"latency p50/p95 = {latencies['latency_p50']:.1f}/"
-            f"{latencies['latency_p95']:.1f} ms; cache_hit_rate: {INSUFFICIENT} "
-            "(no cache instrumentation before Phase 1); storage_delta: n/a."
+            f"{latencies['latency_p95']:.1f} ms; cache_hit_rate: {hit_line}; "
+            f"shadow order-4 share: {shadow_line}; storage_delta: n/a."
         )
     lines.append("")
 

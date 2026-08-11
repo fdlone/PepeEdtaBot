@@ -123,7 +123,9 @@ async def run_bot() -> None:
     await db.init()
     # Генератору отдаётся репозиторий цепи, а не фасад: ядру нужен только
     # порт чтения (app/core/markov_port.py), и реализует его именно репозиторий.
-    generator = MarkovGenerator(db=db.markov)
+    generator = MarkovGenerator(
+        db=db.markov, cache_limit=settings.markov_cache_max_entries
+    )
     pivo_security = PivoSecurity(
         hmac_secret=settings.pivo_hmac_secret,
         encryption_secret=settings.pivo_encryption_secret,

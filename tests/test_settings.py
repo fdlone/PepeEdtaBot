@@ -25,6 +25,7 @@ SETTINGS_ONLY_ENV_VARS: tuple[str, ...] = (
     "THROTTLE_STATE_TTL_SEC",
     "THROTTLE_STATE_MAX_KEYS",
     "TEXT_CACHE_MAX_MESSAGES",
+    "MARKOV_CACHE_MAX_ENTRIES",
 )
 
 # Идентичность деплоя: значения у каждого своя, сверять их с дефолтами нечего,
