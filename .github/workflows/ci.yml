@@ -46,6 +46,14 @@ jobs:
           python -m coverage run -m unittest discover tests -v
           python -m coverage report
 
+      # Markov 2.0R eval smoke (docs/v2/05 §7): C0+CF on the synthetic
+      # snapshot, 40 generations, 1 seed. Gates only on runner errors and
+      # invariant violations, never on metric thresholds. One matrix cell is
+      # enough — the smoke checks the pipeline, not the interpreter.
+      - name: Eval protocol smoke (Markov 2.0R)
+        if: matrix.python-version == '3.12'
+        run: python -m tools.eval --smoke
+
       - name: Security scan (bandit)
         run: python -m bandit -c pyproject.toml -r app tools main.py -x tests --severity-level medium --confidence-level medium
 

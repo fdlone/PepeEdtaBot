@@ -1,0 +1,37 @@
+# Pre-registered gate thresholds (doc 05 §4).
+#
+# Fixed 2026-08-11, BEFORE any gated data was examined (pre-registration rule).
+# Changing any number after this point requires a dedicated commit with written
+# justification. Gate verdicts are computed strictly from this file.
+#
+# Rationale for the numbers is recorded here at registration time so a later
+# reader can audit whether an edit was post-hoc.
+
+phase5_promotion:
+  # ADR-012 / TZ §9.6. A seeded candidate pool share of 0.3 means a "null"
+  # seeded win rate of ~0.30 (winning its pool share = adding nothing), so the
+  # win-rate bar is set meaningfully above the null, and the presence bar keeps
+  # the denominator honest (doc 05 §3.4).
+  seeded_present_rate_min: 0.30
+  seeded_win_rate_given_present_min: 0.40
+  # context_affinity_without_copy delta vs the no-seeded ablation must be
+  # positive AND significant (CI excludes 0) — doc 05 §4 significance rule.
+  affinity_without_copy_delta_min: 0.0
+  latency_p95_ms_max: 150        # TZ §17 full-generation budget
+  storage_growth_max_share: 0.35 # reverse order-2 ~ transitions table ~30% of DB
+
+phase6_anticycle:
+  # Two-dimensional gate (ADR-015): BOTH must exceed. Cycle != harm.
+  cycle_detection_rate_min: 0.05
+  cycle_harm_rate_min: 0.02
+
+phase7_order4:
+  # Shadow selector (Phase 1) must show order-4 actually being chosen, and the
+  # exact-copy rate must not rise significantly in the shadow projection.
+  order4_selected_share_min: 0.10
+  exact_copy_delta_max: 0.0      # significant increase disqualifies
+
+performance:
+  # TZ §17, checked from Phase 1 onward on every protocol run.
+  lookup_p95_ms_max: 10
+  generation_p95_ms_max: 150

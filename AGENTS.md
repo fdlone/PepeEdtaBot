@@ -36,7 +36,8 @@ Always on:
 | `code-review@claude-plugins-official` → `/code-review` | Reviewing a PR before merge. |
 | `pyright-lsp@claude-plugins-official` | Editor-time diagnostics. CI type checking is mypy strict — pyright never overrules `pyproject.toml`. |
 | `ponytail@ponytail` | Over-engineering brake: `/ponytail-review` on a diff, `/ponytail-audit` on the repo, `/ponytail-debt` for `ponytail:` markers. Serves the "prefer minimal safe changes" rule above. |
-| `property-based-testing@trailofbits` | Designing tests for the generation path — scoring, stemming, serialization, anything with an invariant worth stating. |
+| `property-based-testing@trailofbits` | Designing tests for the generation path — scoring, stemming, serialization, anything with an invariant worth stating. Property tests use `hypothesis` (dev dependency). |
+| `tools/eval` (in-repo) | Markov 2.0R eval protocol: ablation matrix C0–CF, pre-registered gates, reports to `docs/eval_reports/`. Normative docs: `docs/v2/01–05`. Every 2.0R phase gates on it. |
 | `skills-lock.json` → `python-anti-patterns`, `python-testing-patterns` | Checklists when reviewing Python or extending the pytest suite. |
 
 Deliberately off — enable per task, then turn back off:
