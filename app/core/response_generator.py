@@ -39,6 +39,7 @@ from app.core.markov import (
 )
 from app.core.mood import HEATED, NEUTRAL_MODIFIERS, MoodModifiers
 from app.core.reply_flavor import apply_reply_flavor
+from app.core.shadow_order import shadow_order4_stats
 from app.core.slot_mutation import mutate_candidate_tokens
 from app.core.text import capitalize_reply_sentences, sanitize_text
 from app.log_masking import mask_chat_id
@@ -95,6 +96,9 @@ class VerbatimCopyChecker(Protocol):
     async def get_hot_ngrams(
         self, chat_id: int, *, min_count: int, recency_share: float
     ) -> list[tuple[str, ...]]: ...
+    async def get_order4_shadow_index(
+        self, chat_id: int
+    ) -> Mapping[tuple[str, str, str, str], Mapping[str, int]]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -486,6 +490,7 @@ class ResponseGenerator:
         target = max(1, min(candidate_target, GENERATION_ATTEMPT_BUDGET))
         candidates: list[_ScoredCandidate] = []
         seen_candidates: set[str] = set()
+        attempt_jump_counts: dict[str, int] = {}
         recent_penalty_strength = self.runtime_state.recent_reply_penalty_strength
         recent_trigrams = (
             build_recent_reply_trigrams(
@@ -587,6 +592,14 @@ class ResponseGenerator:
                 rng=generation_rng,
                 attempt_budget=1,
             )
+            if candidate:
+                # M2R-020: jump count per candidate text — the shadow selector
+                # below skips replies whose token adjacency crosses a splice.
+                # getattr-guarded: test doubles stub the trace with namespaces;
+                # an unknown jump count (-1) simply skips the shadow measure.
+                attempt_jump_counts[candidate] = getattr(
+                    candidate_trace, "jump_count", -1
+                )
             if not candidate:
                 logger.debug(
                     "Generation attempt failed: chat=%s attempt=%s context=%s seed_len=%s",
@@ -780,6 +793,26 @@ class ResponseGenerator:
             selection_margin_used=True,
             selected=selected,
         )
+        # M2R-020 shadow order-4 selector: measurement only, after selection,
+        # over the winner's raw token sequence. Skipped for replies with jumps
+        # or texts not produced by a single walk (extensions/mutations) — their
+        # adjacency crosses splice boundaries. getattr-guarded: test doubles
+        # and older harnesses may not implement the protocol method yet.
+        if (
+            getattr(self.runtime_state, "markov_shadow_order4_enabled", False)
+            and attempt_jump_counts.get(selected.text) == 0
+        ):
+            shadow_index_getter = getattr(
+                self.learning_service, "get_order4_shadow_index", None
+            )
+            if shadow_index_getter is not None:
+                shadow_index = await shadow_index_getter(request.chat_id)
+                eligible, chosen = shadow_order4_stats(
+                    tokenize(selected.text), shadow_index
+                )
+                self.generator.telemetry.note_shadow(
+                    eligible=eligible, selected=chosen
+                )
         text = (
             capitalize_reply_sentences(selected.text)
             if self.runtime_state.auto_capitalize_replies
