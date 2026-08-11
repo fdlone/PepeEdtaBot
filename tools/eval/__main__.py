@@ -1,0 +1,204 @@
+"""CLI for the Markov 2.0R eval protocol (doc 05).
+
+Usage:
+    python -m tools.eval --db db_prod_copy/markov.db --label baseline
+    python -m tools.eval --smoke
+    python -m tools.eval --generate-prompts --db <snapshot> --label <snapshot-id>
+
+``--smoke`` is the CI mode (doc 05 §7): C0 + CF on a freshly built synthetic
+snapshot, 40 generations, 1 seed; fails the process on runner errors or
+invariant violations (never on metric thresholds).
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import datetime as _dt
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from tools.eval.config import (  # noqa: E402
+    MATRIX_PATH,
+    THRESHOLDS_PATH,
+    load_matrix,
+    load_thresholds,
+)
+from tools.eval.metrics import metric_values  # noqa: E402
+from tools.eval.prompts import (  # noqa: E402
+    PROMPTS_PATH,
+    generate_prompts,
+    load_prompts,
+    save_prompts,
+)
+from tools.eval.report import build_report, metrics_summary  # noqa: E402
+from tools.eval.run import (  # noqa: E402
+    DEFAULT_GENERATIONS,
+    PROTOCOL_SEEDS,
+    SMOKE_GENERATIONS,
+    run_matrix,
+)
+from tools.eval.synthetic import SYNTHETIC_CHAT_ID, build_synthetic_snapshot  # noqa: E402
+
+REPORTS_DIR = PROJECT_ROOT / "docs" / "eval_reports"
+
+
+def _revision() -> str:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+            check=True,
+        )
+        return out.stdout.strip()
+    except Exception:
+        return "unknown"
+
+
+def _parse_seeds(raw: str | None) -> tuple[int, ...]:
+    if not raw:
+        return PROTOCOL_SEEDS
+    return tuple(int(part) for part in raw.split(",") if part.strip())
+
+
+async def _smoke() -> int:
+    db_path, temp_dir = await build_synthetic_snapshot()
+    try:
+        prompt_set = generate_prompts(
+            db_path,
+            chat_id=SYNTHETIC_CHAT_ID,
+            seed=PROTOCOL_SEEDS[0],
+            snapshot_label="snapshot_synthetic",
+            per_category=30,
+        )
+        configs = load_matrix()
+        runs, _skipped = await run_matrix(
+            db_source=db_path,
+            chat_id=SYNTHETIC_CHAT_ID,
+            configs={c: configs[c] for c in ("C0", "CF")},
+            prompt_set=prompt_set,
+            seeds=(PROTOCOL_SEEDS[0],),
+            generations=SMOKE_GENERATIONS,
+        )
+    finally:
+        if temp_dir is not None:
+            temp_dir.cleanup()
+    # Invariant checks only (spec: smoke never gates on metric thresholds).
+    failures: list[str] = []
+    for config_id, run in runs.items():
+        values = metric_values(run.records)
+        success = values["generation_success_rate"]
+        if not success or sum(success) == 0:
+            failures.append(f"{config_id}: empty-output collapse (no successful generations)")
+        for name, samples in values.items():
+            for sample in samples or ():
+                if not (sample == sample) or sample in (float("inf"), float("-inf")):
+                    failures.append(f"{config_id}: {name} produced NaN/inf")
+                    break
+    if failures:
+        print("SMOKE FAILED:")
+        for failure in failures:
+            print(f"  - {failure}")
+        return 1
+    summary = metrics_summary(runs)
+    print(json.dumps({"smoke": "ok", "summary": summary}, indent=2, sort_keys=True))
+    return 0
+
+
+async def _protocol(args: argparse.Namespace) -> int:
+    seeds = _parse_seeds(args.seeds)
+    configs = load_matrix(Path(args.matrix))
+    thresholds = load_thresholds(Path(args.thresholds))
+    prompt_set = load_prompts(Path(args.prompts))
+    runs, skipped = await run_matrix(
+        db_source=Path(args.db),
+        chat_id=args.chat_id,
+        configs=configs,
+        prompt_set=prompt_set,
+        seeds=seeds,
+        generations=args.generations,
+    )
+    date = _dt.date.today().isoformat()
+    report = build_report(
+        runs=runs,
+        skipped=skipped,
+        prompt_set=prompt_set,
+        thresholds=thresholds,
+        snapshot_label=args.label,
+        seeds=seeds,
+        generations=args.generations,
+        revision=_revision(),
+        date=date,
+        notes=[
+            "IDF for affinity metrics is computed over the snapshot's retained "
+            "message window (full history is not stored) — window-relative, "
+            "identical across configurations (audit §3).",
+        ],
+    )
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = REPORTS_DIR / f"eval_{date}_{args.label}.md"
+    out_path.write_text(report, encoding="utf-8")
+    print(f"report: {out_path}")
+    if args.json_out:
+        Path(args.json_out).write_text(
+            json.dumps(metrics_summary(runs), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        print(f"metrics summary: {args.json_out}")
+    return 0
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="python -m tools.eval", description=__doc__)
+    parser.add_argument("--db", type=str, help="snapshot DB path (protocol/prompt modes)")
+    parser.add_argument("--chat-id", type=int, default=None)
+    parser.add_argument("--matrix", type=str, default=str(MATRIX_PATH))
+    parser.add_argument("--thresholds", type=str, default=str(THRESHOLDS_PATH))
+    parser.add_argument("--prompts", type=str, default=str(PROMPTS_PATH))
+    parser.add_argument(
+        "--seeds", type=str, default=None, help="comma-separated; default 42,1337,2026"
+    )
+    parser.add_argument("--generations", type=int, default=DEFAULT_GENERATIONS)
+    parser.add_argument("--label", type=str, default="run", help="snapshot label for the report")
+    parser.add_argument("--json-out", type=str, default=None)
+    parser.add_argument("--smoke", action="store_true", help="CI smoke mode (doc 05 §7)")
+    parser.add_argument(
+        "--generate-prompts",
+        action="store_true",
+        help="build eval_prompts.yaml from the snapshot and exit",
+    )
+    parser.add_argument("--prompt-seed", type=int, default=PROTOCOL_SEEDS[0])
+    args = parser.parse_args()
+
+    if args.smoke:
+        raise SystemExit(asyncio.run(_smoke()))
+    if args.generate_prompts:
+        if not args.db:
+            parser.error("--generate-prompts requires --db")
+        from tools.eval_prod import pick_chat_id
+
+        chat = pick_chat_id(Path(args.db), args.chat_id)
+        prompt_set = generate_prompts(
+            Path(args.db),
+            chat_id=chat,
+            seed=args.prompt_seed,
+            snapshot_label=args.label,
+        )
+        save_prompts(prompt_set)
+        print(f"prompts: {PROMPTS_PATH} (version {prompt_set.version})")
+        raise SystemExit(0)
+    if not args.db:
+        parser.error("--db is required (or use --smoke)")
+    raise SystemExit(asyncio.run(_protocol(args)))
+
+
+if __name__ == "__main__":
+    main()

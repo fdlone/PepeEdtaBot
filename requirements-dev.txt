@@ -1,6 +1,8 @@
 -r requirements.lock
 bandit>=1.8.0
 coverage>=7.6.0
+# Property-based tests for generation invariants (Markov 2.0R, TZ §19). Dev-only.
+hypothesis>=6.100.0
 mypy>=2.0.0
 pip-audit>=2.9.0
 ruff>=0.15.0

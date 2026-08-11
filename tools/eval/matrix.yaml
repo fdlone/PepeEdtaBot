@@ -1,0 +1,48 @@
+# Ablation configuration matrix (doc 05 §2).
+#
+# Each configuration = runtime-knob overrides on top of registry defaults.
+# C0 is the FROZEN Markov 1.x baseline: registry defaults with the surface
+# layers silenced (the established eval convention — reply_flavor_strength=0,
+# emoji_append_chance=0 keep flavor/emoji out of content metrics). C0 is never
+# edited after freezing; a new baseline gets a new id.
+#
+# C1–C5 are declared but unavailable until their phases land; the runner skips
+# them and says so in the report (spec: "Before any V2 feature exists").
+# CF aliases C0 while no V2 feature is enabled.
+configurations:
+  - id: C0
+    description: "Markov 1.x frozen baseline (registry defaults, flavor/emoji silenced)"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+  - id: C1
+    description: "V2: entropy sampling only (Phase 2)"
+    available: false
+    same_as: C0
+    overrides: {}
+  - id: C2
+    description: "V2: temporal blend only (Phase 3)"
+    available: false
+    same_as: C0
+    overrides: {}
+  - id: C3
+    description: "V2: PMI memes + collocation scoring only (Phase 4)"
+    available: false
+    same_as: C0
+    overrides: {}
+  - id: C4
+    description: "V2: lexical anchoring only (seeded + IDF scoring, Phase 5)"
+    available: false
+    same_as: C0
+    overrides: {}
+  - id: C5
+    description: "V2: entropy + blend (cumulative core)"
+    available: false
+    same_as: C0
+    overrides: {}
+  - id: CF
+    description: "V2: all currently enabled features (none yet -> alias of C0)"
+    available: true
+    same_as: C0
+    overrides: {}
