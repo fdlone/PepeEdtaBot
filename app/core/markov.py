@@ -23,6 +23,9 @@ PUNCT_SET = {".", ",", "!", "?", ";", ":"}
 DEFAULT_GENERATION_ATTEMPT_BUDGET = 1
 EXPLORATION_FLATTENING = 1.5
 EXPLORATION_POWER_FLOOR = 0.02
+# Floor under the entropy-adjusted temperature: a large negative gain can drive
+# T to zero or below, and 1/T is taken right after.
+_MIN_SAMPLING_TEMPERATURE = 0.01
 SHORT_REPLY_MAX_CONTENT_TOKENS = 3
 REJECTION_NO_STARTS = "no_starts"
 REJECTION_NO_START_TRANSITION = "no_start_transition"
@@ -179,6 +182,53 @@ def pool_diagnostics(counts: list[int]) -> tuple[float, float, int, float]:
     return entropy, normalized, branching, 1.0 - normalized
 
 
+@dataclass(frozen=True, slots=True)
+class EntropySampling:
+    """Entropy-aware sampling temperature (M2R-100, TZ §6).
+
+    The sampler weights candidates as ``cnt ** power``, so ``power`` is an
+    inverse temperature: ``T_base = 1/power``, and ``randomness_strength``
+    keeps its established meaning as the scale of ``T_base``. This applies the
+    per-pool term of TZ §6 — ``T = T_base·(1 + gain·(H_norm − pivot))``,
+    clamped — and hands back a power for the existing machinery.
+
+    The default instance is the neutral one: a generation that never builds a
+    tuned instance behaves exactly like Markov 1.x.
+    """
+
+    gain: float = 0.0
+    pivot: float = 0.5
+    temp_min: float = 0.5
+    temp_max: float = 12.0
+
+    def power_for(self, power: float, normalized_entropy: float) -> float:
+        """Entropy-adjusted frequency power for one pool.
+
+        Zero gain returns the input unchanged through an explicit branch taken
+        before any arithmetic. Relying on ``x * 1.0 == x`` would still be exact,
+        but the clamp is not: a ``T_base`` outside ``[temp_min, temp_max]``
+        would be pulled to a bound even at zero gain, and this phase's contract
+        is that zero gain is byte-identical to 1.x. The early return makes that
+        structural instead of a float coincidence. No random draw either way,
+        so the RNG stream is untouched.
+        """
+        if self.gain == 0.0 or power <= 0.0:
+            return power
+        # Two individually valid /set calls can leave min above max; ordering
+        # the pair beats pinning every step to a nonsense constant.
+        low, high = (
+            (self.temp_min, self.temp_max)
+            if self.temp_min <= self.temp_max
+            else (self.temp_max, self.temp_min)
+        )
+        low = max(low, _MIN_SAMPLING_TEMPERATURE)
+        high = max(high, low)
+        temperature = (1.0 / power) * (
+            1.0 + self.gain * (normalized_entropy - self.pivot)
+        )
+        return 1.0 / max(low, min(high, temperature))
+
+
 @dataclass(slots=True)
 class _DiagnosticsAccumulator:
     """Per-attempt sums of step-pool diagnostics (M2R-010)."""
@@ -189,13 +239,37 @@ class _DiagnosticsAccumulator:
     steps: int = 0
     min_confidence: float = 1.0
 
-    def note_pool(self, counts: list[int]) -> None:
+    def note_pool(self, counts: list[int]) -> float:
+        """Accumulate one pool's diagnostics; returns its normalized entropy.
+
+        Returning the value is what lets M2R-100 sample from the same numbers
+        the telemetry reports without computing them a second time per step.
+        """
         entropy, normalized, branching, confidence = pool_diagnostics(counts)
         self.entropy_bits_sum += entropy
         self.normalized_entropy_sum += normalized
         self.branching_sum += branching
         self.steps += 1
         self.min_confidence = min(self.min_confidence, confidence)
+        return normalized
+
+
+def _step_entropy(
+    diagnostics: _DiagnosticsAccumulator | None,
+    pool: list[tuple[str, int]],
+    entropy_sampling: EntropySampling,
+) -> float:
+    """Normalized entropy of one step's pool, computed at most once.
+
+    Telemetry (M2R-010) needs it for every step anyway, so the accumulator is
+    the source. Without one (test doubles pass no accumulator) it is computed
+    only when sampling actually consumes it.
+    """
+    if diagnostics is not None:
+        return diagnostics.note_pool([cnt for _, cnt in pool])
+    if entropy_sampling.gain == 0.0:
+        return 0.0
+    return pool_diagnostics([cnt for _, cnt in pool])[1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1151,6 +1225,7 @@ class MarkovGenerator:
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
         context_anchor_splice_probability: float = 0.0,
+        entropy_sampling: EntropySampling = EntropySampling(),
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> str:
@@ -1179,6 +1254,7 @@ class MarkovGenerator:
             context_jump_boost=context_jump_boost,
             order_mix_probability=order_mix_probability,
             context_anchor_splice_probability=context_anchor_splice_probability,
+            entropy_sampling=entropy_sampling,
             rng=rng,
             attempt_budget=attempt_budget,
         )
@@ -1209,6 +1285,7 @@ class MarkovGenerator:
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
         context_anchor_splice_probability: float = 0.0,
+        entropy_sampling: EntropySampling = EntropySampling(),
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> tuple[str, GenerationTrace]:
@@ -1239,6 +1316,7 @@ class MarkovGenerator:
                 context_jump_boost=context_jump_boost,
                 order_mix_probability=order_mix_probability,
                 context_anchor_splice_probability=context_anchor_splice_probability,
+                entropy_sampling=entropy_sampling,
                 rng=generation_rng,
                 emit_start=True,
             )
@@ -1594,6 +1672,7 @@ class MarkovGenerator:
         anchor_target_tokens: int = 0,
         rng: random.Random,
         diagnostics: _DiagnosticsAccumulator | None = None,
+        entropy_sampling: EntropySampling = EntropySampling(),
     ) -> tuple[list[str], int, int, bool]:
         """Walk the Markov chain from ``start3`` until a stop condition.
 
@@ -1754,14 +1833,18 @@ class MarkovGenerator:
                     if (w2, w3, cand) not in visited_triplets
                 ]
                 pool = candidates or pool3
-                if diagnostics is not None:
-                    # M2R-010: diagnostics of the pool actually sampled from,
-                    # after dedup filtering and the order-mix decision.
-                    diagnostics.note_pool([cnt for _, cnt in pool])
+                # M2R-010: diagnostics of the pool actually sampled from, after
+                # dedup filtering and the order-mix decision. M2R-100 samples
+                # from the same number: the step's power is the entropy-adjusted
+                # one, and the adjustment happens here — before
+                # ``weighted_next_choice`` rolls exploration on top of it.
+                step_power = entropy_sampling.power_for(
+                    next_power, _step_entropy(diagnostics, pool, entropy_sampling)
+                )
                 w4 = weighted_next_choice(
                     pool,
                     next_explore,
-                    next_power,
+                    step_power,
                     rng,
                     context_token_set=context_token_set,
                     context_pairs=context_pairs,
@@ -1783,12 +1866,14 @@ class MarkovGenerator:
 
                 pool2 = await self._get2(chat_id, w2, w3)
                 if pool2:
-                    if diagnostics is not None:
-                        diagnostics.note_pool([cnt for _, cnt in pool2])
+                    step_power = entropy_sampling.power_for(
+                        next_power,
+                        _step_entropy(diagnostics, pool2, entropy_sampling),
+                    )
                     w4 = weighted_next_choice(
                         pool2,
                         next_explore,
-                        next_power,
+                        step_power,
                         rng,
                         context_token_set=context_token_set,
                         context_pairs=context_pairs,
@@ -1852,6 +1937,7 @@ class MarkovGenerator:
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
         context_anchor_splice_probability: float = 0.0,
+        entropy_sampling: EntropySampling = EntropySampling(),
         rng: random.Random | None = None,
         emit_start: bool = True,
     ) -> _GenerationAttempt:
@@ -2055,6 +2141,7 @@ class MarkovGenerator:
                 anchor_target_tokens=anchor_target_tokens,
                 rng=generation_rng,
                 diagnostics=diagnostics,
+                entropy_sampling=entropy_sampling,
             )
         )
         if deferred_anchor is not None:

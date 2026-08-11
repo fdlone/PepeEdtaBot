@@ -15,10 +15,10 @@ No schema change and no migration in this phase (TZ §6 is sampling-only).
 
 ## 3. M2R-100 — Entropy → temperature (core)
 
-- [ ] 3.1 Pure helper: `T = T_base·(1 + GAIN·(H_norm − H_pivot))` clamped to `[T_min, T_max]`, expressed over the existing frequency power (`power = 1/T`), with the explicit early return at gain 0 / feature off (design D2)
-- [ ] 3.2 `_DiagnosticsAccumulator.note_pool` returns the diagnostics it already computes, so the walk can pass `normalized_entropy` into sampling without recomputing it
-- [ ] 3.3 New keyword-only parameter on `weighted_next_choice`, applied to the base power **before** `_roll_exploration` (design D1); absent at the three start-state call sites, so their behavior is untouched
-- [ ] 3.4 Wire the two walk-step call sites (`markov.py:1761` order-3, `markov.py:1788` order-2)
+- [x] 3.1 Pure helper: `T = T_base·(1 + GAIN·(H_norm − H_pivot))` clamped to `[T_min, T_max]`, expressed over the existing frequency power (`power = 1/T`), with the explicit early return at gain 0 / feature off (design D2)
+- [x] 3.2 `_DiagnosticsAccumulator.note_pool` returns the diagnostics it already computes, so the walk can pass `normalized_entropy` into sampling without recomputing it
+- [x] 3.3 Adjustment applied to the `power` argument at the call site, so it lands **before** `_roll_exploration` (which runs inside `weighted_next_choice`) — no new parameter on that function, and the three start-state call sites keep passing the unadjusted power (design D1)
+- [x] 3.4 Wire the two walk-step call sites (order-3 and order-2) plus the settings path: `EntropySampling` built once per generation in `ResponseGenerator`, applied to the candidate walk and to the verbatim extension
 
 ## 4. M2R-110 — Branching-aware candidate target (core)
 

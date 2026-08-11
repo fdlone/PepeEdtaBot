@@ -54,11 +54,17 @@ See `proposal.md` — Why. The design-relevant state of the code:
 
 ### D1 — Entropy modulates the base power, before the exploration roll
 
-`weighted_next_choice` gains one keyword-only parameter carrying the pool's
-already-computed normalized entropy; when it is absent (the three start-state
-call sites, and every existing test) behavior is exactly today's. Inside, the
-adjustment is applied to `power` *before* `_roll_exploration`, so exploration
-keeps flattening on top of the current temperature rather than replacing it.
+The adjustment happens at the two walk-step call sites, on the `power` argument
+handed to `weighted_next_choice`. Since `_roll_exploration` runs *inside* that
+function, passing an already-adjusted power puts entropy before the exploration
+roll by construction: exploration keeps flattening on top of the current
+temperature rather than replacing it.
+
+*As implemented, simpler than first planned:* `weighted_next_choice` needs no
+new parameter at all, and the three start-state call sites are untouched
+because they simply keep passing the unadjusted power. The settings travel as
+one frozen `EntropySampling` value (gain, pivot, clamps) whose default instance
+is the neutral one, instead of four floats threaded through four signatures.
 
 *Alternative rejected:* applying the adjustment after the roll. It would let
 entropy undo the exploration flattening, silently changing what
@@ -66,7 +72,8 @@ entropy undo the exploration flattening, silently changing what
 
 *Alternative rejected:* recomputing entropy inside `weighted_next_choice` from
 `items`. Same numbers, computed twice per step, for the convenience of not
-passing a float.
+passing a float. Instead `_DiagnosticsAccumulator.note_pool` returns the
+normalized entropy it already computes for telemetry.
 
 ### D2 — Neutrality is an early return, not a float coincidence
 

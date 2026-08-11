@@ -26,6 +26,7 @@ from app.core.intonation import IntonationProfile, blend_length_weights
 from app.core.markov import (
     JUMP_CONNECTIVE_TOKENS,
     PUNCT_SET,
+    EntropySampling,
     MarkovGenerator,
     content_tokens,
     detokenize,
@@ -229,6 +230,22 @@ class ResponseGenerator:
         )
         return result.text
 
+    @property
+    def entropy_sampling(self) -> EntropySampling:
+        """M2R-100 settings for this chat, resolved from the runtime knobs.
+
+        Applied to every walk that produces user-visible text, the verbatim
+        extension included — a setting that governs "how the chain sounds"
+        would otherwise stop at the sentence boundary where an extension begins.
+        """
+        state = self.runtime_state
+        return EntropySampling(
+            gain=state.markov_entropy_temp_gain,
+            pivot=state.markov_entropy_pivot,
+            temp_min=state.markov_entropy_temp_min,
+            temp_max=state.markov_entropy_temp_max,
+        )
+
     async def _candidate_reject_reason(
         self,
         request: GenerationRequest,
@@ -374,6 +391,7 @@ class ResponseGenerator:
             markov_order=state.markov_order,
             enable_backoff=state.enable_backoff,
             jump_probability=0.0,
+            entropy_sampling=self.entropy_sampling,
             rng=rng,
             attempt_budget=2,
         )
@@ -545,6 +563,7 @@ class ResponseGenerator:
         effective_randomness = max(
             0.0, self.runtime_state.randomness_strength + modifiers.randomness_delta
         )
+        entropy_sampling = self.entropy_sampling
 
         gen_trace_log.log_request_header(
             request.chat_id,
@@ -589,6 +608,7 @@ class ResponseGenerator:
                 context_anchor_splice_probability=(
                     self.runtime_state.context_anchor_splice_probability
                 ),
+                entropy_sampling=entropy_sampling,
                 rng=generation_rng,
                 attempt_budget=1,
             )
