@@ -28,16 +28,16 @@ No schema change and no migration in this phase (TZ §6 is sampling-only).
 
 ## 5. Unit tests
 
-- [ ] 5.1 Temperature mapping: pivot behavior, both signs of gain, clamp at both ends, degenerate pool (H_norm = 0), no non-positive or NaN temperature for any legal knob combination
-- [ ] 5.2 Sampling: flatter weights at high entropy with positive gain, sharper at low entropy; excluded tokens stay excluded (spec: entropy never overrides gates)
-- [ ] 5.3 Branching target: degenerate chain stops early; wide chain reaches the full target; a chain with zero accepted candidates still uses the whole budget (no empty reply from an early stop)
-- [ ] 5.4 Knob-off paths for both features hit the early return (no arithmetic, no RNG difference)
+- [x] 5.1 Temperature mapping: pivot behavior, both signs of gain, clamp at both ends, degenerate pool (H_norm = 0), no non-positive or NaN temperature for any legal knob combination
+- [x] 5.2 Sampling: flatter weights at high entropy with positive gain, sharper at low entropy; excluded tokens stay excluded (spec: entropy never overrides gates)
+- [x] 5.3 Branching target: degenerate chain stops early; wide chain reaches the full target; a chain with zero accepted candidates still uses the whole budget (no empty reply from an early stop)
+- [x] 5.4 Knob-off paths for both features hit the early return (no arithmetic, no RNG difference)
 
 ## 6. Property / invariant tests (TZ §19)
 
-- [ ] 6.1 For any pool and any legal knob values: weights stay ≥ 0, finite, and at least one candidate keeps positive weight
+- [x] 6.1 For any pool and any legal knob values: weights stay ≥ 0, finite, and at least one candidate keeps positive weight
 - [ ] 6.2 Determinism: same seed + same settings ⇒ identical output across runs
-- [ ] 6.3 Monotonicity of the mapping in `H_norm` for a fixed sign of gain (the direction the design claims is the direction the code produces)
+- [x] 6.3 Monotonicity of the mapping in `H_norm` for a fixed sign of gain (the direction the design claims is the direction the code produces)
 
 ## 7. Neutrality proof (the phase's hard contract)
 
