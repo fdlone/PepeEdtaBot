@@ -69,6 +69,13 @@ class Settings:
     markov_alpha_calm: float
     markov_alpha_lively: float
     markov_alpha_heated: float
+    markov_meme_min_joint_count: int
+    markov_meme_min_support: float
+    markov_meme_recency_days: float
+    markov_collocation_max_entries: int
+    markov_collocation_bonus: float
+    markov_collocation_break_penalty: float
+    markov_hot_ngram_meme_ordering: bool
     enable_backoff: bool
     markov_jump_probability: float
     context_jump_boost: float

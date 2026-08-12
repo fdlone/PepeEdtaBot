@@ -21,7 +21,7 @@ class CollocationsRepo(BaseRepo):
 
     async def read_pair_counts(
         self, chat_id: int, *, min_joint_count: int
-    ) -> list[tuple[str, str, int]]:
+    ) -> list[tuple[str, str, int, int | None]]:
         """``(left, right, joint_count)`` for pairs at or above the threshold.
 
         The threshold is in the ``HAVING`` clause on purpose: the excluded tail
@@ -31,7 +31,7 @@ class CollocationsRepo(BaseRepo):
         """
         rows = await self._fetch_all(
             """
-            SELECT w1, w2, SUM(cnt)
+            SELECT w1, w2, SUM(cnt), MAX(last_seen)
             FROM transitions
             WHERE chat_id = ?
             GROUP BY w1, w2
@@ -39,7 +39,15 @@ class CollocationsRepo(BaseRepo):
             """,
             (chat_id, min_joint_count),
         )
-        return [(str(r[0]), str(r[1]), int(r[2])) for r in rows]
+        return [
+            (
+                str(r[0]),
+                str(r[1]),
+                int(r[2]),
+                None if r[3] is None else int(r[3]),
+            )
+            for r in rows
+        ]
 
     async def read_token_marginals(
         self, chat_id: int

@@ -12,7 +12,7 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 - [x] 2.1 Migration `019_markov_collocations.sql`: `chat_id, left_token, right_token, joint_count, pmi, status, updated_at`, keyed per chat and pair (TZ §13)
 - [ ] 2.2 Measure the migration on `db_prod_copy` and record the number
-- [ ] 2.3 `/clear confirm` removes the chat's registry — extend the existing orphaned-structures test
+- [x] 2.3 `/clear confirm` removes the chat's registry — extend the existing orphaned-structures test
 - [x] 2.4 Repository for the registry following the established `BaseRepo` pattern
 
 ## 3. Analyzer (M2R-300)
@@ -25,8 +25,8 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 ## 4. Daily maintenance (design D2)
 
-- [ ] 4.1 Analyzer pass joins `run_due_maintenance` beside the flavor decays, inheriting its cadence, retry interval and alert path
-- [ ] 4.2 A failing pass leaves the previous registry usable and does not break message handling
+- [x] 4.1 Analyzer pass joins `run_due_maintenance` beside the flavor decays, inheriting its cadence, retry interval and alert path
+- [x] 4.2 A failing pass leaves the previous registry usable and does not break message handling
 - [ ] 4.3 Record duration and scored-pair count per pass in telemetry
 - [ ] 4.4 Measure the pass on `db_prod_copy` inside the real maintenance path and record the number against the 41 ms estimate
 
@@ -47,9 +47,9 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 ## 7. Knobs
 
-- [ ] 7.1 Registry entries + `Settings`/`RuntimeState` + `.env.example` (established 5-step pattern): `markov_meme_min_joint_count`, `markov_meme_min_support`, `markov_meme_recency_factor`, `markov_collocation_max_entries`, `markov_collocation_bonus`, `markov_collocation_break_penalty`, plus the hot-ngram ordering switch
-- [ ] 7.2 Bonus, penalty and meme-aware ordering default to neutral; bounds validated on both paths
-- [ ] 7.3 `markov_meme_min_joint_count` has a lower bound above the value at which the analysis stops meaning anything (spec: `runtime-knob-validation`)
+- [x] 7.1 Registry entries + `Settings`/`RuntimeState` + `.env.example` (established 5-step pattern): `markov_meme_min_joint_count`, `markov_meme_min_support`, `markov_meme_recency_factor`, `markov_collocation_max_entries`, `markov_collocation_bonus`, `markov_collocation_break_penalty`, plus the hot-ngram ordering switch
+- [x] 7.2 Bonus, penalty and meme-aware ordering default to neutral; bounds validated on both paths
+- [x] 7.3 `markov_meme_min_joint_count` has a lower bound above the value at which the analysis stops meaning anything (spec: `runtime-knob-validation`)
 - [ ] 7.4 `/config full` surfaces the scoring knobs; `/stats` surfaces the registry size by status
 
 ## 8. Tests
@@ -58,7 +58,7 @@ on human raters — start lining it up at task 1.1, not at task 9.
 - [ ] 8.2 Registry lifecycle: capacity, promotion, retirement stops scoring without touching the chain
 - [ ] 8.3 Scoring: bonus on intact reproduction, penalty on a break with the right token available, **no penalty when it was not**
 - [ ] 8.4 Neutral defaults leave generated text identical (`generation_hash` unchanged)
-- [ ] 8.5 `/clear confirm` leaves no registry row
+- [x] 8.5 `/clear confirm` leaves no registry row
 - [x] 8.6 Property: scores are finite for any legal counts, including the degenerate single-token corpus
 
 ## 9. Manual rating round (needs people — see 1.1)
@@ -85,7 +85,7 @@ on human raters — start lining it up at task 1.1, not at task 9.
 ## 12. Documentation
 
 - [ ] 12.1 `docs/v2/00_STATUS.md`: Phase 4 row + next-session pointer
-- [ ] 12.2 `.env.example` with bounds and one-line meanings; `GENERATION_PIPELINE.md` where scoring is described
+- [x] 12.2 `.env.example` with bounds and one-line meanings; `GENERATION_PIPELINE.md` where scoring is described
 - [ ] 12.3 Record that collocation gluing stays out of scope and why (ADR-016), so it is not rediscovered as an idea
 
 ## 13. Housekeeping riding along (no functional content)

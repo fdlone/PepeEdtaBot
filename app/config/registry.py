@@ -341,6 +341,40 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _float_in_range(0.0, 1.0)),
     FieldSpec("markov_alpha_heated", "MARKOV_ALPHA_HEATED", "0",
               _float_in_range(0.0, 1.0)),
+    # Markov 2.0R Phase 4 (M2R-300/310/320, TZ §10): PMI memes and collocations.
+    #
+    # Minimum joint occurrences for a pair to be analysed at all. The lower
+    # bound is 2 and not 1 on purpose: a pair seen once is not a pair that
+    # recurs, and this threshold is also what keeps the daily pass cheap —
+    # measured on the prod copy, 88% of bigrams occur exactly once, and applying
+    # this in SQL is the difference between 41 ms and 88 ms per pass.
+    FieldSpec("markov_meme_min_joint_count", "MARKOV_MEME_MIN_JOINT_COUNT", "3",
+              _int_in_range(2, 50)),
+    # Joint count at which the support factor saturates. A pair just over the
+    # threshold should not rank beside one seen fifty times, but support must
+    # not become a second frequency term either — hence a ramp that stops.
+    FieldSpec("markov_meme_min_support", "MARKOV_MEME_MIN_SUPPORT", "10",
+              _float_in_range(1.0, 500.0)),
+    # Half-life in days of the recency factor, applied to the pair's last_seen
+    # (the temporal record Phase 3 added). A meme the chat stopped saying falls
+    # out of the ranking on its own instead of waiting to be retired by hand.
+    FieldSpec("markov_meme_recency_days", "MARKOV_MEME_RECENCY_DAYS", "30",
+              _float_in_range(1.0, 365.0)),
+    FieldSpec("markov_collocation_max_entries", "MARKOV_COLLOCATION_MAX_ENTRIES",
+              "100", _int_in_range(1, 500)),
+    # Candidate scoring (ADR-016): collocations influence SCORING only and are
+    # never glued into tokens. Both default to 0 — the gate decides whether they
+    # are raised, and its main condition is a human rating round.
+    FieldSpec("markov_collocation_bonus", "MARKOV_COLLOCATION_BONUS", "0",
+              _float_in_range(0.0, 2.0)),
+    FieldSpec("markov_collocation_break_penalty",
+              "MARKOV_COLLOCATION_BREAK_PENALTY", "0",
+              _float_in_range(0.0, 2.0)),
+    # M2R-310: order hot n-grams by meme_score instead of pure frequency. Off by
+    # default — the roadmap says "replace frequency selection WHERE IT WINS on
+    # eval", so both paths must stay runnable side by side to find out.
+    FieldSpec("markov_hot_ngram_meme_ordering", "MARKOV_HOT_NGRAM_MEME_ORDERING",
+              "false", _bool()),
     # Backoff bottoms out at order 2: the order-1 chain was removed entirely
     # (2026-07-12) after eval_prod showed order-1 walks are word salad — the
     # 2026-07-09 default already forbade them and nothing regressed.
