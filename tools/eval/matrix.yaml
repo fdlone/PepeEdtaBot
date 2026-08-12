@@ -16,8 +16,15 @@ configurations:
     overrides:
       reply_flavor_strength: 0.0
       emoji_append_chance: 0.0
+  # Phase 2 landed but did not pass its gate: entropy sampling and the
+  # branching-aware target both ship disabled, so C1 still resolves to C0.
+  # Making it "available" here would add a column identical to C0 and imply a
+  # feature is live when it is not. The calibration grid that produced the
+  # verdict lives in matrix_phase2_grid.yaml, its numbers in
+  # docs/eval_reports/eval_2026-08-12_phase2-verdict.md — re-enable this arm
+  # only if a future phase changes the entropy distribution enough to retest.
   - id: C1
-    description: "V2: entropy sampling only (Phase 2)"
+    description: "V2: entropy sampling only (Phase 2 — gate failed, ships disabled)"
     available: false
     same_as: C0
     overrides: {}

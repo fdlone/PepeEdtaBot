@@ -7,6 +7,37 @@
 # Rationale for the numbers is recorded here at registration time so a later
 # reader can audit whether an edit was post-hoc.
 
+phase2_entropy:
+  # Registered 2026-08-12, BEFORE the Phase 2 calibration grid was run.
+  # Roadmap doc 03 Phase 2 acceptance: "exact-copy не растёт, distinct-2/3
+  # растут, p95 в бюджете". Encoded here as a four-part gate; an arm passes
+  # only if ALL parts pass. Reference numbers are the frozen C0 baseline on
+  # db_prod_copy 2026-07-13: copy 0.222, affinity_without_copy 0.209, p95 48 ms.
+  #
+  # Direction of each bound is stated explicitly because two of them are
+  # one-sided "must not worsen" checks and two are "must improve" checks, and
+  # confusing the two is how a null result gets read as a win.
+  #
+  # must-not-worsen: a SIGNIFICANT increase in copying disqualifies the arm
+  # (same convention as phase7_order4). An insignificant rise is not a fail —
+  # the protocol cannot resolve deltas below ~3 p.p. (doc 05 §8).
+  exact_copy_delta_max: 0.0
+  # must-improve: distinct-2 and distinct-3 must rise AND the rise must be
+  # significant. An insignificant delta is a FAIL, not a pass: diversity is the
+  # stated benefit of this phase, so "no measurable effect" means the phase did
+  # not deliver. Comparable only within one run at equal basis — the report
+  # prints distinct_basis_tokens for exactly this check.
+  distinct2_delta_min: 0.0
+  distinct3_delta_min: 0.0
+  # must-not-worsen: topicality measured without copies may not drop
+  # significantly. Paired with exact_copy_delta_max on purpose — affinity is
+  # trivially inflated by copying, so the two are only meaningful together.
+  affinity_without_copy_delta_floor: 0.0
+  # TZ §17 budget; restated here so the Phase 2 verdict is computable from this
+  # block alone. M2R-110 is expected to LOWER p95 (fewer attempts on degenerate
+  # chains) — the check is that it does not raise it out of budget.
+  latency_p95_ms_max: 150
+
 phase5_promotion:
   # ADR-012 / TZ §9.6. A seeded candidate pool share of 0.3 means a "null"
   # seeded win rate of ~0.30 (winning its pool share = adding nothing), so the

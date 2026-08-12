@@ -23,6 +23,9 @@ PUNCT_SET = {".", ",", "!", "?", ";", ":"}
 DEFAULT_GENERATION_ATTEMPT_BUDGET = 1
 EXPLORATION_FLATTENING = 1.5
 EXPLORATION_POWER_FLOOR = 0.02
+# Floor under the entropy-adjusted temperature: a large negative gain can drive
+# T to zero or below, and 1/T is taken right after.
+_MIN_SAMPLING_TEMPERATURE = 0.01
 SHORT_REPLY_MAX_CONTENT_TOKENS = 3
 REJECTION_NO_STARTS = "no_starts"
 REJECTION_NO_START_TRANSITION = "no_start_transition"
@@ -179,6 +182,53 @@ def pool_diagnostics(counts: list[int]) -> tuple[float, float, int, float]:
     return entropy, normalized, branching, 1.0 - normalized
 
 
+@dataclass(frozen=True, slots=True)
+class EntropySampling:
+    """Entropy-aware sampling temperature (M2R-100, TZ §6).
+
+    The sampler weights candidates as ``cnt ** power``, so ``power`` is an
+    inverse temperature: ``T_base = 1/power``, and ``randomness_strength``
+    keeps its established meaning as the scale of ``T_base``. This applies the
+    per-pool term of TZ §6 — ``T = T_base·(1 + gain·(H_norm − pivot))``,
+    clamped — and hands back a power for the existing machinery.
+
+    The default instance is the neutral one: a generation that never builds a
+    tuned instance behaves exactly like Markov 1.x.
+    """
+
+    gain: float = 0.0
+    pivot: float = 0.5
+    temp_min: float = 0.5
+    temp_max: float = 12.0
+
+    def power_for(self, power: float, normalized_entropy: float) -> float:
+        """Entropy-adjusted frequency power for one pool.
+
+        Zero gain returns the input unchanged through an explicit branch taken
+        before any arithmetic. Relying on ``x * 1.0 == x`` would still be exact,
+        but the clamp is not: a ``T_base`` outside ``[temp_min, temp_max]``
+        would be pulled to a bound even at zero gain, and this phase's contract
+        is that zero gain is byte-identical to 1.x. The early return makes that
+        structural instead of a float coincidence. No random draw either way,
+        so the RNG stream is untouched.
+        """
+        if self.gain == 0.0 or power <= 0.0:
+            return power
+        # Two individually valid /set calls can leave min above max; ordering
+        # the pair beats pinning every step to a nonsense constant.
+        low, high = (
+            (self.temp_min, self.temp_max)
+            if self.temp_min <= self.temp_max
+            else (self.temp_max, self.temp_min)
+        )
+        low = max(low, _MIN_SAMPLING_TEMPERATURE)
+        high = max(high, low)
+        temperature = (1.0 / power) * (
+            1.0 + self.gain * (normalized_entropy - self.pivot)
+        )
+        return 1.0 / max(low, min(high, temperature))
+
+
 @dataclass(slots=True)
 class _DiagnosticsAccumulator:
     """Per-attempt sums of step-pool diagnostics (M2R-010)."""
@@ -188,14 +238,61 @@ class _DiagnosticsAccumulator:
     branching_sum: float = 0.0
     steps: int = 0
     min_confidence: float = 1.0
+    # M2R-100: the temperature actually applied, so "the knob is doing nothing"
+    # is readable from the numbers instead of inferred from the config.
+    applied_temperature_sum: float = 0.0
 
-    def note_pool(self, counts: list[int]) -> None:
+    def note_pool(self, counts: list[int]) -> float:
+        """Accumulate one pool's diagnostics; returns its normalized entropy.
+
+        Returning the value is what lets M2R-100 sample from the same numbers
+        the telemetry reports without computing them a second time per step.
+        """
         entropy, normalized, branching, confidence = pool_diagnostics(counts)
         self.entropy_bits_sum += entropy
         self.normalized_entropy_sum += normalized
         self.branching_sum += branching
         self.steps += 1
         self.min_confidence = min(self.min_confidence, confidence)
+        return normalized
+
+    def note_temperature(self, power: float) -> None:
+        """Record the temperature this step sampled at (``T = 1/power``).
+
+        This is the entropy-adjusted temperature *before* the exploration roll
+        flattens it further — deliberately, because it is the knob's own effect
+        that needs to be readable, not the exploration channel's.
+        """
+        if power > 0.0:
+            self.applied_temperature_sum += 1.0 / power
+
+
+def _step_power(
+    diagnostics: _DiagnosticsAccumulator | None,
+    pool: list[tuple[str, int]],
+    base_power: float,
+    entropy_sampling: EntropySampling,
+) -> float:
+    """Frequency power for one walk step: telemetry in, temperature out.
+
+    Keeping both here is deliberate — the entropy the telemetry reports and the
+    entropy the sampler consumes are the same number by construction, and the
+    temperature actually applied is recorded rather than inferred.
+
+    Telemetry (M2R-010) needs the diagnostics for every step anyway, so the
+    accumulator is the source. Without one (test doubles pass no accumulator)
+    entropy is computed only when sampling actually consumes it.
+    """
+    if diagnostics is not None:
+        normalized = diagnostics.note_pool([cnt for _, cnt in pool])
+    elif entropy_sampling.gain == 0.0:
+        normalized = 0.0
+    else:
+        normalized = pool_diagnostics([cnt for _, cnt in pool])[1]
+    power = entropy_sampling.power_for(base_power, normalized)
+    if diagnostics is not None:
+        diagnostics.note_temperature(power)
+    return power
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,6 +314,8 @@ class GenerationTrace:
     mean_branching: float = 0.0
     min_confidence: float = 1.0
     diagnostic_steps: int = 0
+    # M2R-100: temperature actually applied, averaged over the measured steps.
+    mean_applied_temperature: float = 0.0
 
 
 class _GenerationAttempt(NamedTuple):
@@ -244,6 +343,8 @@ class _GenerationAttempt(NamedTuple):
     mean_branching: float = 0.0
     min_confidence: float = 1.0
     diagnostic_steps: int = 0
+    # M2R-100: temperature actually applied, averaged over the measured steps.
+    mean_applied_temperature: float = 0.0
 
 
 class _ContextualStateSelection(NamedTuple):
@@ -1151,6 +1252,7 @@ class MarkovGenerator:
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
         context_anchor_splice_probability: float = 0.0,
+        entropy_sampling: EntropySampling = EntropySampling(),
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> str:
@@ -1179,6 +1281,7 @@ class MarkovGenerator:
             context_jump_boost=context_jump_boost,
             order_mix_probability=order_mix_probability,
             context_anchor_splice_probability=context_anchor_splice_probability,
+            entropy_sampling=entropy_sampling,
             rng=rng,
             attempt_budget=attempt_budget,
         )
@@ -1209,6 +1312,7 @@ class MarkovGenerator:
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
         context_anchor_splice_probability: float = 0.0,
+        entropy_sampling: EntropySampling = EntropySampling(),
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> tuple[str, GenerationTrace]:
@@ -1239,6 +1343,7 @@ class MarkovGenerator:
                 context_jump_boost=context_jump_boost,
                 order_mix_probability=order_mix_probability,
                 context_anchor_splice_probability=context_anchor_splice_probability,
+                entropy_sampling=entropy_sampling,
                 rng=generation_rng,
                 emit_start=True,
             )
@@ -1274,6 +1379,7 @@ class MarkovGenerator:
             mean_branching=last.mean_branching,
             min_confidence=last.min_confidence,
             diagnostic_steps=last.diagnostic_steps,
+            mean_applied_temperature=last.mean_applied_temperature,
         )
         self.telemetry.note_generation(
             entropy_bits_sum=last.mean_entropy_bits * last.diagnostic_steps,
@@ -1281,6 +1387,9 @@ class MarkovGenerator:
                 last.mean_normalized_entropy * last.diagnostic_steps
             ),
             branching_sum=last.mean_branching * last.diagnostic_steps,
+            applied_temperature_sum=(
+                last.mean_applied_temperature * last.diagnostic_steps
+            ),
             steps=last.diagnostic_steps,
         )
         self._log_trace(trace)
@@ -1292,7 +1401,7 @@ class MarkovGenerator:
             "start_source=%s leading_punctuation_stripped=%s context_exact=%s "
             "context_casefold=%s hidden_context_fallbacks=%s "
             "entropy=%.3f norm_entropy=%.3f branching=%.1f confidence_min=%.3f "
-            "diag_steps=%s",
+            "temperature=%.2f diag_steps=%s",
             trace.attempts_used,
             trace.markov_order_used,
             trace.jump_count,
@@ -1307,6 +1416,7 @@ class MarkovGenerator:
             trace.mean_normalized_entropy,
             trace.mean_branching,
             trace.min_confidence,
+            trace.mean_applied_temperature,
             trace.diagnostic_steps,
         )
 
@@ -1526,6 +1636,9 @@ class MarkovGenerator:
                 mean_branching=diag.branching_sum / steps if steps else 0.0,
                 min_confidence=diag.min_confidence,
                 diagnostic_steps=steps,
+                mean_applied_temperature=(
+                    diag.applied_temperature_sum / steps if steps else 0.0
+                ),
             )
 
         if len(result) < 5:
@@ -1564,6 +1677,9 @@ class MarkovGenerator:
             mean_branching=diag.branching_sum / steps if steps else 0.0,
             min_confidence=diag.min_confidence,
             diagnostic_steps=steps,
+            mean_applied_temperature=(
+                diag.applied_temperature_sum / steps if steps else 0.0
+            ),
         )
 
     async def _run_generation_loop(
@@ -1594,6 +1710,7 @@ class MarkovGenerator:
         anchor_target_tokens: int = 0,
         rng: random.Random,
         diagnostics: _DiagnosticsAccumulator | None = None,
+        entropy_sampling: EntropySampling = EntropySampling(),
     ) -> tuple[list[str], int, int, bool]:
         """Walk the Markov chain from ``start3`` until a stop condition.
 
@@ -1754,14 +1871,18 @@ class MarkovGenerator:
                     if (w2, w3, cand) not in visited_triplets
                 ]
                 pool = candidates or pool3
-                if diagnostics is not None:
-                    # M2R-010: diagnostics of the pool actually sampled from,
-                    # after dedup filtering and the order-mix decision.
-                    diagnostics.note_pool([cnt for _, cnt in pool])
+                # M2R-010: diagnostics of the pool actually sampled from, after
+                # dedup filtering and the order-mix decision. M2R-100 samples
+                # from the same number: the step's power is the entropy-adjusted
+                # one, and the adjustment happens here — before
+                # ``weighted_next_choice`` rolls exploration on top of it.
+                step_power = _step_power(
+                    diagnostics, pool, next_power, entropy_sampling
+                )
                 w4 = weighted_next_choice(
                     pool,
                     next_explore,
-                    next_power,
+                    step_power,
                     rng,
                     context_token_set=context_token_set,
                     context_pairs=context_pairs,
@@ -1783,12 +1904,13 @@ class MarkovGenerator:
 
                 pool2 = await self._get2(chat_id, w2, w3)
                 if pool2:
-                    if diagnostics is not None:
-                        diagnostics.note_pool([cnt for _, cnt in pool2])
+                    step_power = _step_power(
+                        diagnostics, pool2, next_power, entropy_sampling
+                    )
                     w4 = weighted_next_choice(
                         pool2,
                         next_explore,
-                        next_power,
+                        step_power,
                         rng,
                         context_token_set=context_token_set,
                         context_pairs=context_pairs,
@@ -1852,6 +1974,7 @@ class MarkovGenerator:
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
         context_anchor_splice_probability: float = 0.0,
+        entropy_sampling: EntropySampling = EntropySampling(),
         rng: random.Random | None = None,
         emit_start: bool = True,
     ) -> _GenerationAttempt:
@@ -2055,6 +2178,7 @@ class MarkovGenerator:
                 anchor_target_tokens=anchor_target_tokens,
                 rng=generation_rng,
                 diagnostics=diagnostics,
+                entropy_sampling=entropy_sampling,
             )
         )
         if deferred_anchor is not None:

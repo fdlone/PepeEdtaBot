@@ -94,6 +94,9 @@ def format_stats_message(
                 f"энтропия шага (норм.): {mean_entropy:.2f}, "
                 f"ветвление: {mean_branching:.1f}"
             )
+        temperature = telemetry.get("mean_applied_temperature")
+        if temperature is not None:
+            lines.append(f"температура шага: {temperature:.2f}")
         hit_rate = telemetry.get("cache_hit_rate")
         if hit_rate is not None:
             lines.append(f"кэш распределений: {hit_rate:.0%} попаданий")
@@ -140,6 +143,12 @@ def format_config_message(
                 f"typing_per_char_ms={state.typing_per_char_ms}",
                 f"markov_order={state.markov_order}",
                 f"enable_backoff={state.enable_backoff}",
+                # Phase 2 knobs that change what the chat hears. The clamps are
+                # a safety net and stay out of the listing; gain and pivot are
+                # what explain a changed voice, so they are readable here.
+                f"markov_entropy_temp_gain={state.markov_entropy_temp_gain}",
+                f"markov_entropy_pivot={state.markov_entropy_pivot}",
+                f"markov_branching_degenerate_max={state.markov_branching_degenerate_max}",
                 f"reply_context_max_tokens={state.reply_context_max_tokens}",
                 f"reply_context_bias={state.reply_context_bias}",
                 f"reply_context_start_bias={state.reply_context_start_bias}",

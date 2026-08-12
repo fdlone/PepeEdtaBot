@@ -232,6 +232,15 @@ async def evaluate_generation(
                 intonation_profile_strength=0.0,
                 length_context_adaptation=0.0,
                 markov_order=3,
+                # Neutral Phase 2 knobs keep the committed baselines
+                # byte-identical: gain 0 is the 1.x sampler, and a degenerate
+                # bound of 0 leaves the candidate target fixed.
+                markov_entropy_temp_gain=0.0,
+                markov_entropy_pivot=0.5,
+                markov_entropy_temp_min=0.5,
+                markov_entropy_temp_max=12.0,
+                markov_branching_degenerate_max=0.0,
+                markov_branching_candidate_floor=2,
                 enable_backoff=True,
                 # Keep the M3/M4 channels off in eval so the baselines measure the
                 # word model alone (and no emoji-stats DB reads are attempted).

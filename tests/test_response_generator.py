@@ -55,6 +55,14 @@ def _runtime_state() -> MagicMock:
     state.hot_ngram_min_count = 3
     state.hot_ngram_recency_share = 0.5
     state.intonation_profile_strength = 0.0
+    # Phase 2 knobs neutral, for the same reason as slot_mutation_probability
+    # above: a bare MagicMock would silently turn both features on.
+    state.markov_entropy_temp_gain = 0.0
+    state.markov_entropy_pivot = 0.5
+    state.markov_entropy_temp_min = 0.5
+    state.markov_entropy_temp_max = 12.0
+    state.markov_branching_degenerate_max = 0.0
+    state.markov_branching_candidate_floor = 2
     return state
 
 
@@ -636,6 +644,114 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             [call.args[0] for call in scorer.call_args_list],
             [candidate, candidate],
         )
+
+
+class TestEntropySamplingSettings(unittest.TestCase):
+    """M2R-100: the rollback path is a /set away, with no restart."""
+
+    def _generator(self) -> ResponseGenerator:
+        return ResponseGenerator(
+            generator=_traced_generator(),
+            learning_service=_learning_service(),
+            runtime_state=_runtime_state(),
+        )
+
+    def test_settings_follow_the_runtime_state(self) -> None:
+        response_generator = self._generator()
+        self.assertEqual(response_generator.entropy_sampling.gain, 0.0)
+
+        response_generator.runtime_state.markov_entropy_temp_gain = 0.6
+        self.assertEqual(response_generator.entropy_sampling.gain, 0.6)
+
+        # Reverting is the same path in reverse: no restart, no rebuild.
+        response_generator.runtime_state.markov_entropy_temp_gain = 0.0
+        self.assertEqual(response_generator.entropy_sampling.gain, 0.0)
+
+    def test_clamp_and_pivot_come_from_the_state_too(self) -> None:
+        response_generator = self._generator()
+        state = response_generator.runtime_state
+        state.markov_entropy_pivot = 0.42
+        state.markov_entropy_temp_min = 1.0
+        state.markov_entropy_temp_max = 8.0
+        sampling = response_generator.entropy_sampling
+        self.assertEqual(
+            (sampling.pivot, sampling.temp_min, sampling.temp_max),
+            (0.42, 1.0, 8.0),
+        )
+
+
+class TestBranchingAwareCandidateTarget(unittest.IsolatedAsyncioTestCase):
+    """M2R-110: how much choice the walk had decides how many candidates to ask
+    for. The unit-level rule lives in tests/test_markov2r_phase2.py; this checks
+    that the candidate loop actually obeys it."""
+
+    @staticmethod
+    def _generator(branching: float) -> AsyncMock:
+        generator = AsyncMock()
+
+        async def _delegate(*args: object, **kwargs: object):
+            text = await generator.generate_text(*args, **kwargs)
+            return text, SimpleNamespace(
+                markov_order_used=3,
+                start_source="global",
+                mean_branching=branching,
+            )
+
+        generator.generate_text_with_trace = AsyncMock(side_effect=_delegate)
+        return generator
+
+    async def _run(self, *, branching: float, degenerate_max: float) -> int:
+        state = _runtime_state()
+        state.markov_branching_degenerate_max = degenerate_max
+        state.markov_branching_candidate_floor = 2
+        generator = self._generator(branching)
+        generator.generate_text = AsyncMock(
+            side_effect=[f"кандидат номер {index}" for index in range(10)]
+        )
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=_learning_service(),
+            runtime_state=state,
+            scorer=MagicMock(side_effect=lambda *_: _score(1.0)),
+        )
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            result = await response_generator.generate_with_result(
+                _request(), rng=random.Random(17), candidate_target=5
+            )
+        return result.candidates_scored
+
+    async def test_degenerate_chain_stops_at_the_floor(self) -> None:
+        self.assertEqual(await self._run(branching=1.0, degenerate_max=1.5), 2)
+
+    async def test_wide_chain_reaches_the_full_target(self) -> None:
+        self.assertEqual(await self._run(branching=9.0, degenerate_max=1.5), 5)
+
+    async def test_disabled_knob_reaches_the_full_target(self) -> None:
+        """Even on a maximally degenerate chain, 0 restores the old behaviour."""
+        self.assertEqual(await self._run(branching=1.0, degenerate_max=0.0), 5)
+
+    async def test_early_stop_never_returns_an_empty_reply(self) -> None:
+        """A reduced target is a cap on accepted candidates, not on attempts:
+        a chain that keeps failing the gates still gets the whole budget."""
+        state = _runtime_state()
+        state.markov_branching_degenerate_max = 1.5
+        state.markov_branching_candidate_floor = 2
+        generator = self._generator(1.0)
+        # Nine dead attempts, then one usable candidate on the last try.
+        generator.generate_text = AsyncMock(
+            side_effect=[""] * 9 + ["единственный выживший кандидат"]
+        )
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=_learning_service(),
+            runtime_state=state,
+            scorer=MagicMock(side_effect=lambda *_: _score(1.0)),
+        )
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            result = await response_generator.generate_with_result(
+                _request(), rng=random.Random(17), candidate_target=5
+            )
+        self.assertEqual(result.text, "единственный выживший кандидат")
 
 
 class TestResponseGeneratorSlotMutation(unittest.IsolatedAsyncioTestCase):

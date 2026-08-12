@@ -1,0 +1,64 @@
+# Phase 2 calibration grid (doc 05 §2, roadmap M2R-100/110).
+#
+# Not the protocol matrix — this file exists so the calibration run that picks
+# the shipped defaults is reproducible instead of being a command someone typed
+# once. The protocol matrix (matrix.yaml) carries the final C1 arms after this
+# grid has chosen the numbers.
+#
+# Every arm keeps C0's convention of silencing flavor/emoji so the metrics
+# measure the word model alone, and every entropy arm uses the measured pivot
+# 0.21 (mean normalized entropy of this corpus, mean branching 3.09) — a pivot
+# picked by hand would smuggle a global temperature shift into every delta.
+#
+# Arm ids start with C1 so the runner gives each one a Phase 2 gate verdict.
+configurations:
+  - id: C0
+    description: "Markov 1.x frozen baseline (registry defaults, flavor/emoji silenced)"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+
+  # M2R-100: both signs, two magnitudes each. ADR open question #2 is answered
+  # by these four arms, not by argument: positive gain sharpens confident pools
+  # (where verbatim replay lives) and loosens open ones; negative does the
+  # reverse.
+  - id: C1gain_neg06
+    description: "M2R-100 only, gain -0.6 (loosen confident pools)"
+    available: true
+    same_as: C0
+    overrides:
+      markov_entropy_temp_gain: -0.6
+  - id: C1gain_neg03
+    description: "M2R-100 only, gain -0.3"
+    available: true
+    same_as: C0
+    overrides:
+      markov_entropy_temp_gain: -0.3
+  - id: C1gain_pos03
+    description: "M2R-100 only, gain +0.3"
+    available: true
+    same_as: C0
+    overrides:
+      markov_entropy_temp_gain: 0.3
+  - id: C1gain_pos06
+    description: "M2R-100 only, gain +0.6 (sharpen confident pools)"
+    available: true
+    same_as: C0
+    overrides:
+      markov_entropy_temp_gain: 0.6
+
+  # M2R-110 alone, two bounds. Mean branching on this corpus is 3.09, so 1.5
+  # catches near-single-option chains and 2.5 reaches into the middle.
+  - id: C1branch_15
+    description: "M2R-110 only, degenerate bound 1.5"
+    available: true
+    same_as: C0
+    overrides:
+      markov_branching_degenerate_max: 1.5
+  - id: C1branch_25
+    description: "M2R-110 only, degenerate bound 2.5"
+    available: true
+    same_as: C0
+    overrides:
+      markov_branching_degenerate_max: 2.5

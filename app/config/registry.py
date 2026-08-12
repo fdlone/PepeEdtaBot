@@ -262,6 +262,44 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # window); generation output does not depend on the knob position.
     FieldSpec("markov_shadow_order4_enabled", "MARKOV_SHADOW_ORDER4_ENABLED",
               "true", _bool()),
+    # Markov 2.0R Phase 2 (M2R-100, TZ §6): entropy-aware sampling temperature.
+    # Per walk step T = T_base * (1 + GAIN * (H_norm - pivot)), clamped; the
+    # weights are cnt ** (1/T), so T_base is the existing frequency power
+    # inverted and RANDOMNESS_STRENGTH keeps its meaning as its scale.
+    # 0 disables (the established "0 disables" convention of this registry) and
+    # is byte-identical to Markov 1.x — TZ §6 defines GAIN=0 as that identity,
+    # so a separate MARKOV_ENTROPY_ENABLED boolean would be a second switch for
+    # the same thing (deviation from TZ §18 recorded in the phase's design.md).
+    # Sign is an open question answered by the Phase 2 grid: positive sharpens
+    # confident pools and loosens open ones, negative does the reverse.
+    FieldSpec("markov_entropy_temp_gain", "MARKOV_ENTROPY_TEMP_GAIN", "0",
+              _float_in_range(-2.0, 2.0)),
+    # Normalized entropy at which the temperature is left alone. Set from the
+    # measured mean H_norm of the corpus so the knob redistributes temperature
+    # between confident and open steps instead of shifting every step at once.
+    # 0.21 measured on db_prod_copy via the eval runner (mean branching 3.09):
+    # this chat's pools are wide but sharply peaked. A hand-picked 0.5 would
+    # have put almost every step below the pivot, turning the knob into a
+    # global temperature shift — exactly the confound the pivot exists to avoid.
+    FieldSpec("markov_entropy_pivot", "MARKOV_ENTROPY_PIVOT", "0.21",
+              _float_in_range(0.0, 1.0)),
+    # Safety clamp on the resulting temperature. Defaults bracket the reachable
+    # T_base range (~1.4..4.2 for RANDOMNESS_STRENGTH 0..3) with margin, so at
+    # sane gains the clamp never binds; it exists so no combination of knobs
+    # can produce a degenerate or exploding temperature.
+    FieldSpec("markov_entropy_temp_min", "MARKOV_ENTROPY_TEMP_MIN", "0.5",
+              _float_in_range(0.05, 50.0)),
+    FieldSpec("markov_entropy_temp_max", "MARKOV_ENTROPY_TEMP_MAX", "12.0",
+              _float_in_range(0.05, 50.0)),
+    # Markov 2.0R Phase 2 (M2R-110): branching-aware candidate target. Mean
+    # branching at or below which a chain counts as degenerate — further
+    # best-of-N attempts on it return near-duplicates of the first candidate,
+    # so the target drops to the floor and the generation stops early.
+    # 0 disables (no pool has branching <= 0), restoring the fixed target.
+    FieldSpec("markov_branching_degenerate_max", "MARKOV_BRANCHING_DEGENERATE_MAX",
+              "0", _float_in_range(0.0, 20.0)),
+    FieldSpec("markov_branching_candidate_floor", "MARKOV_BRANCHING_CANDIDATE_FLOOR",
+              "2", _int_in_range(1, 5)),
     # Backoff bottoms out at order 2: the order-1 chain was removed entirely
     # (2026-07-12) after eval_prod showed order-1 walks are word salad — the
     # 2026-07-09 default already forbade them and nothing regressed.

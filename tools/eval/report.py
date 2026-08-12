@@ -11,10 +11,16 @@ from __future__ import annotations
 from statistics import mean
 from typing import Any
 
-from .bootstrap import bootstrap_ci, delta_ci
+from .bootstrap import bootstrap_ci, delta_ci, distinct_delta_ci
 from .metrics import distinct_n, latency_percentiles, meme_regression, metric_values
 from .prompts import PromptSet
 from .run import ConfigRun
+
+# Phase 2 arms (doc 05 §2 + the "one arm per knob" rule): the shipped
+# combination C1, each knob alone (C1a/C1b), the flat-temperature control
+# (C1flat), and any calibration variant of the grid. Prefix-matched so a
+# calibration run gets a per-arm verdict without editing this list.
+PHASE2_ARM_PREFIX = "C1"
 
 # Canonical §3 order for the metrics table.
 METRIC_ORDER = (
@@ -77,6 +83,92 @@ def metrics_summary(runs: dict[str, ConfigRun]) -> dict[str, Any]:
     return summary
 
 
+def _phase2_arm_verdict(
+    baseline: ConfigRun, arm: ConfigRun, thresholds: dict[str, Any]
+) -> tuple[str, str]:
+    """Four-part Phase 2 gate for one arm (verdict, detail).
+
+    All four parts must pass. Two are "must not worsen" (copy, affinity) where
+    only a *significant* move against us fails; two are "must improve"
+    (distinct-2/3) where an insignificant move is a fail — an unmeasurable
+    effect is not the diversity this phase promised.
+    """
+    if arm.shared_with is not None:
+        return INSUFFICIENT, f"arm resolves to the same overrides as {arm.shared_with}"
+
+    config = thresholds.get("phase2_entropy", {})
+    base_values = metric_values(baseline.records)
+    arm_values = metric_values(arm.records)
+    parts: list[str] = []
+    failures: list[str] = []
+    missing: list[str] = []
+
+    copy_max = float(config.get("exact_copy_delta_max", 0.0))
+    base_copy = base_values.get("exact_context_copy_rate")
+    arm_copy = arm_values.get("exact_context_copy_rate")
+    if base_copy and arm_copy:
+        point, lo, hi, significant = delta_ci(base_copy, arm_copy)
+        parts.append(
+            f"copy Δ {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]"
+            f"{' *' if significant else ''}"
+        )
+        if significant and point > copy_max:
+            failures.append("copy rose significantly")
+    else:
+        missing.append("exact-copy samples")
+
+    base_replies = [r.reply_content for r in baseline.records if r.success]
+    arm_replies = [r.reply_content for r in arm.records if r.success]
+    for n, key in ((2, "distinct2_delta_min"), (3, "distinct3_delta_min")):
+        minimum = float(config.get(key, 0.0))
+        result = distinct_delta_ci(base_replies, arm_replies, n)
+        if result is None:
+            missing.append(f"distinct-{n} basis")
+            continue
+        point, lo, hi, significant = result
+        parts.append(
+            f"distinct-{n} Δ {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]"
+            f"{' *' if significant else ''}"
+        )
+        if not (significant and point > minimum):
+            failures.append(f"distinct-{n} did not rise significantly")
+
+    floor = float(config.get("affinity_without_copy_delta_floor", 0.0))
+    base_aff = base_values.get("context_affinity_without_copy")
+    arm_aff = arm_values.get("context_affinity_without_copy")
+    if base_aff and arm_aff:
+        point, lo, hi, significant = delta_ci(base_aff, arm_aff)
+        parts.append(
+            f"affinity_without_copy Δ {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]"
+            f"{' *' if significant else ''}"
+        )
+        if significant and point < floor:
+            failures.append("affinity without copies dropped significantly")
+    else:
+        missing.append("affinity-without-copy samples")
+
+    budget = float(config.get("latency_p95_ms_max", 150))
+    p95 = latency_percentiles(arm.records)["latency_p95"]
+    if p95 is None:
+        missing.append("latencies")
+    else:
+        parts.append(f"p95 {p95:.1f} ms (budget {budget:.0f})")
+        if p95 > budget:
+            failures.append("p95 over budget")
+
+    detail = "; ".join(parts) if parts else "nothing computable"
+    if missing:
+        detail = f"{detail} — missing: {', '.join(missing)}"
+    # A demonstrated failure outranks a missing part: an arm that provably
+    # raised copying does not become undecided because some other part of the
+    # gate lacked data. Only a gate with no failures AND a hole is undecided.
+    if failures:
+        return "fail", f"{detail} — {'; '.join(failures)}"
+    if missing:
+        return INSUFFICIENT, detail
+    return "pass", detail
+
+
 def evaluate_gates(
     runs: dict[str, ConfigRun], thresholds: dict[str, Any]
 ) -> list[tuple[str, str, str]]:
@@ -84,6 +176,22 @@ def evaluate_gates(
     construction — that is reported, never guessed."""
     rows: list[tuple[str, str, str]] = []
     baseline = runs.get("C0")
+
+    phase2_arms = sorted(
+        arm for arm in runs if arm.startswith(PHASE2_ARM_PREFIX)
+    )
+    if baseline is None or not phase2_arms:
+        rows.append(
+            (
+                "phase2_entropy",
+                INSUFFICIENT,
+                "no Phase 2 arm in this run (entropy sampling not enabled)",
+            )
+        )
+    else:
+        for arm_id in phase2_arms:
+            verdict, detail = _phase2_arm_verdict(baseline, runs[arm_id], thresholds)
+            rows.append((f"phase2_entropy[{arm_id}]", verdict, detail))
 
     rows.append(
         (
@@ -247,6 +355,32 @@ def build_report(
             if hit_rates
             else INSUFFICIENT
         )
+        # M2R-100: the entropy the sampler saw and the temperature it applied.
+        # The pivot is set from the first of these, so a later reader can audit
+        # that it was measured rather than picked.
+        entropies = [
+            float(value)
+            for snapshot in run.telemetry
+            if (value := snapshot.get("mean_normalized_entropy")) is not None
+        ]
+        temperatures = [
+            float(value)
+            for snapshot in run.telemetry
+            if (value := snapshot.get("mean_applied_temperature")) is not None
+        ]
+        branchings = [
+            float(value)
+            for snapshot in run.telemetry
+            if (value := snapshot.get("mean_branching")) is not None
+        ]
+        entropy_line = (
+            f"{mean(entropies):.3f} (branching {mean(branchings):.2f})"
+            if entropies and branchings
+            else INSUFFICIENT
+        )
+        temperature_line = (
+            f"{mean(temperatures):.2f}" if temperatures else INSUFFICIENT
+        )
         shadow_shares = [
             snapshot["shadow_order4_selected_share"]
             for snapshot in run.telemetry
@@ -265,6 +399,8 @@ def build_report(
             "comparable only at equal basis; "
             f"latency p50/p95 = {latencies['latency_p50']:.1f}/"
             f"{latencies['latency_p95']:.1f} ms; cache_hit_rate: {hit_line}; "
+            f"mean normalized entropy: {entropy_line}; "
+            f"mean applied temperature: {temperature_line}; "
             f"shadow order-4 share: {shadow_line}; storage_delta: n/a."
         )
     lines.append("")

@@ -26,6 +26,7 @@ from app.core.intonation import IntonationProfile, blend_length_weights
 from app.core.markov import (
     JUMP_CONNECTIVE_TOKENS,
     PUNCT_SET,
+    EntropySampling,
     MarkovGenerator,
     content_tokens,
     detokenize,
@@ -49,6 +50,32 @@ logger = logging.getLogger("chat_markov")
 GENERATION_ATTEMPT_BUDGET = 10
 GENERATION_ATTEMPTS_WITH_CONTEXT = 5
 CANDIDATE_TARGET = 5
+
+
+def branching_aware_target(
+    base_target: int,
+    branching_samples: list[float],
+    *,
+    degenerate_max: float,
+    floor: int,
+) -> int:
+    """Candidate target for a chain whose branching has been observed (M2R-110).
+
+    On a near-degenerate chain, candidates 2..N are near-duplicates of the
+    first — the scorer ends up choosing between copies of one walk — so the
+    target drops to the floor and the generation stops early. Everything else
+    keeps the configured target. The attempt budget is untouched either way, so
+    a chain that keeps failing the gates still gets all of its tries.
+
+    ``degenerate_max <= 0`` disables the rule (no pool has branching <= 0),
+    restoring the fixed target this project shipped before Phase 2.
+    """
+    if degenerate_max <= 0.0 or not branching_samples:
+        return base_target
+    mean_branching = sum(branching_samples) / len(branching_samples)
+    if mean_branching > degenerate_max:
+        return base_target
+    return max(1, min(base_target, floor))
 # Softmax candidate selection only considers candidates whose score is within
 # this margin of the best one; clearly weaker candidates never win the roll.
 # 0.3 (2026-07-09): this margin, not the temperature, is what decides whether
@@ -229,6 +256,22 @@ class ResponseGenerator:
         )
         return result.text
 
+    @property
+    def entropy_sampling(self) -> EntropySampling:
+        """M2R-100 settings for this chat, resolved from the runtime knobs.
+
+        Applied to every walk that produces user-visible text, the verbatim
+        extension included — a setting that governs "how the chain sounds"
+        would otherwise stop at the sentence boundary where an extension begins.
+        """
+        state = self.runtime_state
+        return EntropySampling(
+            gain=state.markov_entropy_temp_gain,
+            pivot=state.markov_entropy_pivot,
+            temp_min=state.markov_entropy_temp_min,
+            temp_max=state.markov_entropy_temp_max,
+        )
+
     async def _candidate_reject_reason(
         self,
         request: GenerationRequest,
@@ -374,6 +417,7 @@ class ResponseGenerator:
             markov_order=state.markov_order,
             enable_backoff=state.enable_backoff,
             jump_probability=0.0,
+            entropy_sampling=self.entropy_sampling,
             rng=rng,
             attempt_budget=2,
         )
@@ -488,6 +532,11 @@ class ResponseGenerator:
         modifiers = self.mood_modifiers or NEUTRAL_MODIFIERS
         seed = request.seed
         target = max(1, min(candidate_target, GENERATION_ATTEMPT_BUDGET))
+        # M2R-110: the target may shrink once the walk shows how much choice it
+        # actually had. Starts at the configured value and is recomputed after
+        # each accepted candidate.
+        effective_target = target
+        branching_samples: list[float] = []
         candidates: list[_ScoredCandidate] = []
         seen_candidates: set[str] = set()
         attempt_jump_counts: dict[str, int] = {}
@@ -545,6 +594,7 @@ class ResponseGenerator:
         effective_randomness = max(
             0.0, self.runtime_state.randomness_strength + modifiers.randomness_delta
         )
+        entropy_sampling = self.entropy_sampling
 
         gen_trace_log.log_request_header(
             request.chat_id,
@@ -589,6 +639,7 @@ class ResponseGenerator:
                 context_anchor_splice_probability=(
                     self.runtime_state.context_anchor_splice_probability
                 ),
+                entropy_sampling=entropy_sampling,
                 rng=generation_rng,
                 attempt_budget=1,
             )
@@ -709,6 +760,23 @@ class ResponseGenerator:
                         candidates.append(
                             _ScoredCandidate(text=candidate, score=score)
                         )
+                        # M2R-110: the accepted candidate's own mean branching
+                        # is what tells us whether more attempts would produce
+                        # anything different. getattr-guarded like the jump
+                        # count above — test doubles stub the trace.
+                        candidate_branching = float(
+                            getattr(candidate_trace, "mean_branching", 0.0) or 0.0
+                        )
+                        if candidate_branching > 0.0:
+                            branching_samples.append(candidate_branching)
+                        effective_target = branching_aware_target(
+                            target,
+                            branching_samples,
+                            degenerate_max=(
+                                self.runtime_state.markov_branching_degenerate_max
+                            ),
+                            floor=self.runtime_state.markov_branching_candidate_floor,
+                        )
                         gen_trace_log.log_attempt_accepted(
                             request.chat_id,
                             attempt + 1,
@@ -720,7 +788,7 @@ class ResponseGenerator:
                         )
                         if (
                             word_frequencies
-                            and len(candidates) < target
+                            and len(candidates) < effective_target
                             and generation_rng.random() < slot_mutation_probability
                         ):
                             variant = await self._mutated_variant(
@@ -760,7 +828,7 @@ class ResponseGenerator:
                                     index=len(candidates),
                                     score=mutated_score,
                                 )
-                        if len(candidates) >= target:
+                        if len(candidates) >= effective_target:
                             break
                     else:
                         gen_trace_log.log_attempt_duplicate(
