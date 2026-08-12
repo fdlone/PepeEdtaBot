@@ -28,8 +28,15 @@ configurations:
     available: false
     same_as: C0
     overrides: {}
+  # Same treatment as C1, for the same reason: Phase 3 ships the blend disabled
+  # (every alpha default is 0), so an arm that "enables temporal blend" would be
+  # C0 by construction and the runner would report an alias row. The grid that
+  # produced the verdict lives in matrix_phase3_grid.yaml, its numbers in
+  # docs/eval_reports/eval_2026-08-12_phase3-verdict.md — re-enable this arm
+  # only after a live accumulation window gives the blend a corpus where more
+  # than 1% of states offer a choice.
   - id: C2
-    description: "V2: temporal blend only (Phase 3)"
+    description: "V2: temporal blend only (Phase 3 — gate failed, ships disabled)"
     available: false
     same_as: C0
     overrides: {}

@@ -533,6 +533,22 @@ def build_report(
             for snapshot in run.telemetry
             if snapshot.get("shadow_order4_selected_share") is not None
         ]
+        # M2R-210: intent (alpha) is in the matrix; these two are the effect.
+        coverages = [
+            float(value)
+            for snapshot in run.telemetry
+            if (value := snapshot.get("blend_step_coverage")) is not None
+        ]
+        displacements = [
+            float(value)
+            for snapshot in run.telemetry
+            if (value := snapshot.get("mean_blend_displacement")) is not None
+        ]
+        blend_line = (
+            f"coverage {mean(coverages):.1%}, shift {mean(displacements):.4f}"
+            if coverages and displacements
+            else INSUFFICIENT
+        )
         shadow_line = (
             f"{mean([float(share) for share in shadow_shares]):.1%} "
             "(estimator=window)"
@@ -548,6 +564,7 @@ def build_report(
             f"{latencies['latency_p95']:.1f} ms; cache_hit_rate: {hit_line}; "
             f"mean normalized entropy: {entropy_line}; "
             f"mean applied temperature: {temperature_line}; "
+            f"temporal blend: {blend_line}; "
             f"shadow order-4 share: {shadow_line}; storage_delta: n/a."
         )
     lines.append("")
