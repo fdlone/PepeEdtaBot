@@ -44,22 +44,22 @@ decision (M2R-430) is a follow-up — it needs prod-accumulated df.
 
 ## 7. Eval (generation-eval spec)
 
-- [ ] 7.1 `tools/eval/run.py`: C4 arm populates df from the copy's retained messages at the fixed evaluation moment (C3 precedent, mirrored for df, design D4)
-- [ ] 7.2 `tools/eval/matrix.yaml`: C4 arm `available: true` with `markov_seeded_candidate_ratio` set (and neutral surface layers), `available: true` only for what this change ships
-- [ ] 7.3 `phase5_promotion` gate computed in `tools/eval/report.py` from the run (replace the "does not exist before Phase 5" stub): seeded present/win rates, affinity delta vs no-seeded arm, p95, storage
-- [ ] 7.4 Gate reports `insufficient data` while df is window-approximated — never `pass` (spec: `generation-eval`)
+- [x] 7.1 `tools/eval/run.py`: C4 arm populates df from the copy's retained messages at the fixed evaluation moment (C3 precedent, mirrored for df, design D4)
+- [x] 7.2 `tools/eval/matrix.yaml`: C4 arm `available: true` with `markov_seeded_candidate_ratio` set (and neutral surface layers), `available: true` only for what this change ships
+- [x] 7.3 `phase5_promotion` gate computed in `tools/eval/report.py` from the run (replace the "does not exist before Phase 5" stub): seeded present/win rates, affinity delta vs no-seeded arm, p95, storage
+- [x] 7.4 Gate reports `insufficient data` while df is window-approximated — never `pass` (spec: `generation-eval`)
 - [ ] 7.5 Protocol run C0 vs C4 on `db_prod_copy`; report in `docs/eval_reports/`, referenced from this change
-- [ ] 7.6 CI smoke stays green
+- [x] 7.6 CI smoke stays green
 
 ## 8. Migration verification (standing rule: whole 2.0R package, one restart)
 
-- [ ] 8.1 No new migration this change; re-confirm the full 001→020 chain still applies cleanly on a copy of `db_prod_copy` after this change's code lands (the package rolls out at once)
+- [x] 8.1 No new migration this change; re-confirm the full 001→020 chain still applies cleanly on a copy of `db_prod_copy` after this change's code lands — whole package applies at once, 20 migrations, seed-path structures live and queryable (reverse index used, df/n_docs present)
 
 ## 9. Documentation
 
-- [ ] 9.1 `GENERATION_PIPELINE.md`: seeded branch (seed score, bidirectional assembly, ratio, transparent fallback); note §9.7 candidate IDF stays window-based (design D6)
-- [ ] 9.2 `docs/v2/00_STATUS.md`: Phase 5 seeded row + next-session pointer to the M2R-430 decision (needs the accumulation window)
-- [ ] 9.3 `.env.example` bounds and one-line meanings for the seed knobs
+- [x] 9.1 `GENERATION_PIPELINE.md`: seeded branch (seed score, bidirectional assembly, ratio, transparent fallback); note §9.7 candidate IDF stays window-based (design D6)
+- [x] 9.2 `docs/v2/00_STATUS.md`: Phase 5 seeded row + next-session pointer to the M2R-430 decision (needs the accumulation window)
+- [x] 9.3 `.env.example` bounds and one-line meanings for the seed knobs
 
 ## 10. Default decision (gate — M2R-430, follow-up boundary)
 

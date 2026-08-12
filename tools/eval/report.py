@@ -151,6 +151,83 @@ def _verdict(
     return "pass", detail
 
 
+PHASE5_ARM_PREFIX = "C4"
+
+
+def _mean_telemetry(arm: ConfigRun, key: str) -> float | None:
+    """Mean of a per-seed telemetry value across an arm's snapshots.
+
+    ``None`` when no snapshot reported it (e.g. the seeded branch never fired,
+    so the win rate has no denominator on any seed)."""
+    values = [
+        float(v)
+        for snap in arm.telemetry
+        if (v := snap.get(key)) is not None
+    ]
+    return sum(values) / len(values) if values else None
+
+
+def _phase5_arm_verdict(
+    baseline: ConfigRun, arm: ConfigRun, thresholds: dict[str, Any]
+) -> tuple[str, str]:
+    """Phase 5 promotion gate for one seeded arm (verdict, detail).
+
+    Computes every automatic condition — seeded present rate, seeded win rate
+    given present, the affinity-without-copy delta vs the no-seeded baseline,
+    p95 — and prints them. But the verdict is ALWAYS ``insufficient data``
+    here: the eval's df is approximated from the retained message window, not
+    accumulated on live prod (design D4), so a green verdict would be bought
+    over the easy half. The real promotion decision (M2R-430) needs a protocol
+    run over prod-accumulated df, exactly as Phase 4's gate waits on the manual
+    rating.
+    """
+    if arm.shared_with is not None:
+        return INSUFFICIENT, f"arm resolves to the same overrides as {arm.shared_with}"
+
+    config = thresholds.get("phase5_promotion", {})
+    base_values = metric_values(baseline.records)
+    arm_values = metric_values(arm.records)
+    parts: list[str] = []
+    failures: list[str] = []
+    missing: list[str] = ["a protocol run over prod-accumulated df (df here is "
+                          "window-approximated, design D4)"]
+
+    present = _mean_telemetry(arm, "seeded_present_rate")
+    win = _mean_telemetry(arm, "seeded_win_rate_given_present")
+    present_min = float(config.get("seeded_present_rate_min", 0.30))
+    win_min = float(config.get("seeded_win_rate_given_present_min", 0.40))
+    present_txt = f"{present:.0%}" if present is not None else INSUFFICIENT
+    win_txt = f"{win:.0%}" if win is not None else INSUFFICIENT
+    parts.append(
+        f"seeded present {present_txt} (bar {present_min:.0%}), "
+        f"win|present {win_txt} (bar {win_min:.0%})"
+    )
+
+    floor = float(config.get("affinity_without_copy_delta_min", 0.0))
+    affinity_delta = _delta_part(
+        "affinity_without_copy",
+        base_values.get("context_affinity_without_copy"),
+        arm_values.get("context_affinity_without_copy"),
+        parts=parts,
+        missing=missing,
+    )
+    if affinity_delta is not None:
+        point, significant = affinity_delta
+        if significant and point < floor:
+            failures.append("affinity without copies dropped significantly")
+
+    _latency_part(
+        arm,
+        float(config.get("latency_p95_ms_max", 150)),
+        parts=parts,
+        missing=missing,
+        failures=failures,
+    )
+    # Failures are still reported (a p95 blowout is real regardless of df), but
+    # the missing prod-df line keeps the verdict out of "pass" by construction.
+    return _verdict(parts, failures, missing)
+
+
 def _phase2_arm_verdict(
     baseline: ConfigRun, arm: ConfigRun, thresholds: dict[str, Any]
 ) -> tuple[str, str]:
@@ -472,13 +549,19 @@ def evaluate_gates(
             )
             rows.append((f"phase4_memes[{arm_id}]", verdict, detail))
 
-    rows.append(
-        (
-            "phase5_promotion",
-            INSUFFICIENT,
-            "seeded generation does not exist before Phase 5",
+    phase5_arms = sorted(arm for arm in runs if arm.startswith(PHASE5_ARM_PREFIX))
+    if baseline is None or not phase5_arms:
+        rows.append(
+            (
+                "phase5_promotion",
+                INSUFFICIENT,
+                "no Phase 5 arm in this run (seeded generation not enabled)",
+            )
         )
-    )
+    else:
+        for arm_id in phase5_arms:
+            verdict, detail = _phase5_arm_verdict(baseline, runs[arm_id], thresholds)
+            rows.append((f"phase5_promotion[{arm_id}]", verdict, detail))
 
     phase6 = thresholds.get("phase6_anticycle", {})
     if baseline is not None:

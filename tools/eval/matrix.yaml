@@ -58,11 +58,20 @@ configurations:
       markov_hot_ngram_meme_ordering: true
       markov_collocation_bonus: 0.35
       markov_collocation_break_penalty: 0.35
+  # Phase 5 (M2R-410): seeded candidates from lexical anchoring. The runner
+  # populates df from the copy's retained messages (window-approximated, since
+  # df cannot be backfilled from full history) so the seeded branch has an IDF
+  # to score with — enough to measure seeded_present_rate / win_rate, but NOT
+  # the prod-accumulated df the promotion gate needs, so phase5_promotion stays
+  # `insufficient data` until a live-accumulated run (design D4). Ratio 0.3
+  # matches the pre-registered gate's null assumption (eval_thresholds.yaml).
   - id: C4
-    description: "V2: lexical anchoring only (seeded + IDF scoring, Phase 5)"
-    available: false
-    same_as: C0
-    overrides: {}
+    description: "V2: lexical anchoring only (seeded generation, Phase 5)"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+      markov_seeded_candidate_ratio: 0.3
   - id: C5
     description: "V2: entropy + blend (cumulative core)"
     available: false
