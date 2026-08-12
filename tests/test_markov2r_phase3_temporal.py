@@ -15,6 +15,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from app.core.markov import MarkovGenerator
 from app.core.temporal import (
     COMPRESSION_LOG,
     COMPRESSION_POW,
@@ -211,6 +212,124 @@ class TestBlendProperties(unittest.TestCase):
             blended = TemporalBlend(alpha=0.5).blend(rows, now=DAY)
             assert blended is not None
             self.assertGreater(max(blended.weights), 0.0)
+
+
+class _StubPort:
+    """Minimal MarkovReadPort: counts reads so caching is observable."""
+
+    def __init__(self, rows: list[tuple[str, int, float, int | None]]) -> None:
+        self.rows = rows
+        self.reads = 0
+
+    async def get_transitions3(
+        self, chat_id: int, w1: str, w2: str, w3: str
+    ) -> list[tuple[str, int, float, int | None]]:
+        self.reads += 1
+        return list(self.rows)
+
+    async def get_transitions(
+        self, chat_id: int, w1: str, w2: str
+    ) -> list[tuple[str, int, float, int | None]]:
+        self.reads += 1
+        return list(self.rows)
+
+    async def get_starts(self, chat_id: int) -> list[tuple[str, str, int]]:
+        return []
+
+    async def get_starts3(self, chat_id: int) -> list[tuple[str, str, str, int]]:
+        return []
+
+    async def get_start_if_exists(
+        self, chat_id: int, w1: str, w2: str
+    ) -> tuple[str, str, int] | None:
+        return None
+
+    async def get_start3_if_exists(
+        self, chat_id: int, w1: str, w2: str, w3: str
+    ) -> tuple[str, str, str, int] | None:
+        return None
+
+    async def get_states(
+        self, chat_id: int, order: int
+    ) -> list[tuple[tuple[str, ...], int]]:
+        return []
+
+
+class TestBlendIsInvariantToTheReadingMoment(unittest.TestCase):
+    """Uniform passage of time cancels inside the pool — a real property.
+
+    Every candidate's short weight decays by the SAME factor between two reads,
+    and ``P_short`` is normalized within the pool, so the factor divides out. The
+    blended distribution therefore depends on *when each token was last
+    observed* relative to the others, never on when the pool is read.
+
+    Two consequences worth stating rather than discovering later:
+
+    - a cached pool cannot go stale in the weights sense, which is why the cache
+      needs no time-based invalidation;
+    - the eval fixture's choice of evaluation moment cannot bias the grid, since
+      no choice of moment changes any arm's output.
+
+    ``now`` is still threaded explicitly (design D3): it keeps the clock out of
+    sampling, which is what makes runs reproducible and testable. This test
+    documents that its *numeric* influence is nil, so nobody later "fixes" a
+    non-bug by making sampling read the clock.
+    """
+
+    def test_same_pool_read_at_two_moments_gives_identical_weights(self) -> None:
+        observed = 1_700_000_000
+        rows = [
+            ("часто", 50, 1.0, observed - 10 * DAY),
+            ("свежо", 1, 8.0, observed),
+        ]
+        blend = TemporalBlend(alpha=0.6)
+        early = blend.blend(rows, observed)
+        late = blend.blend(rows, observed + 90 * DAY)
+        assert early is not None and late is not None
+        for a, b in zip(early.weights, late.weights):
+            self.assertAlmostEqual(a, b, places=12)
+
+    def test_relative_recency_is_what_moves_the_weights(self) -> None:
+        """What time cannot do, a newer observation can."""
+        observed = 1_700_000_000
+        stale = [("a", 10, 1.0, observed - 10 * DAY), ("b", 10, 1.0, observed)]
+        refreshed = [("a", 10, 1.0, observed - 10 * DAY), ("b", 10, 4.0, observed)]
+        blend = TemporalBlend(alpha=0.8)
+        before = blend.blend(stale, observed)
+        after = blend.blend(refreshed, observed)
+        assert before is not None and after is not None
+        self.assertGreater(after.weights[1], before.weights[1])
+
+
+class TestCachedPoolMatchesFreshRead(unittest.IsolatedAsyncioTestCase):
+    """A cached pool blends exactly like a freshly read one."""
+
+    async def test_cached_pool_matches_a_fresh_read_at_the_later_moment(self) -> None:
+        observed = 1_700_000_000
+        # Different ages on purpose: decaying both tokens by the same factor
+        # leaves the normalized short distribution unchanged, so a same-age pool
+        # could not tell a live read apart from a frozen one.
+        rows = [
+            ("часто", 50, 1.0, observed - 10 * DAY),
+            ("свежо", 1, 8.0, observed),
+        ]
+        port = _StubPort(rows)
+        generator = MarkovGenerator(db=port)  # type: ignore[arg-type]
+        blend = TemporalBlend(alpha=0.6)
+
+        # Populate the cache at t0, then read it again nine days later.
+        cached = await generator._get3(1, "a", "b", "c")
+        later = observed + 9 * DAY
+        again = await generator._get3(1, "a", "b", "c")
+        self.assertEqual(port.reads, 1, "second read must come from the cache")
+
+        from_cache = blend.blend(again, later)
+        from_fresh = blend.blend(rows, later)
+        assert from_cache is not None and from_fresh is not None
+        self.assertEqual(from_cache.weights, from_fresh.weights)
+        # The cache stores the raw pair, not a resolved weight, so it agrees
+        # with a fresh read at the moment of reading — the same list, in fact.
+        self.assertEqual(cached, again)
 
 
 class TestShortLayerReset(unittest.IsolatedAsyncioTestCase):

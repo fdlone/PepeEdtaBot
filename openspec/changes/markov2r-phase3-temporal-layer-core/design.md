@@ -83,6 +83,17 @@ the protocol's bit-for-bit requirement — the thing that makes every phase verd
 auditable — quietly stops holding. The eval runner and the tests pass a fixed
 moment.
 
+**Correction found during implementation.** The numeric influence of `now` turns
+out to be nil: every candidate's short weight decays by the same factor between
+two reads, and the short layer is normalized *within the pool*, so the factor
+divides out. The blended distribution depends on when each token was last
+observed *relative to the others*, never on when the pool is read. Two
+consequences, both good and both now covered by tests: a cached pool cannot go
+stale in the weights sense (no time-based cache invalidation needed), and the
+fixture's choice of evaluation moment cannot bias the grid. The injection stays
+— it keeps the clock out of sampling, which is what makes runs testable — but
+the claim it defends is hygiene, not sensitivity.
+
 ### D4. The blend returns the pool unchanged when α = 0, so there is one code path
 
 `blend_pool(pool, alpha, now, ...) -> list[tuple[str, float]]` returns its input

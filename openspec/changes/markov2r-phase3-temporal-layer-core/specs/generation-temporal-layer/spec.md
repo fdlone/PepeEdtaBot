@@ -84,8 +84,14 @@ was served from a cache populated earlier.
 
 #### Scenario: A cached pool read later
 
-- **WHEN** a pool cached at one moment is read at a later moment
-- **THEN** the short weights reflect the later moment's decay, not the moment of caching
+- **WHEN** a pool cached at one moment is blended at a later moment
+- **THEN** the result equals blending a freshly read pool at that same moment — the cache stores the observation record, never a resolved weight
+
+#### Scenario: The reading moment does not shift the distribution
+
+- **WHEN** the same pool is blended at two different moments with no new observation in between
+- **THEN** the blended weights are identical, because every candidate's short weight decays by the same factor and the layer is normalized within the pool
+- **AND** a newer observation on one candidate does shift the weights, which is the only thing that can
 
 ### Requirement: Layers are blended over the union of their tokens
 
