@@ -12,9 +12,9 @@
 ## 2. CI action
 
 - [x] 2.1 `actions/checkout@v4` → `@v7` in both jobs of `.github/workflows/ci.yml`
-- [ ] 2.2 CI green on the PR (this is also the live proof for the checkout bump)
+- [x] 2.2 CI green on the PR (this is also the live proof for the checkout bump)
 
 ## 3. Close-out
 
-- [ ] 3.1 Drop the hygiene line from `docs/v2/00_STATUS.md` next-session list — deferred on purpose: the phase-5 branch rewrote that exact list and both branches are unmerged; a one-line edit after both land avoids a guaranteed conflict
-- [ ] 3.2 Archive this change after merge
+- [x] 3.1 Drop the hygiene line from `docs/v2/00_STATUS.md` next-session list — deferred on purpose: the phase-5 branch rewrote that exact list and both branches are unmerged; a one-line edit after both land avoids a guaranteed conflict
+- [x] 3.2 Archive this change after merge
