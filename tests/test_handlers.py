@@ -107,6 +107,12 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.markov_entropy_temp_max = 12.0
     s.markov_branching_degenerate_max = 0.0
     s.markov_branching_candidate_floor = 2
+    # Phase 4 collocation weights neutral: non-zero (or a bare MagicMock, which
+    # does not support ordering comparisons) would send the pipeline to the
+    # collocation registry on a mock.
+    s.markov_collocation_bonus = 0.0
+    s.markov_collocation_break_penalty = 0.0
+    s.markov_hot_ngram_meme_ordering = False
     # L1 hot-ngram channel off by default so learn/reply tests stay
     # deterministic; dedicated hot-ngram tests enable it explicitly.
     s.hot_ngram_seed_chance = 0.0
@@ -184,6 +190,7 @@ class TestCommonHandlers(unittest.IsolatedAsyncioTestCase):
         msg = _fake_message()
         db = AsyncMock()
         db.get_chat_token_volume = AsyncMock(return_value=250)
+        db.collocations.count_by_status = AsyncMock(return_value={})
         state = _fake_state(min_tokens_for_model=50)
         generator = MarkovGenerator(db=AsyncMock())
 
@@ -2270,6 +2277,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             msg.chat.id,
             min_count=state.hot_ngram_min_count,
             recency_share=state.hot_ngram_recency_share,
+            meme_ordering=state.markov_hot_ngram_meme_ordering,
         )
         first_call = generator.generate_text.await_args_list[0]
         self.assertEqual(first_call.kwargs["seed_tokens"], ["крутой", "бобёр"])

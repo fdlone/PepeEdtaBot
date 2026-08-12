@@ -78,13 +78,24 @@ def format_help_message() -> str:
 def format_stats_message(
     stats: dict[str, int],
     telemetry: dict[str, float | int | None] | None = None,
+    collocations: dict[str, int] | None = None,
 ) -> str:
     """Объём модели плюс телеметрия генерации (Markov 2.0R Phase 1).
 
     Телеметрия — счётчики за время жизни процесса; до первой генерации после
-    рестарта показывать нечего, и блок опускается целиком.
+    рестарта показывать нечего, и блок опускается целиком. ``collocations`` —
+    размер реестра коллокаций чата по статусам (M2R-300); пустой реестр
+    строку не печатает.
     """
     lines = [f"объём модели: {stats['volume']}"]
+    if collocations:
+        lines.append(
+            "коллокации: "
+            + ", ".join(
+                f"{status}={count}"
+                for status, count in sorted(collocations.items())
+            )
+        )
     if telemetry and telemetry.get("generations"):
         lines.append(f"генераций с рестарта: {telemetry['generations']}")
         mean_entropy = telemetry.get("mean_normalized_entropy")
@@ -116,6 +127,29 @@ def format_stats_message(
                 f"order-4 (тень, оценка по окну): выбрался бы в {share:.0%} "
                 f"из {eligible} шагов"
             )
+        # M2R-320: вес в конфиге — намерение, эти счётчики — эффект. Отдельный
+        # withheld и есть свидетельство, что гард доступности не мёртвый код.
+        applied = (
+            (telemetry.get("collocation_bonus_hits") or 0)
+            + (telemetry.get("collocation_penalty_hits") or 0)
+            + (telemetry.get("collocation_withheld") or 0)
+        )
+        if applied:
+            lines.append(
+                "коллокации в скоринге: "
+                f"бонусов {telemetry.get('collocation_bonus_hits')}, "
+                f"штрафов {telemetry.get('collocation_penalty_hits')}, "
+                f"удержано {telemetry.get('collocation_withheld')}"
+            )
+    # M2R-300: стоимость суточного анализа — вне блока генераций, проход
+    # случается и до первой генерации после рестарта.
+    if telemetry and telemetry.get("meme_passes"):
+        mean_ms = telemetry.get("meme_mean_pass_ms") or 0.0
+        lines.append(
+            f"мем-анализ: {telemetry['meme_passes']} проходов, "
+            f"пар оценено {telemetry.get('meme_scored_pairs')}, "
+            f"среднее {mean_ms:.0f} мс"
+        )
     return "\n".join(lines)
 
 
@@ -170,6 +204,13 @@ def format_config_message(
                 f"markov_short_half_life_days={state.markov_short_half_life_days}",
                 f"markov_long_compression={state.markov_long_compression}",
                 f"markov_long_compression_beta={state.markov_long_compression_beta}",
+                # Phase 4 collocation scoring (M2R-320): the weights that let
+                # the chat's memes nudge candidate selection, plus the
+                # hot-ngram ordering switch (M2R-310). All neutral until the
+                # phase gate says otherwise.
+                f"markov_collocation_bonus={state.markov_collocation_bonus}",
+                f"markov_collocation_break_penalty={state.markov_collocation_break_penalty}",
+                f"markov_hot_ngram_meme_ordering={state.markov_hot_ngram_meme_ordering}",
                 f"reply_context_max_tokens={state.reply_context_max_tokens}",
                 f"reply_context_bias={state.reply_context_bias}",
                 f"reply_context_start_bias={state.reply_context_start_bias}",

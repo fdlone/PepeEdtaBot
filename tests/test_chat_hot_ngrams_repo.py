@@ -120,6 +120,44 @@ class TestChatHotNgramsRepo(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("SCAN transitions", plan)
 
 
+class TestMemeOrdering(unittest.IsolatedAsyncioTestCase):
+    """M2R-310 / design D5: an ordering behind a knob, not a replacement."""
+
+    LOUD = ("просто", "частая")
+    MEME = ("крутой", "бобёр")
+
+    async def asyncSetUp(self) -> None:
+        self.db_path = Path(f"test_hot_meme_{uuid.uuid4().hex}.sqlite")
+        self.db = Database(str(self.db_path))
+        await self.db.init()
+        # The frequent pair outcounts the meme in the window; the registry
+        # holds only the meme as active.
+        await self.db.chat_hot_ngrams.bump(CHAT, [self.LOUD] * 9)
+        await self.db.chat_hot_ngrams.bump(CHAT, [self.MEME] * 4)
+        await self.db.collocations.replace_scored(
+            CHAT, [(*self.MEME, 4, 0.93, 0.85)]
+        )
+
+    async def asyncTearDown(self) -> None:
+        await self.db.close()
+        self.db_path.unlink(missing_ok=True)
+
+    async def _hot(self, *, meme_ordering: bool) -> list[tuple[str, ...]]:
+        return await self.db.chat_hot_ngrams.get_hot(
+            CHAT, min_count=3, recency_share=0.0, meme_ordering=meme_ordering
+        )
+
+    async def test_default_path_still_orders_by_count(self) -> None:
+        self.assertEqual(await self._hot(meme_ordering=False), [self.LOUD, self.MEME])
+
+    async def test_meme_ordering_puts_the_registry_pair_first(self) -> None:
+        self.assertEqual(await self._hot(meme_ordering=True), [self.MEME, self.LOUD])
+
+    async def test_retired_entry_stops_influencing_the_order(self) -> None:
+        await self.db.collocations.set_status(CHAT, *self.MEME, "retired")
+        self.assertEqual(await self._hot(meme_ordering=True), [self.LOUD, self.MEME])
+
+
 class TestPlantedSpikeEndToEnd(unittest.IsolatedAsyncioTestCase):
     """L1 acceptance check from the action plan: a phrase the chat suddenly
     picked up becomes hot and the seed API opens a reply with it."""

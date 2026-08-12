@@ -26,6 +26,9 @@ PHASE2_ARM_PREFIX = "C1"
 # plus every calibration variant of the grid.
 PHASE3_ARM_PREFIX = "C2"
 
+# Phase 4 arms (PMI memes + collocation scoring), same prefix convention.
+PHASE4_ARM_PREFIX = "C3"
+
 # Canonical §3 order for the metrics table.
 METRIC_ORDER = (
     "generation_success_rate",
@@ -302,8 +305,121 @@ def _phase3_arm_verdict(
     return _verdict(parts, failures, missing)
 
 
+def _phase4_arm_verdict(
+    baseline: ConfigRun,
+    arm: ConfigRun,
+    thresholds: dict[str, Any],
+    manual: dict[str, Any] | None,
+) -> tuple[str, str]:
+    """Phase 4 gate for one arm (verdict, detail).
+
+    The primary condition is a human one — the share of top memes rated genuine
+    (doc 05 §5) — and it is deliberately not computable here. Without it the
+    verdict is `insufficient data` even when every automatic condition passes:
+    this phase's claim is "the bot sounds like this chat", and no metric in this
+    harness can see that.
+    """
+    if arm.shared_with is not None:
+        return INSUFFICIENT, f"arm resolves to the same overrides as {arm.shared_with}"
+
+    config = thresholds.get("phase4_memes", {})
+    base_values = metric_values(baseline.records)
+    arm_values = metric_values(arm.records)
+    parts: list[str] = []
+    failures: list[str] = []
+    missing: list[str] = []
+
+    share_min = float(config.get("manual_real_share_min", 0.70))
+    rated_min = int(config.get("manual_rated_min", 20))
+    control_floor = float(config.get("manual_control_delta_floor", 0.0))
+    decoy_max = float(config.get("manual_decoy_false_positive_max", 0.20))
+    if manual is None:
+        missing.append("manual top-meme rating (doc 05 §5)")
+    else:
+        rated = int(manual.get("rated", 0))
+        real = int(manual.get("real", 0))
+        share = real / rated if rated else 0.0
+        control_rated = int(manual.get("control_rated", 0))
+        control_real = int(manual.get("control_real", 0))
+        control_share = control_real / control_rated if control_rated else 0.0
+        decoy_rated = int(manual.get("decoy_rated", 0))
+        decoy_real = int(manual.get("decoy_real", 0))
+        decoy_share = decoy_real / decoy_rated if decoy_rated else 0.0
+        raters = int(manual.get("raters", 0))
+        agreement = manual.get("agreement")
+        agreement_text = (
+            f", agreement {float(agreement):.2f}"
+            if agreement is not None and raters > 1
+            else ", agreement unavailable (single rater)"
+            if raters == 1
+            else ""
+        )
+        parts.append(
+            f"manual: meme {real}/{rated} genuine ({share:.0%}, bar {share_min:.0%}) "
+            f"vs frequency control {control_real}/{control_rated} "
+            f"({control_share:.0%}), Δ {share - control_share:+.0%}; "
+            f"decoys {decoy_real}/{decoy_rated} ({decoy_share:.0%}); "
+            f"{raters} rater(s){agreement_text}"
+        )
+        # Validity first: if the decoys were rated genuine this often, neither
+        # share means anything and the round is undecided rather than failed.
+        if decoy_rated and decoy_share > decoy_max:
+            missing.append(
+                f"a usable rating round (decoy false-positive {decoy_share:.0%} "
+                f"over the {decoy_max:.0%} bar — the ratings are noise)"
+            )
+        elif rated < rated_min:
+            failures.append(f"only {rated} memes rated, protocol requires {rated_min}")
+        else:
+            if share < share_min:
+                failures.append("genuine share below the bar")
+            if control_rated and (share - control_share) < control_floor:
+                failures.append(
+                    "meme ranking scored below the frequency selection it replaces"
+                )
+            if not control_rated:
+                missing.append("frequency-control half of the rating round")
+
+    copy_max = float(config.get("exact_copy_delta_max", 0.0))
+    copy_delta = _delta_part(
+        "copy",
+        base_values.get("exact_context_copy_rate"),
+        arm_values.get("exact_context_copy_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if copy_delta is not None:
+        point, significant = copy_delta
+        if significant and point > copy_max:
+            failures.append("copy rose significantly")
+
+    floor = float(config.get("affinity_without_copy_delta_floor", 0.0))
+    affinity_delta = _delta_part(
+        "affinity_without_copy",
+        base_values.get("context_affinity_without_copy"),
+        arm_values.get("context_affinity_without_copy"),
+        parts=parts,
+        missing=missing,
+    )
+    if affinity_delta is not None:
+        point, significant = affinity_delta
+        if significant and point < floor:
+            failures.append("affinity without copies dropped significantly")
+
+    _latency_part(
+        arm,
+        float(config.get("latency_p95_ms_max", 150)),
+        parts=parts,
+        missing=missing,
+        failures=failures,
+    )
+    return _verdict(parts, failures, missing)
+
+
 def evaluate_gates(
-    runs: dict[str, ConfigRun], thresholds: dict[str, Any]
+    runs: dict[str, ConfigRun],
+    thresholds: dict[str, Any],
+    manual_rating: dict[str, Any] | None = None,
 ) -> list[tuple[str, str, str]]:
     """(gate, verdict, detail) rows. Phase 0: most gates lack their data by
     construction — that is reported, never guessed."""
@@ -339,6 +455,22 @@ def evaluate_gates(
         for arm_id in phase3_arms:
             verdict, detail = _phase3_arm_verdict(baseline, runs[arm_id], thresholds)
             rows.append((f"phase3_temporal[{arm_id}]", verdict, detail))
+
+    phase4_arms = sorted(arm for arm in runs if arm.startswith(PHASE4_ARM_PREFIX))
+    if baseline is None or not phase4_arms:
+        rows.append(
+            (
+                "phase4_memes",
+                INSUFFICIENT,
+                "no Phase 4 arm in this run (meme scoring not enabled)",
+            )
+        )
+    else:
+        for arm_id in phase4_arms:
+            verdict, detail = _phase4_arm_verdict(
+                baseline, runs[arm_id], thresholds, manual_rating
+            )
+            rows.append((f"phase4_memes[{arm_id}]", verdict, detail))
 
     rows.append(
         (
@@ -438,6 +570,7 @@ def build_report(
     revision: str,
     date: str,
     notes: list[str],
+    manual_rating: dict[str, Any] | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append(
@@ -592,7 +725,7 @@ def build_report(
 
     lines.append("## Gates")
     lines.append("")
-    for gate, verdict, detail in evaluate_gates(runs, thresholds):
+    for gate, verdict, detail in evaluate_gates(runs, thresholds, manual_rating):
         lines.append(f"- **{gate}**: {verdict} — {detail}")
     if "C0" in runs:
         verdict, missing = meme_regression(runs["C0"].records, len(prompt_set.memes))

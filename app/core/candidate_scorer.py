@@ -123,6 +123,11 @@ class CandidateScore:
     repetition_penalty: float
     recent_penalty: float = 0.0
     verbatim_penalty: float = 0.0
+    # M2R-320: bonus minus penalty from the chat's active collocations. Signed
+    # on purpose — the components are counted separately in telemetry, and the
+    # score only needs their net effect. 0 until the phase-4 gate raises the
+    # weights from their neutral defaults.
+    collocation_delta: float = 0.0
 
     @property
     def total(self) -> float:
@@ -130,6 +135,7 @@ class CandidateScore:
             self.completion_quality
             + self.natural_length
             + self.context_relevance
+            + self.collocation_delta
             - self.repetition_penalty
             - self.recent_penalty
             - self.verbatim_penalty

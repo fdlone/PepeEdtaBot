@@ -187,15 +187,32 @@ class _ProdVerbatimChecker:
         return self._frequencies_by_ending
 
     async def get_hot_ngrams(
-        self, chat_id: int, *, min_count: int, recency_share: float
+        self,
+        chat_id: int,
+        *,
+        min_count: int,
+        recency_share: float,
+        meme_ordering: bool = False,
     ) -> list[tuple[str, ...]]:
         if self._db is None:
             return []
         if self._hot_ngrams is None:
             self._hot_ngrams = await self._db.chat_hot_ngrams.get_hot(
-                chat_id, min_count=min_count, recency_share=recency_share
+                chat_id,
+                min_count=min_count,
+                recency_share=recency_share,
+                meme_ordering=meme_ordering,
             )
         return self._hot_ngrams
+
+    async def get_active_collocations(
+        self, chat_id: int
+    ) -> frozenset[tuple[str, str]]:
+        # M2R-320: read only when a scoring weight is non-zero — mirrors the
+        # runtime LearningService, including the C3 ablation arm.
+        if self._db is None:
+            return frozenset()
+        return frozenset(await self._db.collocations.get_active(chat_id))
 
     async def get_order4_shadow_index(
         self, chat_id: int

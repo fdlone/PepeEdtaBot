@@ -26,6 +26,7 @@ from app.repositories import (
     ChatHotNgramsRepo,
     ChatMembersRepo,
     ChatUserInteractionsRepo,
+    CollocationsRepo,
     MarkovRepo,
     MessagesRepo,
     PivoPoolUsageRepo,
@@ -98,6 +99,7 @@ class Database:
         self._chat_emoji_stats: ChatEmojiStatsRepo | None = None
         self._chat_hot_ngrams: ChatHotNgramsRepo | None = None
         self._chat_user_interactions: ChatUserInteractionsRepo | None = None
+        self._collocations: CollocationsRepo | None = None
         # Monotonic-время, раньше которого следующий прогон decay не начинается
         # (None до init()).
         self._next_flavor_decay_monotonic: float | None = None
@@ -153,6 +155,22 @@ class Database:
     def chat_user_interactions(self) -> ChatUserInteractionsRepo:
         return self._require(self._chat_user_interactions)
 
+    @property
+    def collocations(self) -> CollocationsRepo:
+        return self._require(self._collocations)
+
+    async def list_chat_ids(self) -> list[int]:
+        """Chats the model knows about — the daily meme pass iterates these.
+
+        Read from the volume counter rather than from ``messages``: retention
+        trims messages while the chain is kept, so a quiet chat with a large
+        model must not disappear from maintenance.
+        """
+        async with self._lock:
+            db = await self._get_conn()
+            cursor = await db.execute("SELECT chat_id FROM chat_model_volume")
+            return [int(row[0]) for row in await cursor.fetchall()]
+
     async def init(self) -> None:
         if self._conn is not None:
             return
@@ -179,6 +197,7 @@ class Database:
         self._chat_user_interactions = ChatUserInteractionsRepo(
             self._get_conn, self._lock
         )
+        self._collocations = CollocationsRepo(self._get_conn, self._lock)
         await self.cleanup_pivo_daily_usage()
         await self.decay_chat_emoji_stats()
         await self.decay_chat_hot_ngrams()
@@ -199,6 +218,7 @@ class Database:
         self._chat_emoji_stats = None
         self._chat_hot_ngrams = None
         self._chat_user_interactions = None
+        self._collocations = None
 
     # One statement's worth of keys. Bounded so a very long message cannot
     # approach SQLite's bound-parameter ceiling; the loop costs nothing at
@@ -683,6 +703,7 @@ class Database:
 
     async def clear_chat(self, chat_id: int) -> None:
         tables = (
+            "markov_collocations",
             "messages",
             "starts",
             "starts3",

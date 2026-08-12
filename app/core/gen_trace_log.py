@@ -218,7 +218,8 @@ def log_attempt_accepted(
         "        route: %s\n"
         "        text : %r\n"
         "        score: total=%+.3f = "
-        "completion=%+.3f + natural_len=%+.3f + context_rel=%+.3f\n"
+        "completion=%+.3f + natural_len=%+.3f + context_rel=%+.3f "
+        "+ collocation=%+.3f\n"
         "               - repetition=%.3f - recent=%.3f - verbatim=%.3f",
         attempt,
         "on" if context_used else "off",
@@ -229,6 +230,7 @@ def log_attempt_accepted(
         score.completion_quality,
         score.natural_length,
         score.context_relevance,
+        score.collocation_delta,
         score.repetition_penalty,
         score.recent_penalty,
         score.verbatim_penalty,

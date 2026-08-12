@@ -36,6 +36,18 @@ class ChatHotNgramsRepo(DecayableCountsRepo):
             rows,
         )
 
+    # M2R-310 / design D5: the meme variant keeps the eligibility filters and
+    # changes only the ordering — the registry's association score decides,
+    # window count breaks ties. Trigrams take their best adjacent pair; an
+    # n-gram absent from the registry scores 0 and keeps its count order. The
+    # bigram rows store w3 = '', so the second OR arm cannot match for them.
+    _MEME_SCORE_SQL = """, COALESCE((
+                    SELECT MAX(c.meme_score) FROM markov_collocations c
+                    WHERE c.chat_id = h.chat_id AND c.status = 'active'
+                      AND ((c.left_token = h.w1 AND c.right_token = h.w2)
+                           OR (c.left_token = h.w2 AND c.right_token = h.w3))
+                  ), 0.0)"""
+
     async def get_hot(
         self,
         chat_id: int,
@@ -43,6 +55,7 @@ class ChatHotNgramsRepo(DecayableCountsRepo):
         min_count: int,
         recency_share: float,
         limit: int = 8,
+        meme_ordering: bool = False,
     ) -> list[tuple[str, ...]]:
         """Top n-grams whose window count is a big share of their all-time count.
 
@@ -50,6 +63,12 @@ class ChatHotNgramsRepo(DecayableCountsRepo):
         occurrences happened inside the current window. Missing long-term rows
         fall back to the window count itself (share 1.0) so a brand-new meme
         still qualifies.
+
+        ``meme_ordering`` (M2R-310) reorders the same selection by the
+        collocation registry's association score. Off by default, and the off
+        path's SQL is byte-identical to what shipped before the knob existed —
+        tie order among equal counts must not move under neutral settings
+        (the ``generation_hash`` contract).
         """
         # Всевременной счётчик берётся коррелированным подзапросом на строку
         # окна, а не агрегатом по всей таблице переходов чата. Окно — десятки
@@ -59,8 +78,10 @@ class ChatHotNgramsRepo(DecayableCountsRepo):
         # идёт по префиксу первичного ключа и укладывается в сотые доли
         # миллисекунды. Результат тот же: отсутствующая строка по-прежнему
         # означает «считаем всевременным счётчиком оконный».
-        query = """
-            SELECT h.w1, h.w2, h.w3, h.cnt
+        score = self._MEME_SCORE_SQL if meme_ordering else ""
+        order = "ORDER BY 5 DESC, 4 DESC" if meme_ordering else "ORDER BY 4 DESC"
+        query = f"""
+            SELECT h.w1, h.w2, h.w3, h.cnt{score}
             FROM chat_hot_ngrams h
             WHERE h.chat_id = ? AND h.w3 <> '' AND h.cnt >= ?
               AND h.cnt * 1.0 / MAX(COALESCE((
@@ -69,7 +90,7 @@ class ChatHotNgramsRepo(DecayableCountsRepo):
                       AND t.w1 = h.w1 AND t.w2 = h.w2 AND t.w3 = h.w3
                   ), h.cnt), h.cnt) >= ?
             UNION ALL
-            SELECT h.w1, h.w2, h.w3, h.cnt
+            SELECT h.w1, h.w2, h.w3, h.cnt{score}
             FROM chat_hot_ngrams h
             WHERE h.chat_id = ? AND h.w3 = '' AND h.cnt >= ?
               AND h.cnt * 1.0 / MAX(COALESCE((
@@ -77,7 +98,7 @@ class ChatHotNgramsRepo(DecayableCountsRepo):
                     WHERE t.chat_id = h.chat_id
                       AND t.w1 = h.w1 AND t.w2 = h.w2
                   ), h.cnt), h.cnt) >= ?
-            ORDER BY 4 DESC
+            {order}
             LIMIT ?
         """
         params = (
@@ -91,7 +112,7 @@ class ChatHotNgramsRepo(DecayableCountsRepo):
         )
         rows = await self._fetch_all(query, params)
         result: list[tuple[str, ...]] = []
-        for w1, w2, w3, _cnt in rows:
+        for w1, w2, w3, *_counts in rows:
             if w3:
                 result.append((str(w1), str(w2), str(w3)))
             else:

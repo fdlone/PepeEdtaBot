@@ -1149,6 +1149,27 @@ class MarkovGenerator:
         self._touch_cache(self._cache3, key, rows)
         return rows
 
+    def transition_was_available(
+        self, chat_id: int, state: tuple[str, ...], token: str
+    ) -> bool:
+        """Did the chain hold a transition from ``state`` to ``token``? (M2R-320)
+
+        Answered strictly from the pools already cached by walks — never a
+        query: collocation scoring runs per candidate and must not touch the
+        database (design D4). An unknown pool answers False, which withholds
+        the break penalty rather than firing it — missing evidence must not
+        punish the candidate.
+        """
+        if len(state) >= 2:
+            pool2 = self._cache2.get((chat_id, state[-2], state[-1]))
+            if pool2 is not None:
+                return any(row[0] == token for row in pool2)
+        if len(state) >= 3:
+            pool3 = self._cache3.get((chat_id, state[-3], state[-2], state[-1]))
+            if pool3 is not None:
+                return any(row[0] == token for row in pool3)
+        return False
+
     async def _get2(self, chat_id: int, w1: str, w2: str) -> list[TransitionRow]:
         key = (chat_id, w1, w2)
         if key in self._cache2:

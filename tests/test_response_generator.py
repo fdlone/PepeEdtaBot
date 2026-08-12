@@ -63,6 +63,11 @@ def _runtime_state() -> MagicMock:
     state.markov_entropy_temp_max = 12.0
     state.markov_branching_degenerate_max = 0.0
     state.markov_branching_candidate_floor = 2
+    # Phase 4 collocation weights neutral, same MagicMock-truthiness reason:
+    # non-zero would send the pipeline to get_active_collocations on a mock.
+    state.markov_collocation_bonus = 0.0
+    state.markov_collocation_break_penalty = 0.0
+    state.markov_hot_ngram_meme_ordering = False
     return state
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from collections import Counter, deque
 from collections.abc import Callable, Iterable, Mapping, Set
@@ -16,6 +17,8 @@ from app.core.slot_mutation import (
 )
 from app.core.text import sanitize_text
 from app.infrastructure.database import Database, MaintenanceOutcome
+from app.log_masking import mask_chat_id
+from app.services.meme_analyzer import MemeSettings, analyze_chat_memes
 
 # Trailing punctuation stripped before verbatim comparison: the reply pipeline
 # (finalize_reply_ending / reply flavor) only ever rewrites the ending cluster,
@@ -36,6 +39,8 @@ def normalize_for_verbatim(text: str) -> str:
 # кэши (тексты, 4-граммы, частоты) обновляются инкрементально и этой отсрочки
 # не знают.
 STATS_REBUILD_EVERY_MESSAGES = 50
+
+logger = logging.getLogger("chat_markov")
 
 
 def _fold_shadow_order4(
@@ -88,9 +93,15 @@ class LearningService:
         user_hasher: Callable[[int], str] | None = None,
         cache_ttl_sec: int = 86400,
         cache_max_chats: int = 2048,
+        meme_settings: MemeSettings | None = None,
     ) -> None:
         self._db = db
         self._generator = generator
+        # M2R-300: settings for the daily meme pass. Falls back to defaults
+        # rather than disabling itself — the registry should fill from the day
+        # the code ships, because the manual rating round needs a ranking to
+        # rate long before any scoring knob is raised.
+        self._meme_settings = meme_settings or MemeSettings()
         self._text_cache_max_messages = text_cache_max_messages
         self._cache_ttl_sec = float(cache_ttl_sec)
         self._cache_max_chats = cache_max_chats
@@ -165,6 +176,14 @@ class LearningService:
         if outcome is MaintenanceOutcome.SKIPPED:
             return None
 
+        # M2R-300: the meme pass rides the same daily cadence. It runs only when
+        # the flavor decay actually ran, so it inherits the "once a day" rule
+        # instead of inventing a second schedule. Failures are swallowed the
+        # same way the decay swallows its own: a meme ranking is worth less than
+        # the message the learn path is in the middle of handling.
+        if outcome is MaintenanceOutcome.DONE:
+            await self._run_meme_analysis()
+
         if outcome is MaintenanceOutcome.DONE:
             failing_since = self._maintenance_failing_since
             alerted = self._maintenance_alerted_at is not None
@@ -235,6 +254,54 @@ class LearningService:
         self._absorb_message(chat_id, raw_text, tokens)
         return token_volume
 
+    async def _run_meme_analysis(self) -> None:
+        """One meme pass per known chat, failures contained (M2R-300).
+
+        Deliberately does not raise: this is background bookkeeping riding on
+        the learn path, and a failed ranking must not cost the message being
+        learned. The previous registry stays usable, and the next pass retries.
+        """
+        settings = self._meme_settings
+        now = int(time.time())
+        try:
+            chat_ids = await self._db.list_chat_ids()
+        except Exception:
+            # Even enumerating the chats is background bookkeeping. If it
+            # fails, the learn path must carry on — the spec's contract is that
+            # a failing pass leaves the previous registry usable, and that has
+            # to hold for the whole pass, not just for its inner loop.
+            logger.exception("meme analysis could not list chats")
+            return
+        for chat_id in chat_ids:
+            try:
+                result = await analyze_chat_memes(
+                    self._db.collocations,
+                    chat_id,
+                    now=now,
+                    min_joint_count=settings.min_joint_count,
+                    min_support=settings.min_support,
+                    recency_days=settings.recency_days,
+                    max_entries=settings.max_entries,
+                )
+            except Exception:
+                logger.exception(
+                    "meme analysis failed for chat %s", mask_chat_id(chat_id)
+                )
+                continue
+            logger.info(
+                "meme analysis chat=%s scored=%d stored=%d took=%.1fms",
+                mask_chat_id(chat_id),
+                result.scored_pairs,
+                result.stored_pairs,
+                result.duration_ms,
+            )
+            # Task 4.3 / generation-telemetry spec: duration and scored-pair
+            # count per pass, visible in /stats — no chat identifiers.
+            self._generator.telemetry.note_meme_pass(
+                scored_pairs=result.scored_pairs,
+                duration_ms=result.duration_ms,
+            )
+
     async def reset_short_layer(self, chat_id: int | None) -> None:
         """Discard the short layer (TZ §7.2), leaving the long one intact.
 
@@ -269,12 +336,35 @@ class LearningService:
         await self._db.chat_hot_ngrams.bump(chat_id, ngrams)
 
     async def get_hot_ngrams(
-        self, chat_id: int, *, min_count: int, recency_share: float
+        self,
+        chat_id: int,
+        *,
+        min_count: int,
+        recency_share: float,
+        meme_ordering: bool = False,
     ) -> list[tuple[str, ...]]:
-        """Currently-hot n-grams for unprompted-reply seeding (L1)."""
+        """Currently-hot n-grams for unprompted-reply seeding (L1).
+
+        ``meme_ordering`` (M2R-310) reorders the same selection by the
+        collocation registry's association score; the frequency ordering
+        stays the default so the eval can run both paths side by side.
+        """
         return await self._db.chat_hot_ngrams.get_hot(
-            chat_id, min_count=min_count, recency_share=recency_share
+            chat_id,
+            min_count=min_count,
+            recency_share=recency_share,
+            meme_ordering=meme_ordering,
         )
+
+    async def get_active_collocations(
+        self, chat_id: int
+    ) -> frozenset[tuple[str, str]]:
+        """Active collocation pairs for candidate scoring (M2R-320).
+
+        Read once per reply by the generation pipeline — and only when a
+        scoring weight is non-zero, so the neutral defaults add no query.
+        """
+        return frozenset(await self._db.collocations.get_active(chat_id))
 
     def _hash_user(self, user_id: int) -> str:
         if self._user_hasher is None:

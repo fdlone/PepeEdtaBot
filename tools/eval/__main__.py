@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -125,6 +126,15 @@ async def _protocol(args: argparse.Namespace) -> int:
     thresholds = load_thresholds(Path(args.thresholds))
     prompt_set = load_prompts(Path(args.prompts))
     db_source = Path(args.db)
+    # Phase 4 (doc 05 §5): the manual rating lives OUTSIDE the repository — it
+    # is a list of verbatim chat phrases. Only its aggregate reaches the report,
+    # and without it the Phase 4 gate reports insufficient data rather than
+    # passing on the automatic half alone.
+    manual_rating: dict[str, Any] | None = None
+    if args.manual_rating:
+        manual_rating = json.loads(
+            Path(args.manual_rating).read_text(encoding="utf-8")
+        )
     fresh_tokens: frozenset[str] | None = None
     evaluation_moment: int | None = None
     notes = [
@@ -177,6 +187,7 @@ async def _protocol(args: argparse.Namespace) -> int:
         skipped=skipped,
         prompt_set=prompt_set,
         thresholds=thresholds,
+        manual_rating=manual_rating,
         snapshot_label=args.label,
         seeds=seeds,
         generations=args.generations,
@@ -217,6 +228,15 @@ def main() -> None:
         help="build eval_prompts.yaml from the snapshot and exit",
     )
     parser.add_argument("--prompt-seed", type=int, default=PROTOCOL_SEEDS[0])
+    parser.add_argument(
+        "--manual-rating",
+        type=str,
+        default=None,
+        help=(
+            "path to the local manual top-meme rating (doc 05 §5). Keep it "
+            "out of the repository: it contains verbatim chat phrases"
+        ),
+    )
     parser.add_argument(
         "--temporal-fixture",
         action="store_true",

@@ -31,6 +31,7 @@ EXPECTED_MIGRATIONS = [
     "016_verbatim_ngrams",
     "017_strip_list_enumerators",
     "018_temporal_layer",
+    "019_markov_collocations",
 ]
 
 EXPECTED_TABLES = {

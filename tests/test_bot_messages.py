@@ -42,6 +42,13 @@ def make_state() -> SimpleNamespace:
         markov_alpha_calm=0.0,
         markov_alpha_lively=0.0,
         markov_alpha_heated=0.0,
+        markov_meme_min_joint_count=3,
+        markov_meme_min_support=10.0,
+        markov_meme_recency_days=30.0,
+        markov_collocation_max_entries=100,
+        markov_collocation_bonus=0.0,
+        markov_collocation_break_penalty=0.0,
+        markov_hot_ngram_meme_ordering=False,
         markov_short_half_life_days=3.0,
         markov_long_compression="log",
         markov_long_compression_beta=0.6,
@@ -139,6 +146,47 @@ class TestBotMessages(unittest.TestCase):
         self.assertIn("Дополнительно:", text)
         self.assertIn("reply_context_start_bias=2.2", text)
         self.assertIn("markov_entropy_temp_gain=0.0", text)
+
+    def test_config_message_full_includes_collocation_knobs(self) -> None:
+        """Task 7.4: the Phase 4 scoring knobs are readable in /config full."""
+        text = format_config_message(make_state(), full=True)
+
+        self.assertIn("markov_collocation_bonus=0.0", text)
+        self.assertIn("markov_collocation_break_penalty=0.0", text)
+        self.assertIn("markov_hot_ngram_meme_ordering=False", text)
+
+    def test_stats_message_shows_collocation_registry_by_status(self) -> None:
+        """Task 7.4: registry size per status; an empty registry adds nothing."""
+        text = format_stats_message(
+            {"volume": 250}, collocations={"active": 7, "retired": 2}
+        )
+        self.assertIn("коллокации: active=7, retired=2", text)
+
+        empty = format_stats_message({"volume": 250}, collocations={})
+        self.assertNotIn("коллокации", empty)
+
+    def test_stats_message_shows_collocation_effect_counters(self) -> None:
+        """Telemetry spec: applied and withheld counts are the effect."""
+        telemetry = {
+            "generations": 4,
+            "collocation_bonus_hits": 3,
+            "collocation_penalty_hits": 1,
+            "collocation_withheld": 2,
+        }
+        text = format_stats_message({"volume": 250}, telemetry=telemetry)
+        self.assertIn("бонусов 3, штрафов 1, удержано 2", text)
+
+    def test_stats_message_shows_meme_pass_cost(self) -> None:
+        """Task 4.3: pass duration and scored pairs, even with no generations."""
+        telemetry = {
+            "generations": 0,
+            "meme_passes": 2,
+            "meme_scored_pairs": 500,
+            "meme_mean_pass_ms": 41.2,
+        }
+        text = format_stats_message({"volume": 250}, telemetry=telemetry)
+        self.assertIn("мем-анализ: 2 проходов, пар оценено 500", text)
+        self.assertIn("41 мс", text)
 
     def test_set_help_message_shows_common_keys(self) -> None:
         text = format_set_help_message()
