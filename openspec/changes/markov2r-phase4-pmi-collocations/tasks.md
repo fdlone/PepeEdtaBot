@@ -84,7 +84,7 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 ## 12. Documentation
 
-- [ ] 12.1 `docs/v2/00_STATUS.md`: Phase 4 row + next-session pointer
+- [x] 12.1 `docs/v2/00_STATUS.md`: Phase 4 row + next-session pointer
 - [x] 12.2 `.env.example` with bounds and one-line meanings; `GENERATION_PIPELINE.md` where scoring is described
 - [x] 12.3 Record that collocation gluing stays out of scope and why (ADR-016), so it is not rediscovered as an idea — ADR-016 + TZ §10.2 already normative; now also restated in `GENERATION_PIPELINE.md` at the exact place a reader meets the scoring
 
@@ -94,6 +94,6 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 ## 14. Close-out
 
-- [ ] 14.1 `openspec validate --strict` green for this change
-- [ ] 14.2 Full test suite + lint/type checks
+- [x] 14.1 `openspec validate --strict` green for this change
+- [x] 14.2 Full test suite + lint/type checks — 1095 tests OK, ruff clean, mypy clean (2026-08-12)
 - [ ] 14.3 Archive this change after merge — rides in the next phase's PR
