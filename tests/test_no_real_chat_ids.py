@@ -27,6 +27,8 @@ ALLOWED_SYNTHETIC_CHAT_IDS = frozenset(
         "-1009876543210",
         "-1002233445566",
         "-123456789",
+        # test_log_masking: legacy basic-group id with fewer digits.
+        "-12345678",
     }
 )
 

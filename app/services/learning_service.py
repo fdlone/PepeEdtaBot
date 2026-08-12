@@ -157,8 +157,15 @@ class LearningService:
     async def get_token_volume(self, chat_id: int) -> int:
         return await self._db.get_chat_token_volume(chat_id)
 
-    async def run_due_maintenance(self) -> MaintenanceAlert | None:
+    async def run_due_maintenance(
+        self, meme_settings: MemeSettings | None = None
+    ) -> MaintenanceAlert | None:
         """Прокручивает отложенное обслуживание базы, если подошёл срок.
+
+        ``meme_settings`` — эффективные значения /set-ручек мемо-пасса на
+        момент вызова (передаёт конвейер); без них пасс идёт на значениях,
+        полученных конструктором, — то есть /set не действовал бы до
+        перезапуска.
 
         Планировщика в проекте нет, и learn-путь — единственное место, куда
         регулярно приходит управление. Обслуживание вызывается отдельным шагом,
@@ -182,7 +189,7 @@ class LearningService:
         # same way the decay swallows its own: a meme ranking is worth less than
         # the message the learn path is in the middle of handling.
         if outcome is MaintenanceOutcome.DONE:
-            await self._run_meme_analysis()
+            await self._run_meme_analysis(meme_settings or self._meme_settings)
 
         if outcome is MaintenanceOutcome.DONE:
             failing_since = self._maintenance_failing_since
@@ -254,14 +261,13 @@ class LearningService:
         self._absorb_message(chat_id, raw_text, tokens)
         return token_volume
 
-    async def _run_meme_analysis(self) -> None:
+    async def _run_meme_analysis(self, settings: MemeSettings) -> None:
         """One meme pass per known chat, failures contained (M2R-300).
 
         Deliberately does not raise: this is background bookkeeping riding on
         the learn path, and a failed ranking must not cost the message being
         learned. The previous registry stays usable, and the next pass retries.
         """
-        settings = self._meme_settings
         now = int(time.time())
         try:
             chat_ids = await self._db.list_chat_ids()
@@ -609,7 +615,7 @@ class LearningService:
         counts[text] += 1
 
     async def _get_recent_texts(self, chat_id: int) -> list[str]:
-        return await self._db.messages.get_recent_normalized(
+        return await self._db.markov.get_recent_normalized(
             chat_id,
             self._text_cache_max_messages,
         )

@@ -22,11 +22,12 @@ from __future__ import annotations
 import logging
 import random
 import re
+from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from app.config.runtime_state import RuntimeState, get_recent_deque
+from app.config.runtime_state import RuntimeState
 from app.core.emoji import count_emojis
 from app.core.hot_ngrams import extract_content_ngrams
 from app.core.markov import (
@@ -67,6 +68,7 @@ from app.presentation.fallback_phrases import (
     pick_fallback_phrase,
 )
 from app.services.learning_service import LearningService, MaintenanceAlert
+from app.services.meme_analyzer import MemeSettings
 
 logger = logging.getLogger("chat_markov")
 
@@ -119,8 +121,8 @@ def normalize_short_reply_text(text: str) -> str:
 def remember_short_reply(
     runtime_state: RuntimeState, chat_id: int, reply_text: str
 ) -> None:
-    recent = get_recent_deque(
-        runtime_state.recent_short_replies, chat_id, RECENT_SHORT_REPLY_LIMIT
+    recent = runtime_state.recent_short_replies.setdefault(
+        chat_id, deque(maxlen=RECENT_SHORT_REPLY_LIMIT)
     )
     recent.append(normalize_short_reply_text(reply_text))
 
@@ -139,8 +141,8 @@ def next_fallback_phrase(
     a heated chat mood adds punchier phrases (M1). Both are additive, so the
     neutral pool always remains available.
     """
-    recent = get_recent_deque(
-        runtime_state.recent_fallbacks, chat_id, RECENT_FALLBACK_LIMIT
+    recent = runtime_state.recent_fallbacks.setdefault(
+        chat_id, deque(maxlen=RECENT_FALLBACK_LIMIT)
     )
     effective_pool = mood_fallback_pool(late_night_pool(pool, now), mood)
     phrase = pick_fallback_phrase(effective_pool, recent, rng=rng)
@@ -350,6 +352,9 @@ class ReplyPipeline:
 
         if obs.address_reply and not obs.enough_data:
             await self._send_fallback(msg, obs, NOT_ENOUGH_DATA_PHRASES, send)
+            # Как и фолбэк при сбое генерации ниже: ответ отправлен, поэтому
+            # кулдаун/берст его видят (unprompted=False — часовой кап нет).
+            state.note_reply_sent(msg.chat_id, now, unprompted=False)
             state.note_mention_reply(msg.chat_id, msg.user_id, now)
             await self._count_answered_mention(msg.chat_id, msg.user_id)
             return
@@ -467,6 +472,10 @@ class ReplyPipeline:
             raw_text=obs.learn_source,
             tokens=obs.tokens,
             incremental_cache=state.markov_cache_incremental,
+            # M2R-210: писатель обязан гасить короткий слой тем же периодом
+            # полураспада, которым его читают; без ручки запись шла бы на
+            # константе defaults.py, а чтение — на runtime-значении.
+            short_half_life_days=state.markov_short_half_life_days,
         )
         # L1 running jokes: fold the learned message's content n-grams into the
         # sliding hot-ngram window. Gated on the channel knob so a zero chance
@@ -497,8 +506,23 @@ class ReplyPipeline:
 
         Возвращает сигнал владельцу, если о состоянии обслуживания пора
         сказать; отправляет его вызывающий.
+
+        Ручки мемо-пасса передаются отсюда: они /set-абельны, а сервис сам
+        RuntimeState не держит — без этого пасс жил бы на конструкторных
+        значениях до перезапуска.
         """
-        return await self._learning_service.run_due_maintenance()
+        state = self._runtime_state
+        # ponytail: state — вид чата, чьё сообщение запустило пасс, а пасс
+        # обходит все чаты; per-chat оверрайды мемо-ручек сюда протекают.
+        # Глобальный /set (типичный случай для фоновой задачи) корректен.
+        return await self._learning_service.run_due_maintenance(
+            MemeSettings(
+                min_joint_count=state.markov_meme_min_joint_count,
+                min_support=state.markov_meme_min_support,
+                recency_days=state.markov_meme_recency_days,
+                max_entries=state.markov_collocation_max_entries,
+            )
+        )
 
     # --- шаги политики ответа ---
 
@@ -582,7 +606,14 @@ class ReplyPipeline:
             1.0,
             state.reply_probability * obs.mood_modifiers.reply_probability_mult,
         )
-        return reply_prob, cooldown_ok, True
+        # reply_max_per_hour — самостоятельный предохранитель, а не деталь
+        # директора: легаси-ветка обязана соблюдать его так же.
+        hourly_cap_ok = within_hourly_cap(
+            state.recent_reply_times.get(msg.chat_id, ()),
+            now,
+            state.reply_max_per_hour,
+        )
+        return reply_prob, cooldown_ok, hourly_cap_ok
 
     def _context_tokens(
         self, msg: IncomingMessage, obs: MessageObservation

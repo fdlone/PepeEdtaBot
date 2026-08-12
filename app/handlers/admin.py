@@ -6,7 +6,7 @@ from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.config.runtime_config import (
+from app.config.registry import (
     UNKNOWN_RUNTIME_KEY_MESSAGE,
     InvalidRuntimeSettingValueError,
     UnknownRuntimeSettingError,
@@ -17,8 +17,8 @@ from app.config.runtime_state import RuntimeState
 from app.config.settings import Settings
 from app.core.markov import MarkovGenerator
 from app.filters import (
+    GROUP_ONLY,
     AdminOrOwner,
-    GroupOnly,
     OwnerOnly,
     is_admin_or_owner,
     is_owner,
@@ -106,7 +106,7 @@ async def cmd_config(
 # the scoped form is AdminOrOwner again; the `global` form still carries the
 # process-wide effect and stays OWNER_ID-only, checked inside the handler
 # because the scope is a word in the text, not a separate command.
-@router.message(Command("set"), GroupOnly(), AdminOrOwner())
+@router.message(Command("set"), GROUP_ONLY, AdminOrOwner())
 async def cmd_set(
     message: Message,
     runtime_state: RuntimeState,
@@ -137,6 +137,9 @@ async def cmd_set(
             await reply_humanized_state(message, usage, runtime_state)
             return
         key = parts[1].strip().lower()
+        # runtime_state — вид чата, снятый ДО сброса: эффективное значение до
+        # снятия оверрайда читается отсюда (M2R-210, см. ниже).
+        previous_half_life = runtime_state.markov_short_half_life_days
         try:
             cleared = clear_runtime_setting(runtime_state_base, message.chat.id, key)
         except UnknownRuntimeSettingError:
@@ -146,11 +149,33 @@ async def cmd_set(
                 runtime_state,
             )
             return
+        except InvalidRuntimeSettingValueError as exc:
+            await reply_humanized_state(
+                message, f"Сброс не применён: {exc}", runtime_state
+            )
+            return
         text = (
             f"{key}: чат вернулся к глобальному значению."
             if cleared
             else f"{key}: в этом чате и так глобальное значение."
         )
+        # M2R-210: сброс оверрайда — тоже смена периода полураспада, если
+        # глобальное значение отличается; короткий слой чата к нему
+        # несопоставим. Совпадающие значения слой не трогают.
+        if (
+            cleared
+            and key == "markov_short_half_life_days"
+            and runtime_state_base.markov_short_half_life_days
+            != previous_half_life
+        ):
+            await learning_service.reset_short_layer(message.chat.id)
+            text += (
+                "\n\nВнимание: короткий слой чата обнулён — счётчик свежести "
+                "математически привязан к прежнему периоду полураспада. "
+                "Долгая память чата не тронута, свежесть накопится заново "
+                "примерно за "
+                f"{runtime_state_base.markov_short_half_life_days:g} дн."
+            )
         await reply_humanized_state(message, text, runtime_state)
         return
 
@@ -167,8 +192,13 @@ async def cmd_set(
     key, value = arguments[0].strip().lower(), arguments[1].strip()
     # M2R-210 / TZ §7.2: the short layer is mathematically tied to the half-life
     # it accumulated under, so changing that knob discards it. Read the old
-    # value before applying, so an unchanged value stays a no-op.
-    previous_half_life = runtime_state.markov_short_half_life_days
+    # value before applying, so an unchanged value stays a no-op. The global
+    # form compares against the global BASE value: the invoking chat's
+    # override would otherwise mask a real base change (reset skipped) or
+    # fake one (base unchanged, override differs — spurious wipe).
+    previous_half_life = (
+        runtime_state_base if is_global else runtime_state
+    ).markov_short_half_life_days
     try:
         apply_runtime_setting(
             runtime_state_base,
@@ -183,9 +213,15 @@ async def cmd_set(
             runtime_state,
         )
         return
-    except InvalidRuntimeSettingValueError:
+    except InvalidRuntimeSettingValueError as exc:
+        # Конфликт с оверрайдами чата несёт своё сообщение (какой чат, какие
+        # ключи); обычная ошибка значения остаётся коротким отказом.
+        detail = str(exc)
         await reply_humanized_state(
-            message, "Некорректное значение для этого ключа.", runtime_state
+            message,
+            "Некорректное значение для этого ключа."
+            + (f"\n{detail}" if detail else ""),
+            runtime_state,
         )
         return
 
@@ -207,14 +243,14 @@ async def cmd_set(
     await reply_humanized_state(message, text, runtime_state)
 
 
-@router.message(Command("set"), GroupOnly())
+@router.message(Command("set"), GROUP_ONLY)
 async def cmd_set_denied(message: Message, runtime_state: RuntimeState) -> None:
     """Fallback: вызывается, когда AdminOrOwner отказал в правах для /set."""
     await _reply_no_permission(message, runtime_state)
 
 
 # Same split as /set: scoped form to chat admins, `global` to OWNER_ID only.
-@router.message(Command("setprob"), GroupOnly(), AdminOrOwner())
+@router.message(Command("setprob"), GROUP_ONLY, AdminOrOwner())
 async def cmd_setprob(
     message: Message,
     runtime_state: RuntimeState,
@@ -260,7 +296,7 @@ async def cmd_setprob(
     )
 
 
-@router.message(Command("setprob"), GroupOnly())
+@router.message(Command("setprob"), GROUP_ONLY)
 async def cmd_setprob_denied(
     message: Message, runtime_state: RuntimeState
 ) -> None:
@@ -268,7 +304,7 @@ async def cmd_setprob_denied(
     await _reply_no_permission(message, runtime_state)
 
 
-@router.message(Command("quirk_stats"), GroupOnly(), OwnerOnly())
+@router.message(Command("quirk_stats"), GROUP_ONLY, OwnerOnly())
 async def cmd_quirk_stats(
     message: Message,
     runtime_state: RuntimeState,
@@ -304,7 +340,7 @@ async def cmd_quirk_stats(
     await reply_humanized_state(message, text, runtime_state)
 
 
-@router.message(Command("quirk_stats"), GroupOnly())
+@router.message(Command("quirk_stats"), GROUP_ONLY)
 async def cmd_quirk_stats_denied(
     message: Message, runtime_state: RuntimeState
 ) -> None:
@@ -314,7 +350,7 @@ async def cmd_quirk_stats_denied(
     )
 
 
-@router.message(Command("clear"), GroupOnly(), AdminOrOwner())
+@router.message(Command("clear"), GROUP_ONLY, AdminOrOwner())
 async def cmd_clear(
     message: Message,
     db: Database,
@@ -342,7 +378,7 @@ async def cmd_clear(
     )
 
 
-@router.message(Command("clear"), GroupOnly())
+@router.message(Command("clear"), GROUP_ONLY)
 async def cmd_clear_denied(message: Message, runtime_state: RuntimeState) -> None:
     """Fallback: вызывается, когда AdminOrOwner отказал в правах для /clear."""
     await reply_humanized_state(

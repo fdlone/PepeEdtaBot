@@ -4,8 +4,8 @@ Single source of truth for runtime-mutable configuration fields.
 Each FieldSpec describes one configuration field that lives both in
 ``Settings`` (loaded from environment) and ``RuntimeState`` (mutable at
 runtime via ``/set``). The same parser is reused by ``load_settings`` and
-``apply_runtime_setting``, eliminating triple duplication of validation
-logic across ``settings.py``, ``runtime_state.py`` and ``runtime_config.py``.
+``apply_runtime_setting`` (below), eliminating duplication of validation
+logic across ``settings.py`` and ``runtime_state.py``.
 
 Each parser is paired with a human-readable ``hint`` describing its accepted
 range (see ``Domain``), so ``/help`` / ``/set help`` can advertise the valid
@@ -726,11 +726,48 @@ def validate_cross_fields(obj: Any) -> None:
         )
 
 
+class ChatOverrideConflictError(ValueError):
+    """A change that is valid on its own breaks some chat's merged view.
+
+    Carries a user-facing (Russian) message naming the conflicting chat and
+    keys — unlike the plain parse/validation ``ValueError``s, this one is
+    about a combination the operator cannot see without being told.
+    """
+
+
+def _validate_chat_merged_views(candidate: Any, name: str) -> None:
+    """Validate every chat's override-merged view against a global candidate.
+
+    A global value can be valid next to the global fields yet invert a band in
+    a chat that overrides only one side of it (e.g. TYPING_MIN_MS raised above
+    a chat's overridden TYPING_MAX_MS — randint then raises on every reply).
+    Chats that override ``name`` itself keep their own value, so the global
+    change never reaches their merged view and they are skipped.
+    """
+    overrides_map = getattr(candidate, "chat_overrides", None)
+    if not overrides_map:
+        return
+    for chat_id, overrides in overrides_map.items():
+        if name in overrides:
+            continue
+        merged = copy.copy(candidate)
+        for override_name, override_value in overrides.items():
+            setattr(merged, override_name, override_value)
+        try:
+            validate_cross_fields(merged)
+        except ValueError as exc:
+            raise ChatOverrideConflictError(
+                f"конфликт с настройками чата {chat_id} (переопределено: "
+                f"{', '.join(sorted(overrides))}): {exc}"
+            ) from exc
+
+
 def try_apply(state: Any, name: str, value: str) -> None:
     """Parse, validate and apply a runtime field on ``state``.
 
-    Cross-field invariants are checked on a shallow copy first; the real
-    state is mutated only if the resulting combination is valid.
+    Cross-field invariants are checked on a shallow copy first — both against
+    the global fields and against every chat's override-merged view; the real
+    state is mutated only if every resulting combination is valid.
     Raises ``KeyError`` for unknown names and ``ValueError`` for invalid
     values (either by spec.parse or by cross-field validation).
     """
@@ -741,6 +778,7 @@ def try_apply(state: Any, name: str, value: str) -> None:
     candidate = copy.copy(state)
     setattr(candidate, name, parsed)
     validate_cross_fields(candidate)
+    _validate_chat_merged_views(candidate, name)
     setattr(state, name, parsed)
 
 
@@ -760,3 +798,87 @@ def try_apply_for_chat(state: Any, chat_id: int, name: str, value: str) -> None:
     setattr(candidate, name, parsed)
     validate_cross_fields(candidate)
     state.set_override(chat_id, name, parsed)
+
+
+def try_clear_for_chat(state: Any, chat_id: int, name: str) -> bool:
+    """Drop ``chat_id``'s override for ``name`` — validating what remains.
+
+    Clearing swaps the overridden value for the global one, and that
+    combination was never validated as a whole: a chat that overrode both
+    typing bounds and resets only one can fall back into an inverted band.
+    Raises ``ChatOverrideConflictError`` (override kept) if the resulting
+    merged view is invalid. Returns whether there was anything to drop.
+    """
+    if name not in _SPECS_BY_NAME:
+        raise KeyError(name)
+    overrides = getattr(state, "chat_overrides", {}).get(chat_id)
+    if not overrides or name not in overrides:
+        return False
+    merged = copy.copy(state)
+    for override_name, override_value in overrides.items():
+        if override_name == name:
+            continue
+        setattr(merged, override_name, override_value)
+    try:
+        validate_cross_fields(merged)
+    except ValueError as exc:
+        raise ChatOverrideConflictError(
+            f"с глобальным значением {name} настройки чата противоречивы: {exc}"
+        ) from exc
+    return bool(state.clear_override(chat_id, name))
+
+
+# --- Операторский слой /set: нормализация ключей и доменные исключения ---
+
+ALLOWED_RUNTIME_KEYS: tuple[str, ...] = runtime_field_names()
+
+UNKNOWN_RUNTIME_KEY_MESSAGE = "Неизвестный ключ.\nДоступно: " + ", ".join(
+    ALLOWED_RUNTIME_KEYS
+)
+
+
+class UnknownRuntimeSettingError(ValueError):
+    pass
+
+
+class InvalidRuntimeSettingValueError(ValueError):
+    pass
+
+
+def apply_runtime_setting(
+    state: object, key: str, value: str, *, chat_id: int | None = None
+) -> None:
+    """Apply a setting globally, or to one chat when ``chat_id`` is given.
+
+    ``chat_id=None`` keeps the original process-global behaviour, which is
+    what ``load_settings`` and the explicit global form of ``/set`` want.
+    """
+    normalized_key = key.strip().lower()
+    try:
+        if chat_id is None:
+            try_apply(state, normalized_key, value)
+        else:
+            try_apply_for_chat(state, chat_id, normalized_key, value)
+    except KeyError as exc:
+        raise UnknownRuntimeSettingError(normalized_key) from exc
+    except ChatOverrideConflictError as exc:
+        # Сообщение сохраняется: без него оператору не видно, какой чат и
+        # какие ключи ломают в целом валидное значение.
+        raise InvalidRuntimeSettingValueError(str(exc)) from exc
+    except (TypeError, ValueError) as exc:
+        raise InvalidRuntimeSettingValueError from exc
+
+
+def clear_runtime_setting(state: object, chat_id: int, key: str) -> bool:
+    """Drop a chat's override so it follows the global value again.
+
+    Проверяет получившийся merged-вид чата: сброс одного ключа из пары может
+    оставить противоречивую комбинацию (см. ``try_clear_for_chat``).
+    """
+    normalized_key = key.strip().lower()
+    if get_spec(normalized_key) is None:
+        raise UnknownRuntimeSettingError(normalized_key)
+    try:
+        return try_clear_for_chat(state, chat_id, normalized_key)
+    except ChatOverrideConflictError as exc:
+        raise InvalidRuntimeSettingValueError(str(exc)) from exc

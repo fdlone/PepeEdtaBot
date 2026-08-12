@@ -129,6 +129,40 @@ def _score(value: float) -> CandidateScore:
 
 
 class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
+    async def test_seeded_next_explore_is_mapped_to_probability(self) -> None:
+        # randomness_strength is a 0-3 scale; markov.py consumes next_explore
+        # as a probability (rng.random() < value). The raw strength (>= 1.0)
+        # used to make exploration unconditional in seeded walks.
+        state = _runtime_state()
+        state.randomness_strength = 2.0
+        state.markov_seeded_candidate_ratio = 0.5
+        generator = _traced_generator()
+        generator.generate_text = AsyncMock(
+            return_value="обычный кандидат из четырёх слов"
+        )
+        generator.rank_seeds = AsyncMock(
+            return_value=[SimpleNamespace(token="слово", score=1.0)]
+        )
+        generator.generate_seeded_candidate = AsyncMock(return_value=[])
+        learning_service = _learning_service()
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(1.0)),
+        )
+        with patch(
+            "app.core.response_generator.mask_chat_id", return_value="chat"
+        ):
+            await response_generator.generate(
+                _request(), rng=random.Random(1), candidate_target=1
+            )
+        kwargs = generator.generate_seeded_candidate.await_args.kwargs
+        self.assertAlmostEqual(
+            kwargs["next_explore"], min(0.98, 0.12 + 0.18 * 2.0)
+        )
+
     async def test_acceptance_checks_keep_existing_order(self) -> None:
         # Echo and anti-repeat gates still discard; a verbatim training-sample
         # copy is EXTENDED with a fresh continuation instead of discarded.
@@ -928,7 +962,11 @@ class TestResponseGeneratorIntonation(unittest.IsolatedAsyncioTestCase):
         )
         captured: list[tuple[float, float, float]] = []
 
-        def fake_sample(weights: tuple[float, float, float], rng: object) -> str:
+        def fake_sample(
+            weights: tuple[float, float, float],
+            rng: object,
+            base_weights: object = None,
+        ) -> str:
             captured.append(weights)
             return "medium"
 
@@ -968,7 +1006,11 @@ class TestResponseGeneratorIntonation(unittest.IsolatedAsyncioTestCase):
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
         captured: list[tuple[float, float, float]] = []
 
-        def fake_sample(weights: tuple[float, float, float], rng: object) -> str:
+        def fake_sample(
+            weights: tuple[float, float, float],
+            rng: object,
+            base_weights: object = None,
+        ) -> str:
             captured.append(weights)
             return "medium"
 
@@ -1062,7 +1104,11 @@ class TestResponseGeneratorMoodModulation(unittest.IsolatedAsyncioTestCase):
     async def test_length_weights_are_scaled_by_modifiers(self) -> None:
         captured: list[tuple[float, float, float]] = []
 
-        def fake_sample(weights: tuple[float, float, float], rng: object) -> str:
+        def fake_sample(
+            weights: tuple[float, float, float],
+            rng: object,
+            base_weights: object = None,
+        ) -> str:
             captured.append(weights)
             return "medium"
 

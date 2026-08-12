@@ -123,7 +123,12 @@ async def on_text_message(
 
     # Каждое сообщение — свежий снимок профиля отправителя: /pivo упоминает по
     # @username, а он мог смениться после /pivo_on. No-op для неподписанных.
-    await pivo_service.refresh_member(message.chat.id, message.from_user)
+    # Косметика профиля не должна стоить обучения и ответа на сообщение,
+    # поэтому сбой здесь гасится с предупреждением в логе.
+    try:
+        await pivo_service.refresh_member(message.chat.id, message.from_user)
+    except Exception:
+        logger.warning("pivo profile refresh failed; continuing", exc_info=True)
 
     if (message.text or "").startswith("/"):
         return
@@ -153,10 +158,18 @@ async def on_text_message(
         await pipeline.respond(incoming, observation, send)
     finally:
         # Обучение в finally намеренно: сообщение выучивается даже если
-        # генерация или отправка ответа упали.
-        await pipeline.learn(incoming, observation)
+        # генерация или отправка ответа упали. Собственные ошибки finally
+        # гасятся с записью в лог — иначе они подменяют исключение respond(),
+        # летящее в обработчик ошибок.
+        try:
+            await pipeline.learn(incoming, observation)
+        except Exception:
+            logger.exception("learning failed for the message")
         # Обслуживание — после обучения и отдельным вызовом: планировщика в
         # проекте нет, а его сбой не должен стоить выученного сообщения.
-        maintenance_alert = await pipeline.run_due_maintenance()
-        if maintenance_alert is not None:
-            await _report_maintenance_to_owner(maintenance_alert, bot, settings)
+        try:
+            maintenance_alert = await pipeline.run_due_maintenance()
+            if maintenance_alert is not None:
+                await _report_maintenance_to_owner(maintenance_alert, bot, settings)
+        except Exception:
+            logger.exception("due maintenance failed")

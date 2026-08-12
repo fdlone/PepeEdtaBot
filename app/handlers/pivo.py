@@ -19,7 +19,7 @@ from app.domain.pivo import (
     PIVO_PRIVACY_MESSAGE,
     count_mention_paths,
 )
-from app.filters import GroupOnly, OwnerOnly, is_admin_or_owner
+from app.filters import GROUP_ONLY, OwnerOnly, is_admin_or_owner
 from app.handlers._helpers import reply_humanized_state
 from app.log_masking import LogMaskingNotInitialized, mask_chat_id
 from app.services import PivoService
@@ -74,7 +74,12 @@ def _prune_quota_notice_state(now: float) -> None:
 
 
 def _should_notify_quota_exhausted(chat_id: int, user_id: int) -> bool:
-    """True, если об исчерпанной квоте этому участнику пора сказать вслух."""
+    """True, если об исчерпанной квоте этому участнику пора сказать вслух.
+
+    Только проверка, без отметки: окно отмечает
+    :func:`_mark_quota_notice_sent` после фактической отправки ответа — иначе
+    упавшая отправка съедала окно, и повтор команды встречался молчанием.
+    """
     global _quota_notice_tick
     now = time.monotonic()
 
@@ -86,12 +91,13 @@ def _should_notify_quota_exhausted(chat_id: int, user_id: int) -> bool:
         _quota_notice_tick = 0
         _prune_quota_notice_state(now)
 
-    key = (chat_id, user_id)
-    last_sent = _quota_notice_sent.get(key)
-    if last_sent is not None and (now - last_sent) < QUOTA_NOTICE_WINDOW_SEC:
-        return False
-    _quota_notice_sent[key] = now
-    return True
+    last_sent = _quota_notice_sent.get((chat_id, user_id))
+    return last_sent is None or (now - last_sent) >= QUOTA_NOTICE_WINDOW_SEC
+
+
+def _mark_quota_notice_sent(chat_id: int, user_id: int) -> None:
+    """Отмечает окно объяснения — вызывается после успешной отправки."""
+    _quota_notice_sent[(chat_id, user_id)] = time.monotonic()
 
 
 def _entity_counts(sent: Message | None) -> dict[str, int]:
@@ -168,7 +174,7 @@ def _log_mention_aggregate(
     )
 
 
-@router.message(Command("pivo"), GroupOnly())
+@router.message(Command("pivo"), GROUP_ONLY)
 async def cmd_pivo(
     message: Message,
     pivo_service: PivoService,
@@ -215,6 +221,7 @@ async def cmd_pivo(
                     f"Лимит /pivo на сегодня исчерпан: {quota.limit} раз(а) в сутки.",
                     runtime_state,
                 )
+                _mark_quota_notice_sent(message.chat.id, message.from_user.id)
             logger.info(
                 "pivo command rejected by daily quota: limit=%s day=%s",
                 quota.limit,
@@ -288,7 +295,7 @@ async def _finish_pivo_call(
         logger.exception("pivo post-processing failed; call already delivered")
 
 
-@router.message(Command("pivo_on"), GroupOnly())
+@router.message(Command("pivo_on"), GROUP_ONLY)
 async def cmd_pivo_on(
     message: Message, pivo_service: PivoService, runtime_state: RuntimeState
 ) -> None:
@@ -307,7 +314,7 @@ async def cmd_pivo_on(
     )
 
 
-@router.message(Command("pivo_off"), GroupOnly())
+@router.message(Command("pivo_off"), GROUP_ONLY)
 async def cmd_pivo_off(
     message: Message, pivo_service: PivoService, runtime_state: RuntimeState
 ) -> None:
@@ -321,7 +328,7 @@ async def cmd_pivo_off(
     )
 
 
-@router.message(Command("pivo_check"), GroupOnly(), OwnerOnly())
+@router.message(Command("pivo_check"), GROUP_ONLY, OwnerOnly())
 async def cmd_pivo_check(
     message: Message,
     pivo_service: PivoService,
@@ -364,7 +371,7 @@ async def cmd_pivo_check(
     await reply_humanized_state(message, "\n".join(lines), runtime_state)
 
 
-@router.message(Command("pivo_check"), GroupOnly())
+@router.message(Command("pivo_check"), GROUP_ONLY)
 async def cmd_pivo_check_denied(
     message: Message, runtime_state: RuntimeState
 ) -> None:
@@ -374,6 +381,6 @@ async def cmd_pivo_check_denied(
     )
 
 
-@router.message(Command("pivo_privacy"), GroupOnly())
+@router.message(Command("pivo_privacy"), GROUP_ONLY)
 async def cmd_pivo_privacy(message: Message, runtime_state: RuntimeState) -> None:
     await reply_humanized_state(message, PIVO_PRIVACY_MESSAGE, runtime_state)

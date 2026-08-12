@@ -41,19 +41,19 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         tokens = tokenize(text)
         await self.svc.record_message(self.chat, text, tokens)
 
-    # --- MessagesRepo.get_recent_normalized ---
+    # --- MarkovRepo.get_recent_normalized ---
 
     async def test_get_recent_normalized_returns_stored_texts(self) -> None:
         await self._record("кофе утром бодрит")
         await self._record("привет всем")
-        result = await self.db.messages.get_recent_normalized(self.chat, 10)
+        result = await self.db.markov.get_recent_normalized(self.chat, 10)
         self.assertEqual(len(result), 2)
 
     async def test_get_recent_normalized_excludes_other_chats(self) -> None:
         await self._record("кофе утром бодрит")
         other = Database(str(self.db_path))
         await other.init()
-        result = await other.messages.get_recent_normalized(999, 10)
+        result = await other.markov.get_recent_normalized(999, 10)
         self.assertEqual(result, [])
         await other.close()
 
@@ -62,7 +62,7 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         await self._record("второе сообщение")
         await self._record("третье сообщение")
         await self._record("четвертое сообщение")
-        result = await self.db.messages.get_recent_normalized(self.chat, 2)
+        result = await self.db.markov.get_recent_normalized(self.chat, 2)
         self.assertEqual(result, ["третье сообщение", "четвертое сообщение"])
 
     # --- text cache build and lookup ---
@@ -383,6 +383,54 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             await self.db.chat_user_interactions.get_count(self.chat, "hash-1001"), 2
         )
+
+
+class TestMemeSettingsPassThrough(unittest.IsolatedAsyncioTestCase):
+    """M2R-300: the daily pass runs on the settings the caller passes in.
+
+    The constructor snapshot is only the fallback — without the pass-through
+    a /set of the meme knobs would do nothing until a restart.
+    """
+
+    async def test_maintenance_uses_the_passed_meme_settings(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from app.infrastructure.database import MaintenanceOutcome
+        from app.services.learning_service import LearningService
+        from app.services.meme_analyzer import AnalysisResult, MemeSettings
+
+        db = MagicMock()
+        db.decay_flavor_stats_if_due = AsyncMock(
+            return_value=MaintenanceOutcome.DONE
+        )
+        db.list_chat_ids = AsyncMock(return_value=[1])
+        generator = _make_generator()
+        generator.telemetry = MagicMock()
+        service = LearningService(db, generator)
+        analyze = AsyncMock(
+            return_value=AnalysisResult(
+                scored_pairs=0, stored_pairs=0, duration_ms=1.0
+            )
+        )
+        with patch(
+            "app.services.learning_service.analyze_chat_memes", analyze
+        ), patch(
+            "app.services.learning_service.mask_chat_id", return_value="chat"
+        ):
+            await service.run_due_maintenance(
+                MemeSettings(
+                    min_joint_count=5,
+                    min_support=20.0,
+                    recency_days=7.0,
+                    max_entries=50,
+                )
+            )
+
+        kwargs = analyze.await_args.kwargs
+        self.assertEqual(kwargs["min_joint_count"], 5)
+        self.assertEqual(kwargs["min_support"], 20.0)
+        self.assertEqual(kwargs["recency_days"], 7.0)
+        self.assertEqual(kwargs["max_entries"], 50)
 
 
 class TestMaintenanceAlerts(unittest.IsolatedAsyncioTestCase):

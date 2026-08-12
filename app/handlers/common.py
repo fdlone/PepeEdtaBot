@@ -6,7 +6,7 @@ from aiogram.types import Message
 
 from app.config.runtime_state import RuntimeState
 from app.core.markov import MarkovGenerator
-from app.filters import GroupOnly
+from app.filters import GROUP_ONLY
 from app.handlers._helpers import reply_humanized_state
 from app.infrastructure.database import Database
 from app.presentation.bot_messages import format_help_message, format_stats_message
@@ -24,7 +24,7 @@ async def cmd_help(message: Message, runtime_state: RuntimeState) -> None:
     await reply_humanized_state(message, format_help_message(), runtime_state)
 
 
-@router.message(Command("stats"), GroupOnly())
+@router.message(Command("stats"), GROUP_ONLY)
 async def cmd_stats(
     message: Message,
     db: Database,

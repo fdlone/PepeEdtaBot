@@ -811,6 +811,20 @@ class TestPivoMemberRefresh(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(db.chat_members.refresh_profile.await_count, 2)
 
+    async def test_failed_refresh_does_not_consume_the_daily_window(self) -> None:
+        # Отметка ставится после успешной записи: упавший refresh (SQLITE_BUSY)
+        # не съедает суточное окно, следующее сообщение пробует снова.
+        db = AsyncMock()
+        db.chat_members.refresh_profile.side_effect = [RuntimeError("db busy"), None]
+        service = self._make_service(db, make_security())
+        user = self._user("nick")
+
+        with self.assertRaises(RuntimeError):
+            await service.refresh_member(100, user, today=date(2026, 7, 14))
+        await service.refresh_member(100, user, today=date(2026, 7, 14))
+
+        self.assertEqual(db.chat_members.refresh_profile.await_count, 2)
+
     async def test_throttle_is_per_user_and_chat(self) -> None:
         db = AsyncMock()
         service = self._make_service(db, make_security())

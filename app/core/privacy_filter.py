@@ -32,7 +32,13 @@ _PREFIXED_SECRET_RE = re.compile(
     r"(?![A-Za-z0-9_-])",
     re.IGNORECASE,
 )
-_GENERIC_SECRET_RE = re.compile(r"(?<!\S)[A-Za-z0-9_-]{24,128}(?!\S)")
+# Char-class boundaries (same as the specialized patterns above), not
+# whitespace ones: a secret glued to punctuation («token: abc.», parens,
+# quotes, a trailing comma) must still match. The hex detector rides this
+# regex too, so it benefits from the same boundary fix.
+_GENERIC_SECRET_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{24,128}(?![A-Za-z0-9_-])"
+)
 _UUID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"

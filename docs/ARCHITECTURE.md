@@ -18,7 +18,7 @@
                   ▼                                ▼
         ┌───────────────────┐         ┌─────────────────────────┐
         │  filters/         │         │  middlewares/           │
-        │  GroupOnly        │         │  ThrottlingMiddleware   │
+        │  GROUP_ONLY       │         │  ThrottlingMiddleware   │
         │  AdminOrOwner     │         │  ChatSettingsMiddleware │
         │  OwnerOnly        │         │                         │
         └───────────────────┘         └─────────────────────────┘
@@ -102,11 +102,11 @@ n-граммы и функции построения окон 4-грамм, а 
 | `core/` | `markov.py`, `markov_port.py`, `response_generator.py`, `candidate_scorer.py`, `context_state_matcher.py`, `morphology.py`, `gen_trace_log.py`, `reply_flavor.py`, `emoji.py`, `hot_ngrams.py`, `mood.py`, `intonation.py`, `slot_mutation.py`, `lexicon.py`, `privacy_filter.py`, `reply_policy.py`, `text.py` |
 | `services/` | `reply_pipeline.py`, `learning_service.py`, `pivo_service.py`, `pivo_message_builder.py`, `pivo_parser.py` |
 | `handlers/` | `common.py`, `admin.py`, `pivo.py`, `learning.py`, `errors.py` — `aiogram.Router` на файл; `_helpers.py` — отправка с имитацией набора |
-| `repositories/` | `markov_repo.py`, `messages_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py`, `pivo_pool_usage_repo.py`, `chat_emoji_stats_repo.py`, `chat_hot_ngrams_repo.py`, `chat_user_interactions_repo.py` |
+| `repositories/` | `markov_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py`, `pivo_pool_usage_repo.py`, `chat_emoji_stats_repo.py`, `chat_hot_ngrams_repo.py`, `chat_user_interactions_repo.py` |
 | `domain/` | `pivo.py` (`PivoSecurity`, `PivoMember`), `pivo_templates.py` |
 | `presentation/` | `bot_messages.py`, `fallback_phrases.py` |
-| `config/` | `settings.py`, `runtime_state.py`, `runtime_config.py`, `registry.py`, `defaults.py` |
-| `filters/` | `group_only.py`, `admin_or_owner.py`, `owner_only.py` (оба проверяющих права — fail-closed при ошибке Telegram API) |
+| `config/` | `settings.py`, `runtime_state.py`, `registry.py`, `defaults.py` |
+| `filters/` | `GROUP_ONLY` (magic-фильтр в `__init__.py`), `admin_or_owner.py`, `owner_only.py` (оба проверяющих права — fail-closed при ошибке Telegram API) |
 | `middlewares/` | `throttling.py`, `chat_settings.py` |
 | `infrastructure/` | `database.py`, `migrator.py` |
 | `migrations/` | `001_initial.sql` … `017_strip_list_enumerators.sql` |

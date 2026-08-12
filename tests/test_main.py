@@ -19,7 +19,7 @@ class TestMainWiring(unittest.TestCase):
     def test_cheap_and_writing_commands_are_throttled(self) -> None:
         from main import COMMAND_COOLDOWNS_SECONDS
 
-        # /config is the sharp one: no AdminOrOwner, no GroupOnly, so anyone
+        # /config is the sharp one: no AdminOrOwner, no GROUP_ONLY, so anyone
         # could loop it and make the bot answer indefinitely.
         for command in ("ping", "help", "config", "pivo_privacy"):
             with self.subTest(command=command):
@@ -29,6 +29,17 @@ class TestMainWiring(unittest.TestCase):
         for command in ("pivo_on", "pivo_off"):
             with self.subTest(command=command):
                 self.assertEqual(COMMAND_COOLDOWNS_SECONDS[command], 30.0)
+
+    def test_admin_tuning_commands_have_a_short_window(self) -> None:
+        # /set and /setprob are AdminOrOwner, not owner-only: any chat admin
+        # could loop them for an immediate reply each time. A few seconds stop
+        # the loop without hindering iterative tuning.
+        from main import COMMAND_COOLDOWNS_SECONDS, COOLDOWN_EXEMPT_COMMANDS
+
+        for command in ("set", "setprob"):
+            with self.subTest(command=command):
+                self.assertNotIn(command, COOLDOWN_EXEMPT_COMMANDS)
+                self.assertLessEqual(COMMAND_COOLDOWNS_SECONDS[command], 5.0)
 
     def test_every_advertised_command_has_a_window_or_a_stated_exemption(
         self,
@@ -58,7 +69,8 @@ class TestMainWiring(unittest.TestCase):
         from main import COMMANDS_NOTIFIED_ON_THROTTLE
 
         self.assertEqual(
-            COMMANDS_NOTIFIED_ON_THROTTLE, {"clear", "pivo_on", "pivo_off"}
+            COMMANDS_NOTIFIED_ON_THROTTLE,
+            {"clear", "pivo_on", "pivo_off", "set", "setprob"},
         )
 
     def test_configure_dispatcher_registers_expected_data_routers_and_middleware(self) -> None:
@@ -101,9 +113,30 @@ class TestMainWiring(unittest.TestCase):
         self.assertIsInstance(middlewares[1], ChatSettingsMiddleware)
         self.assertEqual(middlewares[0]._state_ttl_sec, 111.0)
         self.assertEqual(middlewares[0]._state_max_keys, 222)
+        # "/clear@ЧужойБот" must be recognizable as foreign traffic.
+        self.assertEqual(middlewares[0]._bot_username, "pepebot")
         self.assertEqual(
             dp["learning_service"], dependencies["learning_service"]
         )
+
+    def test_build_meme_settings_maps_env_knobs(self) -> None:
+        # MARKOV_MEME_* / MARKOV_COLLOCATION_MAX_ENTRIES must reach the
+        # analyzer, not stop at the parsed Settings object.
+        from main import build_meme_settings
+
+        settings = MagicMock(
+            markov_meme_min_joint_count=7,
+            markov_meme_min_support=42.0,
+            markov_meme_recency_days=13.5,
+            markov_collocation_max_entries=321,
+        )
+
+        meme = build_meme_settings(settings)
+
+        self.assertEqual(meme.min_joint_count, 7)
+        self.assertEqual(meme.min_support, 42.0)
+        self.assertEqual(meme.recency_days, 13.5)
+        self.assertEqual(meme.max_entries, 321)
 
 
 if __name__ == "__main__":

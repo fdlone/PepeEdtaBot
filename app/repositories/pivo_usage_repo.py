@@ -27,6 +27,10 @@ class PivoUsageRepo(BaseRepo):
             row = await cursor.fetchone()
 
             if row is None:
+                # Первый вызов за день тоже подчиняется лимиту: при limit <= 0
+                # списывать нечего, и строка квоты не заводится.
+                if limit < 1:
+                    return False, 0
                 await db.execute(
                     """
                     INSERT INTO pivo_daily_usage(chat_hash, user_hash, usage_day, used_count)

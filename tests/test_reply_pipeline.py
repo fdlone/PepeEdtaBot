@@ -9,11 +9,13 @@
 from __future__ import annotations
 
 import unittest
+from collections import deque
 from collections.abc import Sequence
 from unittest.mock import AsyncMock, patch
 
 from app.config.registry import RUNTIME_FIELDS
 from app.config.runtime_state import RuntimeState
+from app.services.meme_analyzer import MemeSettings
 from app.services.reply_pipeline import IncomingMessage, ReplyPipeline
 
 
@@ -208,6 +210,33 @@ class TestRespond(ReplyPipelineTestCase):
 
         self.assertEqual(self.outbox.sent, [])
 
+    async def test_not_enough_data_fallback_counts_as_a_sent_reply(self) -> None:
+        """Фолбэк «мало данных» — отправленный ответ, как и фолбэк генерации."""
+        self.learning_service.get_token_volume.return_value = 0
+        state = _state()
+
+        await self._run(state, _incoming(mentioned=True))
+
+        # Кулдаун/берст видят отправленный фолбэк...
+        self.assertEqual(state.last_reply_ts.get(1), 1000.0)
+        # ...а часовой кап — нет (unprompted=False).
+        self.assertNotIn(1, state.recent_reply_times)
+
+    async def test_legacy_branch_honors_the_hourly_cap(self) -> None:
+        """reply_max_per_hour — предохранитель и без директора (M2)."""
+        state = _state(
+            reply_probability=1.0,
+            min_cooldown_sec=0,
+            reply_director_enabled=False,
+            reply_max_per_hour=1,
+        )
+        state.recent_reply_times[1] = deque([999.5])
+
+        with self._generated("сгенерированный ответ"):
+            await self._run(state, _incoming())
+
+        self.assertEqual(self.outbox.sent, [])
+
 
 class TestHotNgramSeed(ReplyPipelineTestCase):
     async def test_seed_is_taken_for_an_unprompted_reply(self) -> None:
@@ -308,6 +337,19 @@ class TestLearn(ReplyPipelineTestCase):
         self.learning_service.record_message.assert_awaited_once()
         self.assertEqual(state.learned_messages[1], 1)
 
+    async def test_learn_passes_the_effective_short_half_life(self) -> None:
+        """M2R-210: писатель гасит короткий слой runtime-значением ручки."""
+        state = _state(markov_short_half_life_days=7.0)
+        pipeline = self._pipeline(state)
+        msg = _incoming()
+        observation = await pipeline.observe(msg)
+        assert observation is not None
+
+        await pipeline.learn(msg, observation)
+
+        kwargs = self.learning_service.record_message.await_args.kwargs
+        self.assertEqual(kwargs["short_half_life_days"], 7.0)
+
     async def test_maintenance_is_a_step_of_its_own(self) -> None:
         """Обслуживание не спрятано внутри записи сообщения.
 
@@ -318,7 +360,28 @@ class TestLearn(ReplyPipelineTestCase):
 
         await pipeline.run_due_maintenance()
 
-        self.learning_service.run_due_maintenance.assert_awaited_once_with()
+        self.learning_service.run_due_maintenance.assert_awaited_once()
+
+    async def test_maintenance_gets_the_effective_meme_knobs(self) -> None:
+        """M2R-300: /set-ручки мемо-пасса читаются в момент вызова."""
+        state = _state(
+            markov_meme_min_joint_count=5,
+            markov_meme_min_support=20.0,
+            markov_meme_recency_days=7.0,
+            markov_collocation_max_entries=50,
+        )
+        pipeline = self._pipeline(state)
+
+        await pipeline.run_due_maintenance()
+
+        self.learning_service.run_due_maintenance.assert_awaited_once_with(
+            MemeSettings(
+                min_joint_count=5,
+                min_support=20.0,
+                recency_days=7.0,
+                max_entries=50,
+            )
+        )
 
     async def test_unlearnable_message_is_not_recorded(self) -> None:
         state = _state()

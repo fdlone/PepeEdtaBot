@@ -5,7 +5,8 @@ import enum
 import logging
 import time
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import TypeVar
 
@@ -28,7 +29,6 @@ from app.repositories import (
     ChatUserInteractionsRepo,
     CollocationsRepo,
     MarkovRepo,
-    MessagesRepo,
     PivoPoolUsageRepo,
     PivoUsageRepo,
 )
@@ -92,7 +92,6 @@ class Database:
         self._conn: aiosqlite.Connection | None = None
         self._lock = asyncio.Lock()
         self._markov: MarkovRepo | None = None
-        self._messages: MessagesRepo | None = None
         self._chat_members: ChatMembersRepo | None = None
         self._pivo_usage: PivoUsageRepo | None = None
         self._pivo_pool_usage: PivoPoolUsageRepo | None = None
@@ -110,6 +109,23 @@ class Database:
             raise RuntimeError("Database is not initialized. Call init() first.")
         return self._conn
 
+    @asynccontextmanager
+    async def _write_transaction(self) -> AsyncIterator[aiosqlite.Connection]:
+        """Держит lock, отдаёт соединение, коммитит на чистом выходе.
+
+        При ошибке открытая транзакция откатывается до проброса исключения:
+        соединение общее, и незакоммиченные statements иначе уехали бы в базу
+        вместе с коммитом следующего вызова.
+        """
+        async with self._lock:
+            db = await self._get_conn()
+            try:
+                yield db
+            except BaseException:
+                await db.rollback()
+                raise
+            await db.commit()
+
     @staticmethod
     def _require(repo: _RepoT | None) -> _RepoT:
         """Возвращает репозиторий или бросает, если init() ещё не вызван."""
@@ -126,10 +142,6 @@ class Database:
     @property
     def markov(self) -> MarkovRepo:
         return self._require(self._markov)
-
-    @property
-    def messages(self) -> MessagesRepo:
-        return self._require(self._messages)
 
     @property
     def chat_members(self) -> ChatMembersRepo:
@@ -172,32 +184,35 @@ class Database:
             return [int(row[0]) for row in await cursor.fetchall()]
 
     async def init(self) -> None:
-        if self._conn is not None:
-            return
+        # Под lock: конкурентный второй init() между проверкой и присваиванием
+        # открыл бы второе соединение, и первое утекло бы незакрытым.
+        async with self._lock:
+            if self._conn is not None:
+                return
 
-        self._conn = await aiosqlite.connect(self.path)
-        db = await self._get_conn()
+            self._conn = await aiosqlite.connect(self.path)
+            db = await self._get_conn()
 
-        await db.execute("PRAGMA journal_mode=WAL;")
-        await db.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms};")
-        await db.execute(
-            f"PRAGMA wal_autocheckpoint = {self.wal_autocheckpoint_pages};"
-        )
-        await db.execute("PRAGMA foreign_keys=ON;")
+            await db.execute("PRAGMA journal_mode=WAL;")
+            await db.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms};")
+            await db.execute(
+                f"PRAGMA wal_autocheckpoint = {self.wal_autocheckpoint_pages};"
+            )
+            await db.execute("PRAGMA foreign_keys=ON;")
 
-        await migrator.run(db)
+            await migrator.run(db)
 
-        self._markov = MarkovRepo(self._get_conn, self._lock)
-        self._messages = MessagesRepo(self._get_conn, self._lock)
-        self._chat_members = ChatMembersRepo(self._get_conn, self._lock)
-        self._pivo_usage = PivoUsageRepo(self._get_conn, self._lock)
-        self._pivo_pool_usage = PivoPoolUsageRepo(self._get_conn, self._lock)
-        self._chat_emoji_stats = ChatEmojiStatsRepo(self._get_conn, self._lock)
-        self._chat_hot_ngrams = ChatHotNgramsRepo(self._get_conn, self._lock)
-        self._chat_user_interactions = ChatUserInteractionsRepo(
-            self._get_conn, self._lock
-        )
-        self._collocations = CollocationsRepo(self._get_conn, self._lock)
+            self._markov = MarkovRepo(self._get_conn, self._lock)
+            self._chat_members = ChatMembersRepo(self._get_conn, self._lock)
+            self._pivo_usage = PivoUsageRepo(self._get_conn, self._lock)
+            self._pivo_pool_usage = PivoPoolUsageRepo(self._get_conn, self._lock)
+            self._chat_emoji_stats = ChatEmojiStatsRepo(self._get_conn, self._lock)
+            self._chat_hot_ngrams = ChatHotNgramsRepo(self._get_conn, self._lock)
+            self._chat_user_interactions = ChatUserInteractionsRepo(
+                self._get_conn, self._lock
+            )
+            self._collocations = CollocationsRepo(self._get_conn, self._lock)
+        # Обслуживание — вне lock: эти вызовы берут его сами через репозитории.
         await self.cleanup_pivo_daily_usage()
         await self.decay_chat_emoji_stats()
         await self.decay_chat_hot_ngrams()
@@ -207,11 +222,12 @@ class Database:
         )
 
     async def close(self) -> None:
-        if self._conn is not None:
-            await self._conn.close()
-            self._conn = None
+        # Под lock: закрытие соединения посреди чужой транзакции оборвало бы её.
+        async with self._lock:
+            if self._conn is not None:
+                await self._conn.close()
+                self._conn = None
         self._markov = None
-        self._messages = None
         self._chat_members = None
         self._pivo_usage = None
         self._pivo_pool_usage = None
@@ -312,8 +328,7 @@ class Database:
         counter and ``first_seen``/``last_seen`` are a different question and
         must survive a half-life change untouched.
         """
-        async with self._lock:
-            db = await self._get_conn()
+        async with self._write_transaction() as db:
             for table in ("starts", "starts3", "transitions", "transitions3"):
                 if chat_id is None:
                     await db.execute(
@@ -325,7 +340,6 @@ class Database:
                         "WHERE chat_id = ?",
                         (chat_id,),
                     )
-            await db.commit()
 
     async def save_message_and_update_model(
         self,
@@ -365,9 +379,7 @@ class Database:
                 for i in range(len(tokens) - 3)
             )
 
-        async with self._lock:
-            db = await self._get_conn()
-
+        async with self._write_transaction() as db:
             await db.execute(
                 "INSERT INTO messages(chat_id, author_id, normalized_text) VALUES (?, ?, ?)",
                 (chat_id, 0, sanitize_text(raw_text)),
@@ -495,8 +507,7 @@ class Database:
             volume2 = int(row[0] or 0)
             volume3 = int(row[1] or 0)
 
-            await db.commit()
-            return volume3 if volume3 > 0 else volume2
+        return volume3 if volume3 > 0 else volume2
 
     # --- Объём модели чата ---
 
@@ -734,12 +745,10 @@ class Database:
             "chat_user_interactions",
             "chat_verbatim_ngrams",
         )
-        async with self._lock:
-            db = await self._get_conn()
+        async with self._write_transaction() as db:
             # `tables` is the literal tuple above, never user input.
             for table in tables:
                 await db.execute(
                     f"DELETE FROM {table} WHERE chat_id = ?",  # nosec B608
                     (chat_id,),
                 )
-            await db.commit()

@@ -177,6 +177,24 @@ class TestCandidateScorer(unittest.TestCase):
         }
         self.assertEqual(picked, set(LENGTH_MODES))
 
+    def test_sample_length_mode_all_zero_falls_back_to_base_weights(self) -> None:
+        # Mood clamping can zero every weight when the only positive base
+        # weight meets a sub-1.0 multiplier at strength >= 2 (legal config);
+        # random.choices raises on an all-zero vector.
+        rng = random.Random(3)
+        picked = {
+            sample_length_mode((0.0, 0.0, 0.0), rng, (0.0, 0.0, 1.0))
+            for _ in range(20)
+        }
+        self.assertEqual(picked, {"long"})
+
+    def test_sample_length_mode_all_zero_without_base_is_uniform(self) -> None:
+        rng = random.Random(3)
+        picked = {
+            sample_length_mode((0.0, 0.0, 0.0), rng) for _ in range(200)
+        }
+        self.assertEqual(picked, set(LENGTH_MODES))
+
     def test_context_length_weights_off_by_default(self) -> None:
         weights = (0.25, 0.55, 0.2)
         for incoming in (1, 8, 40):

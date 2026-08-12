@@ -22,10 +22,10 @@ async def run(conn: aiosqlite.Connection) -> None:
     applied = await _get_applied(conn)
     for stem, path in _list_pending(applied):
         try:
-            await _apply(conn, path)
-            await conn.execute(
-                "INSERT INTO schema_migrations(name) VALUES (?)", (stem,)
-            )
+            # _apply records the migration into schema_migrations inside the
+            # migration's own transaction: a crash between "applied" and
+            # "recorded" would otherwise re-run a non-idempotent migration.
+            await _apply(conn, path, record_stem=stem)
             await conn.commit()
         except Exception:
             await conn.rollback()
@@ -59,7 +59,15 @@ def _list_pending(applied: set[str]) -> list[tuple[str, Path]]:
     return [(f.stem, f) for f in files if f.stem not in applied]
 
 
-async def _apply(conn: aiosqlite.Connection, path: Path) -> None:
+async def _apply(
+    conn: aiosqlite.Connection, path: Path, record_stem: str | None = None
+) -> None:
+    """Applies one migration file; with ``record_stem`` also records it.
+
+    The schema_migrations INSERT joins the migration's own transaction so
+    "applied" and "recorded" commit together. Tests re-apply migrations by
+    hand without recording — hence the parameter is optional.
+    """
     if path.suffix == ".sql":
         # executescript correctly handles multi-statement scripts (including
         # triggers with BEGIN..END blocks, semicolons inside string literals,
@@ -82,9 +90,24 @@ async def _apply(conn: aiosqlite.Connection, path: Path) -> None:
         sql = path.read_text(encoding="utf-8").rstrip()
         if not sql.endswith(";"):
             sql += ";"
-        await conn.executescript(f"BEGIN;\n{sql}\nCOMMIT;")
+        record = ""
+        if record_stem is not None:
+            # The stem comes from _MIGRATION_RE-matched filenames (\w+ only),
+            # never from user input, so the interpolation is safe — and it has
+            # to be inline: executescript takes no bound parameters.
+            record = (
+                f"INSERT INTO schema_migrations(name) VALUES ('{record_stem}');\n"
+            )
+        await conn.executescript(f"BEGIN;\n{sql}\n{record}COMMIT;")
     else:
         spec = importlib.util.spec_from_file_location(f"_migration_{path.stem}", path)
         mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
         spec.loader.exec_module(mod)  # type: ignore[union-attr]
         await mod.apply(conn)
+        if record_stem is not None:
+            # .py migrations run statements on the caller's connection without
+            # committing; this INSERT joins that open transaction and run()
+            # commits both together.
+            await conn.execute(
+                "INSERT INTO schema_migrations(name) VALUES (?)", (record_stem,)
+            )

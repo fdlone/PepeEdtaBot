@@ -22,14 +22,20 @@ from app.infrastructure.database import Database
 from app.middlewares import ChatSettingsMiddleware, ThrottlingMiddleware
 from app.presentation.bot_messages import TELEGRAM_COMMANDS
 from app.services import LearningService, PivoService
+from app.services.meme_analyzer import MemeSettings
 
 # Per-user per-chat cooldowns, assigned by class of command rather than one by
 # one, so a new command inherits a window by where it belongs:
 #   - cheap read, answered from memory        -> 15 s
 #   - read that touches the database          -> 60 s
 #   - write to the database                   -> 30 s
+#   - admin knob tuning (/set, /setprob)      -> 3 s
 # Without them any participant could loop a command and make the bot answer
 # indefinitely — traffic amplification in the bot's name and a flood-ban risk.
+# /set and /setprob are AdminOrOwner, not owner-only: any chat admin can call
+# them, and each call produces an immediate reply. The window is short on
+# purpose — long enough to stop a reply loop, short enough not to hinder
+# iterative tuning.
 # The list is pinned by a test; see COOLDOWN_EXEMPT_COMMANDS for what is
 # deliberately left out.
 COMMAND_COOLDOWNS_SECONDS = {
@@ -41,25 +47,36 @@ COMMAND_COOLDOWNS_SECONDS = {
     "pivo_on": 30.0,
     "pivo_off": 30.0,
     "clear": 60.0 * 60.0,
+    "set": 3.0,
+    "setprob": 3.0,
 }
 
 # Commands intentionally without a window, each for a stated reason:
-#   - set / setprob / pivo_check / quirk_stats are owner-only, so
-#     no participant can use them to amplify traffic, and knob tuning is
-#     iterative by nature — rate-limiting the owner against themselves buys
-#     nothing.
+#   - pivo_check / quirk_stats are owner-only (OwnerOnly filter), so no
+#     participant can use them to amplify traffic, and rate-limiting the
+#     owner against themselves buys nothing.
 #   - pivo was deliberately removed from throttling in 282051f: the middleware
 #     drops a call *before* the handler, so a throttled /pivo answered with
 #     silence instead of the "daily quota exhausted" reply. Its daily quota is
 #     the rate limit; re-adding a window here would restore that bug.
-COOLDOWN_EXEMPT_COMMANDS = frozenset(
-    {"set", "setprob", "pivo_check", "quirk_stats", "pivo"}
-)
+COOLDOWN_EXEMPT_COMMANDS = frozenset({"pivo_check", "quirk_stats", "pivo"})
 
 # Silence reads as "the bot is broken" only where the user asked for something
 # and expects confirmation; elsewhere a refusal reply is itself the traffic we
-# are damping.
-COMMANDS_NOTIFIED_ON_THROTTLE = {"clear", "pivo_on", "pivo_off"}
+# are damping. /set and /setprob belong here for the same reason as /clear:
+# an admin tuning a knob must see that the attempt was throttled, not applied.
+COMMANDS_NOTIFIED_ON_THROTTLE = {"clear", "pivo_on", "pivo_off", "set", "setprob"}
+
+
+def build_meme_settings(settings: Settings) -> MemeSettings:
+    """MemeSettings из env-настроек: иначе MARKOV_MEME_* парсятся, но не доходят
+    до анализатора, и дневной проход работает на зашитых умолчаниях."""
+    return MemeSettings(
+        min_joint_count=settings.markov_meme_min_joint_count,
+        min_support=settings.markov_meme_min_support,
+        recency_days=settings.markov_meme_recency_days,
+        max_entries=settings.markov_collocation_max_entries,
+    )
 
 
 def configure_dispatcher(
@@ -80,6 +97,8 @@ def configure_dispatcher(
             notify_on_throttle=COMMANDS_NOTIFIED_ON_THROTTLE,
             state_ttl_sec=settings.throttle_state_ttl_sec,
             state_max_keys=settings.throttle_state_max_keys,
+            # Так "/clear@ЧужойБот" не сжигает кулдаун этого бота.
+            bot_username=bot_username,
         )
     )
     # Registered after throttling so a dropped update never pays for building
@@ -148,6 +167,7 @@ async def run_bot() -> None:
         # смысл настройки тот же самый: сколько чатов бот помнит и как долго.
         cache_ttl_sec=settings.runtime_state_ttl_sec,
         cache_max_chats=settings.runtime_state_max_chats,
+        meme_settings=build_meme_settings(settings),
     )
     runtime_state = runtime_state_from_settings(settings)
 

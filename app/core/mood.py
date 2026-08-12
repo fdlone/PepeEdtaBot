@@ -112,8 +112,10 @@ def modifiers_for_mood(mood: str, strength: float) -> MoodModifiers:
     # weight into ``random.choices`` (undefined pick) via ``sample_length_mode`` and
     # silently disable unprompted replies via ``reply_probability_mult``. Clamp each
     # scaled multiplier at 0.0 so any strength degrades gracefully — a mode whose
-    # weight hits 0 is simply excluded, which is safe because registry validation
-    # guarantees at least one positive base length weight. ``randomness_delta`` is a
+    # weight hits 0 is simply excluded. Note the clamp can still zero *every*
+    # length weight (a lone positive base weight times a sub-1.0 multiplier at
+    # high strength); ``sample_length_mode`` falls back to the pre-mood base
+    # weights in that case rather than crashing. ``randomness_delta`` is a
     # signed additive nudge (already floored via ``max(0.0, ...)`` in
     # ``ResponseGenerator``), so it is left unclamped here.
     def _scale(mult: float) -> float:

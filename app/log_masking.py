@@ -49,8 +49,11 @@ _MASK_HEX_LEN = 8
 UNMASKED_PLACEHOLDER = "unmasked"
 
 # A chat id inside foreign text: a negative integer long enough that
-# nothing else in these messages can be confused for one.
-_MIN_CHAT_ID_DIGITS = 9
+# nothing else in these messages can be confused for one. Legacy basic
+# groups can have ids as short as -1xxxxx, so the bound is 6 digits: low
+# enough to catch them, high enough that small negative numbers (offsets,
+# deltas) in the same messages survive untouched.
+_MIN_CHAT_ID_DIGITS = 6
 _CHAT_ID_IN_TEXT = re.compile(rf"(?<![\d-])-\d{{{_MIN_CHAT_ID_DIGITS},}}(?!\d)")
 
 _key: bytes | None = None
@@ -102,9 +105,9 @@ def mask_chat_ids_in_text(text: str) -> str:
     aiogram and Telegram and changes between versions, while the shape of
     an identifier does not. A chat id is a negative integer with at least
     ``_MIN_CHAT_ID_DIGITS`` digits — supergroups (``-100…``) and basic
-    groups both match, while everything else these messages carry (retry
-    delays, error codes, message ids) does not: those are positive, or
-    far too short.
+    groups, including short legacy ids, both match, while everything else
+    these messages carry (retry delays, error codes, message ids) does
+    not: those are positive, or far too short.
 
     Unlike :func:`mask_chat_id` this never raises. It is used on the error
     path, where losing the log line costs more than losing one field, so
