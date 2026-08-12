@@ -123,6 +123,44 @@ class MarkovRepo(BaseRepo):
         )
         return [_transition_row(r) for r in rows]
 
+    async def get_seed_forward(
+        self, chat_id: int, token: str
+    ) -> list[tuple[str, int]]:
+        """Continuations of ``token`` as a first token: ``(w2, total_cnt)``.
+
+        M2R-410 tail bootstrap: a seed is a single token, but the chain's state
+        is a pair — this picks the second token to start the tail's order-2
+        walk from ``(token, w2)``. Long counts only (the temporal blend applies
+        to the per-step walk, not to this one bootstrap draw). Served by the
+        primary-key prefix ``(chat_id, w1)``. ``len`` is the seed's forward
+        branching for the seed score.
+        """
+        rows = await self._fetch_all(
+            """
+            SELECT w2, SUM(cnt)
+            FROM transitions
+            WHERE chat_id = ? AND w1 = ?
+            GROUP BY w2
+            ORDER BY w2
+            """,
+            (chat_id, token),
+        )
+        return [(str(r[0]), int(r[1])) for r in rows]
+
+    async def get_reverse_branch(self, chat_id: int, token: str) -> int:
+        """How many distinct tokens the seed can be preceded by (M2R-410).
+
+        The seed's reverse branching for the seed score: distinct ``w1`` over
+        rows where the seed is the pair's first member (``w2 = token``). Served
+        by the ``idx_transitions_reverse`` prefix ``(chat_id, w2)``.
+        """
+        rows = await self._fetch_all(
+            "SELECT COUNT(*) FROM (SELECT DISTINCT w1 FROM transitions "
+            "WHERE chat_id = ? AND w2 = ?)",
+            (chat_id, token),
+        )
+        return int(rows[0][0]) if rows else 0
+
     async def get_token_df(self, chat_id: int, token: str) -> int:
         """In how many learned messages the token appeared (M2R-400, TZ §9.3)."""
         rows = await self._fetch_all(

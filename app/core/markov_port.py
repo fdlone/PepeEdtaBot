@@ -68,6 +68,27 @@ class MarkovReadPort(Protocol):
         """Продолжения состояния порядка 3, упорядоченные по токену."""
         ...
 
+    async def get_reverse_transitions(
+        self, chat_id: int, w2: str, w3: str
+    ) -> list[TransitionRow]:
+        """Токены-предшественники состояния ``(w2, w3)`` (M2R-400/410).
+
+        Обратный переход — это та же строка прямой таблицы, прочитанная по
+        последним двум колонкам; несёт оба слоя, как и прямой пул.
+        """
+        ...
+
+    async def get_seed_forward(
+        self, chat_id: int, token: str
+    ) -> list[tuple[str, int]]:
+        """Продолжения ``token`` как первого токена: ``(w2, суммарный count)``
+        для бутстрапа хвоста seeded-кандидата (M2R-410)."""
+        ...
+
+    async def get_reverse_branch(self, chat_id: int, token: str) -> int:
+        """Обратное ветвление сида: сколько разных токенов ему предшествуют."""
+        ...
+
     async def get_states(
         self, chat_id: int, order: int
     ) -> list[tuple[tuple[str, ...], int]]:

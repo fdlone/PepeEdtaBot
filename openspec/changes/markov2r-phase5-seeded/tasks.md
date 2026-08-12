@@ -12,10 +12,10 @@ decision (M2R-430) is a follow-up — it needs prod-accumulated df.
 
 ## 2. Bidirectional generation (M2R-410, TZ §9.5)
 
-- [ ] 2.1 Reverse walk in `MarkovGenerator` over `get_reverse_transitions`, sampling predecessors with the **same** weighted-choice + entropy/temporal helpers as the forward walk (design D2); factor the shared step so head and tail cannot drift
-- [ ] 2.2 Seed-anchored assembly `head_reversed + [seed] + tail`; head/tail split by `MARKOV_SEED_HEAD_SHARE` within `max_reply_tokens`; copy-on-write pools like the forward walk
-- [ ] 2.3 Reverse pool absent → head stops at the anchor, candidate still assembled from the tail
-- [ ] 2.4 Test: reverse walk over a hand-built chain yields the expected predecessor distribution; assembled candidate places the anchor mid-reply
+- [x] 2.1 Reverse walk in `MarkovGenerator` over `get_reverse_transitions`, sampling predecessors with the **same** weighted-choice + entropy/temporal helpers as the forward walk (design D2); factor the shared step so head and tail cannot drift
+- [x] 2.2 Seed-anchored assembly `head_reversed + [seed] + tail`; head/tail split by `MARKOV_SEED_HEAD_SHARE` within `max_reply_tokens`; copy-on-write pools like the forward walk
+- [x] 2.3 Reverse pool absent → head stops at the anchor, candidate still assembled from the tail
+- [x] 2.4 Test: reverse walk over a hand-built chain yields the expected predecessor distribution; assembled candidate places the anchor mid-reply
 
 ## 3. Seeded candidates in the pool (M2R-410, ADR-008)
 
