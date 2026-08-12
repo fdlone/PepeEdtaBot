@@ -6,9 +6,9 @@ decision (M2R-430) is a follow-up — it needs prod-accumulated df.
 
 ## 1. Seed scoring (M2R-410, TZ §9.4)
 
-- [ ] 1.1 `app/core/seed.py` — pure `seed_score = normalized_idf × support_factor × branching_quality`; no SQL/clock/RNG (pattern of `collocations.py`). Reuse `collocations.support_factor`; branching_quality is a trapezoid over `min(forward_branch, reverse_branch)` (design D1)
-- [ ] 1.2 Stopword + `MARKOV_SEED_MIN_TOKEN_LEN` filter before scoring; degenerate df (`n_docs == 0` / unknown token) yields no score, not a crash
-- [ ] 1.3 Tests: junk unique token scores below a well-supported distinctive one; branching outside the band drives the score down; property — score finite for any legal counts incl. single-token corpus
+- [x] 1.1 `app/core/seed.py` — pure `seed_score = normalized_idf × support_factor × branching_quality`; no SQL/clock/RNG (pattern of `collocations.py`). Reuse `collocations.support_factor`; branching_quality is a trapezoid over `min(forward_branch, reverse_branch)` (design D1)
+- [x] 1.2 Stopword + `MARKOV_SEED_MIN_TOKEN_LEN` filter before scoring; degenerate df (`n_docs == 0` / unknown token) yields no score, not a crash
+- [x] 1.3 Tests: junk unique token scores below a well-supported distinctive one; branching outside the band drives the score down; property — score finite for any legal counts incl. single-token corpus
 
 ## 2. Bidirectional generation (M2R-410, TZ §9.5)
 
