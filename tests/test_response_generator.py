@@ -67,6 +67,7 @@ def _runtime_state() -> MagicMock:
     # non-zero would send the pipeline to get_active_collocations on a mock.
     state.markov_collocation_bonus = 0.0
     state.markov_collocation_break_penalty = 0.0
+    state.markov_hot_ngram_meme_ordering = False
     return state
 
 

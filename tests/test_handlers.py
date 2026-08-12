@@ -112,6 +112,7 @@ def _fake_state(**kwargs: object) -> MagicMock:
     # collocation registry on a mock.
     s.markov_collocation_bonus = 0.0
     s.markov_collocation_break_penalty = 0.0
+    s.markov_hot_ngram_meme_ordering = False
     # L1 hot-ngram channel off by default so learn/reply tests stay
     # deterministic; dedicated hot-ngram tests enable it explicitly.
     s.hot_ngram_seed_chance = 0.0
@@ -2276,6 +2277,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             msg.chat.id,
             min_count=state.hot_ngram_min_count,
             recency_share=state.hot_ngram_recency_share,
+            meme_ordering=state.markov_hot_ngram_meme_ordering,
         )
         first_call = generator.generate_text.await_args_list[0]
         self.assertEqual(first_call.kwargs["seed_tokens"], ["крутой", "бобёр"])

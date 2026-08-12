@@ -131,7 +131,12 @@ class VerbatimCopyChecker(Protocol):
         self, chat_id: int
     ) -> Mapping[str, Mapping[str, int]]: ...
     async def get_hot_ngrams(
-        self, chat_id: int, *, min_count: int, recency_share: float
+        self,
+        chat_id: int,
+        *,
+        min_count: int,
+        recency_share: float,
+        meme_ordering: bool = False,
     ) -> list[tuple[str, ...]]: ...
     async def get_order4_shadow_index(
         self, chat_id: int
@@ -364,6 +369,7 @@ class ResponseGenerator:
             request.chat_id,
             min_count=self.runtime_state.hot_ngram_min_count,
             recency_share=self.runtime_state.hot_ngram_recency_share,
+            meme_ordering=self.runtime_state.markov_hot_ngram_meme_ordering,
         )
         protected_tokens = frozenset(
             token.casefold() for ngram in hot_ngrams for token in ngram

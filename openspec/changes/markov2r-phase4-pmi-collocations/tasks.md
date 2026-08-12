@@ -41,8 +41,8 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 ## 6. Hot n-grams (M2R-310)
 
-- [ ] 6.1 Meme-score ordering added to `get_hot` behind a knob; the existing frequency path stays the default (design D5)
-- [ ] 6.2 Both paths runnable side by side so the ablation can compare them
+- [x] 6.1 Meme-score ordering added to `get_hot` behind a knob; the existing frequency path stays the default (design D5)
+- [x] 6.2 Both paths runnable side by side so the ablation can compare them
 - [ ] 6.3 Latency of the new ordering measured against the existing one — `get_hot` runs on almost every reply, and the correlated-subquery rewrite exists because a previous version cost ~41 ms per call
 
 ## 7. Knobs

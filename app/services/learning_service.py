@@ -336,11 +336,24 @@ class LearningService:
         await self._db.chat_hot_ngrams.bump(chat_id, ngrams)
 
     async def get_hot_ngrams(
-        self, chat_id: int, *, min_count: int, recency_share: float
+        self,
+        chat_id: int,
+        *,
+        min_count: int,
+        recency_share: float,
+        meme_ordering: bool = False,
     ) -> list[tuple[str, ...]]:
-        """Currently-hot n-grams for unprompted-reply seeding (L1)."""
+        """Currently-hot n-grams for unprompted-reply seeding (L1).
+
+        ``meme_ordering`` (M2R-310) reorders the same selection by the
+        collocation registry's association score; the frequency ordering
+        stays the default so the eval can run both paths side by side.
+        """
         return await self._db.chat_hot_ngrams.get_hot(
-            chat_id, min_count=min_count, recency_share=recency_share
+            chat_id,
+            min_count=min_count,
+            recency_share=recency_share,
+            meme_ordering=meme_ordering,
         )
 
     async def get_active_collocations(

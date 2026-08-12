@@ -627,6 +627,7 @@ class ReplyPipeline:
             msg.chat_id,
             min_count=state.hot_ngram_min_count,
             recency_share=state.hot_ngram_recency_share,
+            meme_ordering=state.markov_hot_ngram_meme_ordering,
         )
         if not hot_ngrams:
             return None
