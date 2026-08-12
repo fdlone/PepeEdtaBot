@@ -48,7 +48,7 @@ decision (M2R-430) is a follow-up — it needs prod-accumulated df.
 - [x] 7.2 `tools/eval/matrix.yaml`: C4 arm `available: true` with `markov_seeded_candidate_ratio` set (and neutral surface layers), `available: true` only for what this change ships
 - [x] 7.3 `phase5_promotion` gate computed in `tools/eval/report.py` from the run (replace the "does not exist before Phase 5" stub): seeded present/win rates, affinity delta vs no-seeded arm, p95, storage
 - [x] 7.4 Gate reports `insufficient data` while df is window-approximated — never `pass` (spec: `generation-eval`)
-- [ ] 7.5 Protocol run C0 vs C4 on `db_prod_copy`; report in `docs/eval_reports/`, referenced from this change
+- [x] 7.5 Protocol run C0 vs C4 on `db_prod_copy`; report in `docs/eval_reports/`, referenced from this change — `eval_2026-08-12_phase5-c4.md`: even on window-approximated df, C4 raises `context_affinity_without_copy` **+0.064 [0.041, 0.087] \*** (the gate's own metric), copy Δ +0.016 (not significant), p95 88.7 ms (budget 150). Gate row: seeded present 81%, win|present 18% (below the 40% bar on window-df); verdict `insufficient data` pending prod-accumulated df (M2R-430)
 - [x] 7.6 CI smoke stays green
 
 ## 8. Migration verification (standing rule: whole 2.0R package, one restart)
@@ -69,6 +69,6 @@ decision (M2R-430) is a follow-up — it needs prod-accumulated df.
 
 ## 11. Close-out
 
-- [ ] 11.1 `openspec validate --strict` green for this change
-- [ ] 11.2 Full test suite + lint/type checks
+- [x] 11.1 `openspec validate --strict` green for this change
+- [x] 11.2 Full test suite + lint/type checks — 1119 tests OK, ruff clean, mypy clean (2026-08-12)
 - [ ] 11.3 Archive this change after merge

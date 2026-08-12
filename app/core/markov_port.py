@@ -89,6 +89,14 @@ class MarkovReadPort(Protocol):
         """Обратное ветвление сида: сколько разных токенов ему предшествуют."""
         ...
 
+    async def get_token_df(self, chat_id: int, token: str) -> int:
+        """Документная частота токена: в скольких сообщениях встречался (M2R-400)."""
+        ...
+
+    async def get_n_docs(self, chat_id: int) -> int:
+        """Число обученных сообщений чата — знаменатель IDF (M2R-400)."""
+        ...
+
     async def get_states(
         self, chat_id: int, order: int
     ) -> list[tuple[tuple[str, ...], int]]:
