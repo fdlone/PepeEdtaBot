@@ -42,4 +42,4 @@ generated reply, and the closing check proves it with `generation_hash`.
 
 - [x] 7.1 `openspec validate --strict` green for this change
 - [x] 7.2 Full test suite + lint/type checks — 1103 tests OK, ruff clean, mypy clean (2026-08-12)
-- [ ] 7.3 Archive this change after merge — rides in the next change's PR (established convention)
+- [x] 7.3 Archive this change after merge — rides in the next change's PR (established convention)
