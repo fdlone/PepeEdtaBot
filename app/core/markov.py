@@ -1006,6 +1006,20 @@ class MarkovGenerator:
             cache_limit=self.cache_limit,
         )
 
+    def invalidate_all_caches(self) -> None:
+        """Drop every chat's cached distributions.
+
+        Used when a change invalidates the stored weights process-wide — so far
+        only a global half-life change, which zeroes the short layer everywhere
+        (TZ §7.2). Rare and coarse on purpose: correctness first, and the caches
+        refill on demand.
+        """
+        self._cache3.clear()
+        self._cache2.clear()
+        self._cache_starts3.clear()
+        self._cache_starts2.clear()
+        self._context_state_matcher.invalidate_all_caches()
+
     def invalidate_chat_cache(self, chat_id: int) -> None:
         # Each cache is unrolled separately so its concrete key type is preserved
         # (a shared loop would widen the key to a union and break .pop typing).

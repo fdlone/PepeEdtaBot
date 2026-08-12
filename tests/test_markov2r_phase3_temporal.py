@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import math
 import random
+import tempfile
 import unittest
+from pathlib import Path
 
 from app.core.temporal import (
     COMPRESSION_LOG,
@@ -23,6 +25,7 @@ from app.core.temporal import (
     short_effective,
     short_observed,
 )
+from app.infrastructure.database import Database
 
 DAY = int(SECONDS_PER_DAY)
 HL = 3.0  # default half-life in days
@@ -208,6 +211,112 @@ class TestBlendProperties(unittest.TestCase):
             blended = TemporalBlend(alpha=0.5).blend(rows, now=DAY)
             assert blended is not None
             self.assertGreater(max(blended.weights), 0.0)
+
+
+class TestShortLayerReset(unittest.IsolatedAsyncioTestCase):
+    """Changing the half-life discards the short layer, and only that."""
+
+    async def asyncSetUp(self) -> None:
+        self._dir = tempfile.TemporaryDirectory()
+        self.db = Database(str(Path(self._dir.name) / "reset.db"))
+        await self.db.init()
+        await self.db.save_message_and_update_model(
+            chat_id=77,
+            raw_text="кот пришёл домой поздно",
+            tokens=["кот", "пришёл", "домой", "поздно"],
+            now=1_700_000_000,
+        )
+        await self.db.save_message_and_update_model(
+            chat_id=88,
+            raw_text="пёс ушёл гулять утром",
+            tokens=["пёс", "ушёл", "гулять", "утром"],
+            now=1_700_000_000,
+        )
+
+    async def asyncTearDown(self) -> None:
+        await self.db.close()
+        self._dir.cleanup()
+
+    async def _rows(self, chat_id: int) -> list[tuple[str, int, float, int | None]]:
+        return await self.db.markov.get_transitions3(
+            chat_id, *(("кот", "пришёл", "домой") if chat_id == 77 else
+                       ("пёс", "ушёл", "гулять"))
+        )
+
+    async def test_reset_empties_the_short_layer_and_keeps_the_long_one(self) -> None:
+        before = await self._rows(77)
+        self.assertEqual(before[0][1], 1)
+        self.assertGreater(before[0][2], 0.0)
+
+        await self.db.reset_short_layer(77)
+
+        after = await self._rows(77)
+        self.assertEqual(after[0][1], 1, "long count must survive")
+        self.assertEqual(after[0][2], 0.0)
+        self.assertIsNone(after[0][3])
+
+    async def test_reset_is_scoped_to_one_chat(self) -> None:
+        await self.db.reset_short_layer(77)
+        other = await self._rows(88)
+        self.assertGreater(other[0][2], 0.0)
+
+    async def test_global_reset_covers_every_chat(self) -> None:
+        await self.db.reset_short_layer(None)
+        for chat_id in (77, 88):
+            rows = await self._rows(chat_id)
+            self.assertEqual(rows[0][2], 0.0, chat_id)
+
+    async def test_first_seen_survives_the_reset(self) -> None:
+        """The reset throws away "recent", never the record of when it began."""
+        async with self.db._lock:
+            conn = await self.db._get_conn()
+            cur = await conn.execute(
+                "SELECT first_seen FROM transitions3 WHERE chat_id = 77 LIMIT 1"
+            )
+            before = (await cur.fetchone())[0]
+        await self.db.reset_short_layer(77)
+        async with self.db._lock:
+            conn = await self.db._get_conn()
+            cur = await conn.execute(
+                "SELECT first_seen FROM transitions3 WHERE chat_id = 77 LIMIT 1"
+            )
+            self.assertEqual((await cur.fetchone())[0], before)
+
+
+class TestLearnPathTemporalRecord(unittest.IsolatedAsyncioTestCase):
+    """first_seen is set once; last_seen and the short layer advance."""
+
+    async def asyncSetUp(self) -> None:
+        self._dir = tempfile.TemporaryDirectory()
+        self.db = Database(str(Path(self._dir.name) / "learn.db"))
+        await self.db.init()
+
+    async def asyncTearDown(self) -> None:
+        await self.db.close()
+        self._dir.cleanup()
+
+    async def test_repeat_observation_moves_last_seen_only(self) -> None:
+        tokens = ["дождь", "идёт", "весь", "день"]
+        first, second = 1_700_000_000, 1_700_000_000 + 5 * DAY
+        for moment in (first, second):
+            await self.db.save_message_and_update_model(
+                chat_id=5, raw_text=" ".join(tokens), tokens=tokens, now=moment
+            )
+        async with self.db._lock:
+            conn = await self.db._get_conn()
+            cur = await conn.execute(
+                "SELECT cnt, first_seen, last_seen, s_value, s_updated_at "
+                "FROM transitions3 WHERE chat_id = 5"
+            )
+            count, first_seen, last_seen, s_value, s_updated_at = await cur.fetchone()
+        self.assertEqual(count, 2)
+        self.assertEqual(first_seen, first)
+        self.assertEqual(last_seen, second)
+        self.assertEqual(s_updated_at, second)
+        # Two observations five days apart at a 3-day half-life: the older one
+        # is worth 2^(-5/3) of a fresh one, and the identity says the stored
+        # value is exactly their sum.
+        self.assertAlmostEqual(s_value, 1.0 + 2.0 ** (-5.0 / 3.0), places=9)
 
 
 if __name__ == "__main__":

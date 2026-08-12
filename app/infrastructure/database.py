@@ -284,6 +284,29 @@ class Database:
             payload,
         )
 
+    async def reset_short_layer(self, chat_id: int | None = None) -> None:
+        """Zero the short layer, keeping counts and timestamps (TZ §7.2).
+
+        ``chat_id=None`` covers every chat — what a global half-life change
+        means. Deliberately scoped to ``s_value``/``s_updated_at``: the long
+        counter and ``first_seen``/``last_seen`` are a different question and
+        must survive a half-life change untouched.
+        """
+        async with self._lock:
+            db = await self._get_conn()
+            for table in ("starts", "starts3", "transitions", "transitions3"):
+                if chat_id is None:
+                    await db.execute(
+                        f"UPDATE {table} SET s_value = 0, s_updated_at = NULL"  # nosec B608
+                    )
+                else:
+                    await db.execute(
+                        f"UPDATE {table} SET s_value = 0, s_updated_at = NULL "  # nosec B608
+                        "WHERE chat_id = ?",
+                        (chat_id,),
+                    )
+            await db.commit()
+
     async def save_message_and_update_model(
         self,
         chat_id: int,

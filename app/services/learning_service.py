@@ -235,6 +235,25 @@ class LearningService:
         self._absorb_message(chat_id, raw_text, tokens)
         return token_volume
 
+    async def reset_short_layer(self, chat_id: int | None) -> None:
+        """Discard the short layer (TZ §7.2), leaving the long one intact.
+
+        Called when the half-life changes: a decayed counter only means
+        something against the half-life it accumulated under, so keeping it
+        would silently mix two scales. The long counts, ``first_seen`` and
+        ``last_seen`` are untouched — this throws away the chat's sense of
+        *recent*, never its memory.
+
+        ``chat_id=None`` resets every chat, which is what a global ``/set``
+        means; the distribution caches are dropped so the change is visible
+        without a restart.
+        """
+        await self._db.reset_short_layer(chat_id)
+        if chat_id is None:
+            self._generator.invalidate_all_caches()
+        else:
+            self._generator.invalidate_chat_cache(chat_id)
+
     async def record_emojis(self, chat_id: int, counts: Mapping[str, int]) -> None:
         """Fold a message's emoji frequencies into the chat's emoji stats (M3)."""
         await self._db.chat_emoji_stats.bump(chat_id, counts)

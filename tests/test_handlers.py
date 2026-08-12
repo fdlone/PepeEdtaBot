@@ -306,7 +306,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         msg = _fake_message(text="/set")
         state = _fake_state()
         settings = MagicMock()
-        await cmd_set(msg, state, settings, _real_runtime_state())
+        await cmd_set(msg, state, settings, _real_runtime_state(), AsyncMock())
         msg.reply.assert_awaited_once()
         assert "Использование" in msg.reply.call_args[0][0]
 
@@ -317,7 +317,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         base = _real_runtime_state()
         base.reply_probability = 0.1
 
-        await cmd_set(msg, base.effective(100), MagicMock(), base)
+        await cmd_set(msg, base.effective(100), MagicMock(), base, AsyncMock())
 
         # Written into the overlay, not the global value.
         self.assertEqual(base.effective(100).reply_probability, 0.5)
@@ -336,7 +336,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
 
         # The global form is the owner's; a chat admin gets refused (covered
         # separately below).
-        await cmd_set(msg, base.effective(100), MagicMock(owner_id=42), base)
+        await cmd_set(msg, base.effective(100), MagicMock(owner_id=42), base, AsyncMock())
 
         self.assertEqual(base.reply_probability, 0.5)
         self.assertEqual(base.chat_overrides, {})
@@ -350,7 +350,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         base.reply_probability = 0.1
         base.set_override(100, "reply_probability", 0.5)
 
-        await cmd_set(msg, base.effective(100), MagicMock(), base)
+        await cmd_set(msg, base.effective(100), MagicMock(), base, AsyncMock())
 
         self.assertEqual(base.effective(100).reply_probability, 0.1)
 
@@ -362,7 +362,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         msg = _fake_message(text="/set reply_probability 0.5", chat_id=100)
         base = _real_runtime_state()
 
-        await cmd_set(msg, base.effective(100), MagicMock(), base)
+        await cmd_set(msg, base.effective(100), MagicMock(), base, AsyncMock())
 
         self.assertEqual(base.effective(100).reply_probability, 0.5)
 
@@ -374,7 +374,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         base.reply_probability = 0.1
         settings = MagicMock(owner_id=42)  # caller is an admin, not the owner
 
-        await cmd_set(msg, base.effective(100), settings, base)
+        await cmd_set(msg, base.effective(100), settings, base, AsyncMock())
 
         self.assertEqual(base.effective(100).reply_probability, 0.5)
         self.assertEqual(base.reply_probability, 0.1)
@@ -389,7 +389,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         base.reply_probability = 0.1
         settings = MagicMock(owner_id=42)
 
-        await cmd_set(msg, base.effective(100), settings, base)
+        await cmd_set(msg, base.effective(100), settings, base, AsyncMock())
 
         self.assertEqual(base.reply_probability, 0.1)
         # And it must not quietly fall back to scoping the change to this
@@ -420,11 +420,11 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         scoped = _fake_message(
             text="/set reply_probability 0.5", user_id=42, chat_id=100
         )
-        await cmd_set(scoped, base.effective(100), settings, base)
+        await cmd_set(scoped, base.effective(100), settings, base, AsyncMock())
         glob = _fake_message(
             text="/set global reply_probability 0.3", user_id=42, chat_id=100
         )
-        await cmd_set(glob, base.effective(100), settings, base)
+        await cmd_set(glob, base.effective(100), settings, base, AsyncMock())
 
         self.assertEqual(base.reply_probability, 0.3)
         self.assertEqual(base.effective(100).reply_probability, 0.5)
@@ -437,7 +437,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         base.reply_probability = 0.1
         base.set_override(100, "reply_probability", 0.5)
 
-        await cmd_set(msg, base.effective(100), MagicMock(owner_id=42), base)
+        await cmd_set(msg, base.effective(100), MagicMock(owner_id=42), base, AsyncMock())
 
         self.assertEqual(base.effective(100).reply_probability, 0.1)
 
