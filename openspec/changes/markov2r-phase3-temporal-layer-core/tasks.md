@@ -33,16 +33,16 @@ changes — see proposal.md.
 - [x] 5.1 Sampler takes float weights: `max(cnt, 1)` becomes `max(w, EPS)`; integer inputs keep producing identical results (design D4)
 - [x] 5.2 `blend_pool(pool, alpha, now, ...)` returns its input unchanged at α = 0 — the early return that makes neutrality structural rather than incidental
 - [x] 5.3 Blend over the union of tokens, long layer compressed sublinearly (`log` | `pow` with β) before normalization; an empty layer degenerates to the other
-- [ ] 5.4 α resolved from the chat's mood; the value the walk actually used is what gets reported (not the configured one)
-- [ ] 5.5 `now` captured once per generation and threaded into blending and cache reads; nothing below reads the clock (design D3)
+- [x] 5.4 α resolved from the chat's mood; the value the walk actually used is what gets reported (not the configured one)
+- [x] 5.5 `now` captured once per generation and threaded into blending and cache reads; nothing below reads the clock (design D3)
 - [x] 5.6 `pool_diagnostics` computed from the blended weights, so entropy describes the sampled distribution (design D5) — note the knock-on: this is Phase 2's input
 
 ## 6. Knobs
 
-- [ ] 6.1 Registry entries + `Settings`/`RuntimeState` + `.env.example` (established 5-step pattern; registry drift tests stay green): `markov_short_half_life_days`, `markov_long_compression`, `markov_long_compression_beta`, `markov_alpha_sleepy`, `markov_alpha_calm`, `markov_alpha_lively`, `markov_alpha_heated`
-- [ ] 6.2 All α default to 0 (neutral); bounds validated on both paths (env and `/set`) per `runtime-knob-validation`
-- [ ] 6.3 Half-life change resets that chat's short layer with an explicit warning naming what was discarded and how long it takes to rebuild; setting the current value is a no-op; long layer untouched (design D7)
-- [ ] 6.4 `/config full` surfaces the α profile, half-life and compression shape
+- [x] 6.1 Registry entries + `Settings`/`RuntimeState` + `.env.example` (established 5-step pattern; registry drift tests stay green): `markov_short_half_life_days`, `markov_long_compression`, `markov_long_compression_beta`, `markov_alpha_sleepy`, `markov_alpha_calm`, `markov_alpha_lively`, `markov_alpha_heated`
+- [x] 6.2 All α default to 0 (neutral); bounds validated on both paths (env and `/set`) per `runtime-knob-validation`
+- [x] 6.3 Half-life change resets that chat's short layer with an explicit warning naming what was discarded and how long it takes to rebuild; setting the current value is a no-op; long layer untouched (design D7)
+- [x] 6.4 `/config full` surfaces the α profile, half-life and compression shape
 
 ## 7. Neutrality proof (the phase's hard contract)
 
@@ -56,7 +56,7 @@ changes — see proposal.md.
 - [x] 8.1 Decay: an observation now contributes 1; an observation one half-life old contributes 0.5; order of observations does not change the result; `s_eff` is non-increasing between observations (TZ §19)
 - [x] 8.2 Compression: both shapes preserve the order of preference; a 10000-vs-20 count pair leaves the smaller non-negligible
 - [x] 8.3 Blend: union coverage, token present in only one layer stays reachable, empty layer degenerates, α = 0 and α = 1 endpoints
-- [ ] 8.4 Half-life reset: short layer emptied, long layer and timestamps untouched, no-op when the value is unchanged
+- [x] 8.4 Half-life reset: short layer emptied, long layer and timestamps untouched, no-op when the value is unchanged
 - [ ] 8.5 Cache: a pool cached at t₀ and read at t₁ yields the same weights as an uncached read at t₁
 
 ## 9. Property / invariant tests (TZ §19)
@@ -68,8 +68,8 @@ changes — see proposal.md.
 
 ## 10. Telemetry
 
-- [ ] 10.1 Applied α, the short layer's step coverage and its mean mass contribution accumulated per generation; exposed in `GenerationTrace`
-- [ ] 10.2 `gen_trace_log` line and `/stats`; aggregates only, no per-message timestamps, chat ids masked (existing `log-privacy` rules)
+- [x] 10.1 Applied α, the short layer's step coverage and its mean mass contribution accumulated per generation; exposed in `GenerationTrace`
+- [x] 10.2 `gen_trace_log` line and `/stats`; aggregates only, no per-message timestamps, chat ids masked (existing `log-privacy` rules)
 - [ ] 10.3 Neutral configuration reads as neutral, and "configured but inert" (α > 0 over an empty short layer) is distinguishable from "not configured" (spec scenario)
 
 ## 11. Temporal eval fixture (owner decision 2026-08-12)

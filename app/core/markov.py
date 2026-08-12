@@ -362,6 +362,15 @@ class GenerationTrace:
     diagnostic_steps: int = 0
     # M2R-100: temperature actually applied, averaged over the measured steps.
     mean_applied_temperature: float = 0.0
+    # M2R-210: what the temporal blend actually did. ``applied_alpha`` is the
+    # configured intent; the other two are the effect — the share of steps where
+    # the short layer had any weight at all, and how far the blend moved the
+    # sampled distribution away from the long layer alone. A knob that is set
+    # but inert reads as alpha > 0 with both of these at 0, which is exactly the
+    # distinction Phase 2 had to discover the hard way.
+    applied_alpha: float = 0.0
+    blend_step_coverage: float = 0.0
+    mean_blend_displacement: float = 0.0
 
 
 class _GenerationAttempt(NamedTuple):
@@ -391,6 +400,10 @@ class _GenerationAttempt(NamedTuple):
     diagnostic_steps: int = 0
     # M2R-100: temperature actually applied, averaged over the measured steps.
     mean_applied_temperature: float = 0.0
+    # M2R-210: see GenerationTrace for what these three mean.
+    applied_alpha: float = 0.0
+    blend_step_coverage: float = 0.0
+    mean_blend_displacement: float = 0.0
 
 
 class _ContextualStateSelection(NamedTuple):
@@ -1488,6 +1501,9 @@ class MarkovGenerator:
             min_confidence=last.min_confidence,
             diagnostic_steps=last.diagnostic_steps,
             mean_applied_temperature=last.mean_applied_temperature,
+            applied_alpha=last.applied_alpha,
+            blend_step_coverage=last.blend_step_coverage,
+            mean_blend_displacement=last.mean_blend_displacement,
         )
         self.telemetry.note_generation(
             entropy_bits_sum=last.mean_entropy_bits * last.diagnostic_steps,
@@ -1497,6 +1513,12 @@ class MarkovGenerator:
             branching_sum=last.mean_branching * last.diagnostic_steps,
             applied_temperature_sum=(
                 last.mean_applied_temperature * last.diagnostic_steps
+            ),
+            blend_covered_steps=round(
+                last.blend_step_coverage * last.diagnostic_steps
+            ),
+            blend_displacement_sum=(
+                last.mean_blend_displacement * last.diagnostic_steps
             ),
             steps=last.diagnostic_steps,
         )
@@ -1706,6 +1728,7 @@ class MarkovGenerator:
         context_casefold_matches: int,
         hidden_context_fallbacks: int,
         diagnostics: _DiagnosticsAccumulator | None = None,
+        applied_alpha: float = 0.0,
     ) -> _GenerationAttempt:
         """Trim, strip and quality-gate generated tokens into an attempt.
 
@@ -1747,6 +1770,13 @@ class MarkovGenerator:
                 mean_applied_temperature=(
                     diag.applied_temperature_sum / steps if steps else 0.0
                 ),
+                applied_alpha=applied_alpha,
+                blend_step_coverage=(
+                    diag.blend_covered_steps / steps if steps else 0.0
+                ),
+                mean_blend_displacement=(
+                    diag.blend_displacement_sum / steps if steps else 0.0
+                ),
             )
 
         if len(result) < 5:
@@ -1787,6 +1817,13 @@ class MarkovGenerator:
             diagnostic_steps=steps,
             mean_applied_temperature=(
                 diag.applied_temperature_sum / steps if steps else 0.0
+            ),
+            applied_alpha=applied_alpha,
+            blend_step_coverage=(
+                diag.blend_covered_steps / steps if steps else 0.0
+            ),
+            mean_blend_displacement=(
+                diag.blend_displacement_sum / steps if steps else 0.0
             ),
         )
 
@@ -2322,4 +2359,5 @@ class MarkovGenerator:
             context_casefold_matches=context_casefold_matches,
             hidden_context_fallbacks=hidden_context_fallbacks,
             diagnostics=diagnostics,
+            applied_alpha=temporal_blend.alpha,
         )

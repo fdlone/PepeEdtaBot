@@ -97,6 +97,15 @@ def format_stats_message(
         temperature = telemetry.get("mean_applied_temperature")
         if temperature is not None:
             lines.append(f"температура шага: {temperature:.2f}")
+        # M2R-210: покрытие короткого слоя и сдвиг распределения — эффект
+        # blend'а, а не его настройка. Выключенный blend читается как два нуля.
+        coverage = telemetry.get("blend_step_coverage")
+        displacement = telemetry.get("mean_blend_displacement")
+        if coverage is not None and displacement is not None:
+            lines.append(
+                f"свежий слой: покрытие {coverage:.0%}, "
+                f"сдвиг распределения {displacement:.3f}"
+            )
         hit_rate = telemetry.get("cache_hit_rate")
         if hit_rate is not None:
             lines.append(f"кэш распределений: {hit_rate:.0%} попаданий")

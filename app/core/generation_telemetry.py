@@ -17,6 +17,9 @@ class GenerationTelemetry:
     normalized_entropy_sum: float = 0.0
     branching_sum: float = 0.0
     applied_temperature_sum: float = 0.0
+    # M2R-210: effect of the temporal blend, summed over steps.
+    blend_covered_steps: int = 0
+    blend_displacement_sum: float = 0.0
     diagnostic_steps: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
@@ -37,12 +40,16 @@ class GenerationTelemetry:
         branching_sum: float,
         steps: int,
         applied_temperature_sum: float = 0.0,
+        blend_covered_steps: int = 0,
+        blend_displacement_sum: float = 0.0,
     ) -> None:
         self.generations += 1
         self.entropy_bits_sum += entropy_bits_sum
         self.normalized_entropy_sum += normalized_entropy_sum
         self.branching_sum += branching_sum
         self.applied_temperature_sum += applied_temperature_sum
+        self.blend_covered_steps += blend_covered_steps
+        self.blend_displacement_sum += blend_displacement_sum
         self.diagnostic_steps += steps
 
     def note_shadow(self, *, eligible: int, selected: int) -> None:
@@ -63,6 +70,12 @@ class GenerationTelemetry:
             "mean_branching": self.branching_sum / steps if steps else None,
             "mean_applied_temperature": (
                 self.applied_temperature_sum / steps if steps else None
+            ),
+            "blend_step_coverage": (
+                self.blend_covered_steps / steps if steps else None
+            ),
+            "mean_blend_displacement": (
+                self.blend_displacement_sum / steps if steps else None
             ),
             "cache_hit_rate": self.cache_hits / lookups if lookups else None,
             "shadow_order4_eligible": eligible,
