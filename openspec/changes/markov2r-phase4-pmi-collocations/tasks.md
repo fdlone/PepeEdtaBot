@@ -90,7 +90,7 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 ## 13. Housekeeping riding along (no functional content)
 
-- [ ] 13.1 `openspec archive markov2r-phase3-temporal-layer-core` — its own commit, established convention
+- [x] 13.1 `openspec archive markov2r-phase3-temporal-layer-core` — its own commit, established convention
 
 ## 14. Close-out
 
