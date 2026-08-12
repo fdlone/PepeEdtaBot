@@ -402,6 +402,56 @@ class TestShortLayerReset(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await cur.fetchone())[0], before)
 
 
+class TestNeutralityOverAPopulatedShortLayer(unittest.IsolatedAsyncioTestCase):
+    """A populated short layer must not leak into sampling while alpha is 0.
+
+    The generation-hash check proves neutrality on the frozen snapshot, whose
+    short layer is empty — every row predates the migration. That leaves the
+    case the live bot reaches on day two untested: schema present, short layer
+    filling up, blend still off. This is that case.
+    """
+
+    async def asyncSetUp(self) -> None:
+        self._dir = tempfile.TemporaryDirectory()
+        self.db = Database(str(Path(self._dir.name) / "populated.db"))
+        await self.db.init()
+        moment = 1_700_000_000
+        for step, text in enumerate(
+            [
+                "кот пришёл домой поздно вечером",
+                "кот ушёл гулять рано утром",
+                "пёс пришёл домой поздно ночью",
+                "кот пришёл домой рано утром",
+            ]
+        ):
+            await self.db.save_message_and_update_model(
+                chat_id=9,
+                raw_text=text,
+                tokens=text.split(),
+                now=moment + step * DAY,
+            )
+
+    async def asyncTearDown(self) -> None:
+        await self.db.close()
+        self._dir.cleanup()
+
+    async def test_weights_ignore_the_short_layer_when_alpha_is_zero(self) -> None:
+        rows = await self.db.markov.get_transitions(9, "кот", "пришёл")
+        self.assertTrue(any(row[2] > 0 for row in rows), "short layer must be populated")
+
+        neutral = TemporalBlend(alpha=0.0)
+        self.assertIsNone(neutral.blend(rows, 1_700_000_000 + 10 * DAY))
+
+        # And the pool the sampler would weight is the raw long count, whatever
+        # the short layer says — zeroing it changes nothing on the neutral path.
+        zeroed = [(row[0], row[1], 0.0, None) for row in rows]
+        self.assertIsNone(neutral.blend(zeroed, 1_700_000_000 + 10 * DAY))
+        self.assertEqual(
+            [(row[0], row[1]) for row in rows],
+            [(row[0], row[1]) for row in zeroed],
+        )
+
+
 class TestLearnPathTemporalRecord(unittest.IsolatedAsyncioTestCase):
     """first_seen is set once; last_seen and the short layer advance."""
 

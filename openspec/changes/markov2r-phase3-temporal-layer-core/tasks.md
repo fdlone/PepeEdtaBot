@@ -47,9 +47,9 @@ changes — see proposal.md.
 ## 7. Neutrality proof (the phase's hard contract)
 
 - [x] 7.1 `python -m tools.generation_hash --db db_prod_copy/markov.db` — identical hash at default settings, against the frozen baseline (`5a72e2d4`)
-- [ ] 7.2 Characterization tests green unchanged at neutral settings
-- [ ] 7.3 Runtime revert check: α set back to 0 via `/set` restores baseline output without a restart
-- [ ] 7.4 Neutrality holds with the migration applied to a database that has already learned messages under the temporal layer (schema present, short layer populated, α = 0)
+- [x] 7.2 Characterization tests green unchanged at neutral settings
+- [x] 7.3 Runtime revert check: α set back to 0 via `/set` restores baseline output without a restart
+- [x] 7.4 Neutrality holds with the migration applied to a database that has already learned messages under the temporal layer (schema present, short layer populated, α = 0)
 
 ## 8. Unit tests
 
@@ -64,55 +64,55 @@ changes — see proposal.md.
 - [x] 9.1 Blending any two valid distributions at any legal α yields a valid distribution: finite, non-negative, sums to 1
 - [x] 9.2 Determinism: same seed + same settings + same `now` ⇒ identical output, cached or not
 - [x] 9.3 `s_eff` monotonically non-increasing between observations, for any legal half-life
-- [ ] 9.4 Learning is atomic across both layers under a mid-transaction failure
+- [x] 9.4 Learning is atomic across both layers under a mid-transaction failure
 
 ## 10. Telemetry
 
 - [x] 10.1 Applied α, the short layer's step coverage and its mean mass contribution accumulated per generation; exposed in `GenerationTrace`
 - [x] 10.2 `gen_trace_log` line and `/stats`; aggregates only, no per-message timestamps, chat ids masked (existing `log-privacy` rules)
-- [ ] 10.3 Neutral configuration reads as neutral, and "configured but inert" (α > 0 over an empty short layer) is distinguishable from "not configured" (spec scenario)
+- [x] 10.3 Neutral configuration reads as neutral, and "configured but inert" (α > 0 over an empty short layer) is distinguishable from "not configured" (spec scenario)
 
 ## 11. Temporal eval fixture (owner decision 2026-08-12)
 
 - [x] 11.1 `tools/eval/temporal_fixture.py`: replay a snapshot's retained messages in timestamp order through the real learning arithmetic into a separate database; source opened read-only (design D8)
-- [ ] 11.2 Deterministic: two builds from the same source and parameters produce byte-identical metric results
+- [x] 11.2 Deterministic: two builds from the same source and parameters produce byte-identical metric results
 - [x] 11.3 Report provenance: snapshot labelled as reconstructed, with its time span and fresh-slice size printed
 - [x] 11.4 `freshness_reflection` implemented per doc 05 §3 against the fresh slice; still `insufficient data` on snapshots without observation times
-- [ ] 11.5 Historical-meme check draws its n-gram list from the full snapshot's `chat_verbatim_ngrams`, not from the fixture's own old rows (design D8)
+- [x] 11.5 Historical-meme check draws its n-gram list from the full snapshot's `chat_verbatim_ngrams`, not from the fixture's own old rows (design D8)
 
 ## 12. Eval — ablation and grid
 
-- [ ] 12.1 `tools/eval/matrix.yaml`: C2 arm (`available: true` only for what this change ships); C5 stays unavailable until it has both features to combine
-- [ ] 12.2 Grid on the fixture: α ∈ {0, 0.3, 0.5, 0.7} × compression ∈ {log, pow β=0.5, pow β=0.75}, protocol volumes (500 generations × seeds 42/1337/2026), bootstrap CIs
-- [ ] 12.3 **All deltas computed within the fixture** (C0_fixture vs arm) — the frozen C0 baseline is a different corpus and is not a valid comparand (design D8)
-- [ ] 12.4 Latency p50/p95 per arm against the 150 ms budget; report the blend's per-step cost separately from the total
-- [ ] 12.5 Re-run Phase 2's entropy histogram (7034-step protocol) on the blended pools and put it beside the Phase 2 numbers — this is the evidence the Phase 2 keep-or-delete decision rests on (design D5)
-- [ ] 12.6 Report in `docs/eval_reports/`, referenced from this change: per-arm table with CIs, gate verdict, `distinct_basis_tokens` denominators, fixture provenance, entropy comparison
-- [ ] 12.7 CI smoke stays green on `snapshot_synthetic`
+- [x] 12.1 `tools/eval/matrix.yaml`: C2 arm (`available: true` only for what this change ships); C5 stays unavailable until it has both features to combine
+- [x] 12.2 Grid on the fixture: α ∈ {0, 0.3, 0.5, 0.7} × compression ∈ {log, pow β=0.5, pow β=0.75}, protocol volumes (500 generations × seeds 42/1337/2026), bootstrap CIs
+- [x] 12.3 **All deltas computed within the fixture** (C0_fixture vs arm) — the frozen C0 baseline is a different corpus and is not a valid comparand (design D8)
+- [x] 12.4 Latency p50/p95 per arm against the 150 ms budget; report the blend's per-step cost separately from the total
+- [x] 12.5 Re-run Phase 2's entropy histogram (7034-step protocol) on the blended pools and put it beside the Phase 2 numbers — this is the evidence the Phase 2 keep-or-delete decision rests on (design D5)
+- [x] 12.6 Report in `docs/eval_reports/`, referenced from this change: per-arm table with CIs, gate verdict, `distinct_basis_tokens` denominators, fixture provenance, entropy comparison
+- [x] 12.7 CI smoke stays green on `snapshot_synthetic`
 
 ## 13. Default decision (gate)
 
-- [ ] 13.1 Gate passed ⇒ propose the α profile as a defaults change, explicitly labelled as measured on a reconstructed snapshot and therefore provisional until live re-measurement in M2R-215
-- [ ] 13.2 Gate fails ⇒ defaults stay neutral; record the negative result with numbers in `docs/v2/00_STATUS.md` and reference the report
-- [ ] 13.3 Never adjust a pre-registered threshold to make the gate pass; if a threshold turns out wrong, that is a separate commit with justification and owner approval
+- [x] 13.1 Gate passed ⇒ propose the α profile as a defaults change — **not applicable: the gate failed on all nine arms**, so 13.2 is the branch that applies
+- [x] 13.2 Gate fails ⇒ defaults stay neutral; record the negative result with numbers in `docs/v2/00_STATUS.md` and reference the report
+- [x] 13.3 Never adjust a pre-registered threshold to make the gate pass; if a threshold turns out wrong, that is a separate commit with justification and owner approval
 
 ## 14. Phase 2 decision (what this phase was asked to unblock)
 
-- [ ] 14.1 Present the entropy comparison from 12.5 to the owner with a recommendation: keep the disabled Phase 2 code for re-measurement, or delete it as dead weight
+- [x] 14.1 Present the entropy comparison from 12.5 to the owner with a recommendation: keep the disabled Phase 2 code for re-measurement, or delete it as dead weight
 - [ ] 14.2 Record the owner's decision in `docs/v2/00_STATUS.md`; if the answer is "re-measure", note that it requires a **new** pre-registered gate — `phase2_entropy` is spent
 
 ## 15. Documentation
 
-- [ ] 15.1 `docs/v2/00_STATUS.md`: Phase 3 row + "next session" section pointed at M2R-215 calibration
+- [x] 15.1 `docs/v2/00_STATUS.md`: Phase 3 row + "next session" section pointed at M2R-215 calibration
 - [x] 15.2 `.env.example` entries with bounds and one-line meanings; `GENERATION_PIPELINE.md` / `ARCHITECTURE.md` updated where sampling and learning are described
 - [x] 15.3 Record in doc 05 that `snapshot_temporal` now has a build path, and that the v1.0.1 amendment's "physically impossible" clause applies only to retrospective live history
 
 ## 16. Housekeeping riding along (no functional content)
 
-- [ ] 16.1 `openspec archive markov2r-phase2-entropy-sampling` — its own commit, owner decision 2026-08-12 (no PR just for an archive)
+- [x] 16.1 `openspec archive markov2r-phase2-entropy-sampling` — its own commit, owner decision 2026-08-12 (no PR just for an archive)
 
 ## 17. Close-out
 
-- [ ] 17.1 `openspec validate --strict` green for this change
-- [ ] 17.2 Full test suite + lint/type checks as configured in the project
+- [x] 17.1 `openspec validate --strict` green for this change
+- [x] 17.2 Full test suite + lint/type checks as configured in the project — 1056 tests OK, ruff clean, mypy clean (74 files)
 - [ ] 17.3 Archive this change after merge — rides in the next phase's PR, same convention as 16.1
