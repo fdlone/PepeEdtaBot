@@ -81,4 +81,6 @@ No schema change and no migration in this phase (TZ §6 is sampling-only).
 
 - [x] 13.1 `openspec validate --strict` green for this change
 - [x] 13.2 Full test suite + lint/type checks as configured in the project
-- [ ] 13.3 Archive this change after merge
+- [ ] 13.3 Archive this change after merge — rides in the Phase 3 PR as its own
+  commit, not a PR of its own (owner decision 2026-08-12); tracked in
+  `docs/v2/00_STATUS.md` §"С чего начинать следующую сессию"
