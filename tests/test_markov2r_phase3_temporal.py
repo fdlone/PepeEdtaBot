@@ -1,0 +1,214 @@
+"""Phase 3 temporal layer: decay arithmetic, compression, blend (TZ §7-8).
+
+The invariants here are the ones TZ §19 names explicitly — an observation now
+contributes 1, an observation one half-life old contributes 0.5, order of
+observations does not matter, and the effective weight never grows on its own.
+They are the reason the short layer can be one row instead of an event log, so
+they are tested directly rather than through generation.
+"""
+
+from __future__ import annotations
+
+import math
+import random
+import unittest
+
+from app.core.temporal import (
+    COMPRESSION_LOG,
+    COMPRESSION_POW,
+    SECONDS_PER_DAY,
+    TemporalBlend,
+    compress_long,
+    decay_multiplier,
+    short_effective,
+    short_observed,
+)
+
+DAY = int(SECONDS_PER_DAY)
+HL = 3.0  # default half-life in days
+
+
+class TestDecayArithmetic(unittest.TestCase):
+    def test_observation_now_contributes_one(self) -> None:
+        self.assertEqual(short_observed(0.0, None, 1000, HL), 1.0)
+
+    def test_observation_one_half_life_old_contributes_half(self) -> None:
+        observed_at = 1_000_000
+        value = short_observed(0.0, None, observed_at, HL)
+        later = observed_at + int(HL * DAY)
+        self.assertAlmostEqual(short_effective(value, observed_at, later, HL), 0.5)
+
+    def test_effective_weight_equals_sum_of_individually_decayed_observations(
+        self,
+    ) -> None:
+        """The identity that justifies O(1) storage (TZ §7.1)."""
+        base = 1_000_000
+        offsets = [0, DAY, 2 * DAY, 5 * DAY, 11 * DAY]
+        value, updated = 0.0, None
+        for offset in offsets:
+            moment = base + offset
+            value, updated = short_observed(value, updated, moment, HL), moment
+        read_at = base + 20 * DAY
+        expected = math.fsum(
+            2.0 ** (-((read_at - (base + offset)) / (HL * DAY))) for offset in offsets
+        )
+        self.assertAlmostEqual(short_effective(value, updated, read_at, HL), expected)
+
+    def test_order_of_observations_does_not_change_the_result(self) -> None:
+        base = 500_000
+        offsets = [0, 3 * DAY, DAY, 9 * DAY, 2 * DAY]
+        read_at = base + 30 * DAY
+
+        def accumulate(sequence: list[int]) -> float:
+            value, updated = 0.0, None
+            for offset in sorted(sequence):
+                moment = base + offset
+                value, updated = short_observed(value, updated, moment, HL), moment
+            return short_effective(value, updated, read_at, HL)
+
+        forward = accumulate(offsets)
+        backward = accumulate(list(reversed(offsets)))
+        self.assertAlmostEqual(forward, backward)
+
+    def test_effective_weight_is_non_increasing_between_observations(self) -> None:
+        value, updated = short_observed(0.0, None, 0, HL), 0
+        previous = math.inf
+        for day in range(0, 40):
+            current = short_effective(value, updated, day * DAY, HL)
+            self.assertLessEqual(current, previous + 1e-12)
+            previous = current
+
+    def test_empty_layer_reads_as_zero(self) -> None:
+        self.assertEqual(short_effective(0.0, None, 1000, HL), 0.0)
+        self.assertEqual(short_effective(5.0, None, 1000, HL), 0.0)
+
+    def test_clock_skew_does_not_inflate_the_counter(self) -> None:
+        """A backwards clock must not extrapolate growth (design D1 guard)."""
+        observed_at = 1_000_000
+        value = short_observed(0.0, None, observed_at, HL)
+        self.assertEqual(short_effective(value, observed_at, observed_at - DAY, HL), 1.0)
+
+    def test_non_positive_half_life_remembers_nothing(self) -> None:
+        self.assertEqual(decay_multiplier(1.0, 0.0), 0.0)
+        self.assertEqual(decay_multiplier(1.0, -3.0), 0.0)
+
+
+class TestCompression(unittest.TestCase):
+    def test_both_shapes_preserve_order_of_preference(self) -> None:
+        counts = [1, 2, 5, 20, 100, 10_000]
+        for shape, beta in ((COMPRESSION_LOG, 0.0), (COMPRESSION_POW, 0.6)):
+            weights = [compress_long(c, shape, beta) for c in counts]
+            self.assertEqual(weights, sorted(weights), shape)
+
+    def test_dominant_count_leaves_the_smaller_one_non_negligible(self) -> None:
+        """The motivating case of TZ §8.1: 10000 vs 20 is 0.998/0.002 raw.
+
+        Both shapes must lift the underdog by at least an order of magnitude —
+        that is the whole point of compressing. They do not lift it equally:
+        measured here, ``log`` gives it 24.8% and ``pow`` at beta=0.6 gives it
+        2.3%. An order of magnitude between the two shapes is exactly the kind
+        of difference the M2R-215 calibration grid exists to settle, so the
+        assertion is the property, not either number.
+        """
+        raw_share = 20 / (10_000 + 20)
+        for shape, beta in ((COMPRESSION_LOG, 0.0), (COMPRESSION_POW, 0.6)):
+            big = compress_long(10_000, shape, beta)
+            small = compress_long(20, shape, beta)
+            share = small / (big + small)
+            self.assertGreater(share, raw_share * 10, shape)
+
+    def test_zero_count_is_weightless_not_negative(self) -> None:
+        self.assertEqual(compress_long(0, COMPRESSION_LOG, 0.0), 0.0)
+        self.assertEqual(compress_long(0, COMPRESSION_POW, 0.6), 0.0)
+
+
+class TestBlend(unittest.TestCase):
+    def test_disabled_blend_returns_none(self) -> None:
+        """The early return that makes neutrality structural (design D4)."""
+        rows = [("a", 5, 3.0, 0), ("b", 1, 0.0, None)]
+        self.assertIsNone(TemporalBlend(alpha=0.0).blend(rows, now=DAY))
+
+    def test_token_known_only_to_the_fresh_layer_stays_reachable(self) -> None:
+        rows = [("a", 100, 0.0, None), ("fresh", 0, 4.0, DAY)]
+        blended = TemporalBlend(alpha=0.5).blend(rows, now=DAY)
+        assert blended is not None
+        self.assertGreater(blended.weights[1], 0.0)
+
+    def test_empty_short_layer_degenerates_to_the_long_layer(self) -> None:
+        rows = [("a", 8, 0.0, None), ("b", 2, 0.0, None)]
+        blended = TemporalBlend(alpha=0.7).blend(rows, now=DAY)
+        assert blended is not None
+        expected_a = compress_long(8, COMPRESSION_LOG, 0.0)
+        expected_b = compress_long(2, COMPRESSION_LOG, 0.0)
+        total = expected_a + expected_b
+        self.assertAlmostEqual(blended.weights[0], expected_a / total)
+        self.assertEqual(blended.displacement, 0.0)
+
+    def test_alpha_one_is_the_short_layer_alone(self) -> None:
+        rows = [("a", 100, 1.0, DAY), ("b", 1, 3.0, DAY)]
+        blended = TemporalBlend(alpha=1.0).blend(rows, now=DAY)
+        assert blended is not None
+        self.assertAlmostEqual(blended.weights[0], 0.25)
+        self.assertAlmostEqual(blended.weights[1], 0.75)
+
+    def test_displacement_is_zero_when_the_layers_agree(self) -> None:
+        rows = [("a", 4, 2.0, DAY), ("b", 4, 2.0, DAY)]
+        blended = TemporalBlend(alpha=0.5).blend(rows, now=DAY)
+        assert blended is not None
+        self.assertAlmostEqual(blended.displacement, 0.0)
+
+    def test_displacement_grows_with_disagreement(self) -> None:
+        rows = [("a", 100, 0.0, None), ("b", 1, 9.0, DAY)]
+        mild = TemporalBlend(alpha=0.2).blend(rows, now=DAY)
+        strong = TemporalBlend(alpha=0.8).blend(rows, now=DAY)
+        assert mild is not None and strong is not None
+        self.assertGreater(strong.displacement, mild.displacement)
+
+
+class TestBlendProperties(unittest.TestCase):
+    """Any legal configuration over any pool yields a valid distribution."""
+
+    def test_blend_of_valid_layers_is_a_valid_distribution(self) -> None:
+        rng = random.Random(2026)
+        for _ in range(300):
+            size = rng.randint(1, 12)
+            now = rng.randint(0, 400) * DAY
+            rows = [
+                (
+                    f"t{i}",
+                    rng.randint(0, 5000),
+                    rng.choice([0.0, rng.random() * 20]),
+                    rng.choice([None, now - rng.randint(0, 200) * DAY]),
+                )
+                for i in range(size)
+            ]
+            blend = TemporalBlend(
+                alpha=rng.choice([0.05, 0.3, 0.5, 0.7, 1.0]),
+                half_life_days=rng.choice([1.0, 3.0, 7.0, 14.0]),
+                compression=rng.choice([COMPRESSION_LOG, COMPRESSION_POW]),
+                beta=rng.choice([0.5, 0.6, 0.75]),
+            )
+            blended = blend.blend(rows, now=now)
+            assert blended is not None
+            for weight in blended.weights:
+                self.assertGreaterEqual(weight, 0.0)
+                self.assertTrue(math.isfinite(weight))
+            self.assertAlmostEqual(math.fsum(blended.weights), 1.0, places=9)
+            self.assertGreaterEqual(blended.displacement, 0.0)
+            self.assertLessEqual(blended.displacement, 1.0 + 1e-12)
+
+    def test_at_least_one_candidate_keeps_positive_weight(self) -> None:
+        rng = random.Random(7)
+        for _ in range(200):
+            size = rng.randint(1, 8)
+            rows = [
+                (f"t{i}", rng.randint(0, 3), rng.random() * 2, rng.choice([None, 0]))
+                for i in range(size)
+            ]
+            blended = TemporalBlend(alpha=0.5).blend(rows, now=DAY)
+            assert blended is not None
+            self.assertGreater(max(blended.weights), 0.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

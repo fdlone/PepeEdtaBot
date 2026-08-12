@@ -10,8 +10,8 @@ changes — see proposal.md.
 
 ## 2. Migration (M2R-200)
 
-- [ ] 2.1 `app/migrations/018_temporal_layer.sql`: `first_seen`, `last_seen` (INTEGER unix seconds), `s_value` (REAL, default 0), `s_updated_at` (INTEGER) on `starts`, `starts3`, `transitions`, `transitions3` — NULL defaults, no data rewrite (design D6)
-- [ ] 2.2 Migration runs on a clean DB and on `db_prod_copy`; record the measured wall time in the change (audit §8 asks for the number, not an assurance)
+- [x] 2.1 `app/migrations/018_temporal_layer.sql`: `first_seen`, `last_seen` (INTEGER unix seconds), `s_value` (REAL, default 0), `s_updated_at` (INTEGER) on `starts`, `starts3`, `transitions`, `transitions3` — NULL defaults, no data rewrite (design D6)
+- [x] 2.2 Migration runs on a clean DB and on `db_prod_copy`; record the measured wall time in the change (audit §8 asks for the number, not an assurance) — **measured: 4.0 ms on the prod copy (30 720 transitions, 27 237 transitions3), 58 ms for the whole chain on an empty DB**; metadata-only as predicted, no row rewritten
 - [ ] 2.3 Readers tolerate NULL: NULL `first_seen` means "predates the temporal record", `s_value = 0` with NULL `s_updated_at` means an empty short layer
 - [ ] 2.4 `/clear confirm` leaves no temporal remnant — extend the existing orphaned-structures test rather than writing a new one
 
