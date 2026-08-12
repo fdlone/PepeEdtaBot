@@ -27,7 +27,7 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 - [x] 4.1 Analyzer pass joins `run_due_maintenance` beside the flavor decays, inheriting its cadence, retry interval and alert path
 - [x] 4.2 A failing pass leaves the previous registry usable and does not break message handling
-- [ ] 4.3 Record duration and scored-pair count per pass in telemetry
+- [x] 4.3 Record duration and scored-pair count per pass in telemetry
 - [ ] 4.4 Measure the pass on `db_prod_copy` inside the real maintenance path and record the number against the 41 ms estimate
 
 ## 5. Collocation scoring (M2R-320, ADR-016)
@@ -50,7 +50,7 @@ on human raters — start lining it up at task 1.1, not at task 9.
 - [x] 7.1 Registry entries + `Settings`/`RuntimeState` + `.env.example` (established 5-step pattern): `markov_meme_min_joint_count`, `markov_meme_min_support`, `markov_meme_recency_factor`, `markov_collocation_max_entries`, `markov_collocation_bonus`, `markov_collocation_break_penalty`, plus the hot-ngram ordering switch
 - [x] 7.2 Bonus, penalty and meme-aware ordering default to neutral; bounds validated on both paths
 - [x] 7.3 `markov_meme_min_joint_count` has a lower bound above the value at which the analysis stops meaning anything (spec: `runtime-knob-validation`)
-- [ ] 7.4 `/config full` surfaces the scoring knobs; `/stats` surfaces the registry size by status
+- [x] 7.4 `/config full` surfaces the scoring knobs; `/stats` surfaces the registry size by status
 
 ## 8. Tests
 

@@ -34,12 +34,15 @@ async def cmd_stats(
     # Показывается только объём модели, поэтому и читается только он: полный
     # срез (`get_stats`) — это пять COUNT-ов по чату, из которых команда не
     # печатает ни одного. Телеметрия генерации — счётчики процесса, без
-    # обращений к базе.
+    # обращений к базе. Реестр коллокаций (M2R-300) — один GROUP BY по чату.
     volume = await db.get_chat_token_volume(message.chat.id)
+    collocations = await db.collocations.count_by_status(message.chat.id)
     await reply_humanized_state(
         message,
         format_stats_message(
-            {"volume": volume}, telemetry=generator.telemetry.snapshot()
+            {"volume": volume},
+            telemetry=generator.telemetry.snapshot(),
+            collocations=collocations,
         ),
         runtime_state,
     )

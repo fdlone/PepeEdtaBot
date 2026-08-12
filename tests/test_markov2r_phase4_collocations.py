@@ -409,5 +409,39 @@ class TestTokenizationUntouched(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class TestMemePassTelemetry(unittest.IsolatedAsyncioTestCase):
+    """Task 4.3: each analyzer pass lands in process telemetry, not only logs."""
+
+    async def test_maintenance_pass_records_duration_and_scored_pairs(
+        self,
+    ) -> None:
+        from app.infrastructure.database import MaintenanceOutcome
+        from app.services.learning_service import LearningService
+        from app.services.meme_analyzer import AnalysisResult
+
+        db = MagicMock()
+        db.decay_flavor_stats_if_due = AsyncMock(
+            return_value=MaintenanceOutcome.DONE
+        )
+        db.list_chat_ids = AsyncMock(return_value=[1])
+        generator = MagicMock(spec=MarkovGenerator)
+        generator.telemetry = MagicMock()
+        service = LearningService(db, generator)
+        with patch(
+            "app.services.learning_service.analyze_chat_memes",
+            AsyncMock(
+                return_value=AnalysisResult(
+                    scored_pairs=500, stored_pairs=100, duration_ms=41.0
+                )
+            ),
+        ), patch(
+            "app.services.learning_service.mask_chat_id", return_value="chat"
+        ):
+            await service.run_due_maintenance()
+        generator.telemetry.note_meme_pass.assert_called_once_with(
+            scored_pairs=500, duration_ms=41.0
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

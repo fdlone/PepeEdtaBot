@@ -32,6 +32,11 @@ class GenerationTelemetry:
     collocation_bonus_hits: int = 0
     collocation_penalty_hits: int = 0
     collocation_withheld: int = 0
+    # M2R-300: cost of the daily analyzer passes. Growth of the corpus must
+    # show up as a number here before it shows up as a stall of the learn path.
+    meme_passes: int = 0
+    meme_scored_pairs: int = 0
+    meme_pass_ms_sum: float = 0.0
 
     def note_cache(self, *, hit: bool) -> None:
         if hit:
@@ -70,6 +75,11 @@ class GenerationTelemetry:
         self.collocation_penalty_hits += penalty_hits
         self.collocation_withheld += withheld
 
+    def note_meme_pass(self, *, scored_pairs: int, duration_ms: float) -> None:
+        self.meme_passes += 1
+        self.meme_scored_pairs += scored_pairs
+        self.meme_pass_ms_sum += duration_ms
+
     def snapshot(self) -> dict[str, float | int | None]:
         """Aggregates for ``/stats``; ``None`` where no data exists yet."""
         steps = self.diagnostic_steps
@@ -99,4 +109,11 @@ class GenerationTelemetry:
             "collocation_bonus_hits": self.collocation_bonus_hits,
             "collocation_penalty_hits": self.collocation_penalty_hits,
             "collocation_withheld": self.collocation_withheld,
+            "meme_passes": self.meme_passes,
+            "meme_scored_pairs": self.meme_scored_pairs,
+            "meme_mean_pass_ms": (
+                self.meme_pass_ms_sum / self.meme_passes
+                if self.meme_passes
+                else None
+            ),
         }

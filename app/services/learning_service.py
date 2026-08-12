@@ -295,6 +295,12 @@ class LearningService:
                 result.stored_pairs,
                 result.duration_ms,
             )
+            # Task 4.3 / generation-telemetry spec: duration and scored-pair
+            # count per pass, visible in /stats — no chat identifiers.
+            self._generator.telemetry.note_meme_pass(
+                scored_pairs=result.scored_pairs,
+                duration_ms=result.duration_ms,
+            )
 
     async def reset_short_layer(self, chat_id: int | None) -> None:
         """Discard the short layer (TZ §7.2), leaving the long one intact.
