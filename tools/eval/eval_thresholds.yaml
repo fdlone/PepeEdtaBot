@@ -38,6 +38,44 @@ phase2_entropy:
   # chains) — the check is that it does not raise it out of budget.
   latency_p95_ms_max: 150
 
+phase3_temporal:
+  # Registered 2026-08-12, BEFORE the Phase 3 grid was run and before the
+  # temporal fixture produced a single number.
+  #
+  # Roadmap doc 03 Phase 3 acceptance: "свежий лексикон отражается быстрее
+  # (временнóй срез); мем-регресс проходит". Encoded as a five-part gate; an arm
+  # passes only if ALL parts pass.
+  #
+  # The gate is deliberately two-sided. A one-sided "freshness went up" bar
+  # would pass an arm that simply forgets the chat — raising the fresh-token
+  # share to 1.0 is trivial if the long layer stops mattering. Phase 2 taught
+  # the matching lesson from the other direction: M2R-110 moved one metric in a
+  # welcome direction while paying for it in another, and only the paired floor
+  # made that visible as a trade rather than a win.
+  #
+  # must-improve: the share of generated tokens drawn from the fresh slice must
+  # rise AND the rise must be significant. An insignificant delta is a FAIL —
+  # reflecting fresh language is the stated benefit of this phase, so "no
+  # measurable effect" means the phase did not deliver.
+  freshness_delta_min: 0.0
+  # must-not-worsen: n-grams from the historical slice must stay reproducible.
+  # A significant drop disqualifies the arm. This is the meme-regression case of
+  # TZ §19 expressed as a comparable rate rather than a pass/fail list, because
+  # the gate needs a delta with an interval, not a boolean.
+  historical_meme_delta_floor: 0.0
+  # must-not-worsen, same convention and rationale as phase2_entropy: only a
+  # SIGNIFICANT increase in copying disqualifies; the protocol cannot resolve
+  # deltas below ~3 p.p. (doc 05 §8).
+  exact_copy_delta_max: 0.0
+  # must-not-worsen: topicality measured without copies may not drop
+  # significantly. Paired with exact_copy_delta_max on purpose — affinity is
+  # trivially inflated by copying, so the two are only meaningful together.
+  affinity_without_copy_delta_floor: 0.0
+  # TZ §17 budget, restated so this verdict is computable from this block alone.
+  # The blend adds per-step work, so unlike Phase 2 this bound is expected to be
+  # tested rather than comfortably cleared.
+  latency_p95_ms_max: 150
+
 phase5_promotion:
   # ADR-012 / TZ §9.6. A seeded candidate pool share of 0.3 means a "null"
   # seeded win rate of ~0.30 (winning its pool share = adding nothing), so the

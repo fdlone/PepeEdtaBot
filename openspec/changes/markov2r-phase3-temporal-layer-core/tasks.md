@@ -5,8 +5,8 @@ changes — see proposal.md.
 
 ## 1. Pre-registration (must land before any Phase 3 number is produced)
 
-- [ ] 1.1 Add the `phase3_temporal` block to `tools/eval/eval_thresholds.yaml` with the numbers and written rationale from design D9 (`freshness_delta_min`, `historical_meme_delta_floor`, `exact_copy_delta_max`, `affinity_without_copy_delta_floor`; latency reuses `performance`) — separate commit, before any grid runs
-- [ ] 1.2 Gate evaluation in the runner: verdict computed strictly from the file, printed with the numbers that produced it, `insufficient data` when an arm is missing
+- [x] 1.1 Add the `phase3_temporal` block to `tools/eval/eval_thresholds.yaml` with the numbers and written rationale from design D9 (`freshness_delta_min`, `historical_meme_delta_floor`, `exact_copy_delta_max`, `affinity_without_copy_delta_floor`; latency reuses `performance`) — separate commit, before any grid runs
+- [x] 1.2 Gate evaluation in the runner: verdict computed strictly from the file, printed with the numbers that produced it, `insufficient data` when an arm is missing
 
 ## 2. Migration (M2R-200)
 
