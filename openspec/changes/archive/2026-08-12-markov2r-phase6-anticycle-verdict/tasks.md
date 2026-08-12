@@ -29,4 +29,4 @@ the phase — it builds no feature (M2R-600/610 are NOT implemented).
 
 - [x] 5.1 `openspec validate --strict` green for this change
 - [x] 5.2 Full test suite + lint/type checks; CI smoke green — 1122 tests OK, ruff/mypy clean, smoke ok
-- [ ] 5.3 Archive this change after merge
+- [x] 5.3 Archive this change after merge
