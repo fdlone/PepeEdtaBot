@@ -277,7 +277,11 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # Normalized entropy at which the temperature is left alone. Set from the
     # measured mean H_norm of the corpus so the knob redistributes temperature
     # between confident and open steps instead of shifting every step at once.
-    FieldSpec("markov_entropy_pivot", "MARKOV_ENTROPY_PIVOT", "0.5",
+    # 0.21 measured on db_prod_copy via the eval runner (mean branching 3.09):
+    # this chat's pools are wide but sharply peaked. A hand-picked 0.5 would
+    # have put almost every step below the pivot, turning the knob into a
+    # global temperature shift — exactly the confound the pivot exists to avoid.
+    FieldSpec("markov_entropy_pivot", "MARKOV_ENTROPY_PIVOT", "0.21",
               _float_in_range(0.0, 1.0)),
     # Safety clamp on the resulting temperature. Defaults bracket the reachable
     # T_base range (~1.4..4.2 for RANDOMNESS_STRENGTH 0..3) with margin, so at

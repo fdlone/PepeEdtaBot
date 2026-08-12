@@ -24,7 +24,7 @@ No schema change and no migration in this phase (TZ §6 is sampling-only).
 
 - [x] 4.1 Running mean of accepted candidates' `mean_branching` in the response generator; target recomputed after each accepted candidate, never below the floor, never above `CANDIDATE_TARGET`, attempt budget untouched (design D6)
 - [x] 4.2 Disabled knob ⇒ target is exactly the previous constant
-- [ ] 4.3 Record the second-order effect on slot mutation (`target` also caps mutations) so it is visible in the report, not discovered later
+- [x] 4.3 Record the second-order effect on slot mutation (`target` also caps mutations) so it is visible in the report, not discovered later
 
 ## 5. Unit tests
 
@@ -53,25 +53,25 @@ No schema change and no migration in this phase (TZ §6 is sampling-only).
 
 ## 9. Eval — ablation and calibration (doc 05)
 
-- [ ] 9.1 `tools/eval/matrix.yaml`: `C1`, `C1a`, `C1b`, `C1flat` per design D7; `available: true` only for what this phase actually ships
-- [ ] 9.2 Read `H_pivot` from the measured mean normalized entropy on the eval corpus and record the number in the report (design D3) — not a hand-picked value
-- [ ] 9.3 Calibration grid on `db_prod_copy`: gain ∈ {−0.6, −0.3, 0, +0.3, +0.6}, protocol volumes (500 generations × seeds 42/1337/2026), bootstrap CIs
-- [ ] 9.4 Flat-temperature control arm matched to the winning entropy arm's mean applied temperature (design D5)
-- [ ] 9.5 Latency: p50/p95 for every arm against the 150 ms budget, both features separately (M2R-110 is expected to reduce attempts — verify rather than assume)
-- [ ] 9.6 Report in `docs/eval_reports/`, referenced from this change: per-arm table with CIs, the gate verdict, the `distinct_basis_tokens` denominators, and the slot-mutation side effect from 4.3
-- [ ] 9.7 CI smoke stays green on `snapshot_synthetic`
+- [x] 9.1 `tools/eval/matrix.yaml`: `C1`, `C1a`, `C1b`, `C1flat` per design D7; `available: true` only for what this phase actually ships
+- [x] 9.2 Read `H_pivot` from the measured mean normalized entropy on the eval corpus and record the number in the report (design D3) — not a hand-picked value
+- [x] 9.3 Calibration grid on `db_prod_copy`: gain ∈ {−0.6, −0.3, 0, +0.3, +0.6}, protocol volumes (500 generations × seeds 42/1337/2026), bootstrap CIs
+- [x] 9.4 Flat-temperature control arm — **not run, and that is the correct outcome**: the control exists to prove a *winning* entropy arm was not just a global temperature shift. No arm won, so there is nothing to control for (design D5).
+- [x] 9.5 Latency: p50/p95 for every arm against the 150 ms budget, both features separately (M2R-110 is expected to reduce attempts — verify rather than assume)
+- [x] 9.6 Report in `docs/eval_reports/`, referenced from this change: per-arm table with CIs, the gate verdict, the `distinct_basis_tokens` denominators, and the slot-mutation side effect from 4.3
+- [x] 9.7 CI smoke stays green on `snapshot_synthetic`
 
 ## 10. Default decision (gate)
 
-- [ ] 10.1 Gate passes ⇒ raise `markov_entropy_temp_gain` (and the branching knob, if its own arm passed) to the calibrated defaults in this change, citing the report
-- [ ] 10.2 Gate fails ⇒ defaults stay neutral; record the negative result with numbers in `docs/v2/00_STATUS.md` and reference the report — a closed phase with a documented number is a valid outcome
-- [ ] 10.3 Never adjust a pre-registered threshold to make the gate pass; if a threshold turns out wrong, that is a separate commit with justification and owner approval
+- [x] 10.1 Gate passed ⇒ raise the defaults — **not applicable: the gate failed on all six arms**, so 10.2 is the branch that applies. Only the pivot moved to its measured value (0.21), which is inert while gain is 0.
+- [x] 10.2 Gate fails ⇒ defaults stay neutral; record the negative result with numbers in `docs/v2/00_STATUS.md` and reference the report — a closed phase with a documented number is a valid outcome
+- [x] 10.3 Never adjust a pre-registered threshold to make the gate pass; if a threshold turns out wrong, that is a separate commit with justification and owner approval
 
 ## 11. Documentation
 
-- [ ] 11.1 `docs/v2/00_STATUS.md`: Phase 2 row + "next session" section pointed at Phase 3
-- [ ] 11.2 `.env.example` entries with bounds and one-line meanings; `GENERATION_PIPELINE.md` / `ARCHITECTURE.md` updated where the sampling step is described
-- [ ] 11.3 ADR open question #2 ("which entropy → temperature mapping works better") answered in the report and marked as answered in the change
+- [x] 11.1 `docs/v2/00_STATUS.md`: Phase 2 row + "next session" section pointed at Phase 3
+- [x] 11.2 `.env.example` entries with bounds and one-line meanings; `GENERATION_PIPELINE.md` / `ARCHITECTURE.md` updated where the sampling step is described
+- [x] 11.3 ADR open question #2 ("which entropy → temperature mapping works better") answered in the report and marked as answered in the change
 
 ## 12. Housekeeping riding along (no functional content)
 

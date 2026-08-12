@@ -17,8 +17,10 @@ from .prompts import PromptSet
 from .run import ConfigRun
 
 # Phase 2 arms (doc 05 §2 + the "one arm per knob" rule): the shipped
-# combination, each knob alone, and the flat-temperature control.
-PHASE2_ARMS = ("C1", "C1a", "C1b", "C1flat")
+# combination C1, each knob alone (C1a/C1b), the flat-temperature control
+# (C1flat), and any calibration variant of the grid. Prefix-matched so a
+# calibration run gets a per-arm verdict without editing this list.
+PHASE2_ARM_PREFIX = "C1"
 
 # Canonical §3 order for the metrics table.
 METRIC_ORDER = (
@@ -175,7 +177,9 @@ def evaluate_gates(
     rows: list[tuple[str, str, str]] = []
     baseline = runs.get("C0")
 
-    phase2_arms = [arm for arm in PHASE2_ARMS if arm in runs]
+    phase2_arms = sorted(
+        arm for arm in runs if arm.startswith(PHASE2_ARM_PREFIX)
+    )
     if baseline is None or not phase2_arms:
         rows.append(
             (
@@ -351,6 +355,32 @@ def build_report(
             if hit_rates
             else INSUFFICIENT
         )
+        # M2R-100: the entropy the sampler saw and the temperature it applied.
+        # The pivot is set from the first of these, so a later reader can audit
+        # that it was measured rather than picked.
+        entropies = [
+            float(value)
+            for snapshot in run.telemetry
+            if (value := snapshot.get("mean_normalized_entropy")) is not None
+        ]
+        temperatures = [
+            float(value)
+            for snapshot in run.telemetry
+            if (value := snapshot.get("mean_applied_temperature")) is not None
+        ]
+        branchings = [
+            float(value)
+            for snapshot in run.telemetry
+            if (value := snapshot.get("mean_branching")) is not None
+        ]
+        entropy_line = (
+            f"{mean(entropies):.3f} (branching {mean(branchings):.2f})"
+            if entropies and branchings
+            else INSUFFICIENT
+        )
+        temperature_line = (
+            f"{mean(temperatures):.2f}" if temperatures else INSUFFICIENT
+        )
         shadow_shares = [
             snapshot["shadow_order4_selected_share"]
             for snapshot in run.telemetry
@@ -369,6 +399,8 @@ def build_report(
             "comparable only at equal basis; "
             f"latency p50/p95 = {latencies['latency_p50']:.1f}/"
             f"{latencies['latency_p95']:.1f} ms; cache_hit_rate: {hit_line}; "
+            f"mean normalized entropy: {entropy_line}; "
+            f"mean applied temperature: {temperature_line}; "
             f"shadow order-4 share: {shadow_line}; storage_delta: n/a."
         )
     lines.append("")
