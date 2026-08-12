@@ -28,6 +28,51 @@ metric here can measure.
 - **WHEN** the meme-aware configuration significantly raises copying or lowers copy-free topicality
 - **THEN** the gate fails regardless of how the manual rating came out
 
+### Requirement: The rating round carries a blind control and validity decoys
+
+The rated list SHALL mix the association-ranked memes with an equally sized
+selection from the frequency-based mechanism they are meant to replace, plus a
+small number of decoy pairs drawn from neither, all shuffled and presented
+without their source. Raters SHALL NOT be told which item came from where.
+
+The association half SHALL be required to score no lower than the frequency
+half. The requirement is "no worse" rather than "measurably better" on purpose:
+one binary judgement over twenty items cannot resolve a difference of a few
+positions, and a gate no achievable evidence can pass is a veto rather than a
+gate. The observed difference SHALL be reported as a number regardless.
+
+An absolute share alone SHALL NOT decide this gate, because a lenient rater
+raises every share and a strict one lowers every share — the absolute number
+measures the rater as much as the ranking, while the difference between halves
+does not.
+
+#### Scenario: Association ranking ties the frequency control
+
+- **WHEN** both halves are rated genuine at the same share and the absolute bar is met
+- **THEN** the gate passes on this condition, and the report shows the difference as approximately zero
+
+#### Scenario: Association ranking scores below the control
+
+- **WHEN** the association half is rated genuine less often than the frequency half
+- **THEN** the gate fails, because the mechanism being replaced performed better
+
+#### Scenario: Raters see no sources
+
+- **WHEN** the rating list is produced
+- **THEN** items from all three sources are shuffled together and carry no marking, and the mapping back to sources is kept separate from the list that is sent out
+
+### Requirement: A noisy rating round is undecided, not failed
+
+When the decoy items are rated genuine more often than a configured bar, the
+round SHALL be reported as `insufficient data` rather than `fail`. A rating
+round whose own controls failed says nothing about the phase, and recording it
+as a failure would later be read as evidence the approach does not work.
+
+#### Scenario: Decoys rated as genuine memes
+
+- **WHEN** the decoy false-positive share exceeds the bar
+- **THEN** the verdict is insufficient data, the decoy share is named as the reason, and neither half's share is treated as meaningful
+
 ### Requirement: Manual ratings are versioned without leaking chat content
 
 The result of a manual rating round SHALL be recorded alongside the run it

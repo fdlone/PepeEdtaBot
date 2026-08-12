@@ -331,12 +331,20 @@ def _phase4_arm_verdict(
 
     share_min = float(config.get("manual_real_share_min", 0.70))
     rated_min = int(config.get("manual_rated_min", 20))
+    control_floor = float(config.get("manual_control_delta_floor", 0.0))
+    decoy_max = float(config.get("manual_decoy_false_positive_max", 0.20))
     if manual is None:
         missing.append("manual top-meme rating (doc 05 §5)")
     else:
         rated = int(manual.get("rated", 0))
         real = int(manual.get("real", 0))
         share = real / rated if rated else 0.0
+        control_rated = int(manual.get("control_rated", 0))
+        control_real = int(manual.get("control_real", 0))
+        control_share = control_real / control_rated if control_rated else 0.0
+        decoy_rated = int(manual.get("decoy_rated", 0))
+        decoy_real = int(manual.get("decoy_real", 0))
+        decoy_share = decoy_real / decoy_rated if decoy_rated else 0.0
         raters = int(manual.get("raters", 0))
         agreement = manual.get("agreement")
         agreement_text = (
@@ -347,13 +355,30 @@ def _phase4_arm_verdict(
             else ""
         )
         parts.append(
-            f"manual: {real}/{rated} rated genuine ({share:.0%}, bar {share_min:.0%}), "
+            f"manual: meme {real}/{rated} genuine ({share:.0%}, bar {share_min:.0%}) "
+            f"vs frequency control {control_real}/{control_rated} "
+            f"({control_share:.0%}), Δ {share - control_share:+.0%}; "
+            f"decoys {decoy_real}/{decoy_rated} ({decoy_share:.0%}); "
             f"{raters} rater(s){agreement_text}"
         )
-        if rated < rated_min:
+        # Validity first: if the decoys were rated genuine this often, neither
+        # share means anything and the round is undecided rather than failed.
+        if decoy_rated and decoy_share > decoy_max:
+            missing.append(
+                f"a usable rating round (decoy false-positive {decoy_share:.0%} "
+                f"over the {decoy_max:.0%} bar — the ratings are noise)"
+            )
+        elif rated < rated_min:
             failures.append(f"only {rated} memes rated, protocol requires {rated_min}")
-        elif share < share_min:
-            failures.append("genuine share below the bar")
+        else:
+            if share < share_min:
+                failures.append("genuine share below the bar")
+            if control_rated and (share - control_share) < control_floor:
+                failures.append(
+                    "meme ranking scored below the frequency selection it replaces"
+                )
+            if not control_rated:
+                missing.append("frequency-control half of the rating round")
 
     copy_max = float(config.get("exact_copy_delta_max", 0.0))
     copy_delta = _delta_part(

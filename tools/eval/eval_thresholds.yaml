@@ -94,6 +94,34 @@ phase4_memes:
   # top-20 and reporting the share would inflate it by letting the rater stop at
   # the good ones.
   manual_rated_min: 20
+  # STRENGTHENED 2026-08-12, before any rating round was run and before any
+  # Phase 4 ranking was rated — owner approved. Justification, recorded here
+  # because the pre-registration rule requires an edit to explain itself:
+  #
+  # The absolute bar above measures the RATER as much as the algorithm. A lenient
+  # rater marks more pairs "real" everywhere; a strict one marks fewer. The same
+  # list given to two people can land at 60% and 80% and flip the verdict.
+  #
+  # Worse, the absolute bar does not test what M2R-310 claims. The roadmap says
+  # "replace frequency selection WHERE IT WINS on eval". A pass at 75% while the
+  # frequency ranking it replaces also scores 75% would mean swapping a mechanism
+  # for an equivalent one and recording it as a success.
+  #
+  # So the rating round mixes the top-20 by meme_score with the top-20 by the
+  # existing frequency selection, blind and shuffled, and this floor requires the
+  # meme half to be NO WORSE than the frequency half. Deliberately "no worse"
+  # rather than "significantly better": one binary judgement over 20 items has no
+  # power to resolve a few positions, and a gate that no achievable evidence can
+  # pass is a veto, not a gate. The actual delta is printed as a number and read
+  # by a human — gated on what is provable, reported on what is interesting.
+  manual_control_delta_floor: 0.0
+  # Decoys (random pairs above the support threshold, in neither ranking) gate
+  # the VALIDITY of the round, not the quality of the phase. If they are marked
+  # "real" this often, the ratings are noise and neither share means anything —
+  # so the verdict is `insufficient data`, NOT `fail`. A bad measurement is not a
+  # failed phase, and merging those two outcomes is how "the round was junk" gets
+  # remembered as "PMI does not work".
+  manual_decoy_false_positive_max: 0.20
   # must-not-worsen, same convention and rationale as the earlier phases: only a
   # SIGNIFICANT move against us disqualifies, since the protocol cannot resolve
   # deltas below ~3 p.p. (doc 05 §8). Memes that raise copying are not memes,
