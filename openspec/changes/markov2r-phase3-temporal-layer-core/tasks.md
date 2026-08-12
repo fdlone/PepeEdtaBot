@@ -99,7 +99,7 @@ changes — see proposal.md.
 ## 14. Phase 2 decision (what this phase was asked to unblock)
 
 - [x] 14.1 Present the entropy comparison from 12.5 to the owner with a recommendation: keep the disabled Phase 2 code for re-measurement, or delete it as dead weight
-- [ ] 14.2 Record the owner's decision in `docs/v2/00_STATUS.md`; if the answer is "re-measure", note that it requires a **new** pre-registered gate — `phase2_entropy` is spent
+- [x] 14.2 Record the owner's decision in `docs/v2/00_STATUS.md`; if the answer is "re-measure", note that it requires a **new** pre-registered gate — `phase2_entropy` is spent
 
 ## 15. Documentation
 
