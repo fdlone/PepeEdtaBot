@@ -409,6 +409,117 @@ class TestTokenizationUntouched(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class TestRegistryLifecycle(unittest.IsolatedAsyncioTestCase):
+    """Task 8.2: capacity, statuses, and retirement that never touches the chain."""
+
+    CHAT = 4242
+
+    async def asyncSetUp(self) -> None:
+        import uuid
+        from pathlib import Path
+
+        from app.infrastructure.database import Database
+
+        self.db_path = Path(f"test_colloc_{uuid.uuid4().hex}.sqlite")
+        self.db = Database(str(self.db_path))
+        await self.db.init()
+
+    async def asyncTearDown(self) -> None:
+        await self.db.close()
+        self.db_path.unlink(missing_ok=True)
+
+    async def _learn(self, texts: list[str]) -> None:
+        for text in texts:
+            await self.db.save_message_and_update_model(
+                chat_id=self.CHAT, raw_text=text, tokens=tokenize(text)
+            )
+
+    async def _analyze(self, *, max_entries: int = 100) -> None:
+        from app.services.meme_analyzer import analyze_chat_memes
+
+        await analyze_chat_memes(
+            self.db.collocations,
+            self.CHAT,
+            now=1_700_000_000,
+            min_joint_count=3,
+            min_support=3.0,
+            recency_days=30.0,
+            max_entries=max_entries,
+        )
+
+    def _corpus(self) -> list[str]:
+        # «крутой бобёр» is the only fully devoted pair: every other token of
+        # the meme sentences also occurs solo in the filler, so every other
+        # adjacent pair has inflated marginals and a strictly weaker
+        # association. Without this the top spot is a tie and the capacity
+        # test would assert an arbitrary winner.
+        filler = [
+            "сегодня отличная погода на улице",
+            "пойдём вечером гулять в парк",
+            "кто пришёл вчера на новый фильм",
+            "этот чат сегодня оживился",
+            "гнойный день выдался тяжёлым",
+            "какой-то пидор припарковался поперёк",
+            "опять понедельник и куча работы",
+            "здесь было тихо всю неделю",
+        ]
+        return (
+            filler * 2
+            + ["крутой бобёр пришёл в чат"] * 4
+            + ["гнойный пидор опять здесь"] * 4
+        )
+
+    async def test_capacity_keeps_only_the_top_scoring_pairs(self) -> None:
+        await self._learn(self._corpus())
+        await self._analyze(max_entries=1)
+        active = await self.db.collocations.get_active(self.CHAT)
+        self.assertEqual(len(active), 1)
+        self.assertIn(("крутой", "бобёр"), active)
+
+    async def test_non_active_statuses_do_not_reach_scoring(self) -> None:
+        await self._learn(self._corpus())
+        await self._analyze()
+        self.assertIn(("крутой", "бобёр"), await self.db.collocations.get_active(self.CHAT))
+
+        await self.db.collocations.set_status(
+            self.CHAT, "крутой", "бобёр", "candidate"
+        )
+        self.assertNotIn(
+            ("крутой", "бобёр"), await self.db.collocations.get_active(self.CHAT)
+        )
+
+    async def test_retirement_stops_scoring_and_never_touches_the_chain(
+        self,
+    ) -> None:
+        await self._learn(self._corpus())
+        await self._analyze()
+
+        conn = await self.db._get_conn()
+        cursor = await conn.execute(
+            "SELECT w1, w2, w3, cnt FROM transitions WHERE chat_id = ? ORDER BY 1,2,3",
+            (self.CHAT,),
+        )
+        chain_before = await cursor.fetchall()
+
+        await self.db.collocations.set_status(
+            self.CHAT, "крутой", "бобёр", "retired"
+        )
+        self.assertNotIn(
+            ("крутой", "бобёр"), await self.db.collocations.get_active(self.CHAT)
+        )
+        # The next pass must not resurrect a retired entry (design D3)...
+        await self._analyze()
+        self.assertNotIn(
+            ("крутой", "бобёр"), await self.db.collocations.get_active(self.CHAT)
+        )
+        # ...and nothing in the lifecycle may alter what the chat learned.
+        cursor = await conn.execute(
+            "SELECT w1, w2, w3, cnt FROM transitions WHERE chat_id = ? ORDER BY 1,2,3",
+            (self.CHAT,),
+        )
+        self.assertEqual(await cursor.fetchall(), chain_before)
+
+
 class TestMemePassTelemetry(unittest.IsolatedAsyncioTestCase):
     """Task 4.3: each analyzer pass lands in process telemetry, not only logs."""
 
