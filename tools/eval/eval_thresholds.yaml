@@ -76,6 +76,33 @@ phase3_temporal:
   # tested rather than comfortably cleared.
   latency_p95_ms_max: 150
 
+phase4_memes:
+  # Registered 2026-08-12, BEFORE any Phase 4 ranking was produced or rated.
+  #
+  # Doc 05 §5 fixes the manual protocol: the top-20 by meme_score are rated
+  # "real local meme / merely frequent / junk", and the phase passes at >= 70%
+  # real. That bar is the primary condition and it is NOT computable — the thing
+  # this phase claims to improve (does the bot sound like THIS chat) is exactly
+  # the thing no metric in this harness can see.
+  #
+  # Consequence encoded in the runner rather than left to discipline: while the
+  # manual rating is missing the gate reports `insufficient data`, never `pass`.
+  # An automatic-only verdict here would be a green light bought by measuring
+  # the easy half.
+  manual_real_share_min: 0.70
+  # How many of the ranked memes must be rated. Rating fewer than the protocol's
+  # top-20 and reporting the share would inflate it by letting the rater stop at
+  # the good ones.
+  manual_rated_min: 20
+  # must-not-worsen, same convention and rationale as the earlier phases: only a
+  # SIGNIFICANT move against us disqualifies, since the protocol cannot resolve
+  # deltas below ~3 p.p. (doc 05 §8). Memes that raise copying are not memes,
+  # they are quotes — this pairing is what tells the two apart.
+  exact_copy_delta_max: 0.0
+  affinity_without_copy_delta_floor: 0.0
+  # TZ §17 budget, restated so this verdict is computable from this block alone.
+  latency_p95_ms_max: 150
+
 phase5_promotion:
   # ADR-012 / TZ §9.6. A seeded candidate pool share of 0.3 means a "null"
   # seeded win rate of ~0.30 (winning its pool share = adding nothing), so the
