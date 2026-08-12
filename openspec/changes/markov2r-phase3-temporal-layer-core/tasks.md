@@ -57,12 +57,12 @@ changes — see proposal.md.
 - [x] 8.2 Compression: both shapes preserve the order of preference; a 10000-vs-20 count pair leaves the smaller non-negligible
 - [x] 8.3 Blend: union coverage, token present in only one layer stays reachable, empty layer degenerates, α = 0 and α = 1 endpoints
 - [x] 8.4 Half-life reset: short layer emptied, long layer and timestamps untouched, no-op when the value is unchanged
-- [ ] 8.5 Cache: a pool cached at t₀ and read at t₁ yields the same weights as an uncached read at t₁
+- [x] 8.5 Cache: a pool cached at t₀ and read at t₁ yields the same weights as an uncached read at t₁
 
 ## 9. Property / invariant tests (TZ §19)
 
 - [x] 9.1 Blending any two valid distributions at any legal α yields a valid distribution: finite, non-negative, sums to 1
-- [ ] 9.2 Determinism: same seed + same settings + same `now` ⇒ identical output, cached or not
+- [x] 9.2 Determinism: same seed + same settings + same `now` ⇒ identical output, cached or not
 - [x] 9.3 `s_eff` monotonically non-increasing between observations, for any legal half-life
 - [ ] 9.4 Learning is atomic across both layers under a mid-transaction failure
 
@@ -74,10 +74,10 @@ changes — see proposal.md.
 
 ## 11. Temporal eval fixture (owner decision 2026-08-12)
 
-- [ ] 11.1 `tools/eval/temporal_fixture.py`: replay a snapshot's retained messages in timestamp order through the real learning arithmetic into a separate database; source opened read-only (design D8)
+- [x] 11.1 `tools/eval/temporal_fixture.py`: replay a snapshot's retained messages in timestamp order through the real learning arithmetic into a separate database; source opened read-only (design D8)
 - [ ] 11.2 Deterministic: two builds from the same source and parameters produce byte-identical metric results
-- [ ] 11.3 Report provenance: snapshot labelled as reconstructed, with its time span and fresh-slice size printed
-- [ ] 11.4 `freshness_reflection` implemented per doc 05 §3 against the fresh slice; still `insufficient data` on snapshots without observation times
+- [x] 11.3 Report provenance: snapshot labelled as reconstructed, with its time span and fresh-slice size printed
+- [x] 11.4 `freshness_reflection` implemented per doc 05 §3 against the fresh slice; still `insufficient data` on snapshots without observation times
 - [ ] 11.5 Historical-meme check draws its n-gram list from the full snapshot's `chat_verbatim_ngrams`, not from the fixture's own old rows (design D8)
 
 ## 12. Eval — ablation and grid
@@ -104,8 +104,8 @@ changes — see proposal.md.
 ## 15. Documentation
 
 - [ ] 15.1 `docs/v2/00_STATUS.md`: Phase 3 row + "next session" section pointed at M2R-215 calibration
-- [ ] 15.2 `.env.example` entries with bounds and one-line meanings; `GENERATION_PIPELINE.md` / `ARCHITECTURE.md` updated where sampling and learning are described
-- [ ] 15.3 Record in doc 05 that `snapshot_temporal` now has a build path, and that the v1.0.1 amendment's "physically impossible" clause applies only to retrospective live history
+- [x] 15.2 `.env.example` entries with bounds and one-line meanings; `GENERATION_PIPELINE.md` / `ARCHITECTURE.md` updated where sampling and learning are described
+- [x] 15.3 Record in doc 05 that `snapshot_temporal` now has a build path, and that the v1.0.1 amendment's "physically impossible" clause applies only to retrospective live history
 
 ## 16. Housekeeping riding along (no functional content)
 
