@@ -11,22 +11,22 @@ the phase — it builds no feature (M2R-600/610 are NOT implemented).
 
 ## 2. Decisive measurement
 
-- [ ] 2.1 Measure `cycle_detection_rate` at increased volume on the frozen C0 config (reuse `has_token_cycle` + the eval's C0 resolution; do not build a second detector) — record the rate and its CI
-- [ ] 2.2 Confirm the interval is decisively below 0.05 (whole CI under the bar); if — unexpectedly — it is not, STOP and report (the verdict would change)
+- [x] 2.1 Measure `cycle_detection_rate` at increased volume on the frozen C0 config (reuse `has_token_cycle` + the eval's C0 resolution; do not build a second detector) — record the rate and its CI — **9000 gens, 1 cyclic reply, 0.0001 [0.0000, 0.0003]**
+- [x] 2.2 Confirm the interval is decisively below 0.05 (whole CI under the bar); if — unexpectedly — it is not, STOP and report (the verdict would change) — CI upper bound 0.0003, **167× below** the bar; decisive
 
 ## 3. Verdict report
 
-- [ ] 3.1 Protocol/verdict run producing the Phase 6 gate row; report in `docs/eval_reports/`, referenced from this change
-- [ ] 3.2 Report shows: detection rate + CI vs 0.05, the automatic harm component, and that the manual harm round was not required (AND-gate, detection arm decisively fails)
+- [x] 3.1 Protocol/verdict run producing the Phase 6 gate row; report in `docs/eval_reports/`, referenced from this change — `eval_2026-08-12_phase6-verdict.md` (gate-row rendering proven by `TestPhase6Gate`)
+- [x] 3.2 Report shows: detection rate + CI vs 0.05, the automatic harm component, and that the manual harm round was not required (AND-gate, detection arm decisively fails)
 
 ## 4. Record the decision
 
-- [ ] 4.1 `docs/v2/00_STATUS.md`: Phase 6 row → **closed without implementation**, with the numbers and a reference to the report
-- [ ] 4.2 Note in the roadmap/ADR trail that M2R-600/610 stay unbuilt and why (cycles rare: 50× below the detection bar), so it is not rediscovered as an idea
-- [ ] 4.3 Never adjust a pre-registered threshold to change the verdict (ADR-017)
+- [x] 4.1 `docs/v2/00_STATUS.md`: Phase 6 row → **closed without implementation**, with the numbers and a reference to the report
+- [x] 4.2 Note in the roadmap/ADR trail that M2R-600/610 stay unbuilt and why (cycles rare: whole CI 167× below the detection bar), so it is not rediscovered as an idea — ADR-015 trail
+- [x] 4.3 Never adjust a pre-registered threshold to change the verdict (ADR-017) — thresholds untouched
 
 ## 5. Close-out
 
-- [ ] 5.1 `openspec validate --strict` green for this change
-- [ ] 5.2 Full test suite + lint/type checks; CI smoke green
+- [x] 5.1 `openspec validate --strict` green for this change
+- [x] 5.2 Full test suite + lint/type checks; CI smoke green — 1122 tests OK, ruff/mypy clean, smoke ok
 - [ ] 5.3 Archive this change after merge
