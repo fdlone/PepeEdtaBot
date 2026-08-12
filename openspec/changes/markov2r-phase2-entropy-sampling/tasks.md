@@ -79,6 +79,6 @@ No schema change and no migration in this phase (TZ §6 is sampling-only).
 
 ## 13. Close-out
 
-- [ ] 13.1 `openspec validate --strict` green for this change
-- [ ] 13.2 Full test suite + lint/type checks as configured in the project
+- [x] 13.1 `openspec validate --strict` green for this change
+- [x] 13.2 Full test suite + lint/type checks as configured in the project
 - [ ] 13.3 Archive this change after merge
