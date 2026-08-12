@@ -176,6 +176,47 @@ class TestConfigFiles(unittest.TestCase):
             self.assertIn(gate, thresholds)
 
 
+class TestPhase7Gate(unittest.TestCase):
+    """Phase 7 shadow order-4 gate (ADR-002): a single-dimension sample-size
+    gate. Below the eligible bar it is insufficient; at or above it, a selected
+    share below the threshold renders fail — closing the phase without building
+    the order-4 index (change: markov2r-phase7-order4-verdict)."""
+
+    @staticmethod
+    def _run(*, eligible_per_seed: int, selected_share: float) -> ConfigRun:
+        # One telemetry snapshot per protocol seed, as run_matrix produces.
+        snap = {
+            "shadow_order4_eligible": eligible_per_seed,
+            "shadow_order4_selected_share": selected_share,
+        }
+        return ConfigRun(
+            config_id="C0",
+            records=[_record()],
+            telemetry=[dict(snap) for _ in range(3)],
+        )
+
+    def test_sufficient_sample_never_selected_renders_fail(self) -> None:
+        # 3 × 2000 = 6000 eligible (> 1000 bar), 0% selected (< 10% threshold).
+        rows = evaluate_gates(
+            {"C0": self._run(eligible_per_seed=2000, selected_share=0.0)},
+            load_thresholds(),
+        )
+        verdict, detail = next(
+            (row[1], row[2]) for row in rows if row[0] == "phase7_order4"
+        )
+        self.assertEqual(verdict, "fail")
+        self.assertIn("0.0%", detail)
+
+    def test_below_sample_bar_stays_insufficient(self) -> None:
+        # 3 × 200 = 600 eligible (< 1000), verdict withheld regardless of share.
+        rows = evaluate_gates(
+            {"C0": self._run(eligible_per_seed=200, selected_share=0.0)},
+            load_thresholds(),
+        )
+        verdict = next(row[1] for row in rows if row[0] == "phase7_order4")
+        self.assertEqual(verdict, "insufficient data")
+
+
 class TestPhase6Gate(unittest.TestCase):
     """Phase 6 rate×harm gate (ADR-015): a two-dimensional AND-gate closes when
     the detection arm is decisively below its threshold, without the manual harm
