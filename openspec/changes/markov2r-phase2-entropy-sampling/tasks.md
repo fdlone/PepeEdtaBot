@@ -75,7 +75,7 @@ No schema change and no migration in this phase (TZ §6 is sampling-only).
 
 ## 12. Housekeeping riding along (no functional content)
 
-- [ ] 12.1 `openspec archive report-pivo-mentions-to-owner` (all 16 tasks complete) — included here only to avoid a PR of its own; keep it in its own commit
+- [x] 12.1 `openspec archive report-pivo-mentions-to-owner` (all 16 tasks complete) — included here only to avoid a PR of its own; keep it in its own commit
 
 ## 13. Close-out
 
