@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.config.registry import RUNTIME_FIELDS
-from app.config.settings import Settings
+from app.config.settings import RuntimeTunables, Settings
 from app.core.mood import ChatMoodState, MoodConfig
 
 
@@ -25,115 +25,10 @@ class _MaintenanceCounter:
     value: int = 0
 
 
-def get_recent_deque(
-    store: dict[int, deque[str]], chat_id: int, maxlen: int
-) -> deque[str]:
-    """Per-chat bounded history from ``store``, created on first access."""
-    recent = store.get(chat_id)
-    if recent is None:
-        recent = deque(maxlen=maxlen)
-        store[chat_id] = recent
-    return recent
-
-
 @dataclass(slots=True)
-class RuntimeState:
-    reply_probability: float
-    min_cooldown_sec: int
-    min_tokens_for_model: int
-    max_reply_chars: int
-    max_reply_tokens: int
-    normalize_lower: bool
-    auto_capitalize_replies: bool
-    typing_min_ms: int
-    typing_max_ms: int
-    typing_per_char_ms: int
-    randomness_strength: float
-    candidate_selection_temperature: float
-    reply_flavor_strength: float
-    emoji_append_chance: float
-    repetition_penalty_strength: float
-    recent_reply_penalty_strength: float
-    verbatim_penalty_strength: float
-    length_mode_weights: tuple[float, float, float]
-    intonation_profile_strength: float
-    length_context_adaptation: float
-    markov_order: int
-    markov_cache_incremental: bool
-    markov_shadow_order4_enabled: bool
-    markov_entropy_temp_gain: float
-    markov_entropy_pivot: float
-    markov_entropy_temp_min: float
-    markov_entropy_temp_max: float
-    markov_branching_degenerate_max: float
-    markov_branching_candidate_floor: int
-    markov_short_half_life_days: float
-    markov_long_compression: str
-    markov_long_compression_beta: float
-    markov_alpha_sleepy: float
-    markov_alpha_calm: float
-    markov_alpha_lively: float
-    markov_alpha_heated: float
-    markov_meme_min_joint_count: int
-    markov_meme_min_support: float
-    markov_meme_recency_days: float
-    markov_collocation_max_entries: int
-    markov_collocation_bonus: float
-    markov_collocation_break_penalty: float
-    markov_hot_ngram_meme_ordering: bool
-    markov_seeded_candidate_ratio: float
-    markov_seed_branch_min: float
-    markov_seed_branch_ideal: float
-    markov_seed_branch_max: float
-    markov_seed_min_support: float
-    markov_seed_min_score: float
-    markov_seed_min_token_len: int
-    markov_seed_head_share: float
-    enable_backoff: bool
-    markov_jump_probability: float
-    context_jump_boost: float
-    verbatim_extension_share: float
-    order_mix_probability: float
-    slot_mutation_probability: float
-    hot_ngram_seed_chance: float
-    hot_ngram_min_count: int
-    hot_ngram_recency_share: float
-    rare_event_chance: float
-    false_start_chance: float
-    rare_event_daily_cap: int
-    user_quirk_chance: float
-    user_quirk_min_interactions: int
-    user_quirk_name_share: float
-    use_reply_context: bool
-    fuzzy_context_casefold: bool
-    reply_context_max_tokens: int
-    reply_context_bias: float
-    reply_context_start_bias: float
-    context_start_affinity: float
-    context_anchor_splice_probability: float
-    reply_context_only_for_replies: bool
-    reply_context_include_current_message: bool
-    pivo_recent_pool_window: int
-    pivo_temporal_flavor_chance: float
-    pivo_mention_by_id: bool
-    pivo_report_to_owner: bool
-    mood_enabled: bool
-    mood_modulation_strength: float
-    mood_ewma_alpha: float
-    mood_lively_rate_per_min: float
-    mood_sleepy_rate_per_min: float
-    mood_heated_intensity: float
-    mood_mention_heated_share: float
-    mood_max_rate_per_min: float
-    reply_director_enabled: bool
-    reply_probability_min: float
-    reply_probability_max: float
-    reply_burst_boost_sec: int
-    reply_burst_boost_mult: float
-    reply_burst_suppress_sec: int
-    reply_burst_suppress_mult: float
-    reply_max_per_hour: int
-    mention_cooldown_sec: int
+class RuntimeState(RuntimeTunables):
+    # Все runtime-mutable поля объявлены один раз в RuntimeTunables
+    # (settings.py); здесь остаётся только живое состояние процесса.
     runtime_state_ttl_sec: int
     runtime_state_max_chats: int
     last_reply_ts: dict[int, float] = field(default_factory=dict)

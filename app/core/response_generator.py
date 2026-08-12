@@ -4,12 +4,13 @@ import logging
 import math
 import random
 import time
+from collections import deque
 from collections.abc import Callable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from typing import Protocol
 
-from app.config.runtime_state import RuntimeState, get_recent_deque
+from app.config.runtime_state import RuntimeState
 from app.core import gen_trace_log
 from app.core.candidate_scorer import (
     CandidateScore,
@@ -217,8 +218,8 @@ def remember_recent_reply(
     normalized = normalize_reply_for_repeat(reply_text)
     if not normalized:
         return
-    recent = get_recent_deque(
-        runtime_state.recent_replies, chat_id, RECENT_REPLY_LIMIT
+    recent = runtime_state.recent_replies.setdefault(
+        chat_id, deque(maxlen=RECENT_REPLY_LIMIT)
     )
     recent.append(normalized)
 
@@ -415,7 +416,7 @@ class ResponseGenerator:
             incoming_tokens,
             self.runtime_state.length_context_adaptation,
         )
-        length_mode = sample_length_mode(conditioned_weights, rng)
+        length_mode = sample_length_mode(conditioned_weights, rng, base_weights)
         max_tokens = self.runtime_state.max_reply_tokens
         if length_mode == "short":
             max_tokens = min(max_tokens, SHORT_MODE_MAX_TOKENS)
@@ -446,6 +447,7 @@ class ResponseGenerator:
         request: GenerationRequest,
         candidate: str,
         rng: random.Random,
+        now: int,
     ) -> str | None:
         """Append a connective + fresh short walk to a 1:1 training-sample copy.
 
@@ -467,7 +469,10 @@ class ResponseGenerator:
             markov_order=state.markov_order,
             enable_backoff=state.enable_backoff,
             jump_probability=0.0,
+            order_mix_probability=state.order_mix_probability,
             entropy_sampling=self.entropy_sampling,
+            temporal_blend=self.temporal_blend,
+            now=now,
             rng=rng,
             attempt_budget=2,
         )
@@ -576,6 +581,12 @@ class ResponseGenerator:
         if not usable:
             return set()
         seeded_slots = max(1, round(target * state.markov_seeded_candidate_ratio))
+        # ``randomness_strength`` — шкала 0–3, а ``next_explore`` — вероятность
+        # (markov.py сравнивает её с rng.random()): сырое значение >= 1.0 делало
+        # исследование безусловным. Отображение то же, что в основном обходе
+        # (см. ``_generate_text_once`` в markov.py).
+        strength = max(0.0, min(3.0, state.randomness_strength))
+        next_explore = min(0.98, 0.12 + 0.18 * strength)
         seeded_texts: set[str] = set()
         for seed_score in usable[:seeded_slots]:
             tokens = await self.generator.generate_seeded_candidate(
@@ -583,7 +594,7 @@ class ResponseGenerator:
                 seed_score.token,
                 max_tokens=max_tokens,
                 head_share=state.markov_seed_head_share,
-                next_explore=state.randomness_strength,
+                next_explore=next_explore,
                 next_power=1.0,
                 repetition_penalty_strength=state.repetition_penalty_strength,
                 entropy_sampling=entropy_sampling,
@@ -871,7 +882,7 @@ class ResponseGenerator:
                     # the copy with отсебятина and re-run the gates on the
                     # combined text instead of discarding the attempt.
                     extended = await self._extend_verbatim_candidate(
-                        request, candidate, generation_rng
+                        request, candidate, generation_rng, now
                     )
                     if extended is not None:
                         gen_trace_log.log_attempt_extended(
@@ -902,7 +913,7 @@ class ResponseGenerator:
                     # get; keep the original candidate when the combined text
                     # fails the gates (the original already passed them).
                     extended = await self._extend_verbatim_candidate(
-                        request, candidate, generation_rng
+                        request, candidate, generation_rng, now
                     )
                     if extended is not None:
                         extended_tokens, _, extended_reject = (

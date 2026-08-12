@@ -1,4 +1,4 @@
-"""Tests for GroupOnly, AdminOrOwner filters and ThrottlingMiddleware."""
+"""Tests for GROUP_ONLY, AdminOrOwner filters and ThrottlingMiddleware."""
 from __future__ import annotations
 
 import unittest
@@ -28,26 +28,26 @@ def _make_admin_member(user_id: int) -> MagicMock:
     return m
 
 
-class TestGroupOnly(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self) -> None:
-        from app.filters import GroupOnly
-        self.f = GroupOnly()
+class TestGroupOnly(unittest.TestCase):
+    def setUp(self) -> None:
+        from app.filters import GROUP_ONLY
+        self.f = GROUP_ONLY
 
-    async def test_group_passes(self) -> None:
+    def test_group_passes(self) -> None:
         msg = _make_message(ChatType.GROUP)
-        self.assertTrue(await self.f(msg))
+        self.assertTrue(self.f.resolve(msg))
 
-    async def test_supergroup_passes(self) -> None:
+    def test_supergroup_passes(self) -> None:
         msg = _make_message(ChatType.SUPERGROUP)
-        self.assertTrue(await self.f(msg))
+        self.assertTrue(self.f.resolve(msg))
 
-    async def test_private_blocked(self) -> None:
+    def test_private_blocked(self) -> None:
         msg = _make_message(ChatType.PRIVATE)
-        self.assertFalse(await self.f(msg))
+        self.assertFalse(self.f.resolve(msg))
 
-    async def test_channel_blocked(self) -> None:
+    def test_channel_blocked(self) -> None:
         msg = _make_message(ChatType.CHANNEL)
-        self.assertFalse(await self.f(msg))
+        self.assertFalse(self.f.resolve(msg))
 
 
 class TestAdminOrOwner(unittest.IsolatedAsyncioTestCase):
@@ -228,7 +228,7 @@ class TestOwnerOnly(unittest.IsolatedAsyncioTestCase):
 
     async def test_private_chat_still_allowed_for_owner(self) -> None:
         # OwnerOnly itself doesn't restrict chat type; /set additionally
-        # chains GroupOnly() at the router level.
+        # chains GROUP_ONLY at the router level.
         msg = _make_message(ChatType.PRIVATE, user_id=42)
         settings = _make_settings(owner_id=42)
         self.assertTrue(await self.f(msg, settings))
@@ -357,6 +357,42 @@ class TestThrottlingMiddleware(unittest.IsolatedAsyncioTestCase):
         await mw(handler, msg, {})
         result = await mw(handler, msg, {})
         self.assertIsNone(result)
+
+    async def test_command_addressed_to_another_bot_skips_throttling(self) -> None:
+        # "/clear@OtherBot confirm" is another bot's traffic; it must neither
+        # be throttled nor burn this bot's cooldown.
+        from app.middlewares import ThrottlingMiddleware
+
+        mw = ThrottlingMiddleware(limits={"clear": 10.0}, bot_username="MyBot")
+        handler = AsyncMock(return_value="ok")
+        foreign = self._make_cmd_message("/clear@OtherBot confirm")
+        for _ in range(2):
+            self.assertEqual(await mw(handler, foreign, {}), "ok")
+        # And the cooldown for this bot's own /clear stays untouched.
+        own = self._make_cmd_message("/clear confirm")
+        self.assertEqual(await mw(handler, own, {}), "ok")
+
+    async def test_command_addressed_to_this_bot_is_throttled_case_insensitively(
+        self,
+    ) -> None:
+        from app.middlewares import ThrottlingMiddleware
+
+        mw = ThrottlingMiddleware(limits={"clear": 10.0}, bot_username="MyBot")
+        handler = AsyncMock(return_value="ok")
+        msg = self._make_cmd_message("/clear@mybot")
+        self.assertEqual(await mw(handler, msg, {}), "ok")
+        self.assertIsNone(await mw(handler, msg, {}))
+        handler.assert_awaited_once()
+
+    async def test_handler_exception_does_not_burn_cooldown(self) -> None:
+        # SQLITE_BUSY during /clear must not lock the user out for the window.
+        mw = self._make_middleware()
+        failing = AsyncMock(side_effect=RuntimeError("database is locked"))
+        msg = self._make_cmd_message("/clear")
+        with self.assertRaises(RuntimeError):
+            await mw(failing, msg, {})
+        handler = AsyncMock(return_value="ok")
+        self.assertEqual(await mw(handler, msg, {}), "ok")
 
     async def test_no_from_user_passes(self) -> None:
         mw = self._make_middleware()

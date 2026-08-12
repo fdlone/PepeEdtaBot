@@ -94,6 +94,30 @@ class TestSecretRedaction(unittest.TestCase):
 
         self.assertEqual(redact_secrets(secret).strip(), "")
 
+    def test_redacts_generic_secret_before_terminal_punctuation(self) -> None:
+        secret = "aB3_dE5-fG7_hJ9-kL2_mN4-pQ6"
+        result = redact_secrets(f"вот токен: {secret}.")
+
+        self.assertNotIn(secret, result)
+        self.assertIn("вот токен:", result)
+
+    def test_redacts_generic_secret_adjacent_to_punctuation(self) -> None:
+        secret = "aB3_dE5-fG7_hJ9-kL2_mN4-pQ6"
+        for wrapped in (
+            f"({secret})",
+            f'"{secret}"',
+            f"«{secret}»",
+            f"{secret},",
+        ):
+            with self.subTest(wrapped=wrapped):
+                self.assertNotIn(secret, redact_secrets(wrapped))
+
+    def test_redacts_hex_secret_adjacent_to_punctuation(self) -> None:
+        secret = "0123456789abcdef0123456789ABCDEF"
+        for wrapped in (f"{secret}.", f"({secret})", f'"{secret}"'):
+            with self.subTest(wrapped=wrapped):
+                self.assertNotIn(secret, redact_secrets(wrapped))
+
     def test_preserves_uuid(self) -> None:
         value = "123e4567-e89b-12d3-a456-426614174000"
 

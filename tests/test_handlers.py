@@ -77,6 +77,9 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.typing_per_char_ms = 0
     s.recent_fallbacks = {}
     s.recent_replies = {}
+    # Hourly-cap guard neutral by default: an empty history never trips the cap.
+    s.reply_max_per_hour = 20
+    s.recent_reply_times = {}
     s.recent_reply_penalty_strength = 1.0
     s.verbatim_penalty_strength = 0.0
     s.length_mode_weights = (0.25, 0.55, 0.2)
@@ -456,6 +459,112 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(base.effective(100).reply_probability, 0.1)
 
+    async def test_set_reset_half_life_wipes_the_chat_short_layer(self) -> None:
+        # M2R-210: dropping the override changes the effective half-life, and
+        # the short layer only means something against the half-life it
+        # accumulated under.
+        from app.handlers.admin import cmd_set
+
+        msg = _fake_message(
+            text="/set reset markov_short_half_life_days", chat_id=100
+        )
+        base = _real_runtime_state()
+        base.set_override(100, "markov_short_half_life_days", 7.0)
+        learning_service = AsyncMock()
+
+        await cmd_set(msg, base.effective(100), MagicMock(), base, learning_service)
+
+        learning_service.reset_short_layer.assert_awaited_once_with(100)
+        self.assertIn("короткий слой", msg.reply.await_args.args[0])
+
+    async def test_set_reset_half_life_equal_to_global_keeps_the_layer(self) -> None:
+        # The override equals the global value: the effective half-life does
+        # not change, so wiping the layer would throw data away for nothing.
+        from app.handlers.admin import cmd_set
+
+        msg = _fake_message(
+            text="/set reset markov_short_half_life_days", chat_id=100
+        )
+        base = _real_runtime_state()
+        base.set_override(100, "markov_short_half_life_days", 3.0)
+        learning_service = AsyncMock()
+
+        await cmd_set(msg, base.effective(100), MagicMock(), base, learning_service)
+
+        learning_service.reset_short_layer.assert_not_awaited()
+
+    async def test_set_global_half_life_compares_against_the_base(self) -> None:
+        # The invoking chat's override (7.0) equals the new value, but the
+        # BASE changes 3.0 -> 7.0 — every other chat's short layer must go.
+        from app.handlers.admin import cmd_set
+
+        msg = _fake_message(
+            text="/set global markov_short_half_life_days 7", user_id=42, chat_id=100
+        )
+        base = _real_runtime_state()
+        base.set_override(100, "markov_short_half_life_days", 7.0)
+        learning_service = AsyncMock()
+
+        await cmd_set(
+            msg, base.effective(100), MagicMock(owner_id=42), base, learning_service
+        )
+
+        self.assertEqual(base.markov_short_half_life_days, 7.0)
+        learning_service.reset_short_layer.assert_awaited_once_with(None)
+
+    async def test_set_global_half_life_unchanged_base_keeps_the_layers(self) -> None:
+        # The base stays 3.0; the invoking chat's differing override must not
+        # fake a change and trigger a global wipe.
+        from app.handlers.admin import cmd_set
+
+        msg = _fake_message(
+            text="/set global markov_short_half_life_days 3", user_id=42, chat_id=100
+        )
+        base = _real_runtime_state()
+        base.set_override(100, "markov_short_half_life_days", 7.0)
+        learning_service = AsyncMock()
+
+        await cmd_set(
+            msg, base.effective(100), MagicMock(owner_id=42), base, learning_service
+        )
+
+        learning_service.reset_short_layer.assert_not_awaited()
+
+    async def test_set_global_conflicting_with_a_chat_override_is_refused(self) -> None:
+        # Globally valid, but chat 200 overrode typing_max_ms below the new
+        # min — the refusal must name the conflicting chat.
+        from app.handlers.admin import cmd_set
+
+        msg = _fake_message(
+            text="/set global typing_min_ms 900", user_id=42, chat_id=100
+        )
+        base = _real_runtime_state()
+        base.set_override(200, "typing_max_ms", 500)
+
+        await cmd_set(
+            msg, base.effective(100), MagicMock(owner_id=42), base, AsyncMock()
+        )
+
+        self.assertEqual(base.typing_min_ms, 350)
+        text = msg.reply.await_args.args[0]
+        self.assertIn("Некорректное значение", text)
+        self.assertIn("200", text)
+
+    async def test_set_reset_breaking_the_chat_view_is_refused(self) -> None:
+        # Chat lowered both typing bounds; resetting only the min would pair
+        # the global min with the overridden max — an inverted band.
+        from app.handlers.admin import cmd_set
+
+        msg = _fake_message(text="/set reset typing_min_ms", chat_id=100)
+        base = _real_runtime_state()
+        base.set_override(100, "typing_min_ms", 100)
+        base.set_override(100, "typing_max_ms", 200)
+
+        await cmd_set(msg, base.effective(100), MagicMock(), base, AsyncMock())
+
+        self.assertEqual(base.effective(100).typing_min_ms, 100)
+        self.assertIn("Сброс не применён", msg.reply.await_args.args[0])
+
     def test_set_and_setprob_are_registered_for_chat_admins(self) -> None:
         from app.filters import AdminOrOwner
         from app.handlers.admin import cmd_set, cmd_setprob, router
@@ -550,7 +659,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("порог", text.lower())
 
     def test_quirk_stats_is_owner_only(self) -> None:
-        from app.filters import GroupOnly, OwnerOnly
+        from app.filters import GROUP_ONLY, OwnerOnly
         from app.handlers.admin import cmd_quirk_stats, router
 
         handler = next(
@@ -558,7 +667,9 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         )
         filter_types = {type(f.callback) for f in handler.filters or ()}
         self.assertIn(OwnerOnly, filter_types)
-        self.assertIn(GroupOnly, filter_types)
+        self.assertTrue(
+            any(f.magic is GROUP_ONLY for f in handler.filters or ())
+        )
 
     async def test_setprob_valid_value(self) -> None:
         from app.handlers.admin import cmd_setprob
@@ -698,7 +809,7 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         pivo_handlers.reset_quota_notice_state()
 
     def test_pivo_router_handlers_are_group_only(self) -> None:
-        from app.filters import GroupOnly
+        from app.filters import GROUP_ONLY
         from app.handlers.pivo import router
 
         expected = {
@@ -716,10 +827,12 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(set(handlers), expected)
         for name, handler in handlers.items():
-            callbacks = [filter_object.callback for filter_object in handler.filters]
             self.assertTrue(
-                any(isinstance(callback, GroupOnly) for callback in callbacks),
-                f"{name} must be registered with GroupOnly",
+                any(
+                    filter_object.magic is GROUP_ONLY
+                    for filter_object in handler.filters
+                ),
+                f"{name} must be registered with GROUP_ONLY",
             )
 
     async def test_pivo_calls_build_and_replies(self) -> None:
@@ -884,6 +997,26 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
             pivo_handlers._quota_notice_sent[key] -= (
                 pivo_handlers.QUOTA_NOTICE_WINDOW_SEC + 1.0
             )
+        await cmd_pivo(msg, pivo_service, state, bot, settings)
+
+        self.assertEqual(msg.reply.await_count, 2)
+
+    async def test_pivo_over_quota_failed_notice_does_not_consume_window(self) -> None:
+        # Окно отмечается после успешной отправки: упавший ответ не должен
+        # оставить повтор команды без объяснения на всё окно.
+        from app.handlers.pivo import cmd_pivo
+        msg = _fake_message()
+        msg.reply = AsyncMock(side_effect=[RuntimeError("telegram down"), None])
+        pivo_service = AsyncMock()
+        quota = MagicMock(allowed=False, limit=3, usage_day="2026-08-06")
+        pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
+        state = _fake_state()
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(return_value=[])
+        settings = MagicMock(owner_id=None)
+
+        with self.assertRaises(RuntimeError):
+            await cmd_pivo(msg, pivo_service, state, bot, settings)
         await cmd_pivo(msg, pivo_service, state, bot, settings)
 
         self.assertEqual(msg.reply.await_count, 2)
@@ -1195,7 +1328,7 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("by_id", reply_text)
 
     async def test_pivo_check_is_owner_only(self) -> None:
-        from app.filters import GroupOnly, OwnerOnly
+        from app.filters import GROUP_ONLY, OwnerOnly
         from app.handlers.pivo import cmd_pivo_check, router
 
         handler = next(
@@ -1203,7 +1336,9 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         )
         filter_types = {type(f.callback) for f in handler.filters or ()}
         self.assertIn(OwnerOnly, filter_types)
-        self.assertIn(GroupOnly, filter_types)
+        self.assertTrue(
+            any(f.magic is GROUP_ONLY for f in handler.filters or ())
+        )
 
     async def test_pivo_on_subscribes_user(self) -> None:
         from app.handlers.pivo import cmd_pivo_on
@@ -1713,6 +1848,73 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(generator.generate_text.await_count, 10)
         learning_service.record_message.assert_awaited_once()
         msg.reply.assert_awaited_once_with("Нормально")
+
+    async def test_profile_refresh_failure_does_not_abort_learning(self) -> None:
+        # Косметика /pivo-профиля не должна стоить обучения на сообщении.
+        from app.handlers.learning import on_text_message
+
+        msg = _fake_message(text="обычное сообщение из чата")
+        learning_service = AsyncMock()
+        learning_service.get_token_volume = AsyncMock(return_value=100)
+        learning_service.record_message = AsyncMock(return_value=102)
+        generator = _traced_generator()
+        state = self._reply_state()
+        pivo_service = _pivo_stub()
+        pivo_service.refresh_member.side_effect = RuntimeError("db busy")
+
+        with (
+            patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"),
+            self.assertLogs("chat_markov", level="WARNING") as captured,
+        ):
+            await on_text_message(
+                msg,
+                learning_service,
+                generator,
+                state,
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+                pivo_service,
+            )
+
+        learning_service.record_message.assert_awaited_once()
+        self.assertTrue(
+            any("profile refresh failed" in line for line in captured.output)
+        )
+
+    async def test_learn_failure_does_not_mask_the_respond_error(self) -> None:
+        # Ошибка respond() должна долететь до обработчика ошибок, а не быть
+        # подменённой сбоем pipeline.learn из finally; сбой learn — в логе.
+        from app.handlers import learning as learning_handlers
+        from app.handlers.learning import on_text_message
+
+        pipeline = AsyncMock()
+        pipeline.observe.return_value = MagicMock()
+        pipeline.respond.side_effect = RuntimeError("respond down")
+        pipeline.learn.side_effect = RuntimeError("learn down")
+        pipeline.run_due_maintenance.return_value = None
+
+        with (
+            patch.object(learning_handlers, "ReplyPipeline", return_value=pipeline),
+            self.assertLogs("chat_markov", level="ERROR") as captured,
+            self.assertRaises(RuntimeError) as ctx,
+        ):
+            await on_text_message(
+                _fake_message(text="обычное сообщение из чата"),
+                AsyncMock(),
+                _traced_generator(),
+                self._reply_state(),
+                "PepeEdtaBot",
+                777,
+                frozenset({"pepe", "пепе"}),
+                _pivo_stub(),
+            )
+
+        self.assertEqual(str(ctx.exception), "respond down")
+        self.assertTrue(
+            any("learning failed" in line for line in captured.output)
+        )
+        pipeline.run_due_maintenance.assert_awaited_once()
 
     async def test_message_is_persisted_when_cooldown_blocks_reply(self) -> None:
         from app.handlers.learning import on_text_message

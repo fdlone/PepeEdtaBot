@@ -64,6 +64,15 @@ def apply_reply_flavor(
         drop_below = drop_probability * scale
         ellipsis_below = drop_below + ellipsis_probability * scale
         exclaim_below = ellipsis_below + exclamation_probability * scale
+        # Profile-blended probabilities times scale can push the cumulative
+        # threshold past 1.0 (ending_none_share=0.9 at strength 2.0 gives
+        # drop_below=1.8): the first branch became deterministic and the
+        # ellipsis/exclamation branches unreachable. Renormalize proportionally
+        # so the three transforms keep their relative shares.
+        if exclaim_below > 1.0:
+            drop_below /= exclaim_below
+            ellipsis_below /= exclaim_below
+            exclaim_below = 1.0
         body = stripped[:-1].rstrip()
         if not body:
             return stripped

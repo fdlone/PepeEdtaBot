@@ -68,7 +68,7 @@ class TestCumulativeVerbatimIndex(unittest.IsolatedAsyncioTestCase):
                 raw_text="совсем другое",
                 tokens=["совсем", "другое"],
             )
-            texts = await db.messages.get_recent_normalized(1, 10)
+            texts = await db.markov.get_recent_normalized(1, 10)
             self.assertEqual(len(texts), 1)  # retention trimmed the first text
             ngrams = set(await db.get_verbatim_ngrams(1))
             self.assertIn(

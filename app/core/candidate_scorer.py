@@ -32,8 +32,20 @@ NATURAL_LENGTH_DECAY_SPAN = LONG_REPLY_SOFT_LIMIT - NATURAL_LENGTH_MAX
 def sample_length_mode(
     weights: tuple[float, float, float],
     rng: random.Random,
+    base_weights: tuple[float, float, float] | None = None,
 ) -> str:
-    """Pick a target length mode using short/medium/long weights."""
+    """Pick a target length mode using short/medium/long weights.
+
+    Mood modulation clamps each scaled multiplier at 0.0, so a legal config
+    with a single positive base weight (e.g. ``0,0,1`` plus sleepy at strength
+    >= 2.0) can zero the whole vector — ``random.choices`` raises on all-zero
+    weights. Fall back to the pre-mood ``base_weights``, then to uniform.
+    """
+    if sum(weights) <= 0.0:
+        if base_weights is not None and sum(base_weights) > 0.0:
+            weights = base_weights
+        else:
+            weights = (1.0, 1.0, 1.0)
     return rng.choices(population=LENGTH_MODES, weights=weights, k=1)[0]
 
 

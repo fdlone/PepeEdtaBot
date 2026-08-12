@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 import uuid
 from datetime import date
@@ -315,7 +316,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(
-            await self.db.messages.get_recent_normalized(4104, 10),
+            await self.db.markov.get_recent_normalized(4104, 10),
             ["Привеет"],
         )
 
@@ -348,7 +349,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         await self.db.init()
 
         self.assertEqual(
-            await self.db.messages.get_recent_normalized(4204, 10),
+            await self.db.markov.get_recent_normalized(4204, 10),
             ["Стаарый текст"],
         )
         async with aiosqlite.connect(str(self.db_path)) as conn:
@@ -556,6 +557,90 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(users, ["cutoff-user", "recent-user"])
 
+    async def test_pivo_daily_usage_zero_limit_denies_first_call(self) -> None:
+        """Лимит действует и на первый вызов дня: limit <= 0 — отказ без записи."""
+        result = await self.db.pivo_usage.consume_daily_call(
+            chat_hash="chat-hash",
+            user_hash="user-hash",
+            usage_day="2026-05-08",
+            limit=0,
+        )
+        self.assertEqual(result, (False, 0))
+
+        # Строка квоты не завелась: с нормальным лимитом вызов проходит первым.
+        result = await self.db.pivo_usage.consume_daily_call(
+            chat_hash="chat-hash",
+            user_hash="user-hash",
+            usage_day="2026-05-08",
+            limit=1,
+        )
+        self.assertEqual(result, (True, 1))
+
+    async def test_write_transaction_rolls_back_on_error(self) -> None:
+        """Ошибка в мультистейтментной записи откатывает её целиком.
+
+        Без rollback незакоммиченный «осколок» уехал бы в базу вместе с
+        коммитом следующего вызова на общем соединении.
+        """
+        with self.assertRaises(RuntimeError):
+            async with self.db._write_transaction() as conn:
+                await conn.execute(
+                    "INSERT INTO messages(chat_id, author_id, normalized_text)"
+                    " VALUES (?, 0, 'осколок')",
+                    (6006,),
+                )
+                raise RuntimeError("boom")
+
+        # Следующая успешная запись не должна прихватить осколок.
+        await self.db.save_message_and_update_model(
+            chat_id=6007, raw_text="ok", tokens=["ok"]
+        )
+        self.assertEqual((await self.db.get_stats(6006))["messages"], 0)
+
+    async def test_repo_transaction_rolls_back_on_error(self) -> None:
+        """BaseRepo._transaction: тот же контракт отката для репозиториев."""
+        repo = self.db.pivo_usage
+        with self.assertRaises(RuntimeError):
+            async with repo._transaction() as conn:
+                await conn.execute(
+                    "INSERT INTO pivo_daily_usage"
+                    "(chat_hash, user_hash, usage_day, used_count)"
+                    " VALUES ('c', 'u', '2026-05-08', 5)"
+                )
+                raise RuntimeError("boom")
+
+        # Чужой коммит не должен материализовать фантомную квоту.
+        await repo.consume_daily_call(
+            chat_hash="c2", user_hash="u2", usage_day="2026-05-08", limit=1
+        )
+        result = await repo.consume_daily_call(
+            chat_hash="c", user_hash="u", usage_day="2026-05-08", limit=3
+        )
+        self.assertEqual(result, (True, 1))
+
+    async def test_concurrent_init_opens_single_connection(self) -> None:
+        """Параллельный двойной init() не открывает второе (утекающее) соединение."""
+        db_path = Path(f"test_db_{uuid.uuid4().hex}.sqlite")
+        db = Database(str(db_path))
+        real_connect = aiosqlite.connect
+        calls = 0
+
+        def counting_connect(*args: object, **kwargs: object):
+            nonlocal calls
+            calls += 1
+            return real_connect(*args, **kwargs)
+
+        try:
+            with patch(
+                "app.infrastructure.database.aiosqlite.connect",
+                side_effect=counting_connect,
+            ):
+                await asyncio.gather(db.init(), db.init())
+            self.assertEqual(calls, 1)
+        finally:
+            await db.close()
+            db_path.unlink(missing_ok=True)
+
 
 class TestDatabaseMessageRetention(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -584,7 +669,7 @@ class TestDatabaseMessageRetention(unittest.IsolatedAsyncioTestCase):
             await self._record(1, text)
 
         self.assertEqual(
-            await self.db.messages.get_recent_normalized(1, 10),
+            await self.db.markov.get_recent_normalized(1, 10),
             ["second", "third", "fourth"],
         )
         self.assertEqual((await self.db.get_stats(1))["messages"], 3)
@@ -595,7 +680,7 @@ class TestDatabaseMessageRetention(unittest.IsolatedAsyncioTestCase):
             await self._record(1, text)
 
         self.assertEqual(
-            await self.db.messages.get_recent_normalized(2, 10),
+            await self.db.markov.get_recent_normalized(2, 10),
             ["other chat message"],
         )
 

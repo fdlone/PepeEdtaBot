@@ -120,7 +120,6 @@ class PivoService:
             self._refreshed_on.clear()
         if self._refreshed_on.get((chat_hash, user_hash)) == usage_day:
             return
-        self._refreshed_on[(chat_hash, user_hash)] = usage_day
         await self._db.chat_members.refresh_profile(
             chat_hash=chat_hash,
             user_hash=user_hash,
@@ -129,6 +128,10 @@ class PivoService:
                 display_name_from_user(user)
             ),
         )
+        # Отметка ставится только после успешной записи: упавший refresh
+        # (например, SQLITE_BUSY) не должен съедать суточное окно — следующее
+        # сообщение участника попробует обновить профиль снова.
+        self._refreshed_on[(chat_hash, user_hash)] = usage_day
 
     async def unsubscribe(self, chat_id: int, user_id: int) -> None:
         await self._db.chat_members.remove(

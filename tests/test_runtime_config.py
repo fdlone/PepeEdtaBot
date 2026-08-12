@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from app.config.runtime_config import (
+from app.config.registry import (
     UNKNOWN_RUNTIME_KEY_MESSAGE,
     InvalidRuntimeSettingValueError,
     UnknownRuntimeSettingError,

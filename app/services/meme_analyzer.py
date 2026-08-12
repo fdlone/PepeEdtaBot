@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 
 from app.core.collocations import score_pair
-from app.core.temporal import SECONDS_PER_DAY, decay_multiplier
+from app.core.temporal import decay_multiplier
 from app.repositories.collocations_repo import CollocationsRepo
 
 
@@ -104,8 +104,3 @@ async def analyze_chat_memes(
         stored_pairs=len(capped),
         duration_ms=(time.perf_counter() - started) * 1000,
     )
-
-
-def days_between(earlier: int, later: int) -> float:
-    """Helper for reports: whole days between two Unix moments."""
-    return (later - earlier) / SECONDS_PER_DAY

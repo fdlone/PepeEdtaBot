@@ -14,11 +14,13 @@ from types import SimpleNamespace
 from app.config import registry
 from app.config.registry import (
     RUNTIME_FIELDS,
+    ChatOverrideConflictError,
     FieldSpec,
     get_spec,
     runtime_field_names,
     try_apply,
     try_apply_for_chat,
+    try_clear_for_chat,
     validate_cross_fields,
 )
 
@@ -258,6 +260,75 @@ class TestTryApplyForChat(unittest.TestCase):
             try_apply_for_chat(state, 100, "markov_order", "5")
         self.assertEqual(state.effective(100).markov_order, 3)
         self.assertEqual(state.chat_overrides, {})
+
+
+class TestGlobalApplyAgainstChatOverrides(unittest.TestCase):
+    """A global change must stay valid in every chat's override-merged view."""
+
+    def _state(self, **overrides: object):
+        from tests.test_runtime_state import make_runtime_state
+
+        return make_runtime_state(**overrides)
+
+    def test_global_change_breaking_a_chat_view_is_rejected(self) -> None:
+        # Globally 900 <= 1100 is fine, but chat 100 lowered its max to 500 —
+        # its merged view would carry an inverted typing band.
+        state = self._state(typing_min_ms=350, typing_max_ms=1100)
+        state.set_override(100, "typing_max_ms", 500)
+
+        with self.assertRaises(ChatOverrideConflictError) as ctx:
+            try_apply(state, "typing_min_ms", "900")
+
+        self.assertEqual(state.typing_min_ms, 350)
+        # The refusal names the conflicting chat and its overridden keys.
+        self.assertIn("100", str(ctx.exception))
+        self.assertIn("typing_max_ms", str(ctx.exception))
+
+    def test_chat_pinning_the_field_does_not_block_the_apply(self) -> None:
+        # The chat overrides typing_min_ms itself, so the global change never
+        # reaches its merged view — no conflict to report.
+        state = self._state(typing_min_ms=350, typing_max_ms=1100)
+        state.set_override(100, "typing_min_ms", 100)
+        state.set_override(100, "typing_max_ms", 200)
+
+        try_apply(state, "typing_min_ms", "900")
+
+        self.assertEqual(state.typing_min_ms, 900)
+        self.assertEqual(state.effective(100).typing_min_ms, 100)
+
+
+class TestTryClearForChat(unittest.TestCase):
+    """Clearing an override must leave the chat with a valid merged view."""
+
+    def _state(self, **overrides: object):
+        from tests.test_runtime_state import make_runtime_state
+
+        return make_runtime_state(**overrides)
+
+    def test_clear_leaving_an_invalid_view_is_refused(self) -> None:
+        # Chat lowered both bounds; resetting only the min would pair the
+        # global min (350) with the overridden max (200).
+        state = self._state(typing_min_ms=350, typing_max_ms=1100)
+        state.set_override(100, "typing_min_ms", 100)
+        state.set_override(100, "typing_max_ms", 200)
+
+        with self.assertRaises(ChatOverrideConflictError):
+            try_clear_for_chat(state, 100, "typing_min_ms")
+
+        # Override kept: the chat's view stays valid.
+        self.assertEqual(state.effective(100).typing_min_ms, 100)
+
+    def test_valid_clear_drops_the_override(self) -> None:
+        state = self._state()
+        state.set_override(100, "reply_probability", 0.5)
+
+        self.assertTrue(try_clear_for_chat(state, 100, "reply_probability"))
+        self.assertFalse(try_clear_for_chat(state, 100, "reply_probability"))
+        self.assertEqual(state.chat_overrides, {})
+
+    def test_unknown_key_raises_keyerror(self) -> None:
+        with self.assertRaises(KeyError):
+            try_clear_for_chat(self._state(), 100, "nope")
 
 
 class TestNoKnobAcceptsNonFinite(unittest.TestCase):

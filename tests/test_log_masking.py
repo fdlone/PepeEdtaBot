@@ -80,6 +80,16 @@ class TestMaskChatIdsInText(unittest.TestCase):
         self.assertNotIn("-1002233445566", masked)
         self.assertIn(log_masking.mask_chat_id(-1002233445566), masked)
 
+    def test_masks_legacy_basic_group_id_with_fewer_digits(self) -> None:
+        # Legacy basic groups have short ids without the -100 prefix; the
+        # documented invariant says they must be masked too.
+        text = "Forbidden: bot was kicked from the group chat -12345678"
+
+        masked = log_masking.mask_chat_ids_in_text(text)
+
+        self.assertNotIn("-12345678", masked)
+        self.assertIn(log_masking.mask_chat_id(-12345678), masked)
+
     def test_keeps_diagnostic_numbers_intact(self) -> None:
         # Retry delay, error code and message id are not chat ids and must
         # survive untouched — the record has to stay useful.

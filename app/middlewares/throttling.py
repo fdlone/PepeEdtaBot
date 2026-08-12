@@ -31,9 +31,14 @@ class ThrottlingMiddleware(BaseMiddleware):
         state_ttl_sec: int = 21600,
         state_max_keys: int = 4096,
         notify_cooldown_sec: float = 30.0,
+        bot_username: str | None = None,
     ) -> None:
         # limits: command name (without /) -> cooldown in seconds
         self._limits = limits
+        # Own username, lowercased: "/clear@OtherBot" is another bot's traffic
+        # and must not burn this bot's cooldown. Telegram usernames are
+        # case-insensitive. When unset (tests), any @mention is treated as ours.
+        self._bot_username = (bot_username or "").lower() or None
         self._notify_on_throttle = notify_on_throttle or set()
         self._state_ttl_sec = float(state_ttl_sec)
         self._state_max_keys = state_max_keys
@@ -85,7 +90,15 @@ class ThrottlingMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         parts = text.split(maxsplit=1)
-        command = parts[0].lstrip("/").split("@")[0].lower()
+        command, _, mention = parts[0].lstrip("/").partition("@")
+        command = command.lower()
+        if (
+            mention
+            and self._bot_username is not None
+            and mention.lower() != self._bot_username
+        ):
+            # Addressed to a different bot: not our traffic, no cooldown.
+            return await handler(event, data)
         limit = self._limits.get(command)
         if limit is None:
             return await handler(event, data)
@@ -114,7 +127,12 @@ class ThrottlingMiddleware(BaseMiddleware):
                     )
             return None  # throttled
 
+        # The cooldown is stamped only after the handler succeeds: a handler
+        # exception (e.g. SQLITE_BUSY during /clear) must not lock the user
+        # out for the whole window. On exception nothing is stamped and the
+        # error propagates to the error handler as before.
+        result = await handler(event, data)
         self._last_used[key] = now
         if len(self._last_used) > self._state_max_keys:
             self._prune_state(now)
-        return await handler(event, data)
+        return result

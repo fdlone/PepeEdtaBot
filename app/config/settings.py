@@ -26,20 +26,23 @@ MIN_SECRET_LENGTH = 32
 
 
 @dataclass(slots=True)
-class Settings:
-    bot_token: str
+class RuntimeTunables:
+    """Runtime-mutable knobs shared by ``Settings`` and ``RuntimeState``.
+
+    Field names, order and types mirror ``RUNTIME_FIELDS`` in ``registry.py``
+    (the registry stays the source of truth for parsing/validation metadata);
+    this base exists so the ~100 field declarations are written once instead
+    of once per class. Both subclasses are constructed with keyword arguments
+    only, so the base-fields-first ``__init__`` reordering is harmless.
+    """
+
     reply_probability: float
     min_cooldown_sec: int
     min_tokens_for_model: int
     max_reply_chars: int
     max_reply_tokens: int
-    owner_id: int | None
     normalize_lower: bool
     auto_capitalize_replies: bool
-    db_path: str
-    messages_retention_per_chat: int
-    sqlite_busy_timeout_ms: int
-    sqlite_wal_autocheckpoint_pages: int
     typing_min_ms: int
     typing_max_ms: int
     typing_per_char_ms: int
@@ -129,6 +132,16 @@ class Settings:
     reply_burst_suppress_mult: float
     reply_max_per_hour: int
     mention_cooldown_sec: int
+
+
+@dataclass(slots=True)
+class Settings(RuntimeTunables):
+    bot_token: str
+    owner_id: int | None
+    db_path: str
+    messages_retention_per_chat: int
+    sqlite_busy_timeout_ms: int
+    sqlite_wal_autocheckpoint_pages: int
     pivo_hmac_secret: str
     pivo_encryption_secret: str
     pivo_explicit_mentions_limit: int

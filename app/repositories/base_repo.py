@@ -31,10 +31,19 @@ class BaseRepo:
 
     @asynccontextmanager
     async def _transaction(self) -> AsyncIterator[aiosqlite.Connection]:
-        """Hold the lock, yield the connection, and commit on clean exit."""
+        """Hold the lock, yield the connection, and commit on clean exit.
+
+        On error the open transaction is rolled back before re-raising:
+        the connection is shared, so leftover uncommitted statements would
+        otherwise ride along with the next caller's commit.
+        """
         async with self._lock:
             db = await self._conn_provider()
-            yield db
+            try:
+                yield db
+            except BaseException:
+                await db.rollback()
+                raise
             await db.commit()
 
     async def _fetch_all(

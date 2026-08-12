@@ -33,6 +33,7 @@ EXPECTED_MIGRATIONS = [
     "018_temporal_layer",
     "019_markov_collocations",
     "020_reverse_index_and_token_df",
+    "021_recompute_model_volume",
 ]
 
 EXPECTED_TABLES = {
@@ -647,6 +648,32 @@ class TestMigratorAtomicity(unittest.IsolatedAsyncioTestCase):
         # _apply commits via the embedded COMMIT inside the wrapped script.
         self.assertTrue(await self._table_exists("persisted"))
 
+    async def test_record_joins_the_sql_migration_transaction(self) -> None:
+        """Apply and record commit together: no crash window between them."""
+        await migrator._ensure_table(self.conn)
+        path = self._write_sql("CREATE TABLE recorded_tbl (a INTEGER)")
+        await migrator._apply(self.conn, path, record_stem="900_recorded")
+        cur = await self.conn.execute(
+            "SELECT name FROM schema_migrations WHERE name='900_recorded'"
+        )
+        self.assertIsNotNone(await cur.fetchone())
+        self.assertTrue(await self._table_exists("recorded_tbl"))
+
+    async def test_failed_sql_migration_records_nothing(self) -> None:
+        await migrator._ensure_table(self.conn)
+        path = self._write_sql(
+            "CREATE TABLE good_table (a INTEGER);\n"
+            "INSERT INTO nonexistent VALUES (1);\n"
+        )
+        with self.assertRaises(Exception):
+            await migrator._apply(self.conn, path, record_stem="901_failed")
+        await self.conn.rollback()
+        self.assertFalse(await self._table_exists("good_table"))
+        cur = await self.conn.execute(
+            "SELECT name FROM schema_migrations WHERE name='901_failed'"
+        )
+        self.assertIsNone(await cur.fetchone())
+
 
 class TestLowercaseModelMigration(unittest.IsolatedAsyncioTestCase):
     """015: legacy mixed-case tokens are casefolded and their counts merged.
@@ -878,3 +905,53 @@ class Test017StripListEnumerators(unittest.IsolatedAsyncioTestCase):
             "SELECT COUNT(*) FROM transitions3 WHERE chat_id = 11"
         )
         self.assertEqual((await cursor.fetchone())[0], 1)
+
+
+class Test021RecomputeModelVolume(unittest.IsolatedAsyncioTestCase):
+    """Migration 021: chat_model_volume resynced to SUM(cnt) after 017's drift.
+
+    The migration is re-applied by hand on an already-migrated database so the
+    fixture can seed counters that drifted from the actual transition sums.
+    """
+
+    async def asyncSetUp(self) -> None:
+        self.conn = await aiosqlite.connect(":memory:")
+        await migrator.run(self.conn)
+
+    async def asyncTearDown(self) -> None:
+        await self.conn.close()
+
+    async def test_volumes_resynced_to_actual_sums(self) -> None:
+        await self.conn.executemany(
+            "INSERT INTO transitions(chat_id, w1, w2, w3, cnt) VALUES (?,?,?,?,?)",
+            [(7, "а", "б", "в", 3), (7, "б", "в", "г", 2)],
+        )
+        await self.conn.execute(
+            "INSERT INTO transitions3(chat_id, w1, w2, w3, w4, cnt)"
+            " VALUES (7, 'а', 'б', 'в', 'г', 4)"
+        )
+        # Counter drifted upward, as after 017's deletes without decrements.
+        await self.conn.execute(
+            "INSERT INTO chat_model_volume(chat_id, volume2, volume3)"
+            " VALUES (7, 100, 100)"
+        )
+        # A chat whose transitions 017 wiped entirely.
+        await self.conn.execute(
+            "INSERT INTO chat_model_volume(chat_id, volume2, volume3)"
+            " VALUES (8, 50, 50)"
+        )
+        await self.conn.commit()
+
+        await migrator._apply(
+            self.conn,
+            Path(migrator._MIGRATIONS_DIR) / "021_recompute_model_volume.sql",
+        )
+
+        cur = await self.conn.execute(
+            "SELECT volume2, volume3 FROM chat_model_volume WHERE chat_id = 7"
+        )
+        self.assertEqual(tuple(await cur.fetchone()), (5, 4))
+        cur = await self.conn.execute(
+            "SELECT volume2, volume3 FROM chat_model_volume WHERE chat_id = 8"
+        )
+        self.assertEqual(tuple(await cur.fetchone()), (0, 0))

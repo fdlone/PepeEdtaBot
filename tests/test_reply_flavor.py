@@ -102,6 +102,32 @@ class TestApplyReplyFlavor(unittest.TestCase):
             dropped / rolls, DROP_FINAL_PERIOD_PROBABILITY, delta=0.03
         )
 
+    def test_overflowing_scaled_profile_keeps_transforms_probabilistic(self) -> None:
+        # ending_none_share=0.9 at strength 2.0 used to give drop_below=1.8:
+        # the drop-period branch became deterministic and ellipsis/exclamation
+        # unreachable. Renormalization keeps the 0.9/0.05/0.05 relative shares.
+        profile = IntonationProfile(
+            length_weights=(0.4, 0.4, 0.2),
+            ending_none_share=0.9,
+            ending_ellipsis_share=0.05,
+            ending_exclamation_share=0.05,
+        )
+        rng = random.Random(23)
+        outcomes = {"": 0, ".": 0, "...": 0, "!": 0}
+        rolls = 5000
+        for _ in range(rolls):
+            flavored = apply_reply_flavor(
+                "проверка формы.",
+                rng,
+                strength=2.0,
+                ending_profile=profile,
+                profile_strength=1.0,
+            )
+            outcomes[flavored.removeprefix("проверка формы")] += 1
+        self.assertAlmostEqual(outcomes[""] / rolls, 0.9, delta=0.03)
+        self.assertGreater(outcomes["..."], 0)
+        self.assertGreater(outcomes["!"], 0)
+
     def test_question_and_exclamation_can_double(self) -> None:
         rng = random.Random(13)
         doubled = 0

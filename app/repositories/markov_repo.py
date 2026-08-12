@@ -22,7 +22,20 @@ def _transition_row(row: aiosqlite.Row) -> TransitionRow:
 
 
 class MarkovRepo(BaseRepo):
-    """Read-only доступ к таблицам starts/transitions/transitions3."""
+    """Read-only доступ к таблицам starts/transitions/transitions3/messages."""
+
+    async def get_recent_normalized(self, chat_id: int, limit: int) -> list[str]:
+        rows = await self._fetch_all(
+            """
+            SELECT normalized_text
+            FROM messages
+            WHERE chat_id = ? AND normalized_text != ''
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (chat_id, limit),
+        )
+        return [str(row[0]) for row in reversed(rows)]
 
     async def get_starts(self, chat_id: int) -> list[tuple[str, str, int]]:
         rows = await self._fetch_all(
