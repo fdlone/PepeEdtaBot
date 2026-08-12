@@ -68,6 +68,16 @@ def _runtime_state() -> MagicMock:
     state.markov_collocation_bonus = 0.0
     state.markov_collocation_break_penalty = 0.0
     state.markov_hot_ngram_meme_ordering = False
+    # Phase 5 seeded off by default: non-zero (or a bare MagicMock) would send
+    # the pipeline to the seed ranking on a mock.
+    state.markov_seeded_candidate_ratio = 0.0
+    state.markov_seed_branch_min = 2.0
+    state.markov_seed_branch_ideal = 6.0
+    state.markov_seed_branch_max = 50.0
+    state.markov_seed_min_support = 5.0
+    state.markov_seed_min_score = 0.1
+    state.markov_seed_min_token_len = 3
+    state.markov_seed_head_share = 0.4
     return state
 
 

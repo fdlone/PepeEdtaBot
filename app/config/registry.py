@@ -375,6 +375,37 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # eval", so both paths must stay runnable side by side to find out.
     FieldSpec("markov_hot_ngram_meme_ordering", "MARKOV_HOT_NGRAM_MEME_ORDERING",
               "false", _bool()),
+    # Markov 2.0R Phase 5 (M2R-410, TZ §9): statistical lexical anchoring.
+    #
+    # Share of the best-of-N pool filled by seeded candidates (an anchor token
+    # the chat uses, a reply grown around it). Default 0 — the feature is inert,
+    # generation byte-identical; raising it needs the phase's promotion gate.
+    FieldSpec("markov_seeded_candidate_ratio", "MARKOV_SEEDED_CANDIDATE_RATIO",
+              "0", _float_in_range(0.0, 0.7)),
+    # Branching band for seed choice (trapezoid, TZ §9.4): a seed below the
+    # minimum stalls generation, one far above the ideal is an anchor about
+    # nothing. min <= ideal <= max is enforced cross-field.
+    FieldSpec("markov_seed_branch_min", "MARKOV_SEED_BRANCH_MIN", "2",
+              _float_in_range(1.0, 1000.0)),
+    FieldSpec("markov_seed_branch_ideal", "MARKOV_SEED_BRANCH_IDEAL", "6",
+              _float_in_range(1.0, 1000.0)),
+    FieldSpec("markov_seed_branch_max", "MARKOV_SEED_BRANCH_MAX", "50",
+              _float_in_range(1.0, 5000.0)),
+    # Support saturation for seed choice: rare-but-real is good, almost-never
+    # seen is bad (reuses the collocation support ramp).
+    FieldSpec("markov_seed_min_support", "MARKOV_SEED_MIN_SUPPORT", "5",
+              _float_in_range(1.0, 500.0)),
+    # A seed must clear this composite score, else the seeded branch is skipped
+    # (transparent fallback). Tokens shorter than the length floor and
+    # stopwords are excluded before scoring.
+    FieldSpec("markov_seed_min_score", "MARKOV_SEED_MIN_SCORE", "0.1",
+              _float_in_range(0.0, 1.0)),
+    FieldSpec("markov_seed_min_token_len", "MARKOV_SEED_MIN_TOKEN_LEN", "3",
+              _int_in_range(1, 20)),
+    # Share of a seeded candidate's length budget spent growing the head
+    # backward; the rest is the forward tail.
+    FieldSpec("markov_seed_head_share", "MARKOV_SEED_HEAD_SHARE", "0.4",
+              _float_in_range(0.0, 1.0)),
     # Backoff bottoms out at order 2: the order-1 chain was removed entirely
     # (2026-07-12) after eval_prod showed order-1 walks are word salad — the
     # 2026-07-09 default already forbade them and nothing regressed.
@@ -683,6 +714,15 @@ def validate_cross_fields(obj: Any) -> None:
     if obj.reply_probability_min > obj.reply_probability_max:
         raise ValueError(
             "REPLY_PROBABILITY_MIN must be <= REPLY_PROBABILITY_MAX"
+        )
+    if not (
+        obj.markov_seed_branch_min
+        <= obj.markov_seed_branch_ideal
+        <= obj.markov_seed_branch_max
+    ):
+        raise ValueError(
+            "MARKOV_SEED_BRANCH_MIN <= MARKOV_SEED_BRANCH_IDEAL <= "
+            "MARKOV_SEED_BRANCH_MAX must hold"
         )
 
 

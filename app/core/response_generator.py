@@ -530,6 +530,95 @@ class ResponseGenerator:
             self.runtime_state.markov_collocation_break_penalty,
         )
 
+    async def _append_seeded_candidates(
+        self,
+        request: GenerationRequest,
+        candidates: list[_ScoredCandidate],
+        seen_candidates: set[str],
+        *,
+        length_mode: str,
+        max_tokens: int,
+        context_idf: Mapping[str, float],
+        recent_trigrams: set[tuple[str, ...]],
+        recent_penalty_strength: float,
+        corpus_ngrams: AbstractSet[tuple[str, ...]],
+        verbatim_penalty_strength: float,
+        active_collocations: frozenset[tuple[str, str]],
+        entropy_sampling: EntropySampling,
+        temporal_blend: TemporalBlend,
+        now: int,
+        target: int,
+        rng: random.Random,
+    ) -> set[str]:
+        """Grow seeded candidates from the message's best anchors (M2R-410).
+
+        The seed ranking is computed once per reply (never per candidate). Each
+        seeded slot takes the next distinct top seed above the minimum score,
+        assembles a bidirectional candidate, and — if it passes the same reject
+        gates as every other candidate — joins the pool with a full score and
+        no priority. Returns the set of texts that are seeded, for telemetry.
+        """
+        state = self.runtime_state
+        message_tokens = tokenize(
+            request.current_message_normalized,
+            normalize_lower=state.normalize_lower,
+        )
+        ranked = await self.generator.rank_seeds(
+            request.chat_id,
+            message_tokens,
+            min_support=state.markov_seed_min_support,
+            branch_min=state.markov_seed_branch_min,
+            branch_ideal=state.markov_seed_branch_ideal,
+            branch_max=state.markov_seed_branch_max,
+            min_token_len=state.markov_seed_min_token_len,
+        )
+        usable = [s for s in ranked if s.score >= state.markov_seed_min_score]
+        if not usable:
+            return set()
+        seeded_slots = max(1, round(target * state.markov_seeded_candidate_ratio))
+        seeded_texts: set[str] = set()
+        for seed_score in usable[:seeded_slots]:
+            tokens = await self.generator.generate_seeded_candidate(
+                request.chat_id,
+                seed_score.token,
+                max_tokens=max_tokens,
+                head_share=state.markov_seed_head_share,
+                next_explore=state.randomness_strength,
+                next_power=1.0,
+                repetition_penalty_strength=state.repetition_penalty_strength,
+                entropy_sampling=entropy_sampling,
+                temporal_blend=temporal_blend,
+                now=now,
+                rng=rng,
+            )
+            if not tokens:
+                continue
+            text = detokenize(tokens, max_chars=state.max_reply_chars)
+            if not text or text in seen_candidates:
+                continue
+            candidate_tokens, is_short, reject = await self._evaluate_candidate(
+                request, text
+            )
+            if reject is not None:
+                continue
+            seen_candidates.add(text)
+            seeded_texts.add(text)
+            score = self._build_score(
+                text,
+                candidate_tokens,
+                request.context_tokens,
+                length_mode,
+                context_idf=context_idf,
+                recent_trigrams=recent_trigrams,
+                recent_penalty_strength=recent_penalty_strength,
+                corpus_ngrams=corpus_ngrams,
+                verbatim_penalty_strength=verbatim_penalty_strength,
+                chat_id=request.chat_id,
+                active_collocations=active_collocations,
+            )
+            candidates.append(_ScoredCandidate(text=text, score=score))
+        return seeded_texts
+
     def _build_score(
         self,
         text: str,
@@ -949,6 +1038,31 @@ class ResponseGenerator:
 
             seed = None
 
+        # M2R-410 lexical anchoring: seeded candidates join the pool and compete
+        # with no priority (ADR-008). Guarded by the ratio so the neutral default
+        # (0) computes no seed ranking, issues no reverse/df read and draws no
+        # extra RNG — the main loop above stays byte-identical (design D5).
+        seeded_texts: set[str] = set()
+        if self.runtime_state.markov_seeded_candidate_ratio > 0.0:
+            seeded_texts = await self._append_seeded_candidates(
+                request,
+                candidates,
+                seen_candidates,
+                length_mode=length_mode,
+                max_tokens=max_tokens,
+                context_idf=context_idf,
+                recent_trigrams=recent_trigrams,
+                recent_penalty_strength=recent_penalty_strength,
+                corpus_ngrams=corpus_ngrams,
+                verbatim_penalty_strength=verbatim_penalty_strength,
+                active_collocations=active_collocations,
+                entropy_sampling=entropy_sampling,
+                temporal_blend=temporal_blend,
+                now=now,
+                target=target,
+                rng=generation_rng,
+            )
+
         if not candidates:
             gen_trace_log.log_selection(
                 request.chat_id,
@@ -963,6 +1077,11 @@ class ResponseGenerator:
             self.runtime_state.candidate_selection_temperature,
             generation_rng,
         )
+        if self.runtime_state.markov_seeded_candidate_ratio > 0.0:
+            self.generator.telemetry.note_seeded(
+                present=bool(seeded_texts),
+                won=selected.text in seeded_texts,
+            )
         gen_trace_log.log_selection(
             request.chat_id,
             candidates,

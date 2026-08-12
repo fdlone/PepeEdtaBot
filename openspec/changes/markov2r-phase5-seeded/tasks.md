@@ -19,28 +19,28 @@ decision (M2R-430) is a follow-up — it needs prod-accumulated df.
 
 ## 3. Seeded candidates in the pool (M2R-410, ADR-008)
 
-- [ ] 3.1 `MARKOV_SEEDED_CANDIDATE_RATIO` of the `candidate_target` slots filled by seeded assembly; seed token drawn from the top of the per-message seed ranking; read once per reply, only when ratio > 0
-- [ ] 3.2 Seeded candidates scored by the existing scorer with no priority; compete in the same selection
-- [ ] 3.3 Availability/df/reverse reads answered from the M2R-400 API; no query per candidate beyond the one seed ranking per reply
+- [x] 3.1 `MARKOV_SEEDED_CANDIDATE_RATIO` of the `candidate_target` slots filled by seeded assembly; seed token drawn from the top of the per-message seed ranking; read once per reply, only when ratio > 0
+- [x] 3.2 Seeded candidates scored by the existing scorer with no priority; compete in the same selection
+- [x] 3.3 Availability/df/reverse reads answered from the M2R-400 API; no query per candidate beyond the one seed ranking per reply
 
 ## 4. Telemetry (TZ §9.6, generation-telemetry spec)
 
-- [ ] 4.1 `note_seeded(present, won)` on `GenerationTelemetry`; `seeded_present_rate` and `seeded_win_rate_given_present` in `snapshot()` with separate denominators
-- [ ] 4.2 `/stats` surfaces the two rates when any seeded generation has occurred
-- [ ] 4.3 Test: configured-but-never-anchoring reports present-count 0, distinguishable from ratio 0
+- [x] 4.1 `note_seeded(present, won)` on `GenerationTelemetry`; `seeded_present_rate` and `seeded_win_rate_given_present` in `snapshot()` with separate denominators
+- [x] 4.2 `/stats` surfaces the two rates when any seeded generation has occurred
+- [x] 4.3 Test: configured-but-never-anchoring reports present-count 0, distinguishable from ratio 0
 
 ## 5. Knobs (established 5-step pattern)
 
-- [ ] 5.1 Registry + `Settings`/`RuntimeState` + `.env.example`: `markov_seed_branch_min`, `markov_seed_branch_ideal`, `markov_seed_branch_max`, `markov_seed_min_token_len`, `markov_seed_min_score`, `markov_seeded_candidate_ratio` (0–0.7), `markov_seed_head_share`
-- [ ] 5.2 Ratio and all seed weights default to neutral (ratio 0); bounds validated. Cross-field: `branch_min ≤ branch_ideal ≤ branch_max` rejected otherwise (spec: `runtime-knob-validation` pattern)
-- [ ] 5.3 `/config full` surfaces the seed knobs
+- [x] 5.1 Registry + `Settings`/`RuntimeState` + `.env.example`: `markov_seed_branch_min`, `markov_seed_branch_ideal`, `markov_seed_branch_max`, `markov_seed_min_token_len`, `markov_seed_min_score`, `markov_seeded_candidate_ratio` (0–0.7), `markov_seed_head_share`
+- [x] 5.2 Ratio and all seed weights default to neutral (ratio 0); bounds validated. Cross-field: `branch_min ≤ branch_ideal ≤ branch_max` rejected otherwise (spec: `runtime-knob-validation` pattern)
+- [x] 5.3 `/config full` surfaces the seed knobs
 
 ## 6. Neutrality (the shipping contract)
 
-- [ ] 6.1 `ratio == 0` short-circuits before the seed ranking and before any df/reverse read — no extra RNG draw, RNG-consumption order unchanged (design D5)
-- [ ] 6.2 Test: reply pipeline issues no reverse/df query at the default
-- [ ] 6.3 `python -m tools.generation_hash --db db_prod_copy/markov.db` — identical to the frozen baseline (`5a72e2d4…`)
-- [ ] 6.4 Neutral defaults leave generated text identical (`generation_hash` unchanged) — the spec scenario
+- [x] 6.1 `ratio == 0` short-circuits before the seed ranking and before any df/reverse read — no extra RNG draw, RNG-consumption order unchanged (design D5)
+- [x] 6.2 Test: reply pipeline issues no reverse/df query at the default
+- [x] 6.3 `python -m tools.generation_hash --db db_prod_copy/markov.db` — identical to the frozen baseline (`5a72e2d4…`) — confirmed 2026-08-12
+- [x] 6.4 Neutral defaults leave generated text identical (`generation_hash` unchanged) — the spec scenario
 
 ## 7. Eval (generation-eval spec)
 

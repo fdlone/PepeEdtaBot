@@ -43,6 +43,9 @@ def _make_state(**overrides: object) -> SimpleNamespace:
         "mood_lively_rate_per_min": 12.0,
         "reply_probability_min": 0.02,
         "reply_probability_max": 0.30,
+        "markov_seed_branch_min": 2.0,
+        "markov_seed_branch_ideal": 6.0,
+        "markov_seed_branch_max": 50.0,
     }
     base.update(overrides)
     return SimpleNamespace(**base)

@@ -15,6 +15,7 @@ from app.core.generation_telemetry import GenerationTelemetry
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
 from app.core.markov_port import MarkovReadPort
 from app.core.morphology import stem_folded, stem_token
+from app.core.seed import SeedScore, is_scorable, score_seeds
 from app.core.temporal import (
     BlendedPool,
     TemporalBlend,
@@ -1622,6 +1623,60 @@ class MarkovGenerator:
                     )
                     return (w1, w2, w3), 2
         return None
+
+    async def rank_seeds(
+        self,
+        chat_id: int,
+        tokens: list[str],
+        *,
+        min_support: float,
+        branch_min: float,
+        branch_ideal: float,
+        branch_max: float,
+        min_token_len: int,
+    ) -> list[SeedScore]:
+        """Score a message's tokens as seed anchors, best first (M2R-410).
+
+        Gathers the seed-score inputs (df, support, forward/reverse branching)
+        from the M2R-400 read API — once per reply, only when the caller has a
+        non-zero seeded ratio — and hands them to the pure scorer. Support and
+        forward branching both come from the one ``get_seed_forward`` read.
+        """
+        eligible = [
+            token
+            for token in dict.fromkeys(tokens)
+            if is_scorable(token, min_token_len=min_token_len)
+        ]
+        if not eligible:
+            return []
+        n_docs = await self.db.get_n_docs(chat_id)
+        if n_docs <= 0:
+            return []
+        df_of: dict[str, int] = {}
+        support_of: dict[str, int] = {}
+        forward_branch_of: dict[str, int] = {}
+        reverse_branch_of: dict[str, int] = {}
+        for token in eligible:
+            forward = await self.db.get_seed_forward(chat_id, token)
+            forward_branch_of[token] = len(forward)
+            support_of[token] = sum(cnt for _, cnt in forward)
+            reverse_branch_of[token] = await self.db.get_reverse_branch(
+                chat_id, token
+            )
+            df_of[token] = await self.db.get_token_df(chat_id, token)
+        return score_seeds(
+            eligible,
+            df_of=df_of,
+            support_of=support_of,
+            forward_branch_of=forward_branch_of,
+            reverse_branch_of=reverse_branch_of,
+            n_docs=n_docs,
+            min_support=min_support,
+            branch_min=branch_min,
+            branch_ideal=branch_ideal,
+            branch_max=branch_max,
+            min_token_len=min_token_len,
+        )
 
     def _seeded_step(
         self,

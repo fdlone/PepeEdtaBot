@@ -113,6 +113,14 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.markov_collocation_bonus = 0.0
     s.markov_collocation_break_penalty = 0.0
     s.markov_hot_ngram_meme_ordering = False
+    s.markov_seeded_candidate_ratio = 0.0
+    s.markov_seed_branch_min = 2.0
+    s.markov_seed_branch_ideal = 6.0
+    s.markov_seed_branch_max = 50.0
+    s.markov_seed_min_support = 5.0
+    s.markov_seed_min_score = 0.1
+    s.markov_seed_min_token_len = 3
+    s.markov_seed_head_share = 0.4
     # L1 hot-ngram channel off by default so learn/reply tests stay
     # deterministic; dedicated hot-ngram tests enable it explicitly.
     s.hot_ngram_seed_chance = 0.0
