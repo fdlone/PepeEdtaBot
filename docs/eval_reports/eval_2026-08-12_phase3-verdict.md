@@ -50,6 +50,31 @@ the same rows: the blend re-weights the candidates a state already has, it never
 adds candidates. That is the wall, and it is the same wall Phase 2 hit from the
 other side.
 
+The walk-level telemetry says the same thing independently, and it is the
+stronger evidence because it counts steps the generator actually took rather
+than states it might visit:
+
+| arm | steps where the short layer contributed | mean distance the blend moved the distribution |
+|---|---|---|
+| C0 (blend off) | 0.0% | 0.0000 |
+| C2a03 (α = 0.3) | 11.2% | 0.0117 |
+| C2a05 (α = 0.5) | 11.2% | 0.0194 |
+| C2a07 (α = 0.7) | 11.2% | 0.0264 |
+
+Coverage is 11.2% rather than the 1.0% of states above because a walk visits
+busy states far more often than rare ones — the reachable surface is an order of
+magnitude larger than the state census suggests. But the movement is tiny: a
+total-variation distance of 0.012–0.026 means the blend nudges the sampled
+distribution by one to three percent on one step in nine, and picks a different
+token almost never. That is precisely the shape of a null result: the knob is
+connected, it is doing arithmetic, and the arithmetic does not reach the output.
+
+Side observation worth recording rather than leaving for someone to rediscover:
+mean normalized entropy goes **down** slightly with the blend on (0.117 → 0.114
+at α = 0.3, → 0.108 at α = 0.5), not up. Mixing two peaked distributions that
+agree about which token is likely sharpens rather than flattens. Anyone hoping a
+blend will loosen the chain should start from that number.
+
 ## What this means for the Phase 2 code — the decision this phase was asked to unblock
 
 The Phase 2 verdict left one hypothesis alive: that Phase 3 would flatten the

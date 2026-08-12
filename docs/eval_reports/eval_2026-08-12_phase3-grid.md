@@ -1,6 +1,6 @@
 # Eval report 2026-08-12 snapshot=phase3-grid prompts=308b7deaea0f seeds=42,1337,2026
 
-Revision: `b990175`. Generations per configuration: 500.
+Revision: `4c3a532`. Generations per configuration: 500.
 - IDF for affinity metrics is computed over the snapshot's retained message window (full history is not stored) — window-relative, identical across configurations (audit §3).
 - reconstructed temporal snapshot: 1000 replayed messages spanning 2026-06-03..2026-07-12 (39 days); fresh slice = tokens first seen in the last 14 days = 1310 of 3137 vocabulary tokens. Built from the retention window, NOT from live accumulation: its C0 is not the frozen baseline and deltas are only valid within this snapshot.
 
@@ -38,25 +38,25 @@ Value [95% CI] per configuration; delta vs C0 [95% CI], `*` = significant (inter
 | freshness_reflection | 0.166 [0.158, 0.176] | 0.167 [0.158, 0.175] | 0.000 [-0.012, 0.013] | 0.167 [0.158, 0.176] | 0.000 [-0.012, 0.012] | 0.167 [0.158, 0.176] | 0.000 [-0.012, 0.013] | 0.168 [0.160, 0.178] | 0.002 [-0.010, 0.014] | 0.168 [0.159, 0.178] | 0.002 [-0.010, 0.014] | 0.168 [0.160, 0.178] | 0.002 [-0.010, 0.014] | 0.170 [0.161, 0.180] | 0.004 [-0.009, 0.016] | 0.170 [0.161, 0.179] | 0.003 [-0.009, 0.015] | 0.170 [0.161, 0.179] | 0.003 [-0.009, 0.015] |
 | historical_meme_rate | 0.376 [0.328, 0.424] | 0.368 [0.323, 0.416] | -0.008 [-0.072, 0.059] | 0.368 [0.323, 0.416] | -0.008 [-0.072, 0.059] | 0.365 [0.320, 0.413] | -0.011 [-0.075, 0.059] | 0.376 [0.331, 0.424] | 0.000 [-0.067, 0.072] | 0.376 [0.331, 0.424] | 0.000 [-0.067, 0.072] | 0.376 [0.328, 0.424] | 0.000 [-0.064, 0.072] | 0.373 [0.325, 0.421] | -0.003 [-0.067, 0.067] | 0.373 [0.325, 0.421] | -0.003 [-0.067, 0.067] | 0.373 [0.325, 0.421] | -0.003 [-0.067, 0.069] |
 
-C0: distinct-2 = 0.407 (basis 15643), distinct-3 = 0.568 (basis 14143) — type/token ratios, comparable only at equal basis; latency p50/p95 = 11.6/22.3 ms; cache_hit_rate: 51%; mean normalized entropy: 0.117 (branching 1.45); mean applied temperature: 2.78; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
+C0: distinct-2 = 0.407 (basis 15643), distinct-3 = 0.568 (basis 14143) — type/token ratios, comparable only at equal basis; latency p50/p95 = 11.7/21.4 ms; cache_hit_rate: 51%; mean normalized entropy: 0.117 (branching 1.45); mean applied temperature: 2.78; temporal blend: coverage 0.0%, shift 0.0000; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
 
-C2a03_log: distinct-2 = 0.408 (basis 15538), distinct-3 = 0.571 (basis 14038) — type/token ratios, comparable only at equal basis; latency p50/p95 = 11.7/21.7 ms; cache_hit_rate: 51%; mean normalized entropy: 0.114 (branching 1.45); mean applied temperature: 2.78; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
+C2a03_log: distinct-2 = 0.408 (basis 15538), distinct-3 = 0.571 (basis 14038) — type/token ratios, comparable only at equal basis; latency p50/p95 = 12.5/22.1 ms; cache_hit_rate: 51%; mean normalized entropy: 0.114 (branching 1.45); mean applied temperature: 2.78; temporal blend: coverage 11.2%, shift 0.0117; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
 
-C2a03_pow50: distinct-2 = 0.408 (basis 15546), distinct-3 = 0.571 (basis 14046) — type/token ratios, comparable only at equal basis; latency p50/p95 = 12.6/23.1 ms; cache_hit_rate: 51%; mean normalized entropy: 0.114 (branching 1.45); mean applied temperature: 2.78; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
+C2a03_pow50: distinct-2 = 0.408 (basis 15546), distinct-3 = 0.571 (basis 14046) — type/token ratios, comparable only at equal basis; latency p50/p95 = 12.3/22.1 ms; cache_hit_rate: 51%; mean normalized entropy: 0.114 (branching 1.45); mean applied temperature: 2.78; temporal blend: coverage 11.2%, shift 0.0117; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
 
-C2a03_pow75: distinct-2 = 0.408 (basis 15527), distinct-3 = 0.571 (basis 14027) — type/token ratios, comparable only at equal basis; latency p50/p95 = 12.8/23.8 ms; cache_hit_rate: 51%; mean normalized entropy: 0.114 (branching 1.45); mean applied temperature: 2.78; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
+C2a03_pow75: distinct-2 = 0.408 (basis 15527), distinct-3 = 0.571 (basis 14027) — type/token ratios, comparable only at equal basis; latency p50/p95 = 13.1/24.6 ms; cache_hit_rate: 51%; mean normalized entropy: 0.114 (branching 1.45); mean applied temperature: 2.78; temporal blend: coverage 11.2%, shift 0.0116; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
 
-C2a05_log: distinct-2 = 0.407 (basis 15467), distinct-3 = 0.571 (basis 13967) — type/token ratios, comparable only at equal basis; latency p50/p95 = 13.0/26.6 ms; cache_hit_rate: 51%; mean normalized entropy: 0.108 (branching 1.45); mean applied temperature: 2.77; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
+C2a05_log: distinct-2 = 0.407 (basis 15467), distinct-3 = 0.571 (basis 13967) — type/token ratios, comparable only at equal basis; latency p50/p95 = 12.4/23.6 ms; cache_hit_rate: 51%; mean normalized entropy: 0.108 (branching 1.45); mean applied temperature: 2.77; temporal blend: coverage 11.2%, shift 0.0194; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
 
-C2a05_pow50: distinct-2 = 0.407 (basis 15457), distinct-3 = 0.570 (basis 13957) — type/token ratios, comparable only at equal basis; latency p50/p95 = 12.6/22.5 ms; cache_hit_rate: 51%; mean normalized entropy: 0.108 (branching 1.45); mean applied temperature: 2.77; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
+C2a05_pow50: distinct-2 = 0.407 (basis 15457), distinct-3 = 0.570 (basis 13957) — type/token ratios, comparable only at equal basis; latency p50/p95 = 12.9/25.6 ms; cache_hit_rate: 51%; mean normalized entropy: 0.108 (branching 1.45); mean applied temperature: 2.77; temporal blend: coverage 11.2%, shift 0.0195; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
 
-C2a05_pow75: distinct-2 = 0.407 (basis 15477), distinct-3 = 0.571 (basis 13977) — type/token ratios, comparable only at equal basis; latency p50/p95 = 12.2/21.6 ms; cache_hit_rate: 51%; mean normalized entropy: 0.108 (branching 1.45); mean applied temperature: 2.78; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
+C2a05_pow75: distinct-2 = 0.407 (basis 15477), distinct-3 = 0.571 (basis 13977) — type/token ratios, comparable only at equal basis; latency p50/p95 = 13.6/24.8 ms; cache_hit_rate: 51%; mean normalized entropy: 0.108 (branching 1.45); mean applied temperature: 2.78; temporal blend: coverage 11.2%, shift 0.0194; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
 
-C2a07_log: distinct-2 = 0.407 (basis 15396), distinct-3 = 0.572 (basis 13896) — type/token ratios, comparable only at equal basis; latency p50/p95 = 12.2/22.4 ms; cache_hit_rate: 51%; mean normalized entropy: 0.100 (branching 1.45); mean applied temperature: 2.78; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
+C2a07_log: distinct-2 = 0.407 (basis 15396), distinct-3 = 0.572 (basis 13896) — type/token ratios, comparable only at equal basis; latency p50/p95 = 12.4/21.6 ms; cache_hit_rate: 51%; mean normalized entropy: 0.100 (branching 1.45); mean applied temperature: 2.78; temporal blend: coverage 11.3%, shift 0.0274; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
 
-C2a07_pow50: distinct-2 = 0.407 (basis 15398), distinct-3 = 0.573 (basis 13898) — type/token ratios, comparable only at equal basis; latency p50/p95 = 12.8/23.4 ms; cache_hit_rate: 51%; mean normalized entropy: 0.100 (branching 1.45); mean applied temperature: 2.78; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
+C2a07_pow50: distinct-2 = 0.407 (basis 15398), distinct-3 = 0.573 (basis 13898) — type/token ratios, comparable only at equal basis; latency p50/p95 = 12.7/22.6 ms; cache_hit_rate: 51%; mean normalized entropy: 0.100 (branching 1.45); mean applied temperature: 2.78; temporal blend: coverage 11.3%, shift 0.0275; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
 
-C2a07_pow75: distinct-2 = 0.407 (basis 15376), distinct-3 = 0.573 (basis 13876) — type/token ratios, comparable only at equal basis; latency p50/p95 = 12.4/22.6 ms; cache_hit_rate: 51%; mean normalized entropy: 0.100 (branching 1.45); mean applied temperature: 2.78; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
+C2a07_pow75: distinct-2 = 0.407 (basis 15376), distinct-3 = 0.573 (basis 13876) — type/token ratios, comparable only at equal basis; latency p50/p95 = 13.7/26.8 ms; cache_hit_rate: 51%; mean normalized entropy: 0.100 (branching 1.45); mean applied temperature: 2.78; temporal blend: coverage 11.3%, shift 0.0274; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
 
 ## Per-category breakdown
 
@@ -106,19 +106,19 @@ C2a07_pow75: distinct-2 = 0.407 (basis 15376), distinct-3 = 0.573 (basis 13876) 
 ## Gates
 
 - **phase2_entropy**: insufficient data — no Phase 2 arm in this run (entropy sampling not enabled)
-- **phase3_temporal[C2a03_log]**: fail — freshness Δ 0.000 [-0.012, 0.013]; historical_meme Δ -0.008 [-0.072, 0.059]; copy Δ -0.003 [-0.035, 0.030]; affinity_without_copy Δ -0.005 [-0.030, 0.020]; p95 21.7 ms (budget 150) — freshness did not rise significantly
-- **phase3_temporal[C2a03_pow50]**: fail — freshness Δ 0.000 [-0.012, 0.012]; historical_meme Δ -0.008 [-0.072, 0.059]; copy Δ -0.003 [-0.035, 0.030]; affinity_without_copy Δ -0.005 [-0.030, 0.020]; p95 23.1 ms (budget 150) — freshness did not rise significantly
-- **phase3_temporal[C2a03_pow75]**: fail — freshness Δ 0.000 [-0.012, 0.013]; historical_meme Δ -0.011 [-0.075, 0.059]; copy Δ -0.003 [-0.035, 0.030]; affinity_without_copy Δ -0.005 [-0.031, 0.021]; p95 23.8 ms (budget 150) — freshness did not rise significantly
-- **phase3_temporal[C2a05_log]**: fail — freshness Δ 0.002 [-0.010, 0.014]; historical_meme Δ 0.000 [-0.067, 0.072]; copy Δ -0.001 [-0.033, 0.032]; affinity_without_copy Δ -0.005 [-0.031, 0.022]; p95 26.6 ms (budget 150) — freshness did not rise significantly
-- **phase3_temporal[C2a05_pow50]**: fail — freshness Δ 0.002 [-0.010, 0.014]; historical_meme Δ 0.000 [-0.067, 0.072]; copy Δ -0.001 [-0.033, 0.032]; affinity_without_copy Δ -0.004 [-0.030, 0.023]; p95 22.5 ms (budget 150) — freshness did not rise significantly
-- **phase3_temporal[C2a05_pow75]**: fail — freshness Δ 0.002 [-0.010, 0.014]; historical_meme Δ 0.000 [-0.064, 0.072]; copy Δ -0.001 [-0.033, 0.032]; affinity_without_copy Δ -0.005 [-0.030, 0.021]; p95 21.6 ms (budget 150) — freshness did not rise significantly
-- **phase3_temporal[C2a07_log]**: fail — freshness Δ 0.004 [-0.009, 0.016]; historical_meme Δ -0.003 [-0.067, 0.067]; copy Δ -0.002 [-0.034, 0.031]; affinity_without_copy Δ -0.002 [-0.029, 0.024]; p95 22.4 ms (budget 150) — freshness did not rise significantly
-- **phase3_temporal[C2a07_pow50]**: fail — freshness Δ 0.003 [-0.009, 0.015]; historical_meme Δ -0.003 [-0.067, 0.067]; copy Δ -0.002 [-0.034, 0.031]; affinity_without_copy Δ -0.002 [-0.029, 0.024]; p95 23.4 ms (budget 150) — freshness did not rise significantly
-- **phase3_temporal[C2a07_pow75]**: fail — freshness Δ 0.003 [-0.009, 0.015]; historical_meme Δ -0.003 [-0.067, 0.069]; copy Δ -0.002 [-0.033, 0.031]; affinity_without_copy Δ -0.002 [-0.030, 0.023]; p95 22.6 ms (budget 150) — freshness did not rise significantly
+- **phase3_temporal[C2a03_log]**: fail — freshness Δ 0.000 [-0.012, 0.013]; historical_meme Δ -0.008 [-0.072, 0.059]; copy Δ -0.003 [-0.035, 0.030]; affinity_without_copy Δ -0.005 [-0.030, 0.020]; p95 22.1 ms (budget 150) — freshness did not rise significantly
+- **phase3_temporal[C2a03_pow50]**: fail — freshness Δ 0.000 [-0.012, 0.012]; historical_meme Δ -0.008 [-0.072, 0.059]; copy Δ -0.003 [-0.035, 0.030]; affinity_without_copy Δ -0.005 [-0.030, 0.020]; p95 22.1 ms (budget 150) — freshness did not rise significantly
+- **phase3_temporal[C2a03_pow75]**: fail — freshness Δ 0.000 [-0.012, 0.013]; historical_meme Δ -0.011 [-0.075, 0.059]; copy Δ -0.003 [-0.035, 0.030]; affinity_without_copy Δ -0.005 [-0.031, 0.021]; p95 24.6 ms (budget 150) — freshness did not rise significantly
+- **phase3_temporal[C2a05_log]**: fail — freshness Δ 0.002 [-0.010, 0.014]; historical_meme Δ 0.000 [-0.067, 0.072]; copy Δ -0.001 [-0.033, 0.032]; affinity_without_copy Δ -0.005 [-0.031, 0.022]; p95 23.6 ms (budget 150) — freshness did not rise significantly
+- **phase3_temporal[C2a05_pow50]**: fail — freshness Δ 0.002 [-0.010, 0.014]; historical_meme Δ 0.000 [-0.067, 0.072]; copy Δ -0.001 [-0.033, 0.032]; affinity_without_copy Δ -0.004 [-0.030, 0.023]; p95 25.6 ms (budget 150) — freshness did not rise significantly
+- **phase3_temporal[C2a05_pow75]**: fail — freshness Δ 0.002 [-0.010, 0.014]; historical_meme Δ 0.000 [-0.064, 0.072]; copy Δ -0.001 [-0.033, 0.032]; affinity_without_copy Δ -0.005 [-0.030, 0.021]; p95 24.8 ms (budget 150) — freshness did not rise significantly
+- **phase3_temporal[C2a07_log]**: fail — freshness Δ 0.004 [-0.009, 0.016]; historical_meme Δ -0.003 [-0.067, 0.067]; copy Δ -0.002 [-0.034, 0.031]; affinity_without_copy Δ -0.002 [-0.029, 0.024]; p95 21.6 ms (budget 150) — freshness did not rise significantly
+- **phase3_temporal[C2a07_pow50]**: fail — freshness Δ 0.003 [-0.009, 0.015]; historical_meme Δ -0.003 [-0.067, 0.067]; copy Δ -0.002 [-0.034, 0.031]; affinity_without_copy Δ -0.002 [-0.029, 0.024]; p95 22.6 ms (budget 150) — freshness did not rise significantly
+- **phase3_temporal[C2a07_pow75]**: fail — freshness Δ 0.003 [-0.009, 0.015]; historical_meme Δ -0.003 [-0.067, 0.069]; copy Δ -0.002 [-0.033, 0.031]; affinity_without_copy Δ -0.002 [-0.030, 0.023]; p95 26.8 ms (budget 150) — freshness did not rise significantly
 - **phase5_promotion**: insufficient data — seeded generation does not exist before Phase 5
 - **phase6_anticycle**: insufficient data — observed cycle_detection_rate=0.001 [0.000, 0.002] (threshold 0.05); cycle_harm_rate has only its automatic component until a manual round (doc 05 §5) is conducted
 - **phase7_order4**: insufficient data — shadow data: 364 eligible steps (need >= 1000 for a verdict; estimator=window)
-- **performance.generation_p95**: pass — C0 p95 = 22.3 ms (budget 150 ms)
+- **performance.generation_p95**: pass — C0 p95 = 21.4 ms (budget 150 ms)
 - **performance.lookup_p95**: insufficient data — distribution-lookup instrumentation lands in Phase 1
 - **meme_regression_pass (C0, informational at Phase 0)**: fail — memes never reproduced (indices): [13, 14, 15] (list of 27 memes, prompt set 308b7deaea0f)
 
