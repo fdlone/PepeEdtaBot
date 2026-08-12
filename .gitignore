@@ -21,6 +21,10 @@ uv.lock
 *.db-wal
 data/
 db_prod_copy/
+# Раунд ручной разметки мемов (docs/MEME_RATING_ROUND.md): список и ключ — это
+# дословные фразы приватного чата, ответы оценщиков тоже. В отчёт идут только
+# агрегаты.
+rating_rounds/
 
 # IDE
 .vscode/

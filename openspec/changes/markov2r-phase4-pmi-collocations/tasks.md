@@ -5,7 +5,7 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 ## 1. Operational precondition (start first, it has a human in the loop)
 
-- [ ] 1.1 Agree with the owner who rates the top-20 and when (owner alone, or owner + chat participants — doc 05 §5 publishes inter-rater agreement only when there is more than one rater)
+- [x] 1.1 Agree with the owner who rates the top-20 and when (owner alone, or owner + chat participants — doc 05 §5 publishes inter-rater agreement only when there is more than one rater)
 - [x] 1.2 Pre-register the `phase4_memes` gate in `tools/eval/eval_thresholds.yaml` with the ≥70% bar and the automatic must-not-worsen conditions — separate commit, before any ranking is produced
 
 ## 2. Schema
@@ -64,7 +64,7 @@ on human raters — start lining it up at task 1.1, not at task 9.
 ## 9. Manual rating round (needs people — see 1.1)
 
 - [ ] 9.1 Produce the top-20 ranking and a rating sheet template (real / merely frequent / junk)
-- [ ] 9.2 Rating sheet stays out of the repository — it is verbatim chat content (spec: `generation-collocations`)
+- [x] 9.2 Rating sheet stays out of the repository — it is verbatim chat content (spec: `generation-collocations`)
 - [ ] 9.3 Conduct the round; record rater count and per-category counts
 - [ ] 9.4 Aggregate into the report: counts, shares, inter-rater agreement when there is more than one rater; explicitly "agreement unavailable" for a single rater
 
