@@ -85,6 +85,15 @@ def _int_in_set(allowed: set[int]) -> Domain:
     return Domain(parse, "/".join(str(v) for v in sorted(allowed)))
 
 
+def _str_in_set(allowed: tuple[str, ...]) -> Domain:
+    def parse(value: str) -> str:
+        parsed = value.strip().lower()
+        if parsed not in allowed:
+            raise ValueError(f"value must be one of {', '.join(allowed)}")
+        return parsed
+    return Domain(parse, "|".join(allowed))
+
+
 def _float_in_range(min_v: float, max_v: float) -> Domain:
     def parse(value: str) -> float:
         parsed = float(value)
@@ -300,6 +309,38 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               "0", _float_in_range(0.0, 20.0)),
     FieldSpec("markov_branching_candidate_floor", "MARKOV_BRANCHING_CANDIDATE_FLOOR",
               "2", _int_in_range(1, 5)),
+    # Markov 2.0R Phase 3 (M2R-210, TZ §7-8): the temporal blend.
+    #
+    # Half-life of the short layer in days. The stored counter is mathematically
+    # tied to the half-life it accumulated under, so changing this DISCARDS the
+    # chat's short layer (TZ §7.2) — the only knob in this registry that throws
+    # data away, which is why /set answers it with an explicit warning instead
+    # of a silent "ok".
+    FieldSpec("markov_short_half_life_days", "MARKOV_SHORT_HALF_LIFE_DAYS", "3",
+              _float_in_range(1.0, 14.0)),
+    # Shape of the sublinear compression applied to historical counts before
+    # they are normalized. Without compression a count of 10000 against 20 gives
+    # 0.998/0.002 and no alpha lets fresh language matter at all. Measured on
+    # exactly that pair: log leaves the smaller token 24.8% of the mass, pow at
+    # beta 0.6 leaves it 2.3% — an order of magnitude apart, which is what the
+    # M2R-215 calibration grid exists to settle.
+    FieldSpec("markov_long_compression", "MARKOV_LONG_COMPRESSION", "log",
+              _str_in_set(("log", "pow"))),
+    FieldSpec("markov_long_compression_beta", "MARKOV_LONG_COMPRESSION_BETA", "0.6",
+              _float_in_range(0.5, 0.75)),
+    # Blend weight per mood: P = alpha*P_short + (1-alpha)*P_long. TZ §8.3
+    # proposes 0.20/0.30/0.50/0.70 as the STARTING POINT OF A GRID, not as a
+    # decision, so every default here is 0 — the neutral value that takes the
+    # early return and keeps generation byte-identical to Markov 1.x. Raising
+    # them is a defaults change that needs the phase3_temporal gate to pass.
+    FieldSpec("markov_alpha_sleepy", "MARKOV_ALPHA_SLEEPY", "0",
+              _float_in_range(0.0, 1.0)),
+    FieldSpec("markov_alpha_calm", "MARKOV_ALPHA_CALM", "0",
+              _float_in_range(0.0, 1.0)),
+    FieldSpec("markov_alpha_lively", "MARKOV_ALPHA_LIVELY", "0",
+              _float_in_range(0.0, 1.0)),
+    FieldSpec("markov_alpha_heated", "MARKOV_ALPHA_HEATED", "0",
+              _float_in_range(0.0, 1.0)),
     # Backoff bottoms out at order 2: the order-1 chain was removed entirely
     # (2026-07-12) after eval_prod showed order-1 walks are word salad — the
     # 2026-07-09 default already forbade them and nothing regressed.

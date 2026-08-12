@@ -62,6 +62,13 @@ class Settings:
     markov_entropy_temp_max: float
     markov_branching_degenerate_max: float
     markov_branching_candidate_floor: int
+    markov_short_half_life_days: float
+    markov_long_compression: str
+    markov_long_compression_beta: float
+    markov_alpha_sleepy: float
+    markov_alpha_calm: float
+    markov_alpha_lively: float
+    markov_alpha_heated: float
     enable_backoff: bool
     markov_jump_probability: float
     context_jump_boost: float

@@ -241,6 +241,15 @@ async def evaluate_generation(
                 markov_entropy_temp_max=12.0,
                 markov_branching_degenerate_max=0.0,
                 markov_branching_candidate_floor=2,
+                # M2R-210: neutral temporal blend — every alpha 0, so this
+                # baseline keeps measuring the word model alone.
+                markov_short_half_life_days=3.0,
+                markov_long_compression="log",
+                markov_long_compression_beta=0.6,
+                markov_alpha_sleepy=0.0,
+                markov_alpha_calm=0.0,
+                markov_alpha_lively=0.0,
+                markov_alpha_heated=0.0,
                 enable_backoff=True,
                 # Keep the M3/M4 channels off in eval so the baselines measure the
                 # word model alone (and no emoji-stats DB reads are attempted).

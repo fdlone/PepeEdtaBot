@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import random
+import time
 from collections.abc import Callable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
@@ -38,10 +39,18 @@ from app.core.markov import (
     tokenize,
     trim_splice_tail,
 )
-from app.core.mood import HEATED, NEUTRAL_MODIFIERS, MoodModifiers
+from app.core.mood import (
+    CALM,
+    HEATED,
+    LIVELY,
+    NEUTRAL_MODIFIERS,
+    SLEEPY,
+    MoodModifiers,
+)
 from app.core.reply_flavor import apply_reply_flavor
 from app.core.shadow_order import shadow_order4_stats
 from app.core.slot_mutation import mutate_candidate_tokens
+from app.core.temporal import TemporalBlend
 from app.core.text import capitalize_reply_sentences, sanitize_text
 from app.log_masking import mask_chat_id
 
@@ -134,6 +143,11 @@ class GenerationRequest:
     context_tokens: list[str]
     seed: list[str] | None
     current_message_normalized: str
+    # M2R-210: the moment the temporal layer is evaluated at, as Unix seconds.
+    # None means "now" — the bot's own path. The eval runner and the tests pass
+    # a fixed value, which is what keeps a time-dependent weight reproducible
+    # (design D3).
+    now: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,6 +284,32 @@ class ResponseGenerator:
             pivot=state.markov_entropy_pivot,
             temp_min=state.markov_entropy_temp_min,
             temp_max=state.markov_entropy_temp_max,
+        )
+
+    @property
+    def temporal_blend(self) -> TemporalBlend:
+        """M2R-210 blend settings for this chat, resolved from the runtime knobs.
+
+        Alpha follows the chat's mood (TZ §8.3): a sleepy chat leans on what it
+        has always said, a heated one on what it is saying right now. An unknown
+        or absent mood falls back to the calm weight rather than to a guess.
+
+        Every alpha defaults to 0, so this returns the neutral instance until
+        someone deliberately raises a knob — and the neutral instance is the one
+        that takes the early return inside the blend.
+        """
+        state = self.runtime_state
+        alpha_by_mood = {
+            SLEEPY: state.markov_alpha_sleepy,
+            CALM: state.markov_alpha_calm,
+            LIVELY: state.markov_alpha_lively,
+            HEATED: state.markov_alpha_heated,
+        }
+        return TemporalBlend(
+            alpha=alpha_by_mood.get(self.mood or CALM, state.markov_alpha_calm),
+            half_life_days=state.markov_short_half_life_days,
+            compression=state.markov_long_compression,
+            beta=state.markov_long_compression_beta,
         )
 
     async def _candidate_reject_reason(
@@ -595,6 +635,12 @@ class ResponseGenerator:
             0.0, self.runtime_state.randomness_strength + modifiers.randomness_delta
         )
         entropy_sampling = self.entropy_sampling
+        temporal_blend = self.temporal_blend
+        # M2R-210 / design D3: one moment for the whole generation. Reading the
+        # clock per step would make two runs of the same seed differ by however
+        # long the run took, and the eval protocol's bit-for-bit requirement —
+        # what makes every phase verdict auditable — would stop holding.
+        now = request.now if request.now is not None else int(time.time())
 
         gen_trace_log.log_request_header(
             request.chat_id,
@@ -640,6 +686,8 @@ class ResponseGenerator:
                     self.runtime_state.context_anchor_splice_probability
                 ),
                 entropy_sampling=entropy_sampling,
+                temporal_blend=temporal_blend,
+                now=now,
                 rng=generation_rng,
                 attempt_budget=1,
             )

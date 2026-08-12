@@ -288,6 +288,20 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["transitions2"], 0)
         self.assertEqual(stats["transitions3"], 0)
 
+        # M2R-200: the temporal record lives on those same rows, so a wipe must
+        # not leave a short layer or an observation time behind. Asserted
+        # directly rather than inferred from the counts above — a future
+        # temporal side table would pass the counts and fail this.
+        async with self.db._lock:
+            conn = await self.db._get_conn()
+            for table in ("starts", "starts3", "transitions", "transitions3"):
+                cur = await conn.execute(
+                    f"SELECT COUNT(*) FROM {table} "  # nosec B608
+                    "WHERE chat_id = ? AND (s_updated_at IS NOT NULL OR s_value > 0)",
+                    (3003,),
+                )
+                self.assertEqual((await cur.fetchone())[0], 0, table)
+
     async def test_stored_text_is_normalized_on_write(self) -> None:
         """Нормализация применяется при записи, а не при чтении.
 
