@@ -71,4 +71,4 @@ decision (M2R-430) is a follow-up — it needs prod-accumulated df.
 
 - [x] 11.1 `openspec validate --strict` green for this change
 - [x] 11.2 Full test suite + lint/type checks — 1119 tests OK, ruff clean, mypy clean (2026-08-12)
-- [ ] 11.3 Archive this change after merge
+- [x] 11.3 Archive this change after merge
