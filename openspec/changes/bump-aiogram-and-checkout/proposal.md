@@ -16,6 +16,14 @@ is deprecating on hosted runners. Both were queued as background hygiene in
   changes documented for 3.29.x→3.30.0). Transitive pins refreshed only if the
   resolver actually moves them. The range in `requirements.txt`
   (`>=3.7.0,<4.0.0`) already admits it and stays untouched.
+- `requirements.lock`: the rest of the pins refreshed by the lock's own
+  documented strategy (pip freeze in a clean venv): aiohappyeyeballs 2.7.1,
+  annotated-types 0.8.0, certifi 2026.7.22, cffi 2.1.1, typing-inspection
+  0.4.4, typing_extensions 4.16.0, yarl 1.24.5. Top-level runtime deps
+  (aiosqlite, python-dotenv, cryptography, pymorphy3) were already at their
+  latest; pydantic stays 2.13.4 — its own core pin, not our lag. Local dev
+  tools aligned with what CI already resolves (ruff 0.16.2, mypy 2.3.0);
+  the open `>=` ranges in `requirements-dev.txt` need no edit.
 - `.github/workflows/ci.yml`: `actions/checkout@v4` → `@v7` in both jobs.
   v5 fixed the Node 20 deprecation (Node 24); v6/v7 changes (credentials in a
   separate file, fork-PR block for `pull_request_target`/`workflow_run`) do
