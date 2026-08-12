@@ -13,15 +13,15 @@ on human raters — start lining it up at task 1.1, not at task 9.
 - [x] 2.1 Migration `019_markov_collocations.sql`: `chat_id, left_token, right_token, joint_count, pmi, status, updated_at`, keyed per chat and pair (TZ §13)
 - [ ] 2.2 Measure the migration on `db_prod_copy` and record the number
 - [ ] 2.3 `/clear confirm` removes the chat's registry — extend the existing orphaned-structures test
-- [ ] 2.4 Repository for the registry following the established `BaseRepo` pattern
+- [x] 2.4 Repository for the registry following the established `BaseRepo` pattern
 
 ## 3. Analyzer (M2R-300)
 
 - [x] 3.1 Association measures over the chat's bigrams: normalized PMI, lift, LLR
 - [x] 3.2 `meme_score = normalized_pmi × support_factor × recency_factor`; support and recency factors are mandatory inputs, not optional
-- [ ] 3.3 **Support threshold applied in the SQL `HAVING`, not after loading** (design D1) — the measured difference is 41 ms against 88 ms, and 88% of pairs are excluded as single occurrences
-- [ ] 3.4 Marginals read as two aggregate queries rather than derived from the filtered pairs — the filter changes which pairs are scored, never what the probabilities mean
-- [ ] 3.5 Registry write: promote by score, cap at `MARKOV_COLLOCATION_MAX_ENTRIES`, never resurrect a retired entry (design D3)
+- [x] 3.3 **Support threshold applied in the SQL `HAVING`, not after loading** (design D1) — the measured difference is 41 ms against 88 ms, and 88% of pairs are excluded as single occurrences
+- [x] 3.4 Marginals read as two aggregate queries rather than derived from the filtered pairs — the filter changes which pairs are scored, never what the probabilities mean
+- [x] 3.5 Registry write: promote by score, cap at `MARKOV_COLLOCATION_MAX_ENTRIES`, never resurrect a retired entry (design D3)
 
 ## 4. Daily maintenance (design D2)
 
