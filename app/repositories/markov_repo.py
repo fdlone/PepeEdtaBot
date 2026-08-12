@@ -102,6 +102,44 @@ class MarkovRepo(BaseRepo):
         )
         return [_transition_row(r) for r in rows]
 
+    async def get_reverse_transitions(
+        self, chat_id: int, w2: str, w3: str
+    ) -> list[TransitionRow]:
+        """Which tokens preceded state ``(w2, w3)``, with the temporal record.
+
+        M2R-400 (TZ §9.2, design D1): a reverse order-2 transition IS the
+        forward row read by its last two columns — served by
+        ``idx_transitions_reverse``, never a scan. No production caller until
+        seeded generation (M2R-410) lands behind its own gate.
+        """
+        rows = await self._fetch_all(
+            """
+            SELECT w1, cnt, s_value, s_updated_at
+            FROM transitions
+            WHERE chat_id = ? AND w2 = ? AND w3 = ?
+            ORDER BY w1
+            """,
+            (chat_id, w2, w3),
+        )
+        return [_transition_row(r) for r in rows]
+
+    async def get_token_df(self, chat_id: int, token: str) -> int:
+        """In how many learned messages the token appeared (M2R-400, TZ §9.3)."""
+        rows = await self._fetch_all(
+            "SELECT messages_seen FROM markov_token_df "
+            "WHERE chat_id = ? AND token = ?",
+            (chat_id, token),
+        )
+        return int(rows[0][0]) if rows else 0
+
+    async def get_n_docs(self, chat_id: int) -> int:
+        """Total learned messages of the chat — the IDF denominator's N."""
+        rows = await self._fetch_all(
+            "SELECT n_docs FROM chat_model_volume WHERE chat_id = ?",
+            (chat_id,),
+        )
+        return int(rows[0][0]) if rows else 0
+
     async def get_states(
         self,
         chat_id: int,

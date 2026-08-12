@@ -392,11 +392,17 @@ jump.
 + s_updated_at
 ```
 
-### `markov_reverse` (Phase 5, только order-2)
+### Реверсные переходы (Phase 5, только order-2)
 
-```text
-chat_id, token, state_hash, count, s_value, s_updated_at, last_seen
-```
+Реализовано **индексом** `idx_transitions_reverse (chat_id, w2, w3)` над
+существующей таблицей прямых переходов, а не отдельной таблицей
+`markov_reverse (chat_id, token, state_hash, …)`, эскизированной в v1.x:
+реверсный переход — это та же строка прямой таблицы, прочитанная по последним
+двум колонкам. Индекс даёт согласованность по построению (второй копии
+счётчиков нет — нечему разъезжаться), кратно меньший storage (замер миграции
+020: +13.9% файла против кратного у таблицы-дубликата), бэкфилл одним
+`CREATE INDEX` и откат одним `DROP INDEX`. Семантика §9.2 не изменилась.
+Решение: change `markov2r-phase5-reverse-index`, design D1.
 
 ### `markov_token_df` (Phase 5)
 

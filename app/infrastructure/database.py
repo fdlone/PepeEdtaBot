@@ -448,19 +448,37 @@ class Database:
                     [(chat_id, *window) for window in verbatim_windows],
                 )
 
+            # Incremental document frequency (M2R-400, TZ §9.3): +1 per unique
+            # token per message. Raw messages are retention-trimmed, so this
+            # aggregate is the only durable record of df — it is accumulated
+            # here, in the same transaction, and never recomputed.
+            if tokens:
+                await db.executemany(
+                    """
+                    INSERT INTO markov_token_df (chat_id, token, messages_seen)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(chat_id, token) DO UPDATE SET
+                        messages_seen = messages_seen + 1
+                    """,
+                    [(chat_id, token) for token in set(tokens)],
+                )
+
             # Maintain the per-chat model volume incrementally instead of
             # re-summing the whole transitions tables on every message (audit
             # D2). The delta is exactly the number of transition occurrences
             # this message contributed (sum of the per-message counters).
+            # n_docs (M2R-400) rides the same upsert: one learned message,
+            # one increment.
             volume2_delta = sum(trans2_counter.values())
             volume3_delta = sum(trans3_counter.values())
             await db.execute(
                 """
-                INSERT INTO chat_model_volume (chat_id, volume2, volume3)
-                VALUES (?, ?, ?)
+                INSERT INTO chat_model_volume (chat_id, volume2, volume3, n_docs)
+                VALUES (?, ?, ?, 1)
                 ON CONFLICT(chat_id) DO UPDATE SET
                     volume2 = volume2 + excluded.volume2,
-                    volume3 = volume3 + excluded.volume3
+                    volume3 = volume3 + excluded.volume3,
+                    n_docs = n_docs + 1
                 """,
                 (chat_id, volume2_delta, volume3_delta),
             )
@@ -704,6 +722,7 @@ class Database:
     async def clear_chat(self, chat_id: int) -> None:
         tables = (
             "markov_collocations",
+            "markov_token_df",
             "messages",
             "starts",
             "starts3",
