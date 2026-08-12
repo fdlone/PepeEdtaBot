@@ -57,6 +57,7 @@ from .metrics import (  # noqa: E402
     longest_common_run,
 )
 from .prompts import PromptSet  # noqa: E402
+from .temporal_fixture import fresh_share  # noqa: E402
 
 PROTOCOL_SEEDS = (42, 1337, 2026)  # doc 05 §1.3
 DEFAULT_GENERATIONS = 500  # 125 x 4 categories
@@ -95,6 +96,8 @@ async def run_config_seed(
     prompt_set: PromptSet,
     seed: int,
     generations: int,
+    fresh_tokens: frozenset[str] | None = None,
+    evaluation_moment: int | None = None,
 ) -> tuple[list[GenRecord], dict[str, float | int | None]]:
     """One (configuration, seed) protocol run — fresh DB copy, cold process state.
 
@@ -171,6 +174,12 @@ async def run_config_seed(
                             context_tokens=prompt_tokens,
                             seed=None,
                             current_message_normalized=sanitize_text(prompt).lower(),
+                            # M2R-210: a fixed moment, so a time-dependent
+                            # weight stays reproducible. On a reconstructed
+                            # snapshot this is the corpus's own last moment —
+                            # wall-clock "now" would be months later and the
+                            # short layer would read as decayed to nothing.
+                            now=evaluation_moment,
                         ),
                         rng=rng,
                         candidate_target=CANDIDATE_TARGET,
@@ -222,6 +231,11 @@ async def run_config_seed(
                                 reply_content, prompt_content, idf, default_idf
                             ),
                             meme_hits=meme_hits,
+                            fresh_share=(
+                                None
+                                if fresh_tokens is None
+                                else fresh_share(reply_content, fresh_tokens)
+                            ),
                         )
                     )
         finally:
@@ -241,6 +255,8 @@ async def run_matrix(
     prompt_set: PromptSet,
     seeds: tuple[int, ...],
     generations: int,
+    fresh_tokens: frozenset[str] | None = None,
+    evaluation_moment: int | None = None,
 ) -> tuple[dict[str, ConfigRun], list[str]]:
     """Run every available configuration; alias ones resolving to identical
     overrides (spec: degenerate matrix before any V2 feature exists)."""
@@ -277,6 +293,8 @@ async def run_matrix(
                 prompt_set=prompt_set,
                 seed=seed,
                 generations=generations,
+                fresh_tokens=fresh_tokens,
+                evaluation_moment=evaluation_moment,
             )
             records.extend(seed_records)
             snapshots.append(snapshot)

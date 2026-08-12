@@ -109,7 +109,13 @@ def _route(trace: GenerationTrace) -> str:
         # M2R-100: the temperature actually sampled at, next to the entropy it
         # was derived from — a neutral knob is then visible as a flat number
         # rather than something to look up in the config.
-        f"temperature={trace.mean_applied_temperature:.2f}"
+        f"temperature={trace.mean_applied_temperature:.2f} "
+        # M2R-210: the blend's intent next to its effect. alpha is what was
+        # configured; coverage and shift are what the walk actually got, so
+        # "set but inert" (alpha>0, shift=0) is readable straight off the line.
+        f"alpha={trace.applied_alpha:.2f} "
+        f"short_cover={trace.blend_step_coverage:.2f} "
+        f"blend_shift={trace.mean_blend_displacement:.3f}"
     )
 
 

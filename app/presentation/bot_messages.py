@@ -97,6 +97,15 @@ def format_stats_message(
         temperature = telemetry.get("mean_applied_temperature")
         if temperature is not None:
             lines.append(f"температура шага: {temperature:.2f}")
+        # M2R-210: покрытие короткого слоя и сдвиг распределения — эффект
+        # blend'а, а не его настройка. Выключенный blend читается как два нуля.
+        coverage = telemetry.get("blend_step_coverage")
+        displacement = telemetry.get("mean_blend_displacement")
+        if coverage is not None and displacement is not None:
+            lines.append(
+                f"свежий слой: покрытие {coverage:.0%}, "
+                f"сдвиг распределения {displacement:.3f}"
+            )
         hit_rate = telemetry.get("cache_hit_rate")
         if hit_rate is not None:
             lines.append(f"кэш распределений: {hit_rate:.0%} попаданий")
@@ -149,6 +158,18 @@ def format_config_message(
                 f"markov_entropy_temp_gain={state.markov_entropy_temp_gain}",
                 f"markov_entropy_pivot={state.markov_entropy_pivot}",
                 f"markov_branching_degenerate_max={state.markov_branching_degenerate_max}",
+                # Phase 3 temporal blend: the alphas decide how much of the
+                # chat's fresh language is mixed in, and the half-life and
+                # compression shape decide what "fresh" and "historical" even
+                # weigh — all four explain a changed voice, so all four are
+                # readable here.
+                f"markov_alpha_sleepy={state.markov_alpha_sleepy}",
+                f"markov_alpha_calm={state.markov_alpha_calm}",
+                f"markov_alpha_lively={state.markov_alpha_lively}",
+                f"markov_alpha_heated={state.markov_alpha_heated}",
+                f"markov_short_half_life_days={state.markov_short_half_life_days}",
+                f"markov_long_compression={state.markov_long_compression}",
+                f"markov_long_compression_beta={state.markov_long_compression_beta}",
                 f"reply_context_max_tokens={state.reply_context_max_tokens}",
                 f"reply_context_bias={state.reply_context_bias}",
                 f"reply_context_start_bias={state.reply_context_start_bias}",

@@ -112,6 +112,7 @@ async def cmd_set(
     runtime_state: RuntimeState,
     settings: Settings,
     runtime_state_base: RuntimeState,
+    learning_service: LearningService,
 ) -> None:
     raw = _extract_command_arg(message.text or "")
     if raw.strip().lower() == "help":
@@ -164,6 +165,10 @@ async def cmd_set(
         return
 
     key, value = arguments[0].strip().lower(), arguments[1].strip()
+    # M2R-210 / TZ §7.2: the short layer is mathematically tied to the half-life
+    # it accumulated under, so changing that knob discards it. Read the old
+    # value before applying, so an unchanged value stays a no-op.
+    previous_half_life = runtime_state.markov_short_half_life_days
     try:
         apply_runtime_setting(
             runtime_state_base,
@@ -185,9 +190,21 @@ async def cmd_set(
         return
 
     scope = "глобально, во всех чатах" if is_global else "в этом чате"
-    await reply_humanized_state(
-        message, f"Обновлено: {key}={value} ({scope}, до перезапуска)", runtime_state
-    )
+    text = f"Обновлено: {key}={value} ({scope}, до перезапуска)"
+
+    if key == "markov_short_half_life_days":
+        new_half_life = float(value)
+        if new_half_life != previous_half_life:
+            reset_chat = None if is_global else message.chat.id
+            await learning_service.reset_short_layer(reset_chat)
+            text += (
+                "\n\nВнимание: короткий слой обнулён — счётчик свежести "
+                "математически привязан к прежнему периоду полураспада и "
+                f"несопоставим с новым. Долгая память чата не тронута, "
+                f"свежесть накопится заново примерно за {value} дн."
+            )
+
+    await reply_humanized_state(message, text, runtime_state)
 
 
 @router.message(Command("set"), GroupOnly())

@@ -2,7 +2,23 @@ from __future__ import annotations
 
 import aiosqlite
 
+from app.core.temporal import TransitionRow
 from app.repositories.base_repo import BaseRepo
+
+
+def _transition_row(row: aiosqlite.Row) -> TransitionRow:
+    """One pool row with both layers (M2R-200).
+
+    ``s_updated_at`` stays None for rows that predate migration 018 or have not
+    been observed since it ran — the reader treats that as an empty short layer
+    rather than inventing a date (design D6).
+    """
+    return (
+        str(row[0]),
+        int(row[1]),
+        float(row[2] or 0.0),
+        None if row[3] is None else int(row[3]),
+    )
 
 
 class MarkovRepo(BaseRepo):
@@ -60,31 +76,31 @@ class MarkovRepo(BaseRepo):
 
     async def get_transitions(
         self, chat_id: int, w1: str, w2: str
-    ) -> list[tuple[str, int]]:
+    ) -> list[TransitionRow]:
         rows = await self._fetch_all(
             """
-            SELECT w3, cnt
+            SELECT w3, cnt, s_value, s_updated_at
             FROM transitions
             WHERE chat_id = ? AND w1 = ? AND w2 = ?
             ORDER BY w3
             """,
             (chat_id, w1, w2),
         )
-        return [(str(r[0]), int(r[1])) for r in rows]
+        return [_transition_row(r) for r in rows]
 
     async def get_transitions3(
         self, chat_id: int, w1: str, w2: str, w3: str
-    ) -> list[tuple[str, int]]:
+    ) -> list[TransitionRow]:
         rows = await self._fetch_all(
             """
-            SELECT w4, cnt
+            SELECT w4, cnt, s_value, s_updated_at
             FROM transitions3
             WHERE chat_id = ? AND w1 = ? AND w2 = ? AND w3 = ?
             ORDER BY w4
             """,
             (chat_id, w1, w2, w3),
         )
-        return [(str(r[0]), int(r[1])) for r in rows]
+        return [_transition_row(r) for r in rows]
 
     async def get_states(
         self,

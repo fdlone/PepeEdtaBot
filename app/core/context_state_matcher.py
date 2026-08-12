@@ -31,6 +31,9 @@ class ContextStateMatcher:
         for key in [key for key in self._cache if key[0] == chat_id]:
             self._cache.pop(key, None)
 
+    def invalidate_all_caches(self) -> None:
+        self._cache.clear()
+
     def apply_state_deltas(
         self,
         chat_id: int,

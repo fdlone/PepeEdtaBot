@@ -102,8 +102,8 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         )
         transitions = await self.db.markov.get_transitions(chat_id, "яблоко", "груша")
         self.assertEqual(
-            [token for token, _ in transitions],
-            sorted(token for token, _ in transitions),
+            [row[0] for row in transitions],
+            sorted(row[0] for row in transitions),
         )
         self.assertGreater(len(transitions), 1)
 
@@ -223,10 +223,13 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         starts3 = await self.db.markov.get_starts3(2002)
         self.assertEqual(starts3, [("Я", "очень", "люблю", 1)])
 
+        # Rows carry both layers since M2R-200: (token, count, s_value,
+        # s_updated_at). The short pair is asserted in the Phase 3 suite; here
+        # only the long count matters.
         transitions2 = await self.db.markov.get_transitions(2002, "Я", "очень")
-        self.assertEqual(transitions2, [("люблю", 1)])
+        self.assertEqual([(row[0], row[1]) for row in transitions2], [("люблю", 1)])
         transitions3 = await self.db.markov.get_transitions3(2002, "Я", "очень", "люблю")
-        self.assertEqual(transitions3, [("чат", 1)])
+        self.assertEqual([(row[0], row[1]) for row in transitions3], [("чат", 1)])
 
         stats = await self.db.get_stats(2002)
         self.assertEqual(stats["starts2"], 1)
@@ -262,8 +265,9 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
                 ("zeta", "start", "shared", 2),
             ],
         )
+        rows = await self.db.markov.get_transitions3(2003, "zeta", "start", "shared")
         self.assertEqual(
-            await self.db.markov.get_transitions3(2003, "zeta", "start", "shared"),
+            [(row[0], row[1]) for row in rows],
             [("alpha", 1), ("omega", 1)],
         )
 
@@ -283,6 +287,20 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["starts3"], 0)
         self.assertEqual(stats["transitions2"], 0)
         self.assertEqual(stats["transitions3"], 0)
+
+        # M2R-200: the temporal record lives on those same rows, so a wipe must
+        # not leave a short layer or an observation time behind. Asserted
+        # directly rather than inferred from the counts above — a future
+        # temporal side table would pass the counts and fail this.
+        async with self.db._lock:
+            conn = await self.db._get_conn()
+            for table in ("starts", "starts3", "transitions", "transitions3"):
+                cur = await conn.execute(
+                    f"SELECT COUNT(*) FROM {table} "  # nosec B608
+                    "WHERE chat_id = ? AND (s_updated_at IS NOT NULL OR s_value > 0)",
+                    (3003,),
+                )
+                self.assertEqual((await cur.fetchone())[0], 0, table)
 
     async def test_stored_text_is_normalized_on_write(self) -> None:
         """Нормализация применяется при записи, а не при чтении.

@@ -2,12 +2,12 @@
 
 ## Purpose
 Defines what the Markov generator must be able to report about its own distributions and machinery — uncertainty diagnostics, shadow order-selection statistics, cache effectiveness — where those numbers surface, and what must never leak into them. Normative sources: TZ §6 (formulas), §20 (observability), doc 03 M2R-010/020.
-
 ## Requirements
-
 ### Requirement: Distribution diagnostics are computed for every sampled pool
 
 For every transition pool the generation walk samples from, the system SHALL compute entropy in bits (`H = -Σ p_i·log2(p_i)` over the pool's normalized weights), branching factor (pool size), normalized entropy (`H / log2(B)`, defined as 0 when branching ≤ 1), and confidence (`1 − H_norm`). Computing diagnostics SHALL NOT change generation behavior and SHALL NOT consume random draws.
+
+Diagnostics SHALL be computed from the model's raw-count proportions, not from the temperature-adjusted sampling weights, so that a feature consuming the diagnostics cannot feed its own effect back into them. Where a feature does consume them, the behavioral change SHALL be attributable to that feature's own setting: with every such consumer at its neutral setting, output SHALL remain byte-identical to the frozen baseline.
 
 #### Scenario: Diagnostics on a walk step
 
@@ -21,8 +21,13 @@ For every transition pool the generation walk samples from, the system SHALL com
 
 #### Scenario: Behavior unchanged
 
-- **WHEN** the same generation runs with diagnostics enabled and with the diagnostics code absent, under the same seed
+- **WHEN** the same generation runs with every diagnostics consumer at its neutral setting and with the diagnostics code absent, under the same seed
 - **THEN** the generated text is byte-identical
+
+#### Scenario: Diagnostics are not self-referential
+
+- **WHEN** a consumer changes the sampling weights based on a pool's entropy
+- **THEN** the entropy reported for that pool is unchanged, because it is computed from raw counts rather than from the adjusted weights
 
 ### Requirement: Shadow order-4 selection is measured without an order-4 index
 
@@ -55,3 +60,4 @@ Telemetry values SHALL be numbers and enum-like labels only: no raw message or c
 
 - **WHEN** a telemetry line mentioning a chat is written to the log
 - **THEN** the chat identifier appears only masked, and no message text appears
+

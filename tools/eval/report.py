@@ -22,6 +22,10 @@ from .run import ConfigRun
 # calibration run gets a per-arm verdict without editing this list.
 PHASE2_ARM_PREFIX = "C1"
 
+# Phase 3 arms (temporal blend), same prefix-matching convention: the shipped C2
+# plus every calibration variant of the grid.
+PHASE3_ARM_PREFIX = "C2"
+
 # Canonical §3 order for the metrics table.
 METRIC_ORDER = (
     "generation_success_rate",
@@ -37,6 +41,7 @@ METRIC_ORDER = (
     "seeded_present_rate",
     "seeded_win_rate_given_present",
     "freshness_reflection",
+    "historical_meme_rate",
 )
 INSUFFICIENT = "insufficient data"
 
@@ -83,6 +88,66 @@ def metrics_summary(runs: dict[str, ConfigRun]) -> dict[str, Any]:
     return summary
 
 
+def _delta_part(
+    label: str,
+    base: list[float] | None,
+    arm: list[float] | None,
+    *,
+    parts: list[str],
+    missing: list[str],
+) -> tuple[float, bool] | None:
+    """Append one metric's delta to ``parts``; return (point, significant).
+
+    ``None`` means the delta was not computable — the caller has already been
+    told what is missing and must not treat the absence as a pass.
+    """
+    if not base or not arm:
+        missing.append(f"{label} samples")
+        return None
+    point, lo, hi, significant = delta_ci(base, arm)
+    parts.append(
+        f"{label} Δ {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]"
+        f"{' *' if significant else ''}"
+    )
+    return point, significant
+
+
+def _latency_part(
+    arm: ConfigRun,
+    budget: float,
+    *,
+    parts: list[str],
+    missing: list[str],
+    failures: list[str],
+) -> None:
+    p95 = latency_percentiles(arm.records)["latency_p95"]
+    if p95 is None:
+        missing.append("latencies")
+        return
+    parts.append(f"p95 {p95:.1f} ms (budget {budget:.0f})")
+    if p95 > budget:
+        failures.append("p95 over budget")
+
+
+def _verdict(
+    parts: list[str], failures: list[str], missing: list[str]
+) -> tuple[str, str]:
+    """Shared gate resolution: a demonstrated failure outranks a missing part.
+
+    An arm that provably raised copying does not become undecided because some
+    other part of the gate lacked data. Only a gate with no failures AND a hole
+    is undecided.
+    """
+    detail = "; ".join(parts) if parts else "nothing computable"
+    if missing:
+        detail = f"{detail} — missing: {', '.join(missing)}"
+    if failures:
+        return "fail", f"{detail} — {'; '.join(failures)}"
+    if missing:
+        return INSUFFICIENT, detail
+    return "pass", detail
+
+
 def _phase2_arm_verdict(
     baseline: ConfigRun, arm: ConfigRun, thresholds: dict[str, Any]
 ) -> tuple[str, str]:
@@ -104,18 +169,17 @@ def _phase2_arm_verdict(
     missing: list[str] = []
 
     copy_max = float(config.get("exact_copy_delta_max", 0.0))
-    base_copy = base_values.get("exact_context_copy_rate")
-    arm_copy = arm_values.get("exact_context_copy_rate")
-    if base_copy and arm_copy:
-        point, lo, hi, significant = delta_ci(base_copy, arm_copy)
-        parts.append(
-            f"copy Δ {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]"
-            f"{' *' if significant else ''}"
-        )
+    copy_delta = _delta_part(
+        "copy",
+        base_values.get("exact_context_copy_rate"),
+        arm_values.get("exact_context_copy_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if copy_delta is not None:
+        point, significant = copy_delta
         if significant and point > copy_max:
             failures.append("copy rose significantly")
-    else:
-        missing.append("exact-copy samples")
 
     base_replies = [r.reply_content for r in baseline.records if r.success]
     arm_replies = [r.reply_content for r in arm.records if r.success]
@@ -134,39 +198,108 @@ def _phase2_arm_verdict(
             failures.append(f"distinct-{n} did not rise significantly")
 
     floor = float(config.get("affinity_without_copy_delta_floor", 0.0))
-    base_aff = base_values.get("context_affinity_without_copy")
-    arm_aff = arm_values.get("context_affinity_without_copy")
-    if base_aff and arm_aff:
-        point, lo, hi, significant = delta_ci(base_aff, arm_aff)
-        parts.append(
-            f"affinity_without_copy Δ {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]"
-            f"{' *' if significant else ''}"
-        )
+    affinity_delta = _delta_part(
+        "affinity_without_copy",
+        base_values.get("context_affinity_without_copy"),
+        arm_values.get("context_affinity_without_copy"),
+        parts=parts,
+        missing=missing,
+    )
+    if affinity_delta is not None:
+        point, significant = affinity_delta
         if significant and point < floor:
             failures.append("affinity without copies dropped significantly")
-    else:
-        missing.append("affinity-without-copy samples")
 
-    budget = float(config.get("latency_p95_ms_max", 150))
-    p95 = latency_percentiles(arm.records)["latency_p95"]
-    if p95 is None:
-        missing.append("latencies")
-    else:
-        parts.append(f"p95 {p95:.1f} ms (budget {budget:.0f})")
-        if p95 > budget:
-            failures.append("p95 over budget")
+    _latency_part(
+        arm,
+        float(config.get("latency_p95_ms_max", 150)),
+        parts=parts,
+        missing=missing,
+        failures=failures,
+    )
+    return _verdict(parts, failures, missing)
 
-    detail = "; ".join(parts) if parts else "nothing computable"
-    if missing:
-        detail = f"{detail} — missing: {', '.join(missing)}"
-    # A demonstrated failure outranks a missing part: an arm that provably
-    # raised copying does not become undecided because some other part of the
-    # gate lacked data. Only a gate with no failures AND a hole is undecided.
-    if failures:
-        return "fail", f"{detail} — {'; '.join(failures)}"
-    if missing:
-        return INSUFFICIENT, detail
-    return "pass", detail
+
+def _phase3_arm_verdict(
+    baseline: ConfigRun, arm: ConfigRun, thresholds: dict[str, Any]
+) -> tuple[str, str]:
+    """Five-part Phase 3 gate for one arm (verdict, detail).
+
+    Two-sided by design (design D9): freshness must rise significantly, while
+    historical memes, copying and copy-free topicality must not worsen
+    significantly. A one-sided freshness bar would pass an arm that simply
+    forgets the chat.
+    """
+    if arm.shared_with is not None:
+        return INSUFFICIENT, f"arm resolves to the same overrides as {arm.shared_with}"
+
+    config = thresholds.get("phase3_temporal", {})
+    base_values = metric_values(baseline.records)
+    arm_values = metric_values(arm.records)
+    parts: list[str] = []
+    failures: list[str] = []
+    missing: list[str] = []
+
+    fresh_min = float(config.get("freshness_delta_min", 0.0))
+    fresh_delta = _delta_part(
+        "freshness",
+        base_values.get("freshness_reflection"),
+        arm_values.get("freshness_reflection"),
+        parts=parts,
+        missing=missing,
+    )
+    if fresh_delta is not None:
+        point, significant = fresh_delta
+        if not (significant and point > fresh_min):
+            failures.append("freshness did not rise significantly")
+
+    meme_floor = float(config.get("historical_meme_delta_floor", 0.0))
+    meme_delta = _delta_part(
+        "historical_meme",
+        base_values.get("historical_meme_rate"),
+        arm_values.get("historical_meme_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if meme_delta is not None:
+        point, significant = meme_delta
+        if significant and point < meme_floor:
+            failures.append("historical memes dropped significantly")
+
+    copy_max = float(config.get("exact_copy_delta_max", 0.0))
+    copy_delta = _delta_part(
+        "copy",
+        base_values.get("exact_context_copy_rate"),
+        arm_values.get("exact_context_copy_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if copy_delta is not None:
+        point, significant = copy_delta
+        if significant and point > copy_max:
+            failures.append("copy rose significantly")
+
+    floor = float(config.get("affinity_without_copy_delta_floor", 0.0))
+    affinity_delta = _delta_part(
+        "affinity_without_copy",
+        base_values.get("context_affinity_without_copy"),
+        arm_values.get("context_affinity_without_copy"),
+        parts=parts,
+        missing=missing,
+    )
+    if affinity_delta is not None:
+        point, significant = affinity_delta
+        if significant and point < floor:
+            failures.append("affinity without copies dropped significantly")
+
+    _latency_part(
+        arm,
+        float(config.get("latency_p95_ms_max", 150)),
+        parts=parts,
+        missing=missing,
+        failures=failures,
+    )
+    return _verdict(parts, failures, missing)
 
 
 def evaluate_gates(
@@ -192,6 +325,20 @@ def evaluate_gates(
         for arm_id in phase2_arms:
             verdict, detail = _phase2_arm_verdict(baseline, runs[arm_id], thresholds)
             rows.append((f"phase2_entropy[{arm_id}]", verdict, detail))
+
+    phase3_arms = sorted(arm for arm in runs if arm.startswith(PHASE3_ARM_PREFIX))
+    if baseline is None or not phase3_arms:
+        rows.append(
+            (
+                "phase3_temporal",
+                INSUFFICIENT,
+                "no Phase 3 arm in this run (temporal blend not enabled)",
+            )
+        )
+    else:
+        for arm_id in phase3_arms:
+            verdict, detail = _phase3_arm_verdict(baseline, runs[arm_id], thresholds)
+            rows.append((f"phase3_temporal[{arm_id}]", verdict, detail))
 
     rows.append(
         (
@@ -386,6 +533,22 @@ def build_report(
             for snapshot in run.telemetry
             if snapshot.get("shadow_order4_selected_share") is not None
         ]
+        # M2R-210: intent (alpha) is in the matrix; these two are the effect.
+        coverages = [
+            float(value)
+            for snapshot in run.telemetry
+            if (value := snapshot.get("blend_step_coverage")) is not None
+        ]
+        displacements = [
+            float(value)
+            for snapshot in run.telemetry
+            if (value := snapshot.get("mean_blend_displacement")) is not None
+        ]
+        blend_line = (
+            f"coverage {mean(coverages):.1%}, shift {mean(displacements):.4f}"
+            if coverages and displacements
+            else INSUFFICIENT
+        )
         shadow_line = (
             f"{mean([float(share) for share in shadow_shares]):.1%} "
             "(estimator=window)"
@@ -401,6 +564,7 @@ def build_report(
             f"{latencies['latency_p95']:.1f} ms; cache_hit_rate: {hit_line}; "
             f"mean normalized entropy: {entropy_line}; "
             f"mean applied temperature: {temperature_line}; "
+            f"temporal blend: {blend_line}; "
             f"shadow order-4 share: {shadow_line}; storage_delta: n/a."
         )
     lines.append("")

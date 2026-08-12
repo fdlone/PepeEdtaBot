@@ -5,6 +5,7 @@ import enum
 import logging
 import time
 from collections import Counter
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import TypeVar
 
@@ -16,6 +17,7 @@ from app.config.defaults import (
     SQLITE_WAL_AUTOCHECKPOINT_PAGES,
 )
 from app.core.candidate_scorer import verbatim_ngram_windows
+from app.core.temporal import short_observed
 from app.core.text import sanitize_text
 from app.infrastructure import migrator
 from app.log_masking import mask_chat_ids_in_text
@@ -198,10 +200,131 @@ class Database:
         self._chat_hot_ngrams = None
         self._chat_user_interactions = None
 
+    # One statement's worth of keys. Bounded so a very long message cannot
+    # approach SQLite's bound-parameter ceiling; the loop costs nothing at
+    # normal message lengths, where a single chunk covers everything.
+    _TEMPORAL_CHUNK = 200
+
+    @staticmethod
+    async def _upsert_temporal(
+        db: aiosqlite.Connection,
+        *,
+        table: str,
+        key_columns: tuple[str, ...],
+        chat_id: int,
+        entries: Sequence[tuple[tuple[str, ...], int]],
+        moment: int,
+        half_life_days: float,
+    ) -> None:
+        """Upsert both layers for one message's n-grams (M2R-200/210).
+
+        Read-modify-write rather than pure SQL arithmetic: the short layer's new
+        value depends on the row's own ``s_updated_at`` through ``2^(-Δt/hl)``,
+        and SQLite's ``pow`` is a compile-time option we do not control across
+        the CI matrix and the Docker image. Doing it in Python also keeps one
+        implementation of the decay identity (design D1) and keeps the clock out
+        of SQL, which determinism needs.
+
+        The extra read is a primary-key lookup over the keys of a single
+        message, inside the transaction and the lock that already exist.
+
+        ``table`` and ``key_columns`` come from this module's call sites only,
+        never from user input.
+        """
+        keys = [key for key, _ in entries]
+        stored: dict[tuple[str, ...], tuple[float, int | None]] = {}
+        key_list = ", ".join(key_columns)
+        placeholder = f"({', '.join('?' * len(key_columns))})"
+        for start in range(0, len(keys), Database._TEMPORAL_CHUNK):
+            chunk = keys[start : start + Database._TEMPORAL_CHUNK]
+            values = ", ".join([placeholder] * len(chunk))
+            cursor = await db.execute(
+                f"""
+                SELECT {key_list}, s_value, s_updated_at
+                FROM {table}
+                WHERE chat_id = ? AND ({key_list}) IN (VALUES {values})
+                """,  # nosec B608
+                (chat_id, *[word for key in chunk for word in key]),
+            )
+            for row in await cursor.fetchall():
+                arity = len(key_columns)
+                stored[tuple(str(row[i]) for i in range(arity))] = (
+                    float(row[arity] or 0.0),
+                    None if row[arity + 1] is None else int(row[arity + 1]),
+                )
+
+        payload = []
+        for key, delta in entries:
+            s_value, s_updated_at = stored.get(key, (0.0, None))
+            payload.append(
+                (
+                    chat_id,
+                    *key,
+                    delta,
+                    moment,
+                    moment,
+                    short_observed(s_value, s_updated_at, moment, half_life_days, delta),
+                    moment,
+                )
+            )
+        columns = f"chat_id, {key_list}, cnt, first_seen, last_seen, s_value, s_updated_at"
+        row_placeholders = ", ".join("?" * (len(key_columns) + 6))
+        await db.executemany(
+            f"""
+            INSERT INTO {table}({columns})
+            VALUES ({row_placeholders})
+            ON CONFLICT(chat_id, {key_list})
+            DO UPDATE SET
+                cnt = cnt + excluded.cnt,
+                first_seen = COALESCE(first_seen, excluded.first_seen),
+                last_seen = excluded.last_seen,
+                s_value = excluded.s_value,
+                s_updated_at = excluded.s_updated_at
+            """,  # nosec B608
+            payload,
+        )
+
+    async def reset_short_layer(self, chat_id: int | None = None) -> None:
+        """Zero the short layer, keeping counts and timestamps (TZ §7.2).
+
+        ``chat_id=None`` covers every chat — what a global half-life change
+        means. Deliberately scoped to ``s_value``/``s_updated_at``: the long
+        counter and ``first_seen``/``last_seen`` are a different question and
+        must survive a half-life change untouched.
+        """
+        async with self._lock:
+            db = await self._get_conn()
+            for table in ("starts", "starts3", "transitions", "transitions3"):
+                if chat_id is None:
+                    await db.execute(
+                        f"UPDATE {table} SET s_value = 0, s_updated_at = NULL"  # nosec B608
+                    )
+                else:
+                    await db.execute(
+                        f"UPDATE {table} SET s_value = 0, s_updated_at = NULL "  # nosec B608
+                        "WHERE chat_id = ?",
+                        (chat_id,),
+                    )
+            await db.commit()
+
     async def save_message_and_update_model(
-        self, chat_id: int, raw_text: str, tokens: list[str]
+        self,
+        chat_id: int,
+        raw_text: str,
+        tokens: list[str],
+        now: int | None = None,
+        short_half_life_days: float = 3.0,
     ) -> int:
-        """Атомарно сохраняет raw-сообщение и обновляет счётчики переходов n=3/n=2/n=1."""
+        """Атомарно сохраняет raw-сообщение и обновляет счётчики переходов n=3/n=2/n=1.
+
+        С M2R-200 в той же транзакции ведётся и временная запись: долгий
+        счётчик, ``first_seen``/``last_seen`` и затухающая пара короткого слоя
+        (ТЗ §7.1). Момент наблюдения — параметр, а не ``strftime('now')`` в SQL:
+        тесты и eval должны уметь задать его, а арифметика затухания живёт в
+        одном месте (``app/core/temporal.py``), а не во второй реализации на
+        SQL — математические функции SQLite это опция сборки.
+        """
+        moment = int(time.time()) if now is None else now
         starts2_pair: tuple[str, str] | None = None
         starts3_triplet: tuple[str, str, str] | None = None
 
@@ -249,55 +372,44 @@ class Database:
             )
 
             if starts2_pair:
-                await db.execute(
-                    """
-                    INSERT INTO starts(chat_id, w1, w2, cnt)
-                    VALUES (?, ?, ?, 1)
-                    ON CONFLICT(chat_id, w1, w2)
-                    DO UPDATE SET cnt = cnt + 1
-                    """,
-                    (chat_id, starts2_pair[0], starts2_pair[1]),
+                await self._upsert_temporal(
+                    db,
+                    table="starts",
+                    key_columns=("w1", "w2"),
+                    chat_id=chat_id,
+                    entries=[(starts2_pair, 1)],
+                    moment=moment,
+                    half_life_days=short_half_life_days,
                 )
             if starts3_triplet:
-                await db.execute(
-                    """
-                    INSERT INTO starts3(chat_id, w1, w2, w3, cnt)
-                    VALUES (?, ?, ?, ?, 1)
-                    ON CONFLICT(chat_id, w1, w2, w3)
-                    DO UPDATE SET cnt = cnt + 1
-                    """,
-                    (
-                        chat_id,
-                        starts3_triplet[0],
-                        starts3_triplet[1],
-                        starts3_triplet[2],
-                    ),
+                await self._upsert_temporal(
+                    db,
+                    table="starts3",
+                    key_columns=("w1", "w2", "w3"),
+                    chat_id=chat_id,
+                    entries=[(starts3_triplet, 1)],
+                    moment=moment,
+                    half_life_days=short_half_life_days,
                 )
             if trans2_counter:
-                await db.executemany(
-                    """
-                    INSERT INTO transitions(chat_id, w1, w2, w3, cnt)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(chat_id, w1, w2, w3)
-                    DO UPDATE SET cnt = cnt + excluded.cnt
-                    """,
-                    [
-                        (chat_id, w1, w2, w3, cnt)
-                        for (w1, w2, w3), cnt in trans2_counter.items()
-                    ],
+                await self._upsert_temporal(
+                    db,
+                    table="transitions",
+                    key_columns=("w1", "w2", "w3"),
+                    chat_id=chat_id,
+                    entries=list(trans2_counter.items()),
+                    moment=moment,
+                    half_life_days=short_half_life_days,
                 )
             if trans3_counter:
-                await db.executemany(
-                    """
-                    INSERT INTO transitions3(chat_id, w1, w2, w3, w4, cnt)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(chat_id, w1, w2, w3, w4)
-                    DO UPDATE SET cnt = cnt + excluded.cnt
-                    """,
-                    [
-                        (chat_id, w1, w2, w3, w4, cnt)
-                        for (w1, w2, w3, w4), cnt in trans3_counter.items()
-                    ],
+                await self._upsert_temporal(
+                    db,
+                    table="transitions3",
+                    key_columns=("w1", "w2", "w3", "w4"),
+                    chat_id=chat_id,
+                    entries=list(trans3_counter.items()),
+                    moment=moment,
+                    half_life_days=short_half_life_days,
                 )
 
             # Cumulative verbatim index (O4): distinct casefolded content

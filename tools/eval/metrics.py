@@ -50,6 +50,10 @@ class GenRecord:
     has_cycle: bool = False
     affinity: float | None = None
     meme_hits: frozenset[int] = field(default_factory=frozenset)
+    # §3.5: share of the reply's content tokens that belong to the snapshot's
+    # fresh slice. ``None`` on a snapshot without observation times — the
+    # metric then reports insufficient data rather than a fabricated zero.
+    fresh_share: float | None = None
 
 
 def longest_common_run(a: tuple[str, ...], b: tuple[str, ...]) -> int:
@@ -179,8 +183,18 @@ def metric_values(records: list[GenRecord]) -> dict[str, list[float] | None]:
         # §3.4 — seeded generation does not exist before Phase 5.
         "seeded_present_rate": None,
         "seeded_win_rate_given_present": None,
-        # §3.5 — no temporal snapshot before Phase 3 (audit §10.1).
-        "freshness_reflection": None,
+        # §3.5 — both require a temporal snapshot; ``None`` on any snapshot
+        # without observation times (audit §10.1).
+        "freshness_reflection": [
+            r.fresh_share for r in successful if r.fresh_share is not None
+        ]
+        or None,
+        "historical_meme_rate": [
+            1.0 if r.meme_hits else 0.0
+            for r in successful
+            if r.category == "meme-bait"
+        ]
+        or None,
     }
 
 

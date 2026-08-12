@@ -1,0 +1,99 @@
+# Phase 3 calibration grid (doc 05 §2, roadmap M2R-210).
+#
+# Not the protocol matrix — this file exists so the run that informs the shipped
+# defaults is reproducible instead of being a command someone typed once. It is
+# meant to be run with `--temporal-fixture`: without observation times there is
+# no fresh slice, and freshness reports insufficient data by construction.
+#
+# The eval's runtime state carries no mood, so the blend resolves to the calm
+# weight — that is the knob every arm below moves. Flavor/emoji stay silenced
+# exactly as in C0, so the metrics measure the word model alone.
+#
+# Arm ids start with C2 so the runner gives each one a Phase 3 gate verdict.
+#
+# Alpha 0 is not an arm: it IS C0 by construction (the blend takes its early
+# return), and adding it would only produce an alias row.
+configurations:
+  - id: C0
+    description: "Markov 1.x frozen baseline (registry defaults, flavor/emoji silenced)"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+
+  # Three blend weights against three compression shapes. Compression decides
+  # how much room the long layer leaves for anything else — measured on a
+  # 10000/20 count pair, log leaves the smaller token 24.8% of the mass and
+  # pow(0.6) leaves it 2.3% — so pairing the two knobs is the whole point:
+  # an alpha that looks weak under one shape may not be under the other.
+  - id: C2a03_log
+    description: "M2R-210, alpha 0.3, log compression"
+    available: true
+    same_as: C0
+    overrides:
+      markov_alpha_calm: 0.3
+      markov_long_compression: log
+  - id: C2a05_log
+    description: "M2R-210, alpha 0.5, log compression"
+    available: true
+    same_as: C0
+    overrides:
+      markov_alpha_calm: 0.5
+      markov_long_compression: log
+  - id: C2a07_log
+    description: "M2R-210, alpha 0.7, log compression"
+    available: true
+    same_as: C0
+    overrides:
+      markov_alpha_calm: 0.7
+      markov_long_compression: log
+
+  - id: C2a03_pow50
+    description: "M2R-210, alpha 0.3, pow compression beta 0.5"
+    available: true
+    same_as: C0
+    overrides:
+      markov_alpha_calm: 0.3
+      markov_long_compression: pow
+      markov_long_compression_beta: 0.5
+  - id: C2a05_pow50
+    description: "M2R-210, alpha 0.5, pow compression beta 0.5"
+    available: true
+    same_as: C0
+    overrides:
+      markov_alpha_calm: 0.5
+      markov_long_compression: pow
+      markov_long_compression_beta: 0.5
+  - id: C2a07_pow50
+    description: "M2R-210, alpha 0.7, pow compression beta 0.5"
+    available: true
+    same_as: C0
+    overrides:
+      markov_alpha_calm: 0.7
+      markov_long_compression: pow
+      markov_long_compression_beta: 0.5
+
+  - id: C2a03_pow75
+    description: "M2R-210, alpha 0.3, pow compression beta 0.75"
+    available: true
+    same_as: C0
+    overrides:
+      markov_alpha_calm: 0.3
+      markov_long_compression: pow
+      markov_long_compression_beta: 0.75
+  - id: C2a05_pow75
+    description: "M2R-210, alpha 0.5, pow compression beta 0.75"
+    available: true
+    same_as: C0
+    overrides:
+      markov_alpha_calm: 0.5
+      markov_long_compression: pow
+      markov_long_compression_beta: 0.75
+  - id: C2a07_pow75
+    description: "M2R-210, alpha 0.7, pow compression beta 0.75"
+    available: true
+    same_as: C0
+    overrides:
+      markov_alpha_calm: 0.7
+      markov_long_compression: pow
+      markov_long_compression_beta: 0.75
