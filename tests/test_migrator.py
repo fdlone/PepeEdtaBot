@@ -32,6 +32,7 @@ EXPECTED_MIGRATIONS = [
     "017_strip_list_enumerators",
     "018_temporal_layer",
     "019_markov_collocations",
+    "020_reverse_index_and_token_df",
 ]
 
 EXPECTED_TABLES = {
@@ -47,6 +48,7 @@ EXPECTED_TABLES = {
     "chat_emoji_stats",
     "chat_hot_ngrams",
     "chat_user_interactions",
+    "markov_token_df",
     "schema_migrations",
 }
 
