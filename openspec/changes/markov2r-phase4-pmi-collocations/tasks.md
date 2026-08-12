@@ -63,18 +63,18 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 ## 9. Manual rating round (needs people — see 1.1)
 
-- [ ] 9.1 Produce the top-20 ranking and a rating sheet template (real / merely frequent / junk)
+- [x] 9.1 Produce the top-20 ranking and a rating sheet template (real / merely frequent / junk) — `tools/meme_rating_round.py`; the 2026-08-12 round is prepared locally in `rating_rounds/` (42 positions: 20 meme, 20 frequency control, 5 decoys, overlaps shown once)
 - [x] 9.2 Rating sheet stays out of the repository — it is verbatim chat content (spec: `generation-collocations`)
 - [ ] 9.3 Conduct the round; record rater count and per-category counts
 - [ ] 9.4 Aggregate into the report: counts, shares, inter-rater agreement when there is more than one rater; explicitly "agreement unavailable" for a single rater
 
 ## 10. Eval
 
-- [ ] 10.1 `tools/eval/matrix.yaml`: C3 arm (meme-aware ordering + collocation scoring), `available: true` only for what this change ships
-- [ ] 10.2 Protocol run C0 vs C3 at protocol volumes; the automatic gate conditions computed from it
-- [ ] 10.3 Gate reports `insufficient data` while the manual rating is missing — never `pass` (spec: `generation-eval`)
-- [ ] 10.4 Report in `docs/eval_reports/`, referenced from this change
-- [ ] 10.5 CI smoke stays green
+- [x] 10.1 `tools/eval/matrix.yaml`: C3 arm (meme-aware ordering + collocation scoring), `available: true` only for what this change ships
+- [x] 10.2 Protocol run C0 vs C3 at protocol volumes; the automatic gate conditions computed from it — 1500 gens/arm, copy Δ −0.033 [−0.063, −0.005]*, affinity_without_copy Δ −0.016 [−0.039, 0.006] (floor holds), p95 40.0 ms; note: repetition_rate rose 0.001→0.007* (not a gate condition, recorded for the verdict reader)
+- [x] 10.3 Gate reports `insufficient data` while the manual rating is missing — never `pass` (spec: `generation-eval`) — verified on the real run: phase4_memes[C3] says `insufficient data — missing: manual top-meme rating`
+- [x] 10.4 Report in `docs/eval_reports/`, referenced from this change — `docs/eval_reports/eval_2026-08-12_phase4-c3.md`
+- [x] 10.5 CI smoke stays green — `python -m tools.eval --smoke` passes with the C3 arm in the matrix
 
 ## 11. Default decision (gate)
 
@@ -86,7 +86,7 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 - [ ] 12.1 `docs/v2/00_STATUS.md`: Phase 4 row + next-session pointer
 - [x] 12.2 `.env.example` with bounds and one-line meanings; `GENERATION_PIPELINE.md` where scoring is described
-- [ ] 12.3 Record that collocation gluing stays out of scope and why (ADR-016), so it is not rediscovered as an idea
+- [x] 12.3 Record that collocation gluing stays out of scope and why (ADR-016), so it is not rediscovered as an idea — ADR-016 + TZ §10.2 already normative; now also restated in `GENERATION_PIPELINE.md` at the exact place a reader meets the scoring
 
 ## 13. Housekeeping riding along (no functional content)
 

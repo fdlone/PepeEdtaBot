@@ -38,6 +38,10 @@ from app.core.response_generator import (  # noqa: E402
 from app.core.text import sanitize_text  # noqa: E402
 from app.infrastructure.database import Database  # noqa: E402
 from app.services.learning_service import normalize_for_verbatim  # noqa: E402
+from app.services.meme_analyzer import (  # noqa: E402
+    MemeSettings,
+    analyze_chat_memes,
+)
 from tools.eval_prod import (  # noqa: E402
     _ProdVerbatimChecker,
     _TraceCapturingGenerator,
@@ -121,6 +125,30 @@ async def run_config_seed(
         db = Database(str(db_copy))
         await db.init()
         try:
+            # Phase 4 arms need the collocation registry a prod process would
+            # have: its daily pass rides maintenance, which never runs inside
+            # an eval. Populate it the same way, at the same fixed moment that
+            # keeps the run reproducible; skipped entirely for arms that leave
+            # every Phase 4 knob neutral.
+            if (
+                overrides.get("markov_collocation_bonus", 0.0) > 0.0
+                or overrides.get("markov_collocation_break_penalty", 0.0) > 0.0
+                or overrides.get("markov_hot_ngram_meme_ordering", False)
+            ):
+                meme_settings = MemeSettings()
+                await analyze_chat_memes(
+                    db.collocations,
+                    resolved_chat,
+                    now=(
+                        evaluation_moment
+                        if evaluation_moment is not None
+                        else int(time.time())
+                    ),
+                    min_joint_count=meme_settings.min_joint_count,
+                    min_support=meme_settings.min_support,
+                    recency_days=meme_settings.recency_days,
+                    max_entries=meme_settings.max_entries,
+                )
             alltime_ngrams = frozenset(
                 tuple(row) for row in await db.get_verbatim_ngrams(resolved_chat)
             )

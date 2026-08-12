@@ -40,11 +40,24 @@ configurations:
     available: false
     same_as: C0
     overrides: {}
+  # Phase 4 (M2R-300/310/320): meme-aware hot-ngram ordering + collocation
+  # scoring. The runner populates the collocation registry on the DB copy
+  # (analyze_chat_memes at the evaluation moment) before generating — a prod
+  # process would have run its daily pass, and an empty registry would make
+  # this arm C0 with extra steps. Weights 0.35: the scale of CLEAN_END_BONUS
+  # and just above SELECTION_SCORE_MARGIN (0.3), so one intact meme can move
+  # a candidate into or out of the selection window without drowning the
+  # topicality term (cap 1.6). Not pre-registered as a gate number — the gate
+  # conditions live in eval_thresholds.yaml; these are the treatment dose.
   - id: C3
     description: "V2: PMI memes + collocation scoring only (Phase 4)"
-    available: false
-    same_as: C0
-    overrides: {}
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+      markov_hot_ngram_meme_ordering: true
+      markov_collocation_bonus: 0.35
+      markov_collocation_break_penalty: 0.35
   - id: C4
     description: "V2: lexical anchoring only (seeded + IDF scoring, Phase 5)"
     available: false
