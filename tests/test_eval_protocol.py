@@ -176,6 +176,52 @@ class TestConfigFiles(unittest.TestCase):
             self.assertIn(gate, thresholds)
 
 
+class TestPhase6Gate(unittest.TestCase):
+    """Phase 6 rate×harm gate (ADR-015): a two-dimensional AND-gate closes when
+    the detection arm is decisively below its threshold, without the manual harm
+    round (change: markov2r-phase6-anticycle-verdict)."""
+
+    @staticmethod
+    def _run(cycle_share: float, count: int = 200) -> ConfigRun:
+        # ``cycle_share`` of the replies carry a period-2 token cycle.
+        cyclic = round(cycle_share * count)
+        records = [
+            _record(
+                reply_content=(
+                    ("х", "у", "х", "у") if index < cyclic else ("а", "б", "в", "г")
+                ),
+                has_cycle=index < cyclic,
+            )
+            for index in range(count)
+        ]
+        return ConfigRun(config_id="C0", records=records)
+
+    def test_rare_cycles_close_the_phase_without_the_harm_round(self) -> None:
+        # ~0.5% cyclic — well below the 0.05 detection bar, whole CI under it.
+        rows = evaluate_gates({"C0": self._run(0.005)}, load_thresholds())
+        gate, verdict, detail = next(
+            row for row in rows if row[0] == "phase6_anticycle"
+        )
+        self.assertEqual(verdict, "close")
+        self.assertIn("without implementation", detail)
+        self.assertIn("harm round is not required", detail)
+
+    def test_frequent_cycles_defer_to_the_missing_harm_arm(self) -> None:
+        # 20% cyclic — above the detection bar, so the harm arm decides and its
+        # manual component is missing.
+        rows = evaluate_gates({"C0": self._run(0.20)}, load_thresholds())
+        verdict, detail = next(
+            (row[1], row[2]) for row in rows if row[0] == "phase6_anticycle"
+        )
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("manual round", detail)
+
+    def test_no_baseline_is_insufficient(self) -> None:
+        rows = evaluate_gates({}, load_thresholds())
+        verdict = next(row[1] for row in rows if row[0] == "phase6_anticycle")
+        self.assertEqual(verdict, "insufficient data")
+
+
 class TestPhase2Gate(unittest.TestCase):
     """The Phase 2 gate is four-part and asymmetric (doc 03 Phase 2 acceptance,
     thresholds pre-registered in eval_thresholds.yaml)."""

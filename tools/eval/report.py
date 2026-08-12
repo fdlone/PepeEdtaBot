@@ -493,6 +493,52 @@ def _phase4_arm_verdict(
     return _verdict(parts, failures, missing)
 
 
+def _phase6_verdict(
+    baseline: ConfigRun | None, thresholds: dict[str, Any]
+) -> tuple[str, str]:
+    """Phase 6 anti-cycle gate (verdict, detail) — two-dimensional (ADR-015).
+
+    The gate opens only if cycles are BOTH frequent (`cycle_detection_rate`)
+    AND harmful (`cycle_harm_rate`); non-exceedance of either closes the phase
+    without implementation (roadmap Phase 6). So a detection arm whose whole
+    confidence interval sits below its threshold makes the conjunction
+    impossible, and the gate resolves to `close` WITHOUT the manual harm round —
+    the same "a demonstrated miss outranks a missing part" rule the other gates
+    use, applied to a conjunction (change: markov2r-phase6-anticycle-verdict).
+    """
+    phase6 = thresholds.get("phase6_anticycle", {})
+    if baseline is None:
+        return INSUFFICIENT, "no baseline run"
+    rate = metric_values(baseline.records).get("cycle_detection_rate")
+    if not rate:
+        return INSUFFICIENT, "no cycle-detection samples"
+    detect_min = float(phase6.get("cycle_detection_rate_min", 0.05))
+    point, lo, hi = bootstrap_ci(rate)
+    interval = f"{_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]"
+    if hi < detect_min:
+        # The detection arm is decisively below its bar: the whole interval is
+        # under the threshold, so cycles are not frequent at the protocol's
+        # confidence and the AND-gate cannot open. Phase closes; the harm round
+        # would only measure the harm of a ~detection-rate phenomenon and
+        # cannot change this.
+        return (
+            "close",
+            f"cycle_detection_rate {interval} wholly below the "
+            f"{detect_min:.2f} threshold — cycles are not frequent, the "
+            "rate×harm conjunction cannot hold, so Phase 6 closes without "
+            "implementation (M2R-600/610 not built); the manual harm round is "
+            "not required (ADR-015)",
+        )
+    # Detection is near or above its bar: the harm arm now decides, and its
+    # manual component is missing.
+    return (
+        INSUFFICIENT,
+        f"cycle_detection_rate {interval} (threshold {detect_min:.2f}) is not "
+        "decisively below the bar; cycle_harm_rate has only its automatic "
+        "component until a manual round (doc 05 §5) is conducted",
+    )
+
+
 def evaluate_gates(
     runs: dict[str, ConfigRun],
     thresholds: dict[str, Any],
@@ -563,19 +609,7 @@ def evaluate_gates(
             verdict, detail = _phase5_arm_verdict(baseline, runs[arm_id], thresholds)
             rows.append((f"phase5_promotion[{arm_id}]", verdict, detail))
 
-    phase6 = thresholds.get("phase6_anticycle", {})
-    if baseline is not None:
-        values = metric_values(baseline.records)
-        rate = values["cycle_detection_rate"]
-        detail = (
-            f"observed cycle_detection_rate={_cell(rate)} "
-            f"(threshold {phase6.get('cycle_detection_rate_min')}); "
-            "cycle_harm_rate has only its automatic component until a manual "
-            "round (doc 05 §5) is conducted"
-        )
-    else:
-        detail = "no baseline run"
-    rows.append(("phase6_anticycle", INSUFFICIENT, detail))
+    rows.append(("phase6_anticycle", *_phase6_verdict(baseline, thresholds)))
 
     phase7 = thresholds.get("phase7_order4", {})
     shadow_eligible = 0

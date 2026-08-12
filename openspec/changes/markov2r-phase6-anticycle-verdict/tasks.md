@@ -5,9 +5,9 @@ the phase — it builds no feature (M2R-600/610 are NOT implemented).
 
 ## 1. Gate resolution (generation-eval spec)
 
-- [ ] 1.1 `tools/eval/report.py`: the Phase 6 branch resolves to **fail/close** when the detection-rate CI upper bound is below `cycle_detection_rate_min` (design D1/D2); otherwise, with the harm arm unmeasured, it stays `insufficient data`. Thresholds untouched
-- [ ] 1.2 Detail line names the failing arm and the miss (rate, interval, threshold) so the closed verdict is auditable from its numbers
-- [ ] 1.3 Test: a synthetic run with detection CI wholly below the bar renders fail/close; a run with detection near/above the bar and no harm data stays insufficient
+- [x] 1.1 `tools/eval/report.py`: the Phase 6 branch resolves to **fail/close** when the detection-rate CI upper bound is below `cycle_detection_rate_min` (design D1/D2); otherwise, with the harm arm unmeasured, it stays `insufficient data`. Thresholds untouched
+- [x] 1.2 Detail line names the failing arm and the miss (rate, interval, threshold) so the closed verdict is auditable from its numbers
+- [x] 1.3 Test: a synthetic run with detection CI wholly below the bar renders fail/close; a run with detection near/above the bar and no harm data stays insufficient
 
 ## 2. Decisive measurement
 
