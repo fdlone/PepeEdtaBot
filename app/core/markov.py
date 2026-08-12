@@ -15,6 +15,7 @@ from app.core.generation_telemetry import GenerationTelemetry
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
 from app.core.markov_port import MarkovReadPort
 from app.core.morphology import stem_folded, stem_token
+from app.core.seed import SeedScore, is_scorable, score_seeds
 from app.core.temporal import (
     BlendedPool,
     TemporalBlend,
@@ -1622,6 +1623,182 @@ class MarkovGenerator:
                     )
                     return (w1, w2, w3), 2
         return None
+
+    async def rank_seeds(
+        self,
+        chat_id: int,
+        tokens: list[str],
+        *,
+        min_support: float,
+        branch_min: float,
+        branch_ideal: float,
+        branch_max: float,
+        min_token_len: int,
+    ) -> list[SeedScore]:
+        """Score a message's tokens as seed anchors, best first (M2R-410).
+
+        Gathers the seed-score inputs (df, support, forward/reverse branching)
+        from the M2R-400 read API — once per reply, only when the caller has a
+        non-zero seeded ratio — and hands them to the pure scorer. Support and
+        forward branching both come from the one ``get_seed_forward`` read.
+        """
+        eligible = [
+            token
+            for token in dict.fromkeys(tokens)
+            if is_scorable(token, min_token_len=min_token_len)
+        ]
+        if not eligible:
+            return []
+        n_docs = await self.db.get_n_docs(chat_id)
+        if n_docs <= 0:
+            return []
+        df_of: dict[str, int] = {}
+        support_of: dict[str, int] = {}
+        forward_branch_of: dict[str, int] = {}
+        reverse_branch_of: dict[str, int] = {}
+        for token in eligible:
+            forward = await self.db.get_seed_forward(chat_id, token)
+            forward_branch_of[token] = len(forward)
+            support_of[token] = sum(cnt for _, cnt in forward)
+            reverse_branch_of[token] = await self.db.get_reverse_branch(
+                chat_id, token
+            )
+            df_of[token] = await self.db.get_token_df(chat_id, token)
+        return score_seeds(
+            eligible,
+            df_of=df_of,
+            support_of=support_of,
+            forward_branch_of=forward_branch_of,
+            reverse_branch_of=reverse_branch_of,
+            n_docs=n_docs,
+            min_support=min_support,
+            branch_min=branch_min,
+            branch_ideal=branch_ideal,
+            branch_max=branch_max,
+            min_token_len=min_token_len,
+        )
+
+    def _seeded_step(
+        self,
+        pool: list[TransitionRow],
+        *,
+        next_explore: float,
+        next_power: float,
+        repetition_penalty_strength: float,
+        entropy_sampling: EntropySampling,
+        temporal_blend: TemporalBlend,
+        now: int,
+        recent: list[str],
+        rng: random.Random,
+    ) -> str:
+        """One sampling step of the seeded assembler (M2R-410).
+
+        Head and tail of a seeded candidate share this one stepper so their
+        sampling cannot drift: the same blend → step-power → weighted-choice
+        the forward walk uses, minus the walk's jump/anchor/order-3 machinery
+        (a seeded candidate is order-2 both ways, and the reverse index is
+        order-2 only). No context bias — the candidate is anchored by its seed,
+        not by the message.
+        """
+        blended = temporal_blend.blend(pool, now)
+        step_power = _step_power(None, pool, next_power, entropy_sampling, blended)
+        return weighted_next_choice(
+            pool,
+            next_explore,
+            step_power,
+            rng,
+            recent_tokens=recent,
+            repetition_penalty_strength=repetition_penalty_strength,
+            base_weights=None if blended is None else blended.weights,
+        )
+
+    async def generate_seeded_candidate(
+        self,
+        chat_id: int,
+        seed: str,
+        *,
+        max_tokens: int,
+        head_share: float,
+        next_explore: float,
+        next_power: float,
+        repetition_penalty_strength: float,
+        entropy_sampling: EntropySampling = EntropySampling(),
+        temporal_blend: TemporalBlend = TemporalBlend(),
+        now: int = 0,
+        rng: random.Random,
+    ) -> list[str] | None:
+        """Assemble one candidate anchored on ``seed`` (M2R-410, TZ §9.5).
+
+        The tail grows forward on the chain and the head grows backward on the
+        reverse order-2 index, so the anchor sits mid-reply rather than at the
+        start. Returns the token list or ``None`` when the seed has no forward
+        continuation to bootstrap from (the transparent fallback — the caller
+        simply gets one fewer seeded candidate).
+
+        The reverse pool is read fresh, not cached: seeded candidates are a
+        minority of the pool, the read is index-served, and a reverse cache
+        would have to mirror the incremental-learning fold for no measured
+        gain.
+        """
+        budget = max(2, max_tokens)
+        forward = await self.db.get_seed_forward(chat_id, seed)
+        if not forward:
+            return None
+        # Bootstrap the tail's order-2 pair: pick the seed's second token by
+        # long count (one draw; the blend governs the per-step walk, not this).
+        weights = [max(cnt, 1) ** next_power for _, cnt in forward]
+        second = forward[weighted_index_choice(weights, exploring=False, rng=rng)][0]
+
+        head_budget = max(0, min(budget - 2, int(budget * head_share)))
+        tail_budget = budget - head_budget
+
+        tail = [seed, second]
+        a, b = seed, second
+        while len(tail) < tail_budget:
+            pool = await self._get2(chat_id, a, b)
+            if not pool:
+                break
+            nxt = self._seeded_step(
+                pool,
+                next_explore=next_explore,
+                next_power=next_power,
+                repetition_penalty_strength=repetition_penalty_strength,
+                entropy_sampling=entropy_sampling,
+                temporal_blend=temporal_blend,
+                now=now,
+                recent=tail[-10:],
+                rng=rng,
+            )
+            tail.append(nxt)
+            if has_degraded_recent_window(tail):
+                tail.pop()
+                break
+            a, b = b, nxt
+
+        head: list[str] = []
+        left0, left1 = seed, second
+        while len(head) < head_budget:
+            pool = await self.db.get_reverse_transitions(chat_id, left0, left1)
+            if not pool:
+                break
+            prev = self._seeded_step(
+                pool,
+                next_explore=next_explore,
+                next_power=next_power,
+                repetition_penalty_strength=repetition_penalty_strength,
+                entropy_sampling=entropy_sampling,
+                temporal_blend=temporal_blend,
+                now=now,
+                recent=head[-10:],
+                rng=rng,
+            )
+            head.append(prev)
+            if has_degraded_recent_window([*reversed(head), seed]):
+                head.pop()
+                break
+            left0, left1 = prev, left0
+        head.reverse()
+        return head + tail
 
     async def _pick_global_start(
         self,

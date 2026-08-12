@@ -127,6 +127,17 @@ def format_stats_message(
                 f"order-4 (тень, оценка по окну): выбрался бы в {share:.0%} "
                 f"из {eligible} шагов"
             )
+        # M2R-410: два раздельных знаменателя — присутствовал ли seeded-кандидат
+        # в пуле и, отдельно, выиграл ли при наличии. Слитая в одну ставка
+        # скрыла бы, редко ли он появляется или появляется, но проигрывает.
+        seeded_present = telemetry.get("seeded_present_rate")
+        if seeded_present is not None:
+            win = telemetry.get("seeded_win_rate_given_present")
+            win_text = f"{win:.0%}" if win is not None else "н/д"
+            lines.append(
+                f"seeded: присутствовал в {seeded_present:.0%} генераций, "
+                f"побеждал при наличии в {win_text}"
+            )
         # M2R-320: вес в конфиге — намерение, эти счётчики — эффект. Отдельный
         # withheld и есть свидетельство, что гард доступности не мёртвый код.
         applied = (
@@ -211,6 +222,15 @@ def format_config_message(
                 f"markov_collocation_bonus={state.markov_collocation_bonus}",
                 f"markov_collocation_break_penalty={state.markov_collocation_break_penalty}",
                 f"markov_hot_ngram_meme_ordering={state.markov_hot_ngram_meme_ordering}",
+                # Phase 5 lexical anchoring (M2R-410): the seeded-candidate
+                # share plus the seed-choice band. Neutral (ratio 0) until the
+                # promotion gate says otherwise.
+                f"markov_seeded_candidate_ratio={state.markov_seeded_candidate_ratio}",
+                f"markov_seed_branch_min={state.markov_seed_branch_min}",
+                f"markov_seed_branch_ideal={state.markov_seed_branch_ideal}",
+                f"markov_seed_branch_max={state.markov_seed_branch_max}",
+                f"markov_seed_min_score={state.markov_seed_min_score}",
+                f"markov_seed_head_share={state.markov_seed_head_share}",
                 f"reply_context_max_tokens={state.reply_context_max_tokens}",
                 f"reply_context_bias={state.reply_context_bias}",
                 f"reply_context_start_bias={state.reply_context_start_bias}",

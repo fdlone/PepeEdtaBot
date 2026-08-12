@@ -76,6 +76,14 @@ class Settings:
     markov_collocation_bonus: float
     markov_collocation_break_penalty: float
     markov_hot_ngram_meme_ordering: bool
+    markov_seeded_candidate_ratio: float
+    markov_seed_branch_min: float
+    markov_seed_branch_ideal: float
+    markov_seed_branch_max: float
+    markov_seed_min_support: float
+    markov_seed_min_score: float
+    markov_seed_min_token_len: int
+    markov_seed_head_share: float
     enable_backoff: bool
     markov_jump_probability: float
     context_jump_boost: float

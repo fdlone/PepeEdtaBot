@@ -37,6 +37,13 @@ class GenerationTelemetry:
     meme_passes: int = 0
     meme_scored_pairs: int = 0
     meme_pass_ms_sum: float = 0.0
+    # M2R-410: two separate denominators (TZ §9.6). "A seeded candidate was
+    # present in the pool" and "a seeded candidate won when present" are
+    # different findings for the promotion decision, and a single win-rate over
+    # all generations hides which one is true.
+    seeded_generations: int = 0
+    seeded_present: int = 0
+    seeded_won: int = 0
 
     def note_cache(self, *, hit: bool) -> None:
         if hit:
@@ -80,6 +87,14 @@ class GenerationTelemetry:
         self.meme_scored_pairs += scored_pairs
         self.meme_pass_ms_sum += duration_ms
 
+    def note_seeded(self, *, present: bool, won: bool) -> None:
+        """One generation's seeded outcome (M2R-410). ``won`` implies ``present``."""
+        self.seeded_generations += 1
+        if present:
+            self.seeded_present += 1
+            if won:
+                self.seeded_won += 1
+
     def snapshot(self) -> dict[str, float | int | None]:
         """Aggregates for ``/stats``; ``None`` where no data exists yet."""
         steps = self.diagnostic_steps
@@ -114,6 +129,17 @@ class GenerationTelemetry:
             "meme_mean_pass_ms": (
                 self.meme_pass_ms_sum / self.meme_passes
                 if self.meme_passes
+                else None
+            ),
+            "seeded_generations": self.seeded_generations,
+            "seeded_present_rate": (
+                self.seeded_present / self.seeded_generations
+                if self.seeded_generations
+                else None
+            ),
+            "seeded_win_rate_given_present": (
+                self.seeded_won / self.seeded_present
+                if self.seeded_present
                 else None
             ),
         }

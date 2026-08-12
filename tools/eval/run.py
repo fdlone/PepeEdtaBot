@@ -84,6 +84,33 @@ def _content_cf(text: str) -> tuple[str, ...]:
     return tuple(token.casefold() for token in content_tokens(tokenize(text)))
 
 
+async def _populate_token_df(
+    db: Database, chat_id: int, messages: list[str]
+) -> None:
+    """Window-approximated df for a Phase 5 arm (design D4).
+
+    +1 per unique token per retained message, plus the message count as
+    ``n_docs`` — the same arithmetic the learn path does, over the snapshot's
+    retained window. Not prod-accumulated df; the gate accounts for that.
+    """
+    conn = await db._get_conn()
+    for text in messages:
+        tokens = set(tokenize(text))
+        if not tokens:
+            continue
+        await conn.executemany(
+            "INSERT INTO markov_token_df (chat_id, token, messages_seen) "
+            "VALUES (?, ?, 1) ON CONFLICT(chat_id, token) DO UPDATE SET "
+            "messages_seen = messages_seen + 1",
+            [(chat_id, token) for token in tokens],
+        )
+    await conn.execute(
+        "UPDATE chat_model_volume SET n_docs = ? WHERE chat_id = ?",
+        (len(messages), chat_id),
+    )
+    await conn.commit()
+
+
 def _select_prompts(prompts: list[str], count: int, rng: random.Random) -> list[str]:
     """Seeded prompt choice (§1.3): a seeded shuffle defines the order, then
     prompts are cycled until ``count`` generations are covered."""
@@ -149,6 +176,13 @@ async def run_config_seed(
                     recency_days=meme_settings.recency_days,
                     max_entries=meme_settings.max_entries,
                 )
+            # Phase 5 arms need a df aggregate the seed score can read. df is
+            # accumulated on live prod and cannot be backfilled, but the copy's
+            # retained messages give a window-approximation — enough to exercise
+            # the seeded branch. The promotion gate stays `insufficient data`
+            # over window-approximated df (report.py, design D4).
+            if overrides.get("markov_seeded_candidate_ratio", 0.0) > 0.0:
+                await _populate_token_df(db, resolved_chat, messages)
             alltime_ngrams = frozenset(
                 tuple(row) for row in await db.get_verbatim_ngrams(resolved_chat)
             )

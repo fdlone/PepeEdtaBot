@@ -257,6 +257,14 @@ async def evaluate_generation(
                 markov_collocation_bonus=0.0,
                 markov_collocation_break_penalty=0.0,
                 markov_hot_ngram_meme_ordering=False,
+                markov_seeded_candidate_ratio=0.0,
+                markov_seed_branch_min=2.0,
+                markov_seed_branch_ideal=6.0,
+                markov_seed_branch_max=50.0,
+                markov_seed_min_support=5.0,
+                markov_seed_min_score=0.1,
+                markov_seed_min_token_len=3,
+                markov_seed_head_share=0.4,
                 enable_backoff=True,
                 # Keep the M3/M4 channels off in eval so the baselines measure the
                 # word model alone (and no emoji-stats DB reads are attempted).
