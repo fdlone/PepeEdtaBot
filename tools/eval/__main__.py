@@ -18,6 +18,7 @@ import datetime as _dt
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -45,6 +46,11 @@ from tools.eval.run import (  # noqa: E402
     run_matrix,
 )
 from tools.eval.synthetic import SYNTHETIC_CHAT_ID, build_synthetic_snapshot  # noqa: E402
+from tools.eval.temporal_fixture import (  # noqa: E402
+    DEFAULT_FRESH_DAYS,
+    build_temporal_fixture,
+)
+from tools.eval_prod import pick_chat_id  # noqa: E402
 
 REPORTS_DIR = PROJECT_ROOT / "docs" / "eval_reports"
 
@@ -118,14 +124,53 @@ async def _protocol(args: argparse.Namespace) -> int:
     configs = load_matrix(Path(args.matrix))
     thresholds = load_thresholds(Path(args.thresholds))
     prompt_set = load_prompts(Path(args.prompts))
-    runs, skipped = await run_matrix(
-        db_source=Path(args.db),
-        chat_id=args.chat_id,
-        configs=configs,
-        prompt_set=prompt_set,
-        seeds=seeds,
-        generations=args.generations,
-    )
+    db_source = Path(args.db)
+    fresh_tokens: frozenset[str] | None = None
+    evaluation_moment: int | None = None
+    notes = [
+        "IDF for affinity metrics is computed over the snapshot's retained "
+        "message window (full history is not stored) — window-relative, "
+        "identical across configurations (audit §3).",
+    ]
+    fixture_dir: tempfile.TemporaryDirectory[str] | None = None
+
+    if args.temporal_fixture:
+        # Phase 3 (M2R-210): the source snapshot has no observation times, so a
+        # temporal one is reconstructed from its retained messages. The runs
+        # below then measure freshness on a corpus that actually has a fresh
+        # slice — see temporal_fixture.py for what this is and is not.
+        fixture_dir = tempfile.TemporaryDirectory(prefix="pepe_eval_temporal_")
+        target = Path(fixture_dir.name) / "temporal.db"
+        chat_id = pick_chat_id(db_source, args.chat_id)
+        info = await build_temporal_fixture(
+            source=db_source,
+            target=target,
+            chat_id=chat_id,
+            fresh_days=args.fresh_days,
+        )
+        db_source = target
+        args.chat_id = chat_id
+        fresh_tokens = info.fresh_tokens
+        # The corpus's own last moment, not wall-clock now: the snapshot is
+        # weeks old, and at a 3-day half-life "now" would read every short
+        # counter as decayed to nothing.
+        evaluation_moment = info.last_moment
+        notes.append(info.describe())
+
+    try:
+        runs, skipped = await run_matrix(
+            db_source=db_source,
+            chat_id=args.chat_id,
+            configs=configs,
+            prompt_set=prompt_set,
+            seeds=seeds,
+            generations=args.generations,
+            fresh_tokens=fresh_tokens,
+            evaluation_moment=evaluation_moment,
+        )
+    finally:
+        if fixture_dir is not None:
+            fixture_dir.cleanup()
     date = _dt.date.today().isoformat()
     report = build_report(
         runs=runs,
@@ -137,11 +182,7 @@ async def _protocol(args: argparse.Namespace) -> int:
         generations=args.generations,
         revision=_revision(),
         date=date,
-        notes=[
-            "IDF for affinity metrics is computed over the snapshot's retained "
-            "message window (full history is not stored) — window-relative, "
-            "identical across configurations (audit §3).",
-        ],
+        notes=notes,
     )
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = REPORTS_DIR / f"eval_{date}_{args.label}.md"
@@ -176,6 +217,20 @@ def main() -> None:
         help="build eval_prompts.yaml from the snapshot and exit",
     )
     parser.add_argument("--prompt-seed", type=int, default=PROTOCOL_SEEDS[0])
+    parser.add_argument(
+        "--temporal-fixture",
+        action="store_true",
+        help=(
+            "rebuild a temporal snapshot from the source's retained messages "
+            "and run on it (Phase 3; freshness metrics need observation times)"
+        ),
+    )
+    parser.add_argument(
+        "--fresh-days",
+        type=float,
+        default=DEFAULT_FRESH_DAYS,
+        help="window that defines the fixture's fresh slice (default 14)",
+    )
     args = parser.parse_args()
 
     if args.smoke:
