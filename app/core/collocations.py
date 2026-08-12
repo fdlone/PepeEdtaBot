@@ -155,7 +155,11 @@ def collocation_effect(
         if (left, following) in active:
             bonus += 1
             continue
-        state = (tokens[index - 1], left) if index else (left,)
+        # The longest window ending at ``left`` (up to 3 tokens): the answerer
+        # may hold the pool under an order-2 or an order-3 key, and the state
+        # it was keyed by is the walk history — which for a candidate IS its
+        # own preceding tokens.
+        state = tuple(tokens[max(0, index - 2) : index + 1])
         for pair_left, pair_right in active:
             if pair_left != left or pair_right == following:
                 continue

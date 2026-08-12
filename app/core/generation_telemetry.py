@@ -25,6 +25,13 @@ class GenerationTelemetry:
     cache_misses: int = 0
     shadow_order4_eligible: int = 0
     shadow_order4_selected: int = 0
+    # M2R-320: what the active collocations did to candidates. Withheld counts
+    # breaks that were NOT penalized because the chain never offered the right
+    # token there — reported separately because it is the evidence that the
+    # availability guard earns its place (generation-telemetry spec).
+    collocation_bonus_hits: int = 0
+    collocation_penalty_hits: int = 0
+    collocation_withheld: int = 0
 
     def note_cache(self, *, hit: bool) -> None:
         if hit:
@@ -56,6 +63,13 @@ class GenerationTelemetry:
         self.shadow_order4_eligible += eligible
         self.shadow_order4_selected += selected
 
+    def note_collocations(
+        self, *, bonus_hits: int, penalty_hits: int, withheld: int
+    ) -> None:
+        self.collocation_bonus_hits += bonus_hits
+        self.collocation_penalty_hits += penalty_hits
+        self.collocation_withheld += withheld
+
     def snapshot(self) -> dict[str, float | int | None]:
         """Aggregates for ``/stats``; ``None`` where no data exists yet."""
         steps = self.diagnostic_steps
@@ -82,4 +96,7 @@ class GenerationTelemetry:
             "shadow_order4_selected_share": (
                 self.shadow_order4_selected / eligible if eligible else None
             ),
+            "collocation_bonus_hits": self.collocation_bonus_hits,
+            "collocation_penalty_hits": self.collocation_penalty_hits,
+            "collocation_withheld": self.collocation_withheld,
         }

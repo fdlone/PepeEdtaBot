@@ -32,12 +32,12 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 ## 5. Collocation scoring (M2R-320, ADR-016)
 
-- [ ] 5.1 Bonus for a candidate containing an active collocation as an adjacent pair
-- [ ] 5.2 Penalty for breaking one **only when the chain held a transition to the right token from that state** (design D4)
-- [ ] 5.3 Availability answered from the pool the walk already loaded — no query per candidate per collocation
-- [ ] 5.4 Active collocations read once per reply, not once per candidate
-- [ ] 5.5 Count applied bonuses, applied penalties and **withheld** penalties separately (the withheld count is the evidence that 5.2's guard earns its place)
-- [ ] 5.6 Tokenization untouched: a test asserts learning and generation tokenize identically with collocations active
+- [x] 5.1 Bonus for a candidate containing an active collocation as an adjacent pair
+- [x] 5.2 Penalty for breaking one **only when the chain held a transition to the right token from that state** (design D4)
+- [x] 5.3 Availability answered from the pool the walk already loaded — no query per candidate per collocation
+- [x] 5.4 Active collocations read once per reply, not once per candidate
+- [x] 5.5 Count applied bonuses, applied penalties and **withheld** penalties separately (the withheld count is the evidence that 5.2's guard earns its place)
+- [x] 5.6 Tokenization untouched: a test asserts learning and generation tokenize identically with collocations active
 
 ## 6. Hot n-grams (M2R-310)
 

@@ -337,6 +337,16 @@ class LearningService:
             chat_id, min_count=min_count, recency_share=recency_share
         )
 
+    async def get_active_collocations(
+        self, chat_id: int
+    ) -> frozenset[tuple[str, str]]:
+        """Active collocation pairs for candidate scoring (M2R-320).
+
+        Read once per reply by the generation pipeline — and only when a
+        scoring weight is non-zero, so the neutral defaults add no query.
+        """
+        return frozenset(await self._db.collocations.get_active(chat_id))
+
     def _hash_user(self, user_id: int) -> str:
         if self._user_hasher is None:
             raise RuntimeError(

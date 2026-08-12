@@ -22,6 +22,7 @@ from app.core.candidate_scorer import (
     verbatim_ngram_overlap,
     verbatim_quote_severity,
 )
+from app.core.collocations import collocation_effect
 from app.core.emoji import append_emoji_flavor, strip_trailing_emojis
 from app.core.intonation import IntonationProfile, blend_length_weights
 from app.core.markov import (
@@ -135,6 +136,9 @@ class VerbatimCopyChecker(Protocol):
     async def get_order4_shadow_index(
         self, chat_id: int
     ) -> Mapping[tuple[str, str, str, str], Mapping[str, int]]: ...
+    async def get_active_collocations(
+        self, chat_id: int
+    ) -> frozenset[tuple[str, str]]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -491,6 +495,35 @@ class ResponseGenerator:
             return None
         return extended
 
+    def _collocation_delta(
+        self, chat_id: int, tokens: list[str], active: frozenset[tuple[str, str]]
+    ) -> float:
+        """Net collocation effect on one candidate (M2R-320, ADR-016).
+
+        Availability is answered from the transition pools the walks already
+        cached — never a query per candidate per collocation (design D4). The
+        applied and withheld counts go to telemetry: the configured weight is
+        the intent, these counts are the effect.
+        """
+        if not active:
+            return 0.0
+        effect = collocation_effect(
+            tokens,
+            active,
+            lambda state, token: self.generator.transition_was_available(
+                chat_id, state, token
+            ),
+        )
+        self.generator.telemetry.note_collocations(
+            bonus_hits=effect.bonus_hits,
+            penalty_hits=effect.penalty_hits,
+            withheld=effect.withheld,
+        )
+        return effect.delta(
+            self.runtime_state.markov_collocation_bonus,
+            self.runtime_state.markov_collocation_break_penalty,
+        )
+
     def _build_score(
         self,
         text: str,
@@ -503,6 +536,8 @@ class ResponseGenerator:
         recent_penalty_strength: float,
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
+        chat_id: int,
+        active_collocations: frozenset[tuple[str, str]] = frozenset(),
     ) -> CandidateScore:
         """Full candidate score with the per-request penalty components.
 
@@ -521,6 +556,9 @@ class ResponseGenerator:
             verbatim_penalty=verbatim_penalty_strength
             * verbatim_quote_severity(
                 verbatim_ngram_overlap(tokens, corpus_ngrams)
+            ),
+            collocation_delta=self._collocation_delta(
+                chat_id, tokens, active_collocations
             ),
         )
 
@@ -596,6 +634,20 @@ class ResponseGenerator:
         if verbatim_penalty_strength > 0.0:
             corpus_ngrams = await self.learning_service.get_verbatim_ngram_index(
                 request.chat_id
+            )
+        # M2R-320: active collocations are read once per reply, never per
+        # candidate — and not at all while both scoring weights sit at their
+        # neutral zero, so installing the capability adds no query and changes
+        # no reply (the generation_hash contract).
+        active_collocations: frozenset[tuple[str, str]] = frozenset()
+        if (
+            self.runtime_state.markov_collocation_bonus > 0.0
+            or self.runtime_state.markov_collocation_break_penalty > 0.0
+        ):
+            active_collocations = (
+                await self.learning_service.get_active_collocations(
+                    request.chat_id
+                )
             )
         # Topic overlap is scored by how much of the context's *informative* mass
         # the candidate echoes, not by raw token count -- otherwise a short reply
@@ -804,6 +856,8 @@ class ResponseGenerator:
                             recent_penalty_strength=recent_penalty_strength,
                             corpus_ngrams=corpus_ngrams,
                             verbatim_penalty_strength=verbatim_penalty_strength,
+                            chat_id=request.chat_id,
+                            active_collocations=active_collocations,
                         )
                         candidates.append(
                             _ScoredCandidate(text=candidate, score=score)
@@ -862,6 +916,8 @@ class ResponseGenerator:
                                     recent_penalty_strength=recent_penalty_strength,
                                     corpus_ngrams=corpus_ngrams,
                                     verbatim_penalty_strength=verbatim_penalty_strength,
+                                    chat_id=request.chat_id,
+                                    active_collocations=active_collocations,
                                 )
                                 candidates.append(
                                     _ScoredCandidate(

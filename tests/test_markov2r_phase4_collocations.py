@@ -11,7 +11,9 @@ formula's algebra.
 from __future__ import annotations
 
 import math
+import random
 import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.core.collocations import (
     MIN_SUPPORTABLE_JOINT_COUNT,
@@ -21,6 +23,14 @@ from app.core.collocations import (
     recency_factor,
     score_pair,
     support_factor,
+)
+from app.core.markov import MarkovGenerator, tokenize
+from app.core.response_generator import GenerationRequest, ResponseGenerator
+from tests.test_response_generator import (
+    _learning_service,
+    _runtime_state,
+    _score,
+    _traced_generator,
 )
 
 TOTAL = 10_000.0
@@ -182,6 +192,221 @@ class TestCollocationEffect(unittest.TestCase):
 
         collocation_effect(["вчера", "кек", "потом"], self.ACTIVE, probe)
         self.assertEqual(seen, [(("вчера", "кек"), "лол")])
+
+
+class TestAvailabilityFromCachedPools(unittest.TestCase):
+    """D4: availability answers come from pools walks already cached — no SQL."""
+
+    def setUp(self) -> None:
+        self.generator = MarkovGenerator(db=MagicMock())
+        # TransitionRow: (token, cnt, s_value, s_updated_at).
+        self.generator._cache2[(1, "вчера", "кек")] = [("лол", 2, 2.0, 0)]
+        self.generator._cache3[(1, "мы", "вчера", "кек")] = [("лол", 1, 1.0, 0)]
+
+    def test_cached_order2_pool_answers(self) -> None:
+        self.assertTrue(
+            self.generator.transition_was_available(1, ("вчера", "кек"), "лол")
+        )
+        self.assertFalse(
+            self.generator.transition_was_available(1, ("вчера", "кек"), "нет")
+        )
+
+    def test_order3_pool_answers_when_order2_is_not_cached(self) -> None:
+        self.assertTrue(
+            self.generator.transition_was_available(
+                2, ("мы", "вчера", "кек"), "лол"
+            )
+            is False
+        )
+        self.assertTrue(
+            self.generator.transition_was_available(
+                1, ("мы", "вчера", "кек"), "лол"
+            )
+        )
+
+    def test_unknown_pool_means_unavailable_not_a_query(self) -> None:
+        """A cache miss withholds the penalty; it never falls through to SQL."""
+        self.assertFalse(
+            self.generator.transition_was_available(1, ("не", "кэшировано"), "лол")
+        )
+        self.generator.db.get_transitions.assert_not_called()
+        self.generator.db.get_transitions3.assert_not_called()
+
+
+def _collocation_pipeline(
+    *,
+    candidates: list[str],
+    bonus: float,
+    penalty: float,
+    active: frozenset[tuple[str, str]],
+    available: bool,
+) -> tuple[ResponseGenerator, AsyncMock, MagicMock]:
+    """ResponseGenerator wired for M2R-320 tests: equal base scores, argmax."""
+    state = _runtime_state()
+    state.markov_collocation_bonus = bonus
+    state.markov_collocation_break_penalty = penalty
+    generator = _traced_generator()
+    generator.generate_text = AsyncMock(side_effect=candidates)
+    generator.transition_was_available = MagicMock(return_value=available)
+    generator.telemetry = MagicMock()
+    service = _learning_service()
+    service.is_verbatim_copy = AsyncMock(return_value=False)
+    service.get_active_collocations = AsyncMock(return_value=active)
+    response_generator = ResponseGenerator(
+        generator=generator,
+        learning_service=service,
+        runtime_state=state,
+        scorer=MagicMock(return_value=_score(1.0)),
+    )
+    return response_generator, service, generator.telemetry
+
+
+def _request() -> GenerationRequest:
+    return GenerationRequest(
+        chat_id=123,
+        context_tokens=[],
+        seed=None,
+        current_message_normalized="совсем другое сообщение",
+    )
+
+
+async def _generate(pipeline: ResponseGenerator, target: int) -> str | None:
+    with patch(
+        "app.core.response_generator.mask_chat_id", return_value="chat"
+    ):
+        return await pipeline.generate(
+            _request(), rng=random.Random(7), candidate_target=target
+        )
+
+
+class TestPipelineCollocationScoring(unittest.IsolatedAsyncioTestCase):
+    """M2R-320 in the reply pipeline: the effect reaches candidate selection."""
+
+    ACTIVE = frozenset({("кек", "лол")})
+
+    async def test_bonus_moves_selection(self) -> None:
+        pipeline, _, telemetry = _collocation_pipeline(
+            candidates=[
+                "сегодня без единой пары тут",
+                "сегодня кек лол опять тут",
+            ],
+            bonus=0.5,
+            penalty=0.0,
+            active=self.ACTIVE,
+            available=True,
+        )
+        text = await _generate(pipeline, 2)
+        self.assertEqual(text, "сегодня кек лол опять тут")
+        counted = sum(
+            kwargs["bonus_hits"]
+            for _, kwargs in telemetry.note_collocations.call_args_list
+        )
+        self.assertEqual(counted, 1)
+
+    async def test_break_penalty_moves_selection_when_available(self) -> None:
+        pipeline, _, telemetry = _collocation_pipeline(
+            candidates=[
+                "сегодня кек потом опять тут",
+                "сегодня без единой пары тут",
+            ],
+            bonus=0.0,
+            penalty=0.7,
+            active=self.ACTIVE,
+            available=True,
+        )
+        text = await _generate(pipeline, 2)
+        self.assertEqual(text, "сегодня без единой пары тут")
+        counted = sum(
+            kwargs["penalty_hits"]
+            for _, kwargs in telemetry.note_collocations.call_args_list
+        )
+        self.assertEqual(counted, 1)
+
+    async def test_withheld_break_does_not_move_selection(self) -> None:
+        """The guard through the whole pipeline: unavailable ⇒ no penalty."""
+        pipeline, _, telemetry = _collocation_pipeline(
+            candidates=[
+                "сегодня кек потом опять тут",
+                "сегодня без единой пары тут",
+            ],
+            bonus=0.0,
+            penalty=0.7,
+            active=self.ACTIVE,
+            available=False,
+        )
+        text = await _generate(pipeline, 2)
+        # Equal totals, argmax keeps the first accepted candidate.
+        self.assertEqual(text, "сегодня кек потом опять тут")
+        counted = sum(
+            kwargs["withheld"]
+            for _, kwargs in telemetry.note_collocations.call_args_list
+        )
+        self.assertEqual(counted, 1)
+
+    async def test_registry_is_read_once_per_reply(self) -> None:
+        pipeline, service, _ = _collocation_pipeline(
+            candidates=[
+                "сегодня кек лол опять тут",
+                "сегодня без единой пары тут",
+            ],
+            bonus=0.5,
+            penalty=0.7,
+            active=self.ACTIVE,
+            available=True,
+        )
+        await _generate(pipeline, 2)
+        self.assertEqual(service.get_active_collocations.await_count, 1)
+
+    async def test_neutral_weights_never_touch_the_registry(self) -> None:
+        """Neutral defaults add no query — the generation_hash contract."""
+        pipeline, service, telemetry = _collocation_pipeline(
+            candidates=["сегодня кек лол опять тут"],
+            bonus=0.0,
+            penalty=0.0,
+            active=self.ACTIVE,
+            available=True,
+        )
+        text = await _generate(pipeline, 1)
+        self.assertIsNotNone(text)
+        service.get_active_collocations.assert_not_awaited()
+        telemetry.note_collocations.assert_not_called()
+
+
+class TestTokenizationUntouched(unittest.IsolatedAsyncioTestCase):
+    """ADR-016: collocations influence scoring only, tokenization is shared.
+
+    The learn path and the candidate scorer both call ``app.core.markov
+    .tokenize`` with the chat's ``normalize_lower``. With collocations active,
+    the tokens the scorer sees must be exactly that tokenization — two separate
+    tokens, never a glued «кек лол» unit.
+    """
+
+    async def test_scorer_sees_plain_tokenization_with_collocations_active(
+        self,
+    ) -> None:
+        candidate = "сегодня кек лол опять тут"
+        seen_tokens: list[list[str]] = []
+
+        def spy_scorer(
+            _text: str, tokens: list[str], _context: list[str], _mode: str
+        ):
+            seen_tokens.append(tokens)
+            return _score(1.0)
+
+        pipeline, _, _ = _collocation_pipeline(
+            candidates=[candidate],
+            bonus=0.5,
+            penalty=0.7,
+            active=frozenset({("кек", "лол")}),
+            available=True,
+        )
+        pipeline.scorer = spy_scorer
+        await _generate(pipeline, 1)
+        self.assertEqual(seen_tokens, [tokenize(candidate, normalize_lower=False)])
+        self.assertTrue(
+            all(" " not in token for token in seen_tokens[0]),
+            "glued collocation token leaked into scoring",
+        )
 
 
 if __name__ == "__main__":
