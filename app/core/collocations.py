@@ -21,6 +21,7 @@ Three measures, each answering a different question:
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from typing import NamedTuple
 
 # A pair below this many joint occurrences carries no evidence of anything. The
@@ -103,6 +104,66 @@ def recency_factor(recent_share: float) -> float:
     waiting to be retired by hand.
     """
     return min(1.0, max(0.0, recent_share))
+
+
+class CollocationEffect(NamedTuple):
+    """What the active collocations did to one candidate (M2R-320).
+
+    ``withheld`` counts breaks that were NOT penalized because the chain never
+    offered the collocation's right token there. It is reported separately on
+    purpose: it is the evidence that the guard earns its place, and if it turns
+    out to be always zero the guard is dead code rather than a safeguard.
+    """
+
+    bonus_hits: int
+    penalty_hits: int
+    withheld: int
+
+    def delta(self, bonus: float, penalty: float) -> float:
+        """Score adjustment for the configured weights.
+
+        Both weights default to 0, so this is 0 until the gate says otherwise.
+        """
+        return self.bonus_hits * bonus - self.penalty_hits * penalty
+
+
+def collocation_effect(
+    tokens: list[str],
+    active: frozenset[tuple[str, str]],
+    was_available: Callable[[tuple[str, ...], str], bool],
+) -> CollocationEffect:
+    """Count intact reproductions and genuine breaks in one candidate.
+
+    ``was_available(state, token)`` answers "did the chain hold a transition
+    from this state to this token". A break is only a break if the answer is
+    yes: otherwise the candidate is being punished for a continuation the corpus
+    never contained, which measures the corpus rather than the candidate. That
+    is the same mistake Phase 2's M2R-110 made in a different costume.
+
+    The callable is expected to answer from state the caller already has —
+    scoring runs per candidate and must not issue a query per pair.
+    """
+    if not active or len(tokens) < 2:
+        return CollocationEffect(0, 0, 0)
+
+    lefts = {left for left, _ in active}
+    bonus = penalty = withheld = 0
+    for index in range(len(tokens) - 1):
+        left, following = tokens[index], tokens[index + 1]
+        if left not in lefts:
+            continue
+        if (left, following) in active:
+            bonus += 1
+            continue
+        state = (tokens[index - 1], left) if index else (left,)
+        for pair_left, pair_right in active:
+            if pair_left != left or pair_right == following:
+                continue
+            if was_available(state, pair_right):
+                penalty += 1
+            else:
+                withheld += 1
+    return CollocationEffect(bonus, penalty, withheld)
 
 
 def score_pair(

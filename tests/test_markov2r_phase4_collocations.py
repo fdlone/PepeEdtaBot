@@ -15,6 +15,7 @@ import unittest
 
 from app.core.collocations import (
     MIN_SUPPORTABLE_JOINT_COUNT,
+    collocation_effect,
     lift,
     normalized_pmi,
     recency_factor,
@@ -121,6 +122,66 @@ class TestDegenerateInputs(unittest.TestCase):
 
     def test_hard_floor_rejects_single_occurrence_pairs(self) -> None:
         self.assertGreaterEqual(MIN_SUPPORTABLE_JOINT_COUNT, 2)
+
+
+class TestCollocationEffect(unittest.TestCase):
+    """The scoring side (M2R-320) — and the guard that is its whole point."""
+
+    ACTIVE = frozenset({("кек", "лол")})
+
+    def test_intact_reproduction_earns_the_bonus(self) -> None:
+        effect = collocation_effect(
+            ["сегодня", "кек", "лол", "опять"], self.ACTIVE, lambda _s, _t: True
+        )
+        self.assertEqual(effect.bonus_hits, 1)
+        self.assertEqual(effect.penalty_hits, 0)
+
+    def test_break_is_penalized_when_the_chain_offered_the_right_token(self) -> None:
+        effect = collocation_effect(
+            ["сегодня", "кек", "потом"], self.ACTIVE, lambda _s, _t: True
+        )
+        self.assertEqual(effect.penalty_hits, 1)
+        self.assertEqual(effect.withheld, 0)
+
+    def test_no_penalty_when_the_right_token_was_never_available(self) -> None:
+        """The guard: otherwise we punish the candidate for the corpus."""
+        effect = collocation_effect(
+            ["сегодня", "кек", "потом"], self.ACTIVE, lambda _s, _t: False
+        )
+        self.assertEqual(effect.penalty_hits, 0)
+        self.assertEqual(effect.withheld, 1)
+
+    def test_no_active_collocations_is_a_no_op(self) -> None:
+        effect = collocation_effect(
+            ["кек", "лол"], frozenset(), lambda _s, _t: True
+        )
+        self.assertEqual(effect, (0, 0, 0))
+
+    def test_neutral_weights_produce_no_adjustment(self) -> None:
+        effect = collocation_effect(
+            ["кек", "лол", "кек", "потом"], self.ACTIVE, lambda _s, _t: True
+        )
+        self.assertGreater(effect.bonus_hits, 0)
+        self.assertEqual(effect.delta(0.0, 0.0), 0.0)
+
+    def test_delta_uses_both_weights(self) -> None:
+        effect = collocation_effect(
+            ["кек", "лол", "тут", "кек", "иначе"], self.ACTIVE, lambda _s, _t: True
+        )
+        self.assertEqual(effect.bonus_hits, 1)
+        self.assertEqual(effect.penalty_hits, 1)
+        self.assertAlmostEqual(effect.delta(0.5, 0.2), 0.3)
+
+    def test_availability_is_asked_with_the_preceding_state(self) -> None:
+        """The scorer must ask about the real state, not a bare token."""
+        seen: list[tuple[tuple[str, ...], str]] = []
+
+        def probe(state: tuple[str, ...], token: str) -> bool:
+            seen.append((state, token))
+            return False
+
+        collocation_effect(["вчера", "кек", "потом"], self.ACTIVE, probe)
+        self.assertEqual(seen, [(("вчера", "кек"), "лол")])
 
 
 if __name__ == "__main__":

@@ -56,7 +56,7 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 - [x] 8.1 Association measures: a frequent pair of frequent tokens scores below a rare pair that always co-occurs; a pair below the support threshold is never scored
 - [ ] 8.2 Registry lifecycle: capacity, promotion, retirement stops scoring without touching the chain
-- [ ] 8.3 Scoring: bonus on intact reproduction, penalty on a break with the right token available, **no penalty when it was not**
+- [x] 8.3 Scoring: bonus on intact reproduction, penalty on a break with the right token available, **no penalty when it was not**
 - [ ] 8.4 Neutral defaults leave generated text identical (`generation_hash` unchanged)
 - [x] 8.5 `/clear confirm` leaves no registry row
 - [x] 8.6 Property: scores are finite for any legal counts, including the degenerate single-token corpus
