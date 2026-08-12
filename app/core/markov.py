@@ -6,7 +6,7 @@ import math
 import random
 import re
 from collections import Counter, OrderedDict
-from collections.abc import Container, Iterable
+from collections.abc import Container, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple, cast
 
@@ -15,6 +15,12 @@ from app.core.generation_telemetry import GenerationTelemetry
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
 from app.core.markov_port import MarkovReadPort
 from app.core.morphology import stem_folded, stem_token
+from app.core.temporal import (
+    BlendedPool,
+    TemporalBlend,
+    TransitionRow,
+    short_observed,
+)
 
 logger = logging.getLogger("chat_markov")
 
@@ -155,25 +161,41 @@ def context_emission_tokens(state: tuple[str, str, str]) -> list[str]:
         tail.pop(0)
     return tail
 
-def pool_diagnostics(counts: list[int]) -> tuple[float, float, int, float]:
+def pool_diagnostics(counts: Sequence[float]) -> tuple[float, float, int, float]:
     """Distribution diagnostics of one transition pool (M2R-010, TZ §6).
 
     Returns ``(entropy_bits, normalized_entropy, branching_factor,
-    confidence)`` computed over the raw-count proportions — the *model's*
-    distribution, deliberately not the temperature-adjusted sampling weights.
+    confidence)`` computed over the proportions of the weights the sampler
+    actually uses — raw counts while the temporal blend is off, blended weights
+    once it is on (M2R-210, design D5). Deliberately *not* the
+    temperature-adjusted weights: the temperature is a response to this number,
+    not an input to it.
+
     ``normalized_entropy`` is 0 when branching <= 1 (no uncertainty to
     normalize); ``confidence = 1 - normalized_entropy``. Pure math on the
     pool list: no SQL, no RNG.
+
+    Blended weights are probabilities below 1, so the old ``max(count, 1)``
+    floor would have flattened every pool to uniform. It is now a floor at 0,
+    which leaves the integer path bit-identical: no chain row has ``cnt <= 0``
+    (verified on the prod copy — min is 1 in all four tables) and nothing in
+    the codebase deletes counts.
     """
     branching = len(counts)
     if branching <= 1:
         return 0.0, 0.0, branching, 1.0
-    total = 0
+    total = 0.0
     for count in counts:
-        total += max(count, 1)
+        total += max(count, 0.0)
+    if total <= 0.0:
+        # No weight anywhere: every candidate is equally unsupported, which is
+        # maximum uncertainty, not certainty.
+        return math.log2(branching), 1.0, branching, 0.0
     entropy = 0.0
     for count in counts:
-        p = max(count, 1) / total
+        p = max(count, 0.0) / total
+        if p <= 0.0:
+            continue
         entropy -= p * math.log2(p)
     normalized = entropy / math.log2(branching)
     # Float rounding can push H marginally past log2(B); clamp keeps the
@@ -241,8 +263,21 @@ class _DiagnosticsAccumulator:
     # M2R-100: the temperature actually applied, so "the knob is doing nothing"
     # is readable from the numbers instead of inferred from the config.
     applied_temperature_sum: float = 0.0
+    # M2R-210: how often the short layer had anything to say at all, and how far
+    # the blend actually moved the distribution. A configured alpha proves
+    # intent; these two prove effect.
+    blend_covered_steps: int = 0
+    blend_displacement_sum: float = 0.0
 
-    def note_pool(self, counts: list[int]) -> float:
+    def note_blend(self, blended: BlendedPool | None) -> None:
+        """Record what the blend did at this step (nothing, when it is off)."""
+        if blended is None:
+            return
+        if blended.displacement > 0.0:
+            self.blend_covered_steps += 1
+        self.blend_displacement_sum += blended.displacement
+
+    def note_pool(self, counts: Sequence[float]) -> float:
         """Accumulate one pool's diagnostics; returns its normalized entropy.
 
         Returning the value is what lets M2R-100 sample from the same numbers
@@ -269,9 +304,10 @@ class _DiagnosticsAccumulator:
 
 def _step_power(
     diagnostics: _DiagnosticsAccumulator | None,
-    pool: list[tuple[str, int]],
+    pool: Sequence[TransitionRow],
     base_power: float,
     entropy_sampling: EntropySampling,
+    blended: BlendedPool | None = None,
 ) -> float:
     """Frequency power for one walk step: telemetry in, temperature out.
 
@@ -279,16 +315,26 @@ def _step_power(
     entropy the sampler consumes are the same number by construction, and the
     temperature actually applied is recorded rather than inferred.
 
+    With the temporal blend on, both read the blended weights rather than the
+    raw counts (design D5): entropy has to describe the distribution actually
+    being sampled, otherwise Phase 2's temperature responds to a distribution
+    that no longer exists.
+
     Telemetry (M2R-010) needs the diagnostics for every step anyway, so the
     accumulator is the source. Without one (test doubles pass no accumulator)
     entropy is computed only when sampling actually consumes it.
     """
-    if diagnostics is not None:
-        normalized = diagnostics.note_pool([cnt for _, cnt in pool])
-    elif entropy_sampling.gain == 0.0:
+    if diagnostics is None and entropy_sampling.gain == 0.0:
         normalized = 0.0
     else:
-        normalized = pool_diagnostics([cnt for _, cnt in pool])[1]
+        weights: Sequence[float] = (
+            blended.weights if blended is not None else [row[1] for row in pool]
+        )
+        normalized = (
+            diagnostics.note_pool(weights)
+            if diagnostics is not None
+            else pool_diagnostics(weights)[1]
+        )
     power = entropy_sampling.power_for(base_power, normalized)
     if diagnostics is not None:
         diagnostics.note_temperature(power)
@@ -734,7 +780,7 @@ def weighted_population_choice[T](
 
 
 def weighted_next_choice(
-    items: list[tuple[str, int]],
+    items: Sequence[TransitionRow],
     explore_probability: float,
     power: float,
     rng: random.Random,
@@ -748,6 +794,7 @@ def weighted_next_choice(
     seen_pairs: Container[tuple[str, ...]] | None = None,
     seen_triplets: Container[tuple[str, ...]] | None = None,
     repetition_penalty_strength: float = 1.0,
+    base_weights: Sequence[float] | None = None,
 ) -> str:
     # ПРЕДУСЛОВИЕ: items упорядочены по токену. Его обеспечивает источник —
     # запросы переходов идут с ORDER BY, а фильтрация порядок сохраняет (см.
@@ -760,8 +807,14 @@ def weighted_next_choice(
     penalty_strength = max(0.0, repetition_penalty_strength)
     recent_tokens = recent_tokens or []
     weights: list[float] = []
-    for token, cnt in ordered_items:
-        weight = max(cnt, 1) ** frequency_power
+    for index, row in enumerate(ordered_items):
+        token = row[0]
+        # ``base_weights`` is the temporal blend's output (M2R-210). None means
+        # the blend is off and the raw long count is the weight — the same
+        # arithmetic as before the blend existed, which is what makes the
+        # neutral configuration byte-identical rather than merely close.
+        base = max(row[1], 1) if base_weights is None else base_weights[index]
+        weight = base**frequency_power
         if context_token_set and token in context_token_set:
             weight *= step_bias
         if current_state and context_pairs and len(current_state) >= 1:
@@ -789,7 +842,13 @@ def weighted_next_choice(
             if (current_state[-2], current_state[-1], token) in seen_triplets:
                 weight *= max(0.01, 1.0 - 0.94 * penalty_strength)
 
-        weight = max(weight, 0.01)
+        # The 0.01 floor keeps a heavily penalized candidate from reaching zero.
+        # It is calibrated against raw counts, which are >= 1; blended weights
+        # are probabilities, where a legitimate candidate in a 200-token pool
+        # sits below 0.01 and the same floor would flatten the tail into a
+        # plateau. The blended path therefore floors at an epsilon that only
+        # guards against zero, which is all the floor was ever for.
+        weight = max(weight, 0.01 if base_weights is None else 1e-12)
         weights.append(weight)
     index = weighted_index_choice(weights, exploring=exploring, rng=rng)
     return ordered_items[index][0]
@@ -862,8 +921,12 @@ def weighted_start3_choice(
 
 
 def _fold_transition(
-    rows: list[tuple[str, int]], token: str, delta: int
-) -> list[tuple[str, int]]:
+    rows: list[TransitionRow],
+    token: str,
+    delta: int,
+    now: int,
+    half_life_days: float,
+) -> list[TransitionRow]:
     """A copy of a cached transition list with ``(token, +delta)`` upserted.
 
     Copy-on-write on purpose: a walk holds its fetched pool across awaits, and
@@ -873,13 +936,25 @@ def _fold_transition(
     that order, so inserts go through bisection. Python's str comparison
     (code points) agrees with SQLite's default BINARY collation (UTF-8 bytes)
     — UTF-8 preserves code-point order.
+
+    Both layers are folded, and the short one is folded whatever the blend is
+    set to (M2R-210): learning maintains the temporal record so that turning
+    the blend on later finds data rather than an empty layer. The arithmetic is
+    the same helper the SQL writer uses, which is what keeps a folded cache
+    equal to a fresh read.
     """
     updated = rows.copy()
     index = bisect.bisect_left(updated, token, key=lambda row: row[0])
     if index < len(updated) and updated[index][0] == token:
-        updated[index] = (token, updated[index][1] + delta)
+        _, count, s_value, s_updated_at = updated[index]
+        updated[index] = (
+            token,
+            count + delta,
+            short_observed(s_value, s_updated_at, now, half_life_days, delta),
+            now,
+        )
     else:
-        updated.insert(index, (token, delta))
+        updated.insert(index, (token, delta, float(delta), now))
     return updated
 
 
@@ -908,10 +983,10 @@ class MarkovGenerator:
     max_steps: int = 90
     cache_limit: int = 1024
 
-    _cache3: OrderedDict[tuple[int, str, str, str], list[tuple[str, int]]] = field(
+    _cache3: OrderedDict[tuple[int, str, str, str], list[TransitionRow]] = field(
         default_factory=OrderedDict, init=False
     )
-    _cache2: OrderedDict[tuple[int, str, str], list[tuple[str, int]]] = field(
+    _cache2: OrderedDict[tuple[int, str, str], list[TransitionRow]] = field(
         default_factory=OrderedDict, init=False
     )
     _cache_starts3: OrderedDict[int, list[tuple[str, str, str, int]]] = field(
@@ -942,11 +1017,18 @@ class MarkovGenerator:
         self._cache_starts2.pop(chat_id, None)
         self._context_state_matcher.invalidate_chat_cache(chat_id)
 
-    def apply_learning_deltas(self, chat_id: int, tokens: list[str]) -> None:
+    def apply_learning_deltas(
+        self,
+        chat_id: int,
+        tokens: list[str],
+        now: int = 0,
+        half_life_days: float = 3.0,
+    ) -> None:
         """Fold one learned message into the cached distributions (M2R-030).
 
         Mirrors the delta construction of ``save_message_and_update_model``
-        (same n-gram counters, same start tuples) so a folded cache equals a
+        (same n-gram counters, same start tuples, and since M2R-210 the same
+        temporal arithmetic at the same ``now``) so a folded cache equals a
         fresh SQL read — the equivalence is enforced by tests, and the
         ``markov_cache_incremental=false`` knob falls back to
         :meth:`invalidate_chat_cache` entirely. Only cached keys are touched;
@@ -966,12 +1048,16 @@ class MarkovGenerator:
             key3 = (chat_id, w1, w2, w3)
             cached3 = self._cache3.get(key3)
             if cached3 is not None:
-                self._cache3[key3] = _fold_transition(cached3, w4, delta)
+                self._cache3[key3] = _fold_transition(
+                    cached3, w4, delta, now, half_life_days
+                )
         for (w1, w2, w3), delta in trans2.items():
             key2 = (chat_id, w1, w2)
             cached2 = self._cache2.get(key2)
             if cached2 is not None:
-                self._cache2[key2] = _fold_transition(cached2, w3, delta)
+                self._cache2[key2] = _fold_transition(
+                    cached2, w3, delta, now, half_life_days
+                )
         starts2 = self._cache_starts2.get(chat_id)
         if starts2 is not None:
             self._cache_starts2[chat_id] = _fold_start_row(
@@ -1025,7 +1111,7 @@ class MarkovGenerator:
 
     async def _get3(
         self, chat_id: int, w1: str, w2: str, w3: str
-    ) -> list[tuple[str, int]]:
+    ) -> list[TransitionRow]:
         key = (chat_id, w1, w2, w3)
         if key in self._cache3:
             self.telemetry.note_cache(hit=True)
@@ -1036,7 +1122,7 @@ class MarkovGenerator:
         self._touch_cache(self._cache3, key, rows)
         return rows
 
-    async def _get2(self, chat_id: int, w1: str, w2: str) -> list[tuple[str, int]]:
+    async def _get2(self, chat_id: int, w1: str, w2: str) -> list[TransitionRow]:
         key = (chat_id, w1, w2)
         if key in self._cache2:
             self.telemetry.note_cache(hit=True)
@@ -1060,7 +1146,7 @@ class MarkovGenerator:
         for index, window in enumerate(windows3):
             transitions = await self._get3(chat_id, window[0], window[1], window[2])
             if transitions:
-                transition_count = sum(count for _, count in transitions)
+                transition_count = sum(row[1] for row in transitions)
                 recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
                 weight = max(transition_count, 1) ** frequency_power * recency_bonus
                 candidates3.append(
@@ -1074,15 +1160,15 @@ class MarkovGenerator:
         windows2: list[tuple[str, ...]],
         total2: int,
         frequency_power: float,
-    ) -> list[tuple[tuple[str, str], list[tuple[str, int]], float]]:
+    ) -> list[tuple[tuple[str, str], list[TransitionRow], float]]:
         """Exact 2-gram context windows that have stored transitions, carrying
         their transitions for the follow-up step, weighted by count and
         recency."""
-        candidates2: list[tuple[tuple[str, str], list[tuple[str, int]], float]] = []
+        candidates2: list[tuple[tuple[str, str], list[TransitionRow], float]] = []
         for index, window in enumerate(windows2):
             transitions = await self._get2(chat_id, window[0], window[1])
             if transitions:
-                transition_count = sum(count for _, count in transitions)
+                transition_count = sum(row[1] for row in transitions)
                 recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
                 weight = max(transition_count, 1) ** frequency_power * recency_bonus
                 candidates2.append(((window[0], window[1]), transitions, weight))
@@ -1119,10 +1205,10 @@ class MarkovGenerator:
         windows2: list[tuple[str, ...]],
         total2: int,
         frequency_power: float,
-    ) -> list[tuple[tuple[str, str], list[tuple[str, int]], float]]:
+    ) -> list[tuple[tuple[str, str], list[TransitionRow], float]]:
         """Casefold 2-gram start candidates that still have stored
         transitions."""
-        additions: list[tuple[tuple[str, str], list[tuple[str, int]], float]] = []
+        additions: list[tuple[tuple[str, str], list[TransitionRow], float]] = []
         for index, window in enumerate(windows2):
             matches = await self._context_state_matcher.match(chat_id, window, 2)
             recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
@@ -1253,6 +1339,8 @@ class MarkovGenerator:
         order_mix_probability: float = 0.0,
         context_anchor_splice_probability: float = 0.0,
         entropy_sampling: EntropySampling = EntropySampling(),
+        temporal_blend: TemporalBlend = TemporalBlend(),
+        now: int = 0,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> str:
@@ -1282,6 +1370,8 @@ class MarkovGenerator:
             order_mix_probability=order_mix_probability,
             context_anchor_splice_probability=context_anchor_splice_probability,
             entropy_sampling=entropy_sampling,
+            temporal_blend=temporal_blend,
+            now=now,
             rng=rng,
             attempt_budget=attempt_budget,
         )
@@ -1313,6 +1403,8 @@ class MarkovGenerator:
         order_mix_probability: float = 0.0,
         context_anchor_splice_probability: float = 0.0,
         entropy_sampling: EntropySampling = EntropySampling(),
+        temporal_blend: TemporalBlend = TemporalBlend(),
+        now: int = 0,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
     ) -> tuple[str, GenerationTrace]:
@@ -1344,6 +1436,8 @@ class MarkovGenerator:
                 order_mix_probability=order_mix_probability,
                 context_anchor_splice_probability=context_anchor_splice_probability,
                 entropy_sampling=entropy_sampling,
+                temporal_blend=temporal_blend,
+                now=now,
                 rng=generation_rng,
                 emit_start=True,
             )
@@ -1711,6 +1805,8 @@ class MarkovGenerator:
         rng: random.Random,
         diagnostics: _DiagnosticsAccumulator | None = None,
         entropy_sampling: EntropySampling = EntropySampling(),
+        temporal_blend: TemporalBlend = TemporalBlend(),
+        now: int = 0,
     ) -> tuple[list[str], int, int, bool]:
         """Walk the Markov chain from ``start3`` until a stop condition.
 
@@ -1866,9 +1962,7 @@ class MarkovGenerator:
                     pool3 = []
             if pool3 and order >= 3:
                 candidates = [
-                    (cand, cnt)
-                    for cand, cnt in pool3
-                    if (w2, w3, cand) not in visited_triplets
+                    row for row in pool3 if (w2, w3, row[0]) not in visited_triplets
                 ]
                 pool = candidates or pool3
                 # M2R-010: diagnostics of the pool actually sampled from, after
@@ -1876,8 +1970,13 @@ class MarkovGenerator:
                 # from the same number: the step's power is the entropy-adjusted
                 # one, and the adjustment happens here — before
                 # ``weighted_next_choice`` rolls exploration on top of it.
+                # M2R-210: the blend runs first, so entropy and temperature both
+                # describe the distribution that is really sampled.
+                blended = temporal_blend.blend(pool, now)
+                if diagnostics is not None:
+                    diagnostics.note_blend(blended)
                 step_power = _step_power(
-                    diagnostics, pool, next_power, entropy_sampling
+                    diagnostics, pool, next_power, entropy_sampling, blended
                 )
                 w4 = weighted_next_choice(
                     pool,
@@ -1894,6 +1993,7 @@ class MarkovGenerator:
                     seen_pairs=seen_pairs,
                     seen_triplets=seen_triplets,
                     repetition_penalty_strength=repetition_penalty_strength,
+                    base_weights=None if blended is None else blended.weights,
                 )
             else:
                 if not enable_backoff and order >= 3:
@@ -1904,14 +2004,18 @@ class MarkovGenerator:
 
                 pool2 = await self._get2(chat_id, w2, w3)
                 if pool2:
+                    blended2 = temporal_blend.blend(pool2, now)
+                    if diagnostics is not None:
+                        diagnostics.note_blend(blended2)
                     step_power = _step_power(
-                        diagnostics, pool2, next_power, entropy_sampling
+                        diagnostics, pool2, next_power, entropy_sampling, blended2
                     )
                     w4 = weighted_next_choice(
                         pool2,
                         next_explore,
                         step_power,
                         rng,
+                        base_weights=None if blended2 is None else blended2.weights,
                         context_token_set=context_token_set,
                         context_pairs=context_pairs,
                         context_triplets=context_triplets,
@@ -1975,6 +2079,8 @@ class MarkovGenerator:
         order_mix_probability: float = 0.0,
         context_anchor_splice_probability: float = 0.0,
         entropy_sampling: EntropySampling = EntropySampling(),
+        temporal_blend: TemporalBlend = TemporalBlend(),
+        now: int = 0,
         rng: random.Random | None = None,
         emit_start: bool = True,
     ) -> _GenerationAttempt:
@@ -2179,6 +2285,8 @@ class MarkovGenerator:
                 rng=generation_rng,
                 diagnostics=diagnostics,
                 entropy_sampling=entropy_sampling,
+                temporal_blend=temporal_blend,
+                now=now,
             )
         )
         if deferred_anchor is not None:

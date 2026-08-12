@@ -5,6 +5,7 @@ from collections import Counter, deque
 from collections.abc import Callable, Iterable, Mapping, Set
 from dataclasses import dataclass
 
+from app.config.defaults import SHORT_HALF_LIFE_DAYS
 from app.core.candidate_scorer import build_token_idf, verbatim_ngram_windows
 from app.core.intonation import IntonationProfile, build_intonation_profile
 from app.core.markov import MarkovGenerator, tokenize
@@ -202,6 +203,7 @@ class LearningService:
         tokens: list[str],
         *,
         incremental_cache: bool = False,
+        short_half_life_days: float = SHORT_HALF_LIFE_DAYS,
     ) -> int:
         """Атомарно записывает сообщение и обновляет модель.
 
@@ -210,14 +212,24 @@ class LearningService:
         вкатывает дельты сообщения в кэши распределений генератора вместо
         их полного сброса; дефолт false сохраняет прежнее поведение для
         вызывающих, не передающих ручку.
+
+        Момент наблюдения берётся здесь один раз и передаётся обоим — SQL и
+        свёртке кэша (M2R-210). Два вызова ``time.time()`` разошлись бы на
+        доли секунды, и свёрнутый кэш перестал бы совпадать со свежим чтением:
+        именно это гарантирует тест эквивалентности.
         """
+        now = int(time.time())
         token_volume = await self._db.save_message_and_update_model(
             chat_id=chat_id,
             raw_text=raw_text,
             tokens=tokens,
+            now=now,
+            short_half_life_days=short_half_life_days,
         )
         if incremental_cache:
-            self._generator.apply_learning_deltas(chat_id, tokens)
+            self._generator.apply_learning_deltas(
+                chat_id, tokens, now, short_half_life_days
+            )
         else:
             self._generator.invalidate_chat_cache(chat_id)
         self._absorb_message(chat_id, raw_text, tokens)

@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from app.core.temporal import TransitionRow
+
 
 class MarkovReadPort(Protocol):
     """Чтение цепи Маркова по чату."""
@@ -51,13 +53,18 @@ class MarkovReadPort(Protocol):
 
     async def get_transitions(
         self, chat_id: int, w1: str, w2: str
-    ) -> list[tuple[str, int]]:
-        """Продолжения состояния порядка 2, упорядоченные по токену."""
+    ) -> list[TransitionRow]:
+        """Продолжения состояния порядка 2, упорядоченные по токену.
+
+        Строка несёт оба слоя (M2R-200): долгий счётчик и пару короткого слоя.
+        Пул читается один раз на шаг, поэтому оба слоя приходят вместе — иначе
+        включённый blend стоил бы второго запроса на каждый шаг прогулки.
+        """
         ...
 
     async def get_transitions3(
         self, chat_id: int, w1: str, w2: str, w3: str
-    ) -> list[tuple[str, int]]:
+    ) -> list[TransitionRow]:
         """Продолжения состояния порядка 3, упорядоченные по токену."""
         ...
 

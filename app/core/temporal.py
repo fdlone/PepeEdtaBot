@@ -77,14 +77,22 @@ def short_observed(
     s_updated_at: int | None,
     now: int,
     half_life_days: float,
+    observations: int = 1,
 ) -> float:
     """The stored value after observing the transition at ``now`` (TZ §7.1).
 
-    Decay what was there, then add this observation's full weight of 1. Storing
-    the result together with ``now`` as the new ``s_updated_at`` is what keeps
-    the identity above true without keeping any per-event rows.
+    Decay what was there, then add this moment's observations at full weight of
+    1 each. Storing the result together with ``now`` as the new
+    ``s_updated_at`` is what keeps the identity above true without keeping any
+    per-event rows.
+
+    ``observations`` exists because one message can contain the same transition
+    several times; those repeats happen at the same instant, so they decay
+    identically and adding them at once is exact rather than an approximation.
     """
-    return short_effective(s_value, s_updated_at, now, half_life_days) + 1.0
+    return short_effective(s_value, s_updated_at, now, half_life_days) + float(
+        observations
+    )
 
 
 def compress_long(count: int, shape: str, beta: float) -> float:

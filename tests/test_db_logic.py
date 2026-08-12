@@ -102,8 +102,8 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         )
         transitions = await self.db.markov.get_transitions(chat_id, "яблоко", "груша")
         self.assertEqual(
-            [token for token, _ in transitions],
-            sorted(token for token, _ in transitions),
+            [row[0] for row in transitions],
+            sorted(row[0] for row in transitions),
         )
         self.assertGreater(len(transitions), 1)
 
@@ -223,10 +223,13 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         starts3 = await self.db.markov.get_starts3(2002)
         self.assertEqual(starts3, [("Я", "очень", "люблю", 1)])
 
+        # Rows carry both layers since M2R-200: (token, count, s_value,
+        # s_updated_at). The short pair is asserted in the Phase 3 suite; here
+        # only the long count matters.
         transitions2 = await self.db.markov.get_transitions(2002, "Я", "очень")
-        self.assertEqual(transitions2, [("люблю", 1)])
+        self.assertEqual([(row[0], row[1]) for row in transitions2], [("люблю", 1)])
         transitions3 = await self.db.markov.get_transitions3(2002, "Я", "очень", "люблю")
-        self.assertEqual(transitions3, [("чат", 1)])
+        self.assertEqual([(row[0], row[1]) for row in transitions3], [("чат", 1)])
 
         stats = await self.db.get_stats(2002)
         self.assertEqual(stats["starts2"], 1)
@@ -262,8 +265,9 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
                 ("zeta", "start", "shared", 2),
             ],
         )
+        rows = await self.db.markov.get_transitions3(2003, "zeta", "start", "shared")
         self.assertEqual(
-            await self.db.markov.get_transitions3(2003, "zeta", "start", "shared"),
+            [(row[0], row[1]) for row in rows],
             [("alpha", 1), ("omega", 1)],
         )
 

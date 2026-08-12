@@ -12,30 +12,30 @@ changes — see proposal.md.
 
 - [x] 2.1 `app/migrations/018_temporal_layer.sql`: `first_seen`, `last_seen` (INTEGER unix seconds), `s_value` (REAL, default 0), `s_updated_at` (INTEGER) on `starts`, `starts3`, `transitions`, `transitions3` — NULL defaults, no data rewrite (design D6)
 - [x] 2.2 Migration runs on a clean DB and on `db_prod_copy`; record the measured wall time in the change (audit §8 asks for the number, not an assurance) — **measured: 4.0 ms on the prod copy (30 720 transitions, 27 237 transitions3), 58 ms for the whole chain on an empty DB**; metadata-only as predicted, no row rewritten
-- [ ] 2.3 Readers tolerate NULL: NULL `first_seen` means "predates the temporal record", `s_value = 0` with NULL `s_updated_at` means an empty short layer
-- [ ] 2.4 `/clear confirm` leaves no temporal remnant — extend the existing orphaned-structures test rather than writing a new one
+- [x] 2.3 Readers tolerate NULL: NULL `first_seen` means "predates the temporal record", `s_value = 0` with NULL `s_updated_at` means an empty short layer
+- [x] 2.4 `/clear confirm` leaves no temporal remnant — extend the existing orphaned-structures test rather than writing a new one
 
 ## 3. Decay arithmetic (M2R-210, core)
 
-- [ ] 3.1 One pure helper for both directions: observe (`s_value·2^(−Δt/hl) + 1`) and read (`s_eff = s_value·2^(−Δt/hl)`), taking `(s_value, s_updated_at, now, half_life)` — no second implementation in SQL (design D1)
-- [ ] 3.2 Guard the degenerate inputs explicitly: NULL/absent `s_updated_at`, `now` earlier than `s_updated_at` (clock skew), and a zero `s_value`
-- [ ] 3.3 Verify locally that no chain row has `cnt <= 0` on `db_prod_copy`, so the sampler's clamp change in 5.1 is provably behavior-preserving (design D4)
+- [x] 3.1 One pure helper for both directions: observe (`s_value·2^(−Δt/hl) + 1`) and read (`s_eff = s_value·2^(−Δt/hl)`), taking `(s_value, s_updated_at, now, half_life)` — no second implementation in SQL (design D1)
+- [x] 3.2 Guard the degenerate inputs explicitly: NULL/absent `s_updated_at`, `now` earlier than `s_updated_at` (clock skew), and a zero `s_value`
+- [x] 3.3 Verify locally that no chain row has `cnt <= 0` on `db_prod_copy`, so the sampler's clamp change in 5.1 is provably behavior-preserving (design D4)
 
 ## 4. Learn path
 
-- [ ] 4.1 Extend the existing single learn transaction: read the touched rows' short pairs, compute the new values in Python, write both layers plus `first_seen`/`last_seen` atomically (design D1)
-- [ ] 4.2 `first_seen` is set once and never moved; `last_seen` advances on every observation
+- [x] 4.1 Extend the existing single learn transaction: read the touched rows' short pairs, compute the new values in Python, write both layers plus `first_seen`/`last_seen` atomically (design D1)
+- [x] 4.2 `first_seen` is set once and never moved; `last_seen` advances on every observation
 - [ ] 4.3 Measure the learn path's added cost on `db_prod_copy` and record the number — one extra indexed SELECT per message is the claim, not the finding
-- [ ] 4.4 Phase 1's incremental cache fold carries the temporal pair, so a cached pool and a freshly read one agree
+- [x] 4.4 Phase 1's incremental cache fold carries the temporal pair, so a cached pool and a freshly read one agree
 
 ## 5. Blend and sampling (M2R-210, core)
 
-- [ ] 5.1 Sampler takes float weights: `max(cnt, 1)` becomes `max(w, EPS)`; integer inputs keep producing identical results (design D4)
-- [ ] 5.2 `blend_pool(pool, alpha, now, ...)` returns its input unchanged at α = 0 — the early return that makes neutrality structural rather than incidental
-- [ ] 5.3 Blend over the union of tokens, long layer compressed sublinearly (`log` | `pow` with β) before normalization; an empty layer degenerates to the other
+- [x] 5.1 Sampler takes float weights: `max(cnt, 1)` becomes `max(w, EPS)`; integer inputs keep producing identical results (design D4)
+- [x] 5.2 `blend_pool(pool, alpha, now, ...)` returns its input unchanged at α = 0 — the early return that makes neutrality structural rather than incidental
+- [x] 5.3 Blend over the union of tokens, long layer compressed sublinearly (`log` | `pow` with β) before normalization; an empty layer degenerates to the other
 - [ ] 5.4 α resolved from the chat's mood; the value the walk actually used is what gets reported (not the configured one)
 - [ ] 5.5 `now` captured once per generation and threaded into blending and cache reads; nothing below reads the clock (design D3)
-- [ ] 5.6 `pool_diagnostics` computed from the blended weights, so entropy describes the sampled distribution (design D5) — note the knock-on: this is Phase 2's input
+- [x] 5.6 `pool_diagnostics` computed from the blended weights, so entropy describes the sampled distribution (design D5) — note the knock-on: this is Phase 2's input
 
 ## 6. Knobs
 
@@ -46,24 +46,24 @@ changes — see proposal.md.
 
 ## 7. Neutrality proof (the phase's hard contract)
 
-- [ ] 7.1 `python -m tools.generation_hash --db db_prod_copy/markov.db` — identical hash at default settings, against the frozen baseline (`5a72e2d4`)
+- [x] 7.1 `python -m tools.generation_hash --db db_prod_copy/markov.db` — identical hash at default settings, against the frozen baseline (`5a72e2d4`)
 - [ ] 7.2 Characterization tests green unchanged at neutral settings
 - [ ] 7.3 Runtime revert check: α set back to 0 via `/set` restores baseline output without a restart
 - [ ] 7.4 Neutrality holds with the migration applied to a database that has already learned messages under the temporal layer (schema present, short layer populated, α = 0)
 
 ## 8. Unit tests
 
-- [ ] 8.1 Decay: an observation now contributes 1; an observation one half-life old contributes 0.5; order of observations does not change the result; `s_eff` is non-increasing between observations (TZ §19)
-- [ ] 8.2 Compression: both shapes preserve the order of preference; a 10000-vs-20 count pair leaves the smaller non-negligible
-- [ ] 8.3 Blend: union coverage, token present in only one layer stays reachable, empty layer degenerates, α = 0 and α = 1 endpoints
+- [x] 8.1 Decay: an observation now contributes 1; an observation one half-life old contributes 0.5; order of observations does not change the result; `s_eff` is non-increasing between observations (TZ §19)
+- [x] 8.2 Compression: both shapes preserve the order of preference; a 10000-vs-20 count pair leaves the smaller non-negligible
+- [x] 8.3 Blend: union coverage, token present in only one layer stays reachable, empty layer degenerates, α = 0 and α = 1 endpoints
 - [ ] 8.4 Half-life reset: short layer emptied, long layer and timestamps untouched, no-op when the value is unchanged
 - [ ] 8.5 Cache: a pool cached at t₀ and read at t₁ yields the same weights as an uncached read at t₁
 
 ## 9. Property / invariant tests (TZ §19)
 
-- [ ] 9.1 Blending any two valid distributions at any legal α yields a valid distribution: finite, non-negative, sums to 1
+- [x] 9.1 Blending any two valid distributions at any legal α yields a valid distribution: finite, non-negative, sums to 1
 - [ ] 9.2 Determinism: same seed + same settings + same `now` ⇒ identical output, cached or not
-- [ ] 9.3 `s_eff` monotonically non-increasing between observations, for any legal half-life
+- [x] 9.3 `s_eff` monotonically non-increasing between observations, for any legal half-life
 - [ ] 9.4 Learning is atomic across both layers under a mid-transaction failure
 
 ## 10. Telemetry

@@ -30,6 +30,7 @@ EXPECTED_MIGRATIONS = [
     "015_lowercase_model",
     "016_verbatim_ngrams",
     "017_strip_list_enumerators",
+    "018_temporal_layer",
 ]
 
 EXPECTED_TABLES = {

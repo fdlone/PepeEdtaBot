@@ -160,13 +160,24 @@ class TestFoldHelpers(unittest.TestCase):
     def test_fold_transition_equals_rebuild(
         self, rows: list[tuple[str, int]], token: str, delta: int
     ) -> None:
-        ordered = sorted(rows, key=lambda row: row[0])
-        folded = _fold_transition(ordered, token, delta)
-        merged = dict(ordered)
+        """The long layer folds exactly as before M2R-200 widened the row.
+
+        The short layer rides along in the same row (checked in the Phase 3
+        suite); this property is about the count and the ordering, which the
+        cache-equals-a-fresh-read contract depends on.
+        """
+        now = 1_700_000_000
+        ordered: list[tuple[str, int, float, int | None]] = [
+            (word, count, 0.0, None)
+            for word, count in sorted(rows, key=lambda row: row[0])
+        ]
+        snapshot = list(ordered)
+        folded = _fold_transition(ordered, token, delta, now, 3.0)
+        merged = {row[0]: row[1] for row in ordered}
         merged[token] = merged.get(token, 0) + delta
         rebuilt = sorted(merged.items(), key=lambda row: row[0])
-        self.assertEqual(folded, rebuilt)
-        self.assertEqual(ordered, sorted(rows, key=lambda row: row[0]))  # copy-on-write
+        self.assertEqual([(row[0], row[1]) for row in folded], rebuilt)
+        self.assertEqual(ordered, snapshot)  # copy-on-write
 
     def test_fold_start_row_insert_and_increment(self) -> None:
         rows = [("а", "б", 2), ("в", "г", 1)]
