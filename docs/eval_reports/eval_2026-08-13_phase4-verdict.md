@@ -1,6 +1,6 @@
 # Eval report 2026-08-13 snapshot=phase4-verdict prompts=308b7deaea0f seeds=42,1337,2026
 
-Revision: `2ec6bda`. Generations per configuration: 500.
+Revision: `382c826`. Generations per configuration: 500.
 - IDF for affinity metrics is computed over the snapshot's retained message window (full history is not stored) — window-relative, identical across configurations (audit §3).
 
 ## Config matrix
@@ -32,13 +32,13 @@ Value [95% CI] per configuration; delta vs C0 [95% CI], `*` = significant (inter
 | freshness_reflection | insufficient data | insufficient data | — | insufficient data | — | insufficient data | — |
 | historical_meme_rate | 0.317 [0.272, 0.368] | 0.309 [0.264, 0.357] | -0.008 [-0.072, 0.064] | 0.352 [0.304, 0.400] | 0.035 [-0.032, 0.101] | 0.317 [0.272, 0.368] | 0.000 [-0.064, 0.069] |
 
-C0: distinct-2 = 0.646 (basis 15077), distinct-3 = 0.798 (basis 13577) — type/token ratios, comparable only at equal basis; latency p50/p95 = 19.9/30.1 ms; cache_hit_rate: 41%; mean normalized entropy: 0.234 (branching 3.19); mean applied temperature: 2.77; temporal blend: coverage 0.0%, shift 0.0000; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
+C0: distinct-2 = 0.646 (basis 15077), distinct-3 = 0.798 (basis 13577) — type/token ratios, comparable only at equal basis; latency p50/p95 = 25.0/40.7 ms; cache_hit_rate: 41%; mean normalized entropy: 0.234 (branching 3.19); mean applied temperature: 2.77; temporal blend: coverage 0.0%, shift 0.0000; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
 
-C3: distinct-2 = 0.637 (basis 15500), distinct-3 = 0.788 (basis 14000) — type/token ratios, comparable only at equal basis; latency p50/p95 = 20.2/30.8 ms; cache_hit_rate: 41%; mean normalized entropy: 0.234 (branching 3.19); mean applied temperature: 2.77; temporal blend: coverage 0.0%, shift 0.0000; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
+C3: distinct-2 = 0.637 (basis 15500), distinct-3 = 0.788 (basis 14000) — type/token ratios, comparable only at equal basis; latency p50/p95 = 26.4/41.6 ms; cache_hit_rate: 41%; mean normalized entropy: 0.234 (branching 3.19); mean applied temperature: 2.77; temporal blend: coverage 0.0%, shift 0.0000; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
 
-C4: distinct-2 = 0.628 (basis 15322), distinct-3 = 0.776 (basis 13822) — type/token ratios, comparable only at equal basis; latency p50/p95 = 41.7/91.8 ms; cache_hit_rate: 38%; mean normalized entropy: 0.234 (branching 3.19); mean applied temperature: 2.77; temporal blend: coverage 0.0%, shift 0.0000; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
+C4: distinct-2 = 0.628 (basis 15322), distinct-3 = 0.776 (basis 13822) — type/token ratios, comparable only at equal basis; latency p50/p95 = 53.7/119.1 ms; cache_hit_rate: 38%; mean normalized entropy: 0.234 (branching 3.19); mean applied temperature: 2.77; temporal blend: coverage 0.0%, shift 0.0000; shadow order-4 share: 0.0% (estimator=window); storage_delta: n/a.
 
-CF: distinct-2 = 0.646 (basis 15077), distinct-3 = 0.798 (basis 13577) — type/token ratios, comparable only at equal basis; latency p50/p95 = 19.9/30.1 ms; cache_hit_rate: insufficient data; mean normalized entropy: insufficient data; mean applied temperature: insufficient data; temporal blend: insufficient data; shadow order-4 share: insufficient data; storage_delta: n/a.
+CF: distinct-2 = 0.646 (basis 15077), distinct-3 = 0.798 (basis 13577) — type/token ratios, comparable only at equal basis; latency p50/p95 = 25.0/40.7 ms; cache_hit_rate: insufficient data; mean normalized entropy: insufficient data; mean applied temperature: insufficient data; temporal blend: insufficient data; shadow order-4 share: insufficient data; storage_delta: n/a.
 
 ## Per-category breakdown
 
@@ -61,17 +61,25 @@ CF: distinct-2 = 0.646 (basis 15077), distinct-3 = 0.798 (basis 13577) — type/
 
 - **phase2_entropy**: insufficient data — no Phase 2 arm in this run (entropy sampling not enabled)
 - **phase3_temporal**: insufficient data — no Phase 3 arm in this run (temporal blend not enabled)
-- **phase4_memes[C3]**: fail — manual: meme 8/20 genuine (40%, bar 70%) vs frequency control 2/20 (10%), Δ +30%; decoys 1/5 (20%); 3 rater(s), agreement 0.17; copy Δ -0.039 [-0.067, -0.009] *; affinity_without_copy Δ -0.017 [-0.037, 0.004]; p95 30.8 ms (budget 150) — genuine share below the bar
-- **phase5_promotion[C4]**: insufficient data — seeded present 82% (bar 30%), win|present 20% (bar 40%); affinity_without_copy Δ 0.073 [0.049, 0.097] *; p95 91.8 ms (budget 150) — missing: a protocol run over prod-accumulated df (df here is window-approximated, design D4)
+- **phase4_memes[C3]**: fail — manual: meme 8/20 genuine (40%, bar 70%) vs frequency control 2/20 (10%), Δ +30%; decoys 1/5 (20%); 3 rater(s), agreement 0.17; copy Δ -0.039 [-0.067, -0.009] *; affinity_without_copy Δ -0.017 [-0.037, 0.004]; p95 41.6 ms (budget 150) — genuine share below the bar
+- **phase5_promotion[C4]**: insufficient data — seeded present 82% (bar 30%), win|present 20% (bar 40%); affinity_without_copy Δ 0.073 [0.049, 0.097] *; p95 119.1 ms (budget 150) — missing: a protocol run over prod-accumulated df (df here is window-approximated, design D4)
 - **phase6_anticycle**: close — cycle_detection_rate 0.001 [0.000, 0.003] wholly below the 0.05 threshold — cycles are not frequent, the rate×harm conjunction cannot hold, so Phase 6 closes without implementation (M2R-600/610 not built); the manual harm round is not required (ADR-015)
 - **phase7_order4**: insufficient data — shadow data: 933 eligible steps (need >= 1000 for a verdict; estimator=window)
-- **performance.generation_p95**: pass — C0 p95 = 30.1 ms (budget 150 ms)
+- **performance.generation_p95**: pass — C0 p95 = 40.7 ms (budget 150 ms)
 - **performance.lookup_p95**: insufficient data — distribution-lookup instrumentation lands in Phase 1
 - **meme_regression_pass (C0, informational at Phase 0)**: fail — memes never reproduced (indices): [4, 5, 12, 13, 14, 15, 21, 22, 23] (list of 27 memes, prompt set 308b7deaea0f)
 
 ## Manual eval summary
 
-Not conducted in this run (first required at the Phase 4 gate).
+Raters: 3; inter-rater agreement: 0.17.
+
+| source | rated | genuine | share |
+|---|---|---|---|
+| association ranking | 20 | 8 | 40% |
+| frequency control | 20 | 2 | 10% |
+| decoys | 5 | 1 | 20% |
+
+Ranking version rated: `b81b634`.
 
 ## Verdict per phase
 

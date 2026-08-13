@@ -29,7 +29,12 @@ from tools.eval.metrics import (
     repeated_ngram_share,
 )
 from tools.eval.prompts import generate_prompts
-from tools.eval.report import build_report, evaluate_gates, metrics_summary
+from tools.eval.report import (
+    build_report,
+    evaluate_gates,
+    manual_summary,
+    metrics_summary,
+)
 from tools.eval.run import ConfigRun, run_matrix
 from tools.eval.synthetic import SYNTHETIC_CHAT_ID, build_synthetic_snapshot
 
@@ -360,6 +365,49 @@ class TestPhase2Gate(unittest.TestCase):
         )
         self.assertEqual(verdict, "fail", detail)
         self.assertIn("p95 over budget", detail)
+
+
+class TestManualEvalSummary(unittest.TestCase):
+    """The section must describe the run it belongs to (spec: generation-eval).
+
+    It used to print "not conducted" unconditionally, so a report could carry
+    the manual numbers in its gate line and deny the round two sections later.
+    """
+
+    AGGREGATE = {
+        "ranking_version": "b81b634",
+        "raters": 3,
+        "agreement": 0.17,
+        "rated": 20,
+        "real": 8,
+        "control_rated": 20,
+        "control_real": 2,
+        "decoy_rated": 5,
+        "decoy_real": 1,
+        "_comment": "phrase-free note that must never reach the report",
+    }
+
+    def test_absent_rating_says_so(self) -> None:
+        self.assertEqual(
+            manual_summary(None),
+            ["Not conducted in this run (first required at the Phase 4 gate)."],
+        )
+
+    def test_supplied_rating_is_reported(self) -> None:
+        text = "\n".join(manual_summary(self.AGGREGATE))
+        self.assertNotIn("Not conducted", text)
+        for fragment in ("3", "0.17", "20", "8", "40%", "2", "10%", "5", "1", "20%"):
+            self.assertIn(fragment, text)
+        self.assertIn("b81b634", text)
+
+    def test_unknown_keys_never_reach_the_report(self) -> None:
+        # The aggregate sits next to verbatim chat phrases; only known count
+        # keys are read, so a stray note cannot ride into a committed report.
+        self.assertNotIn("phrase-free note", "\n".join(manual_summary(self.AGGREGATE)))
+
+    def test_single_rater_states_agreement_is_unavailable(self) -> None:
+        solo = {**self.AGGREGATE, "raters": 1, "agreement": None}
+        self.assertIn("unavailable (single rater)", "\n".join(manual_summary(solo)))
 
 
 class TestSyntheticProtocol(unittest.IsolatedAsyncioTestCase):

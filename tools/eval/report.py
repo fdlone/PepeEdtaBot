@@ -675,6 +675,56 @@ def evaluate_gates(
     return rows
 
 
+def manual_summary(manual: dict[str, Any] | None) -> list[str]:
+    """Report section describing the manual rating round that fed this run.
+
+    Only the aggregate keys are read: the rated items are verbatim chat
+    phrases, and a committed report carries counts, not phrases (spec:
+    `generation-eval` — "Manual ratings are versioned without leaking chat
+    content"). Unknown keys in the aggregate file — a `_comment`, say — are
+    never echoed, so the section cannot leak whatever a note happens to hold.
+
+    The "not conducted" wording is reachable only for a genuinely absent
+    rating: a report that describes its own inputs wrongly discredits its
+    other sections too, and this one used to say it unconditionally.
+    """
+    if manual is None:
+        return ["Not conducted in this run (first required at the Phase 4 gate)."]
+
+    def counts(rated_key: str, real_key: str) -> tuple[int, int, str]:
+        rated = int(manual.get(rated_key, 0))
+        real = int(manual.get(real_key, 0))
+        share = f"{real / rated:.0%}" if rated else INSUFFICIENT
+        return rated, real, share
+
+    rated, real, share = counts("rated", "real")
+    control_rated, control_real, control_share = counts("control_rated", "control_real")
+    decoy_rated, decoy_real, decoy_share = counts("decoy_rated", "decoy_real")
+    raters = int(manual.get("raters", 0))
+    agreement = manual.get("agreement")
+    agreement_text = (
+        f"{float(agreement):.2f}"
+        if agreement is not None and raters > 1
+        else "unavailable (single rater)"
+        if raters == 1
+        else INSUFFICIENT
+    )
+    version = manual.get("ranking_version")
+
+    lines = [
+        f"Raters: {raters}; inter-rater agreement: {agreement_text}.",
+        "",
+        "| source | rated | genuine | share |",
+        "|---|---|---|---|",
+        f"| association ranking | {rated} | {real} | {share} |",
+        f"| frequency control | {control_rated} | {control_real} | {control_share} |",
+        f"| decoys | {decoy_rated} | {decoy_real} | {decoy_share} |",
+    ]
+    if version:
+        lines.extend(["", f"Ranking version rated: `{version}`."])
+    return lines
+
+
 def build_report(
     *,
     runs: dict[str, ConfigRun],
@@ -864,7 +914,7 @@ def build_report(
 
     lines.append("## Manual eval summary")
     lines.append("")
-    lines.append("Not conducted in this run (first required at the Phase 4 gate).")
+    lines.extend(manual_summary(manual_rating))
     lines.append("")
 
     lines.append("## Verdict per phase")
