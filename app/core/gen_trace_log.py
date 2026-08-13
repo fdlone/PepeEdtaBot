@@ -21,6 +21,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Protocol
 
 from app.core.candidate_scorer import CandidateScore
+from app.core.generation_telemetry import CandidateRoute
 from app.log_masking import mask_chat_id
 
 if TYPE_CHECKING:
@@ -46,6 +47,9 @@ class _HasScore(Protocol):
 
     @property
     def score(self) -> CandidateScore: ...
+
+    @property
+    def route(self) -> str: ...
 
 
 def enabled() -> bool:
@@ -130,15 +134,28 @@ def log_attempt_failed(_chat_id: int, attempt: int, *, context_used: bool) -> No
 
 
 def log_attempt_rejected(
-    _chat_id: int, attempt: int, *, context_used: bool, reason: str, text: str
+    _chat_id: int,
+    attempt: int,
+    *,
+    context_used: bool,
+    reason: str,
+    text: str,
+    route: str = CandidateRoute.VANILLA,
 ) -> None:
+    """A candidate discarded before the pool, with the route that built it.
+
+    The route is on the rejection line too, not only on survivors: «маршрут
+    ничего не производит» и «производит, но всё отклоняется» — разные находки,
+    и различают их только строки отклонений.
+    """
     if not enabled():
         return
     gen_logger.info(
-        "  attempt %02d [context=%s] -> REJECTED (%s)\n"
+        "  attempt %02d [context=%s route=%s] -> REJECTED (%s)\n"
         "        text: %r",
         attempt,
         "on" if context_used else "off",
+        route,
         reason,
         text,
     )
@@ -266,7 +283,8 @@ def log_selection(
         for i, c in enumerate(candidates, 1):
             mark = "  <== CHOSEN" if c is selected else ""
             lines.append(
-                f"    #{i} total={c.score.total:+.3f}{mark}  {c.text!r}"
+                f"    #{i} total={c.score.total:+.3f} route={c.route}{mark}  "
+                f"{c.text!r}"
             )
         gen_logger.info("\n".join(lines))
         return
@@ -287,13 +305,13 @@ def log_selection(
             w = weight_by_id[id(c)]
             prob = 100.0 * w / weight_sum
             lines.append(
-                f"    #{i} total={c.score.total:+.3f}  eligible  "
+                f"    #{i} total={c.score.total:+.3f} route={c.route}  eligible  "
                 f"weight={w:.4f}  p={prob:5.1f}%{mark}  {c.text!r}"
             )
         else:
             gap = best_total - c.score.total
             lines.append(
-                f"    #{i} total={c.score.total:+.3f}  "
+                f"    #{i} total={c.score.total:+.3f} route={c.route}  "
                 f"excluded (>{margin:.2f} below best, gap={gap:.3f})  "
                 f"{c.text!r}"
             )

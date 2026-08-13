@@ -120,6 +120,53 @@ class TestChatHotNgramsRepo(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("SCAN transitions", plan)
 
 
+class TestHotNgramTieOrder(unittest.IsolatedAsyncioTestCase):
+    """Равные счётчики упорядочены по самой n-грамме, а не как выйдет.
+
+    Результат ``get_hot`` идёт в ``random.choice`` на пути ответа, поэтому
+    неопределённый тай-брейк — это неопределённый розыгрыш. На замороженном
+    снимке при дефолтных порогах чтение возвращает пусто, так что данными это
+    не проверяется — только синтетикой с намеренно равными счётчиками.
+
+    Оговорка про силу теста: сегодня он проходит и без тай-брейка в запросе —
+    план идёт по первичному ключу, а его порядок совпадает с порядком
+    n-граммы. Тест закрепляет наблюдаемое свойство, но не отличает «держится
+    клаузой» от «держится планом»; форсировать второй случай из теста нечем.
+    Ценность в том, что смена плана (новый индекс, другой набор колонок) или
+    потеря клаузы при переписывании запроса станет видна здесь.
+    """
+
+    PAIRS = [("ямка", "яма"), ("арка", "аре"), ("мель", "мели")]
+
+    async def asyncSetUp(self) -> None:
+        self.db_path = Path(f"test_hot_tie_{uuid.uuid4().hex}.sqlite")
+        self.db = Database(str(self.db_path))
+        await self.db.init()
+        # Вставляются в неалфавитном порядке и с одинаковым счётчиком: любой
+        # порядок, кроме заданного тай-брейком, был бы порядком вставки.
+        for pair in self.PAIRS:
+            await self.db.chat_hot_ngrams.bump(CHAT, [pair] * 4)
+
+    async def asyncTearDown(self) -> None:
+        await self.db.close()
+        self.db_path.unlink(missing_ok=True)
+
+    async def test_equal_counts_are_ordered_by_the_ngram(self) -> None:
+        hot = await self.db.chat_hot_ngrams.get_hot(
+            CHAT, min_count=3, recency_share=0.0
+        )
+        self.assertEqual(len(hot), len(self.PAIRS))
+        self.assertEqual(hot, sorted(hot))
+
+    async def test_meme_ordering_path_breaks_ties_the_same_way(self) -> None:
+        hot = await self.db.chat_hot_ngrams.get_hot(
+            CHAT, min_count=3, recency_share=0.0, meme_ordering=True
+        )
+        # Реестр коллокаций пуст, значит score одинаков у всех и решает
+        # тот же тай-брейк, что на дефолтном пути.
+        self.assertEqual(hot, sorted(hot))
+
+
 class TestMemeOrdering(unittest.IsolatedAsyncioTestCase):
     """M2R-310 / design D5: an ordering behind a knob, not a replacement."""
 

@@ -65,10 +65,16 @@ class ChatHotNgramsRepo(DecayableCountsRepo):
         still qualifies.
 
         ``meme_ordering`` (M2R-310) reorders the same selection by the
-        collocation registry's association score. Off by default, and the off
-        path's SQL is byte-identical to what shipped before the knob existed —
-        tie order among equal counts must not move under neutral settings
-        (the ``generation_hash`` contract).
+        collocation registry's association score. Off by default.
+
+        Both orderings break ties on the n-gram itself. The result feeds
+        ``random.choice`` on the reply path, so an undefined tie order would be
+        an undefined draw (``generation-sampling-determinism``). Adding the
+        tie-break is deliberate and does not move ``generation_hash`` today:
+        at the default thresholds this read returns nothing on the frozen
+        snapshot, so there are no ties to order. It stops being free the moment
+        the hotness thresholds are lowered (M3R-145), which is why it lands
+        before that sweep rather than with it.
         """
         # Всевременной счётчик берётся коррелированным подзапросом на строку
         # окна, а не агрегатом по всей таблице переходов чата. Окно — десятки
@@ -79,7 +85,14 @@ class ChatHotNgramsRepo(DecayableCountsRepo):
         # миллисекунды. Результат тот же: отсутствующая строка по-прежнему
         # означает «считаем всевременным счётчиком оконный».
         score = self._MEME_SCORE_SQL if meme_ordering else ""
-        order = "ORDER BY 5 DESC, 4 DESC" if meme_ordering else "ORDER BY 4 DESC"
+        # Хвост ``, 1, 2, 3`` — тай-брейк по самой n-грамме: без него порядок
+        # строк с равным счётчиком не определён, а результат идёт в
+        # ``random.choice`` на пути ответа.
+        order = (
+            "ORDER BY 5 DESC, 4 DESC, 1, 2, 3"
+            if meme_ordering
+            else "ORDER BY 4 DESC, 1, 2, 3"
+        )
         query = f"""
             SELECT h.w1, h.w2, h.w3, h.cnt{score}
             FROM chat_hot_ngrams h

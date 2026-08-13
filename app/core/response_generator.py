@@ -25,6 +25,7 @@ from app.core.candidate_scorer import (
 )
 from app.core.collocations import collocation_effect
 from app.core.emoji import append_emoji_flavor, strip_trailing_emojis
+from app.core.generation_telemetry import CandidateRoute
 from app.core.intonation import IntonationProfile, blend_length_weights
 from app.core.markov import (
     JUMP_CONNECTIVE_TOKENS,
@@ -34,6 +35,7 @@ from app.core.markov import (
     content_tokens,
     detokenize,
     escalated_randomness_strength,
+    finalize_candidate_tokens,
     finalize_reply_ending,
     is_short_generated_reply,
     pick_splice_connective,
@@ -170,6 +172,12 @@ class ResponseGenerationResult:
 class _ScoredCandidate:
     text: str
     score: CandidateScore
+    # M3R-103: which mechanism built this candidate. Set where the candidate is
+    # created, never inferred afterwards from its text — the whole point is to
+    # attribute the pool without guessing, and the previous state of affairs
+    # (seeded candidates indistinguishable from organic ones in the trace) is
+    # exactly what forced an external harness to wrap the method to find out.
+    route: str = CandidateRoute.VANILLA
 
 
 def select_scored_candidate(
@@ -535,6 +543,20 @@ class ResponseGenerator:
             self.runtime_state.markov_collocation_break_penalty,
         )
 
+    def _note_rejected(
+        self, chat_id: int, route: str, reason: str, text: str
+    ) -> None:
+        """Record a discarded candidate in both the trace and the counters.
+
+        Branches outside the main attempt loop discarded candidates silently
+        until M3R-103, so «ветка ничего не дала» и «ветка дала, но всё
+        отклонили» выглядели одинаково — нулём.
+        """
+        gen_trace_log.log_attempt_rejected(
+            chat_id, 0, context_used=False, reason=reason, text=text, route=route
+        )
+        self.generator.telemetry.note_route_rejected(route, reason)
+
     async def _append_seeded_candidates(
         self,
         request: GenerationRequest,
@@ -558,10 +580,16 @@ class ResponseGenerator:
         """Grow seeded candidates from the message's best anchors (M2R-410).
 
         The seed ranking is computed once per reply (never per candidate). Each
-        seeded slot takes the next distinct top seed above the minimum score,
-        assembles a bidirectional candidate, and — if it passes the same reject
-        gates as every other candidate — joins the pool with a full score and
-        no priority. Returns the set of texts that are seeded, for telemetry.
+        seeded slot takes the next distinct top seed above the minimum score and
+        assembles a bidirectional candidate, which is then finished by the same
+        pipeline as the main walk (``finalize_candidate_tokens``: tail trims plus
+        the four form gates) and screened by the same staleness and verbatim-copy
+        gates. Survivors join the pool with a full score and no priority.
+        Returns the set of texts that are seeded, for telemetry.
+
+        The "same gates" claim is load-bearing and was false until M3R-101: the
+        branch went straight to ``detokenize``, so it skipped the tail pipeline
+        and all four form gates while this docstring already claimed parity.
         """
         state = self.runtime_state
         message_tokens = tokenize(
@@ -604,13 +632,35 @@ class ResponseGenerator:
             )
             if not tokens:
                 continue
-            text = detokenize(tokens, max_chars=state.max_reply_chars)
-            if not text or text in seen_candidates:
+            # Тот же хвостовой конвейер и те же четыре гейта формы, что у
+            # основного обхода. До M3R-101 здесь стоял голый ``detokenize``, и
+            # seeded-кандидат приходил в пул недоведённым: терминальная
+            # пунктуация у 21% против 91% у органических, то есть он терял
+            # ``CLEAN_END_BONUS`` и получал от скорера минус за собственную
+            # сборку, а не за содержание (map §3.4, REVIEW §2).
+            final = finalize_candidate_tokens(
+                tokens,
+                max_chars=state.max_reply_chars,
+                context_tokens=request.context_tokens,
+            )
+            if final.rejection_reason is not None:
+                self._note_rejected(
+                    request.chat_id,
+                    CandidateRoute.SEEDED,
+                    final.rejection_reason,
+                    detokenize(tokens, max_chars=state.max_reply_chars),
+                )
+                continue
+            text = final.text
+            if text in seen_candidates:
                 continue
             candidate_tokens, is_short, reject = await self._evaluate_candidate(
                 request, text
             )
             if reject is not None:
+                self._note_rejected(
+                    request.chat_id, CandidateRoute.SEEDED, reject, text
+                )
                 continue
             seen_candidates.add(text)
             seeded_texts.add(text)
@@ -627,7 +677,11 @@ class ResponseGenerator:
                 chat_id=request.chat_id,
                 active_collocations=active_collocations,
             )
-            candidates.append(_ScoredCandidate(text=text, score=score))
+            candidates.append(
+                _ScoredCandidate(
+                    text=text, score=score, route=CandidateRoute.SEEDED
+                )
+            )
         return seeded_texts
 
     def _build_score(
@@ -926,6 +980,7 @@ class ResponseGenerator:
                                 original=candidate,
                                 extended=extended,
                             )
+                            was_extended = True
                             candidate = extended
                             candidate_tokens = extended_tokens
                 if reject_reason is not None:
@@ -935,12 +990,21 @@ class ResponseGenerator:
                         mask_chat_id(request.chat_id),
                         attempt + 1,
                     )
+                    route = (
+                        CandidateRoute.EXTENSION
+                        if was_extended
+                        else CandidateRoute.VANILLA
+                    )
                     gen_trace_log.log_attempt_rejected(
                         request.chat_id,
                         attempt + 1,
                         context_used=bool(attempt_context_tokens),
                         reason=reject_reason,
                         text=candidate,
+                        route=route,
+                    )
+                    self.generator.telemetry.note_route_rejected(
+                        route, reject_reason
                     )
                 else:
                     logger.debug(
@@ -966,7 +1030,15 @@ class ResponseGenerator:
                             active_collocations=active_collocations,
                         )
                         candidates.append(
-                            _ScoredCandidate(text=candidate, score=score)
+                            _ScoredCandidate(
+                                text=candidate,
+                                score=score,
+                                route=(
+                                    CandidateRoute.EXTENSION
+                                    if was_extended
+                                    else CandidateRoute.VANILLA
+                                ),
+                            )
                         )
                         # M2R-110: the accepted candidate's own mean branching
                         # is what tells us whether more attempts would produce
@@ -1027,7 +1099,9 @@ class ResponseGenerator:
                                 )
                                 candidates.append(
                                     _ScoredCandidate(
-                                        text=mutated_text, score=mutated_score
+                                        text=mutated_text,
+                                        score=mutated_score,
+                                        route=CandidateRoute.MUTATED,
                                     )
                                 )
                                 gen_trace_log.log_attempt_mutated(
@@ -1093,6 +1167,19 @@ class ResponseGenerator:
                 present=bool(seeded_texts),
                 won=selected.text in seeded_texts,
             )
+        # M3R-103. ``attempted`` is deliberately not "every route in the enum":
+        # a route whose knob is off must stay distinguishable from one that ran
+        # and produced nothing, and only the knobs know which is which.
+        attempted = {CandidateRoute.VANILLA, CandidateRoute.EXTENSION}
+        if self.runtime_state.markov_seeded_candidate_ratio > 0.0:
+            attempted.add(CandidateRoute.SEEDED)
+        if self.runtime_state.slot_mutation_probability > 0.0:
+            attempted.add(CandidateRoute.MUTATED)
+        self.generator.telemetry.note_routes(
+            attempted=attempted,
+            present={candidate.route for candidate in candidates},
+            winner=selected.route,
+        )
         gen_trace_log.log_selection(
             request.chat_id,
             candidates,
