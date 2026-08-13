@@ -79,7 +79,7 @@ on human raters — start lining it up at task 1.1, not at task 9.
 ## 11. Default decision (gate)
 
 - [ ] 11.1 Gate passed ⇒ propose raising the defaults, with the numbers
-- [ ] 11.2 Gate fails ⇒ defaults stay neutral; record the negative result with numbers in `docs/v2/00_STATUS.md` and reference the report
+- [x] 11.2 Gate fails ⇒ defaults stay neutral; record the negative result with numbers in `docs/v2/00_STATUS.md` and reference the report — gate `fail` on 2026-08-13 (`eval_2026-08-13_phase4-verdict.md`): manual 8/20 genuine (40%) against the 70% bar; all knobs stay at their neutral defaults
 - [ ] 11.3 Never adjust a pre-registered threshold to make the gate pass
 
 ## 12. Documentation
