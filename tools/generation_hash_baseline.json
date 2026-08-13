@@ -1,0 +1,9 @@
+{
+  "_comment": "Normative value of the generation HASH baseline (tools/generation_hash.py). Not to be confused with tools/generation_baseline.json, which holds eval_generation.py's metric baseline. Prose in docs may cite this value; this file defines it. Change it only in a commit that states which change moved generation output and why the move is legitimate — `python -m tools.generation_hash --synthetic --check` fails on any other drift. Anchored on the synthetic snapshot because the prod copy never leaves the owner's machine, which is exactly how the previous constant drifted unnoticed.",
+  "snapshot": "synthetic",
+  "hash": "555f552a76cb84899c40d3b49069b96b8100f9d65203125641820712af6635f9",
+  "seeds": [101, 102, 103, 104],
+  "per_seed": 250,
+  "revision": "2ec6bda",
+  "reason": "First recorded value. Measured twice on tools/eval/synthetic.py's snapshot at 2ec6bda, identical both times. It is NOT the historical 5a72e2d4: that constant was measured on the prod copy, which this record deliberately does not use, so the two are not comparable numbers. The prod-copy value did move at 2ec6bda (5a72e2d4 -> 13e496c0) — a legitimate 1.x fix, see docs/GENERATION_PIPELINE.md."
+}

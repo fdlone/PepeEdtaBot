@@ -54,6 +54,16 @@ jobs:
         if: matrix.python-version == '3.12'
         run: python -m tools.eval --smoke
 
+      # Generation baseline guard. The prod copy never leaves the owner's
+      # machine, so the recorded value is anchored on the synthetic snapshot —
+      # that is what makes it checkable here, on the commit that moves it,
+      # instead of being noticed weeks later against a constant quoted in prose.
+      # A legitimate move is a deliberate edit of tools/generation_hash_baseline.json
+      # stating which change moved it and why; anything else fails this step.
+      - name: Generation baseline (byte-identical output)
+        if: matrix.python-version == '3.12'
+        run: python -m tools.generation_hash --synthetic --check
+
       - name: Security scan (bandit)
         run: python -m bandit -c pyproject.toml -r app tools main.py -x tests --severity-level medium --confidence-level medium
 

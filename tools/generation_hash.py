@@ -16,17 +16,21 @@ committed, so the next refactor had to reinvent it. This one is committed.
 
 Usage::
 
-    python tools/generation_hash.py                 # 4 seeds x 250
-    python tools/generation_hash.py --per-seed 100  # quicker smoke run
+    python -m tools.generation_hash                     # prod copy, 4 seeds x 250
+    python -m tools.generation_hash --per-seed 100      # quicker smoke run
+    python -m tools.generation_hash --synthetic --check # CI guard vs the record
 
-The hash is meaningless in isolation — it only means something compared with
-the hash of another revision produced by the same command.
+On the prod copy the hash is meaningless in isolation — it only means something
+compared with the hash of another revision produced by the same command. On the
+synthetic snapshot it is compared for you, against
+``tools/generation_hash_baseline.json``.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 import hashlib
+import json
 import random
 import sys
 from pathlib import Path
@@ -45,6 +49,7 @@ from app.core.response_generator import (  # noqa: E402
 )
 from app.core.text import sanitize_text  # noqa: E402
 from app.infrastructure.database import Database  # noqa: E402
+from tools.eval.synthetic import build_synthetic_snapshot  # noqa: E402
 from tools.eval_prod import (  # noqa: E402
     VERBATIM_MIN_N,
     _ProdVerbatimChecker,
@@ -58,6 +63,15 @@ from tools.eval_prod import (  # noqa: E402
 DEFAULT_DB = PROJECT_ROOT / "db_prod_copy" / "markov.db"
 DEFAULT_SEEDS = (101, 102, 103, 104)
 DEFAULT_PER_SEED = 250
+
+# The recorded baseline. It is anchored on the SYNTHETIC snapshot, not on the
+# prod copy: the prod copy never leaves the owner's machine, so a value
+# recorded against it is checkable on exactly one machine — which is how the
+# constant quoted in three documents drifted from 5a72e2d4 to 13e496c0 without
+# anyone noticing. The synthetic corpus is reproducible everywhere, so the
+# record is checkable in CI on the commit that moves it.
+BASELINE_PATH = PROJECT_ROOT / "tools" / "generation_hash_baseline.json"
+SYNTHETIC_LABEL = "synthetic"
 
 
 def _runtime_state() -> SimpleNamespace:
@@ -138,6 +152,57 @@ async def run(db_path: Path, seeds: tuple[int, ...], per_seed: int) -> str:
             await db.close()
 
 
+async def run_synthetic(seeds: tuple[int, ...], per_seed: int) -> str:
+    """Same harness over the reproducible synthetic corpus (doc 05 §7)."""
+    db_path, temp_dir = await build_synthetic_snapshot()
+    try:
+        return await run(db_path, seeds, per_seed)
+    finally:
+        if temp_dir is not None:
+            temp_dir.cleanup()
+
+
+def check_against_baseline(
+    digest: str, snapshot: str, seeds: tuple[int, ...], per_seed: int
+) -> int:
+    """Compare a computed hash with the record; return a process exit code.
+
+    A hash is only comparable against a record produced by the same corpus and
+    the same draw budget, so a run parameterised differently refuses to compare
+    rather than reporting a mismatch nobody should act on.
+    """
+    if not BASELINE_PATH.exists():
+        print(f"no baseline record at {BASELINE_PATH} — nothing to compare")
+        return 0
+    record = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    if record.get("snapshot") != snapshot:
+        print(
+            f"no baseline recorded for snapshot {snapshot!r} "
+            f"(the record covers {record.get('snapshot')!r}) — nothing to compare"
+        )
+        return 0
+    if tuple(record.get("seeds", ())) != seeds or record.get("per_seed") != per_seed:
+        print(
+            "BASELINE NOT COMPARABLE: the record was computed with "
+            f"seeds={record.get('seeds')} per_seed={record.get('per_seed')}, "
+            f"this run used seeds={list(seeds)} per_seed={per_seed}. "
+            "Re-run with the recorded parameters."
+        )
+        return 1
+    if digest == record.get("hash"):
+        print(f"baseline OK: matches the record for snapshot {snapshot!r}")
+        return 0
+    print(
+        "BASELINE MISMATCH — generation output moved.\n"
+        f"  recorded: {record.get('hash')}\n"
+        f"  computed: {digest}\n"
+        f"  record set by: {record.get('revision')} — {record.get('reason')}\n"
+        f"If the move is intended, update {BASELINE_PATH.name} and state which "
+        "change moved it and why."
+    )
+    return 1
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
@@ -148,9 +213,30 @@ def main() -> None:
         nargs="+",
         default=list(DEFAULT_SEEDS),
     )
+    parser.add_argument(
+        "--synthetic",
+        action="store_true",
+        help="run on the reproducible synthetic snapshot instead of --db",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "compare the result with the recorded baseline and exit non-zero "
+            "on a mismatch (the record is anchored on --synthetic)"
+        ),
+    )
     args = parser.parse_args()
-    digest = asyncio.run(run(args.db, tuple(args.seeds), args.per_seed))
+    seeds = tuple(args.seeds)
+    if args.synthetic:
+        digest = asyncio.run(run_synthetic(seeds, args.per_seed))
+        snapshot = SYNTHETIC_LABEL
+    else:
+        digest = asyncio.run(run(args.db, seeds, args.per_seed))
+        snapshot = str(args.db)
     print(f"SHA256 {digest}")
+    if args.check:
+        raise SystemExit(check_against_baseline(digest, snapshot, seeds, args.per_seed))
 
 
 if __name__ == "__main__":
