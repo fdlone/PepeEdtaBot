@@ -65,8 +65,8 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 - [x] 9.1 Produce the top-20 ranking and a rating sheet template (real / merely frequent / junk) — `tools/meme_rating_round.py`; the 2026-08-12 round is prepared locally in `rating_rounds/` (42 positions: 20 meme, 20 frequency control, 5 decoys, overlaps shown once)
 - [x] 9.2 Rating sheet stays out of the repository — it is verbatim chat content (spec: `generation-collocations`)
-- [ ] 9.3 Conduct the round; record rater count and per-category counts
-- [ ] 9.4 Aggregate into the report: counts, shares, inter-rater agreement when there is more than one rater; explicitly "agreement unavailable" for a single rater
+- [x] 9.3 Conduct the round; record rater count and per-category counts — conducted 2026-08-12/13, 3 raters; meme half 8/20, frequency control 2/20, decoys 1/5
+- [x] 9.4 Aggregate into the report: counts, shares, inter-rater agreement when there is more than one rater; explicitly "agreement unavailable" for a single rater — aggregated in `rating_rounds/2026-08-12/manual_rating.json` (out of the repo), agreement = Fleiss' kappa 0.17 over three categories. Recorded as an UPPER bound: one rater's answer arrived unnumbered with 46 labels instead of 42, and the reduction to 42 was an alignment against the other two, which inflates agreement by construction. The aggregate itself is invariant — all 60 equally-optimal alignments yield the same counts
 
 ## 10. Eval
 
@@ -78,9 +78,9 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 ## 11. Default decision (gate)
 
-- [ ] 11.1 Gate passed ⇒ propose raising the defaults, with the numbers
+- [ ] 11.1 Gate passed ⇒ propose raising the defaults, with the numbers — **branch not taken**: the gate failed, so no defaults were proposed
 - [x] 11.2 Gate fails ⇒ defaults stay neutral; record the negative result with numbers in `docs/v2/00_STATUS.md` and reference the report — gate `fail` on 2026-08-13 (`eval_2026-08-13_phase4-verdict.md`): manual 8/20 genuine (40%) against the 70% bar; all knobs stay at their neutral defaults
-- [ ] 11.3 Never adjust a pre-registered threshold to make the gate pass
+- [x] 11.3 Never adjust a pre-registered threshold to make the gate pass — honoured: `phase4_memes` in `eval_thresholds.yaml` is untouched since its 2026-08-12 pre-registration, and the 40%-vs-70% failure was recorded rather than tuned away
 
 ## 12. Documentation
 
@@ -96,4 +96,4 @@ on human raters — start lining it up at task 1.1, not at task 9.
 
 - [x] 14.1 `openspec validate --strict` green for this change
 - [x] 14.2 Full test suite + lint/type checks — 1095 tests OK, ruff clean, mypy clean (2026-08-12)
-- [ ] 14.3 Archive this change after merge — rides in the next phase's PR
+- [x] 14.3 Archive this change after merge — rides in the next phase's PR — archived 2026-08-13 alongside the Phase 4 verdict
