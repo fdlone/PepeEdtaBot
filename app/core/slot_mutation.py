@@ -173,8 +173,7 @@ def pick_replacement(
     original_folded = original.casefold()
     ending = original_folded[-ENDING_MATCH_LEN:]
     max_delta = int(len(original) * MAX_LENGTH_DELTA_SHARE)
-    pool: list[str] = []
-    weights: list[int] = []
+    matches: list[tuple[str, int]] = []
     for word, count in frequencies.items():
         if count < MIN_REPLACEMENT_FREQUENCY:
             continue
@@ -193,10 +192,20 @@ def pick_replacement(
             continue
         if not agrees_morphologically(original, word):
             continue
-        pool.append(word)
-        weights.append(count)
-    if not pool:
+        matches.append((word, count))
+    if not matches:
         return None
+    # Порядок этого списка попадает прямо в розыгрыш: ``rng.choices`` выбирает
+    # по позиции, а не по слову. Источник порядка — словарь частот, и он у
+    # тёплого и холодного пути разный: ``_absorb_message`` дописывает новые
+    # слова в конец кэша, а чтение из SQL отдаёт свой порядок. Без сортировки
+    # здесь один и тот же чат сэмплирует замены по-разному в проде и под
+    # ``generation_hash`` — то есть зафиксированный хеш описывает не то
+    # поведение, которое работает. Сортировка снимает зависимость от источника
+    # целиком; слова в словаре уникальны, поэтому порядок тотальный.
+    matches.sort()
+    pool = [word for word, _ in matches]
+    weights = [count for _, count in matches]
     return rng.choices(pool, weights=weights, k=1)[0]
 
 
@@ -209,9 +218,10 @@ def frequencies_by_ending(
     почти весь словарь — но проверялся он внутри полного обхода: 8892 слова на
     каждый слот, 2.2 мс на копии прода. Раскладка делается один раз на чат.
 
-    Порядок внутри корзины — тот же, что в исходном словаре (dict сохраняет
-    порядок вставки), поэтому набор и порядок кандидатов в ``pick_replacement``
-    не меняются, а с ними не меняется и результат розыгрыша.
+    Порядок внутри корзины значения не имеет: ``pick_replacement`` сортирует
+    отобранных кандидатов перед розыгрышем, потому что источник порядка (тёплый
+    кэш против чтения из SQL) не один и тот же. Раскладка обязана сохранять
+    только состав корзины и счётчики.
     """
     index: dict[str, dict[str, int]] = {}
     for word, count in frequencies.items():

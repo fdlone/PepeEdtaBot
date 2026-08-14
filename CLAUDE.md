@@ -1,136 +1,129 @@
 # CLAUDE.md
 
-## Project
+`PepeEdtaBot` — Telegram-бот на Python (https://github.com/fdlone/PepeEdtaBot).
+Ядро — **Pepe Response Engine (PRE)**: статистическая генерация ответов.
+Это дистиллят правил. Полные тексты — в `docs/`, см. §8.
 
-This repository is `PepeEdtaBot`: a Python Telegram bot project located locally in the current project folder and linked to:
+## 1. Конституция PRE
 
-https://github.com/fdlone/PepeEdtaBot
+1. **Только статистика.** Никаких LLM, эмбеддингов, нейросетей и внешних AI
+   API, включая локальные модели. Retrieval-статистика (BM25/TF-IDF/
+   инвертированный индекс) разрешена.
+2. **PRE оптимизирует branching пространства кандидатов, а не следующего
+   токена.** Доказано фазами 2/3/7: token-level механизмы инертны,
+   candidate-level работают. Markov — один из генераторов предложений внутри
+   PRE, а не вся архитектура.
+3. **Поведение меняется только через OpenSpec** (propose → apply → sync →
+   archive, `/opsx:*`, артефакты в `openspec/`). Гейты и пороги
+   пре-регистрируются в `tools/eval/eval_thresholds.yaml` **до** прогонов и
+   после не меняются. «Закрыто с цифрами» — полноценный результат, не
+   неудача. Тривиальные механические правки (опечатки, форматирование) могут
+   идти мимо OpenSpec; при сомнении — через OpenSpec.
 
-The project is expected to evolve, so maintainability, clarity, safety, and long-term extensibility are high priorities.
+## 2. Hash-контракт
 
-## Communication rules
+- `generation_hash` **тёплого** пути (прод, инкрементальный кэш) обязан
+  совпадать с **холодным** (чтение из SQL). Расхождение — дефект, не
+  особенность. Базлайн: `tests/test_generation_hash_baseline.py`.
+- Хеш-ломающие правки собираются в **один пакет** с **одной** перезаморозкой
+  базлайна; причины перечисляются в вердикт-заметке `docs/eval_reports/`.
+- Незапланированная смена хеша = стоп и отчёт владельцу.
 
-- Always communicate with the user in Russian.
-- All explanations of actions, findings, risks, decisions, and results must be written in Russian.
-- Source code, identifiers, function names, class names, variable names, comments, docstrings, tests, commit messages, branch names, configuration names, and technical project artifacts should be written in English unless the user explicitly asks otherwise.
-- Do not hide important risks or assumptions. If something is uncertain, say so clearly in Russian.
+## 3. Независимость треков
 
-## Session start procedure
+Track A (ремонт и валидация) и Track B (структурный выход — маршруты)
+планируются и исполняются **независимо**. Плоский список M3R-задач роадмапа —
+**не последовательность**. Зависимости — только явные поимённые из
+`docs/PRE_ROADMAP.md` §5. Выстраивание цепочки «сначала весь Track A» —
+ошибка исполнения, а не осторожность.
 
-At the beginning of every new session, before making changes:
+## 4. Privacy
 
-1. Inspect the current repository state:
-   - current branch;
-   - `git status`;
-   - recent commits if useful;
-   - project structure;
-   - dependency files;
-   - configuration files;
-   - environment examples;
-   - test setup;
-   - existing documentation.
+- Маскировать `chat_id`/`user_id` везде, **включая текст чужих исключений**
+  (`app/log_masking.py`).
+- Секреты (токены, ключи) — только из окружения; в логи не попадают, в репо
+  не коммитятся.
+- В тестах и фикстурах — только синтетические ID; инвариант закреплён
+  `tests/test_no_real_chat_ids.py`.
+- Приватные данные — под явными границами доступа; при смене
+  privacy-поведения обновлять пользовательские тексты.
 
-2. Check attribution settings to prevent accidental AI-authored commits:
-   - Check `~/.claude/settings.json` for `"includeCoAuthoredBy": false` and empty `attribution.commit` / `attribution.pr`.
-   - If the settings file is missing or the values are not set correctly, **stop and warn the user in Russian before making any commits**. Do not proceed with commits until the user confirms the issue is resolved or explicitly accepts the risk.
-   - Also scan the 5 most recent commits for any `Co-Authored-By: Claude` or `Generated with Claude Code` lines:
-     ```
-     git log -5 --format="%H %s" | head -20
-     git log -5 --format="%B" | grep -i "co-authored\|claude code\|🤖"
-     ```
-   - If traces are found, report them to the user in Russian and ask whether to proceed or clean up first.
+## 5. Чек-лист ловушек для нового кода
 
-## Attribution & Commit Hygiene
+Каждая строка — прецедент, уже стоивший вердикта. Проверять перед мержем.
 
-- Do NOT include `Co-Authored-By` lines in any commit messages.
-- Do NOT add `Generated with Claude Code` footers to commits or PRs.
-- Do NOT add any AI attribution, signatures, or AI-related metadata anywhere.
-- Commits must appear as authored solely by the human developer.
+| ловушка | прецедент |
+|---|---|
+| Новая ветка кандидата обязана идти через **полный** `_finalize_attempt` — хвостовой конвейер **и** четыре гейта формы, а не только `detokenize` | `app/core/markov.py:1916`; нарушитель — seeded, `app/core/response_generator.py:538`; map §3.4 |
+| Новый пер-чатовый кэш обязан добавиться в `forget_chat`, иначе `/clear` его переживёт | `app/services/learning_service.py:504`, врезка — `_absorb_message` там же:561 |
+| Суточный пасс читает настройки чата-триггера и применяет их **ко всем** чатам | `app/services/reply_pipeline.py:515`; map §3.9а |
+| SQL-чтение, питающее RNG, обязано иметь полный `ORDER BY` + тест упорядоченности | `app/repositories/markov_repo.py:224` (нет `ORDER BY`), `app/repositories/chat_hot_ngrams_repo.py:82` (нет вторичного ключа); map §3.7 |
+| Новый канал данных обязан иметь счётчик «вернул пусто» — иначе канал, выключенный **данными**, неотличим от выключенного **ручкой** | map §3.2: `rank_seeds` при `n_docs=0` и пустой `get_hot` — две подсистемы молча мертвы в проде |
+| Новый хвостовой слой ответа обязан обновить `normalize_reply_for_repeat`, иначе анти-повтор не узнаёт отправленную форму | `app/core/response_generator.py:203`; map §4 |
+| Любое изменение состава пула кандидатов обязано сохранить страховочный инвариант **ECB ≥ 4/5 по пулу** | roadmap M3R-011 + success criteria; базлайн C0 — 4.73 / 4.68 |
 
-## Workflow
+## 6. Протокол замеров
 
-- All subsequent project work MUST go through the OpenSpec workflow: propose → apply → sync → archive (`/opsx:*` skills, artifacts in `openspec/`).
-- Every non-trivial change starts with an OpenSpec proposal before any code is written.
-- Trivial mechanical fixes (typos, formatting) may skip OpenSpec, but when in doubt, use it.
+- Гейт прогоняется в **двух режимах** — `ctx` и `noctx`; вердикт взвешивается
+  по измеренной прод-доле режима. Только `ctx` недостаточно: `tools/eval/run.py`
+  исторически мерил лишь его (map §3.1).
+- Каждый гейт включает **coverage** — долю ответов, которых касается дельта.
+  «+10% на 0.5% ответов» результатом не считается.
+- Значимость: CI 95%, интервал обязан исключать 0.
+- Латентность: база p95 150 мс; превышение допустимо только при значимом
+  улучшении не ниже порога, зафиксированного до прогона (по умолчанию
+  `affinity_without_copy` Δ ≥ +0.05). Плохой trade-off = отказ; хороший =
+  поднятие бюджета решением владельца в вердикте.
+- Смена состава набора промптов/мемов = смена `version` = осознанный разрыв
+  сопоставимости с прошлыми отчётами, фиксируется явно.
 
-## Coding rules
+## 7. Где мерить
 
-- Prefer simple, readable, maintainable Python code.
-- Keep business logic separated from Telegram handlers where practical.
-- Avoid large monolithic functions.
-- Avoid hardcoded secrets, tokens, chat IDs, user IDs, passwords, or environment-specific paths.
-- Use environment variables or configuration files for runtime settings.
-- Keep sensitive data protected.
-- Do not introduce unnecessary dependencies.
-- If adding a dependency, explain why it is needed.
-- Preserve existing behavior unless the user asked to change it or a fix is clearly required.
-- Make small, reviewable changes.
-- Do not perform broad rewrites unless there is a strong reason.
+Замеры на реальных данных (хеш генерации, свипы, харнессы, разведка) идут на
+копии прода `db_prod_copy/markov.db`, а не на синтетике: синтетический снапшот
+существует для CI-гарда, его словарь и распределения не похожи на живые.
+Юнит-тесты — наоборот, только на временных БД с синтетическими ID (§4).
 
-## Security and privacy rules
+**Ограничение гарда:** `generation_hash` выполняется на **холодном** старте,
+поэтому расхождения тёплого инкрементального кэша с холодным чтением он не
+видит по построению. Совпадение хеша не доказывает, что правка нейтральна для
+прода — для этого нужен отдельный тест тёплого пути.
 
-- Treat bot tokens, API keys, user identifiers, chat metadata, and private user data as sensitive.
-- Never print secrets in logs.
-- Never commit real secrets.
-- Validate and sanitize user-controlled input where relevant.
-- Be careful with database queries and file operations.
-- If sensitive user data is stored, prefer encryption and clear access boundaries.
-- If privacy-related behavior is changed, update the relevant user-facing text.
+## 8. Приёмка любой задачи
 
-## Testing and validation
+`ruff` + `mypy app/` + `unittest` зелёные; покрытие не ниже храповика
+(`fail_under = 87` в `pyproject.toml`); privacy-инварианты §4; влияние на
+`generation_hash` заявлено заранее и совпало с фактом. Не заявлять, что
+проверки прошли, если они не запускались; если инструмент не настроен —
+сказать это прямо.
 
-After making changes, run the most relevant available checks, for example:
+## 9. Указатели
 
-- unit tests;
-- linting;
-- type checks;
-- import checks;
-- bot startup checks;
-- targeted manual validation where automated tests are absent.
+| документ | что в нём |
+|---|---|
+| `docs/PRE_ROADMAP.md` | план работ: треки, зависимости, приоритеты, success criteria |
+| `docs/GENERATION_MAP.md` | карта механики генерации: file:line известных дефектов, реестр ручек, скрытые связи. **Актуализируется вместе с любой правкой** `markov.py` / `response_generator.py` / `reply_pipeline.py` — как именно, см. §5 самой карты |
+| `docs/v2/05_MARKOV_2_0R_EVAL_PROTOCOL.md` | протокол eval |
+| `docs/ARCHITECTURE.md`, `docs/OPEN.md` | архитектура; открытые вопросы и статус |
+| `docs/eval_reports/` | вердикты по фазам — образец для новых заметок |
 
-If tools such as pytest, ruff, mypy, or other checks are not configured, do not invent results. Clearly state in Russian what was and was not available.
+## 10. Рабочие правила
 
-## Git rules
-
-- Before changing files, check git status.
-- Avoid modifying unrelated files.
-- Do not discard user changes.
-- Do not force push.
-- Do not rewrite history unless the user explicitly asks.
-- If there are uncommitted changes not made by you, identify them and avoid overwriting them.
-
-## Response format to the user
-
-When reporting progress or final results to the user:
-
-- Write in Russian.
-- Be concise but specific.
-- Mention what was checked.
-- Mention what was changed.
-- Mention what files were affected.
-- Mention what tests/checks were run.
-- Mention any remaining risks or unfinished items.
-- If something could not be completed, explain why clearly.
-
-Preferred final response structure:
-
-```
-Готово.
-
-Что сделал:
-- ...
-
-Изменённые файлы:
-- ...
-
-Проверки:
-- ...
-
-Осталось / рекомендуется:
-- ...
-```
-
-## Important behavior
-
-- Do not claim that checks passed if they were not run.
-- When in doubt, preserve information and add clarification instead of deleting it.
+- **Язык:** общение с пользователем — русский; код, идентификаторы, коммиты,
+  ветки, конфиги — английский.
+- **Атрибуция:** никаких `Co-Authored-By`, footer'ов «Generated with Claude
+  Code» и любых AI-меток. В начале сессии проверить `~/.claude/settings.json`
+  (`includeCoAuthoredBy: false`, пустые `attribution.commit`/`pr`) и последние
+  5 коммитов на следы; при расхождении — остановиться и предупредить
+  до любых коммитов.
+- **Git:** перед правкой — `git status`; не трогать чужие незакоммиченные
+  изменения и несвязанные файлы; без force-push и переписывания истории.
+- **Код:** просто и читаемо, без монолитных функций; бизнес-логика отдельно от
+  Telegram-хендлеров; без новых зависимостей (новая — только с обоснованием);
+  маленькие ревьюабельные диффы; поведение не меняется попутно; при сомнении —
+  сохранять информацию и уточнять, а не удалять.
+- **Границы доверия:** валидировать пользовательский ввод; аккуратно с SQL и
+  файловыми операциями; runtime-настройки — из окружения/конфигов, не хардкодом
+  (пути, ID, токены).
+- **Отчёт:** по-русски, структура «Что сделал / Изменённые файлы / Проверки /
+  Осталось». Риски и неопределённости называть прямо.

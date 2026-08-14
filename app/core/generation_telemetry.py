@@ -7,7 +7,28 @@ surfaced through ``/stats``; reset on restart by construction.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from enum import StrEnum
+
+
+class CandidateRoute(StrEnum):
+    """The mechanism that produced a candidate (M3R-103).
+
+    Closed enumeration on purpose: the route is the axis every per-route number
+    is broken down by, so a typo must be an error rather than a new category.
+
+    Only routes with a live producer are members. A member with nothing
+    producing it would show up in every report as a permanent zero row, which
+    reads as "the mechanism runs and never wins" — the opposite of the truth.
+    Adding a route is one member here; the aggregation below walks the
+    enumeration, so a new one appears in the breakdown without touching it.
+    """
+
+    VANILLA = "vanilla"
+    SEEDED = "seeded"
+    MUTATED = "mutated"
+    EXTENSION = "extension"
 
 
 @dataclass(slots=True)
@@ -44,6 +65,15 @@ class GenerationTelemetry:
     seeded_generations: int = 0
     seeded_present: int = 0
     seeded_won: int = 0
+    # M3R-103: the same two-denominator rule, per route rather than for seeded
+    # alone. ``attempts`` is the mechanism running at all, ``present`` is it
+    # putting a candidate in the pool: that pair is what separates "the route is
+    # off" from "the route is on and produced nothing" from "it produced and
+    # lost". Without it a zero win-rate is unreadable.
+    route_attempts: dict[str, int] = field(default_factory=dict)
+    route_present: dict[str, int] = field(default_factory=dict)
+    route_won: dict[str, int] = field(default_factory=dict)
+    route_rejected: dict[str, dict[str, int]] = field(default_factory=dict)
 
     def note_cache(self, *, hit: bool) -> None:
         if hit:
@@ -94,6 +124,64 @@ class GenerationTelemetry:
             self.seeded_present += 1
             if won:
                 self.seeded_won += 1
+
+    def note_routes(
+        self,
+        *,
+        attempted: Iterable[str],
+        present: Iterable[str],
+        winner: str | None,
+    ) -> None:
+        """One generation's per-route outcome (M3R-103).
+
+        ``attempted`` — routes whose mechanism ran; ``present`` — those that put
+        at least one candidate in the pool; ``winner`` — the route of the
+        selected candidate, or None when nothing was selected. ``present``
+        implies ``attempted`` and the caller is responsible for that.
+        """
+        for route in attempted:
+            self.route_attempts[route] = self.route_attempts.get(route, 0) + 1
+        for route in present:
+            self.route_present[route] = self.route_present.get(route, 0) + 1
+        if winner is not None:
+            self.route_won[winner] = self.route_won.get(winner, 0) + 1
+
+    def note_route_rejected(self, route: str, reason: str) -> None:
+        """One candidate discarded before the pool, by route and reason.
+
+        Reasons are the existing trace reasons; the F-class taxonomy (M3R-021)
+        layers on top of them later and does not replace them.
+        """
+        self.route_rejected.setdefault(route, {})[reason] = (
+            self.route_rejected.setdefault(route, {}).get(reason, 0) + 1
+        )
+
+    def route_breakdown(self) -> dict[str, dict[str, float | int | None]]:
+        """Per-route share, win-rate and rejection reasons.
+
+        Kept out of ``snapshot`` because it is nested: ``/stats`` shows flat
+        numbers, and the breakdown is for reports that compare routes against
+        each other.
+        """
+        breakdown: dict[str, dict[str, float | int | None]] = {}
+        for route in CandidateRoute:
+            attempts = self.route_attempts.get(route, 0)
+            present = self.route_present.get(route, 0)
+            breakdown[str(route)] = {
+                "attempts": attempts,
+                "present": present,
+                "present_rate": present / attempts if attempts else None,
+                "won": self.route_won.get(route, 0),
+                "win_rate_given_present": (
+                    self.route_won.get(route, 0) / present if present else None
+                ),
+                "rejected": sum(self.route_rejected.get(route, {}).values()),
+            }
+        return breakdown
+
+    def route_rejection_reasons(self) -> Mapping[str, Mapping[str, int]]:
+        """Rejection reason counts per route, as recorded."""
+        return {route: dict(reasons) for route, reasons in self.route_rejected.items()}
 
     def snapshot(self) -> dict[str, float | int | None]:
         """Aggregates for ``/stats``; ``None`` where no data exists yet."""

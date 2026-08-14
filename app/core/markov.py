@@ -702,6 +702,80 @@ def is_short_context_copy(generated_tokens: list[str], context_tokens: list[str]
     return shared_run >= len(generated_content)
 
 
+@dataclass(frozen=True, slots=True)
+class FinalizedCandidate:
+    """Outcome of the shared tail pipeline and form gates.
+
+    ``rejection_reason`` is None exactly when the candidate is usable; ``text``
+    and ``tokens`` are then its final form. On rejection both are empty and the
+    reason is one of the ``REJECTION_*`` constants.
+    """
+
+    text: str
+    tokens: list[str]
+    rejection_reason: str | None
+    leading_punctuation_stripped: int
+
+
+def finalize_candidate_tokens(
+    generated: list[str],
+    *,
+    max_chars: int,
+    context_tokens: list[str],
+) -> FinalizedCandidate:
+    """Run the tail pipeline and the four form gates over raw tokens.
+
+    Single source of truth for "a candidate is finished and shaped". Every
+    branch that assembles a candidate goes through here — the main walk via
+    ``_finalize_attempt``, seeded assembly via ``ResponseGenerator``. A branch
+    that skips it does not merely look different: it forfeits
+    ``CLEAN_END_BONUS`` and risks ``BAD_ENDING_PENALTY``, so the scorer marks it
+    down for a defect in its construction rather than for its content. That is
+    exactly what happened to the seeded branch (map §3.4), and a second copy of
+    these steps would let it happen again silently.
+    """
+    generated = trim_repetitive_tail(generated)
+    generated = trim_to_sentence_boundary(generated)
+    generated = finalize_reply_ending(generated)
+    finalized_token_count = len(generated)
+    generated = strip_leading_punctuation(generated)
+    stripped = finalized_token_count - len(generated)
+    text = detokenize(generated, max_chars=max_chars)
+
+    def reject(reason: str) -> FinalizedCandidate:
+        return FinalizedCandidate(
+            text="",
+            tokens=[],
+            rejection_reason=reason,
+            leading_punctuation_stripped=stripped,
+        )
+
+    if len(text) < 5:
+        return reject(REJECTION_RESULT_TOO_SHORT)
+    # Без normalize_lower намеренно: текст ответа уже в том регистре, в
+    # котором чат учил модель (флаг применяется на входе, при токенизации
+    # сообщения), и контекст сюда приходит в том же соглашении. Приведение
+    # к нижнему регистру здесь было бы не выравниванием, а сменой правила:
+    # в профиле с сохранением регистра гейты формы стали бы
+    # регистронезависимыми. Проверено: в дефолтном профиле это no-op —
+    # хеш генерации не меняется (tools/generation_hash.py).
+    tokens = tokenize(text)
+    is_short_reply = is_short_generated_reply(tokens)
+    if not is_short_reply and is_low_diversity_reply(tokens):
+        return reject(REJECTION_LOW_DIVERSITY)
+    if is_short_reply:
+        if is_short_context_copy(tokens, context_tokens):
+            return reject(REJECTION_SHORT_CONTEXT_COPY)
+    elif is_context_heavy_reply(tokens, context_tokens):
+        return reject(REJECTION_CONTEXT_HEAVY)
+    return FinalizedCandidate(
+        text=text,
+        tokens=tokens,
+        rejection_reason=None,
+        leading_punctuation_stripped=stripped,
+    )
+
+
 def context_decay(step_index: int) -> float:
     return max(0.25, 0.92 ** step_index)
 
@@ -1928,81 +2002,27 @@ class MarkovGenerator:
         diagnostics: _DiagnosticsAccumulator | None = None,
         applied_alpha: float = 0.0,
     ) -> _GenerationAttempt:
-        """Trim, strip and quality-gate generated tokens into an attempt.
+        """Attach trace metadata to a candidate run through the shared pipeline.
 
-        Applies the tail pipeline (repetitive-tail/sentence-boundary/ending
-        trims, leading-punctuation strip) then rejects results that are too
-        short, low-diversity, a short context copy, or context-heavy. All
-        outcomes carry the same trace metadata accumulated by the caller.
+        The tail pipeline and the four form gates live in
+        ``finalize_candidate_tokens`` — this wrapper only turns their outcome
+        into a ``_GenerationAttempt``, so the main walk and every other branch
+        that assembles a candidate share one definition of "finished".
         """
-        generated = trim_repetitive_tail(generated)
-        generated = trim_to_sentence_boundary(generated)
-        generated = finalize_reply_ending(generated)
-        finalized_token_count = len(generated)
-        generated = strip_leading_punctuation(generated)
-        leading_punctuation_stripped = finalized_token_count - len(generated)
-        result = detokenize(generated, max_chars=max_chars)
-
+        final = finalize_candidate_tokens(
+            generated, max_chars=max_chars, context_tokens=context_tokens
+        )
         diag = diagnostics or _DiagnosticsAccumulator()
         steps = diag.steps
-
-        def reject(reason: str) -> _GenerationAttempt:
-            return _GenerationAttempt(
-                text="",
-                markov_order_used=order_used,
-                jump_count=jump_count,
-                rejection_reason=reason,
-                token_count=0,
-                start_source=start_source,
-                leading_punctuation_stripped=leading_punctuation_stripped,
-                context_exact_matches=context_exact_matches,
-                context_casefold_matches=context_casefold_matches,
-                hidden_context_fallbacks=hidden_context_fallbacks,
-                mean_entropy_bits=diag.entropy_bits_sum / steps if steps else 0.0,
-                mean_normalized_entropy=(
-                    diag.normalized_entropy_sum / steps if steps else 0.0
-                ),
-                mean_branching=diag.branching_sum / steps if steps else 0.0,
-                min_confidence=diag.min_confidence,
-                diagnostic_steps=steps,
-                mean_applied_temperature=(
-                    diag.applied_temperature_sum / steps if steps else 0.0
-                ),
-                applied_alpha=applied_alpha,
-                blend_step_coverage=(
-                    diag.blend_covered_steps / steps if steps else 0.0
-                ),
-                mean_blend_displacement=(
-                    diag.blend_displacement_sum / steps if steps else 0.0
-                ),
-            )
-
-        if len(result) < 5:
-            return reject(REJECTION_RESULT_TOO_SHORT)
-        # Без normalize_lower намеренно: текст ответа уже в том регистре, в
-        # котором чат учил модель (флаг применяется на входе, при токенизации
-        # сообщения), и контекст сюда приходит в том же соглашении. Приведение
-        # к нижнему регистру здесь было бы не выравниванием, а сменой правила:
-        # в профиле с сохранением регистра гейты формы стали бы
-        # регистронезависимыми. Проверено: в дефолтном профиле это no-op —
-        # хеш генерации не меняется (tools/generation_hash.py).
-        result_tokens = tokenize(result)
-        is_short_reply = is_short_generated_reply(result_tokens)
-        if not is_short_reply and is_low_diversity_reply(result_tokens):
-            return reject(REJECTION_LOW_DIVERSITY)
-        if is_short_reply:
-            if is_short_context_copy(result_tokens, context_tokens):
-                return reject(REJECTION_SHORT_CONTEXT_COPY)
-        elif is_context_heavy_reply(result_tokens, context_tokens):
-            return reject(REJECTION_CONTEXT_HEAVY)
+        rejected = final.rejection_reason is not None
         return _GenerationAttempt(
-            text=result,
+            text=final.text,
             markov_order_used=order_used,
             jump_count=jump_count,
-            rejection_reason=None,
-            token_count=len(result_tokens),
+            rejection_reason=final.rejection_reason,
+            token_count=0 if rejected else len(final.tokens),
             start_source=start_source,
-            leading_punctuation_stripped=leading_punctuation_stripped,
+            leading_punctuation_stripped=final.leading_punctuation_stripped,
             context_exact_matches=context_exact_matches,
             context_casefold_matches=context_casefold_matches,
             hidden_context_fallbacks=hidden_context_fallbacks,
@@ -2017,9 +2037,7 @@ class MarkovGenerator:
                 diag.applied_temperature_sum / steps if steps else 0.0
             ),
             applied_alpha=applied_alpha,
-            blend_step_coverage=(
-                diag.blend_covered_steps / steps if steps else 0.0
-            ),
+            blend_step_coverage=(diag.blend_covered_steps / steps if steps else 0.0),
             mean_blend_displacement=(
                 diag.blend_displacement_sum / steps if steps else 0.0
             ),

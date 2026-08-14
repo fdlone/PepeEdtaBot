@@ -290,6 +290,64 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
             dict(await fresh.get_word_frequencies(self.chat)),
         )
 
+    async def test_warm_frequency_cache_draws_like_a_cold_read(self) -> None:
+        """Тёплый кэш и холодное чтение дают одну и ту же замену.
+
+        Соседний тест сверяет только состав словаря, а в розыгрыш попадает ещё
+        и порядок: ``pick_replacement`` строит пул обходом словаря и отдаёт его
+        в ``rng.choices``, который выбирает по позиции. Тёплый кэш дописывает
+        выученные слова в конец, холодное чтение отсортировано — то есть до
+        сортировки в ``pick_replacement`` один и тот же чат при одном и том же
+        сиде сэмплировал замену по-разному в проде (тёплый) и под
+        ``generation_hash`` (холодный).
+
+        «Банка» учится последней специально: в тёплом словаре она в конце, в
+        холодном — первая по алфавиту. Без этого порядки совпали бы и тест
+        ничего не сторожил.
+        """
+        import random
+
+        from app.core.slot_mutation import pick_replacement
+
+        for text in (
+            "один два лодка лодка лодка",
+            "три четыре марка марка марка",
+            "пять шесть ветка ветка ветка",
+        ):
+            await self._record(text)
+        await self.svc.get_word_frequencies(self.chat)  # прогрев кэша
+
+        await self._record("семь восемь банка банка банка")
+
+        warm = await self.svc.get_word_frequencies(self.chat)
+        cold = await (await self._fresh_service()).get_word_frequencies(self.chat)
+
+        self.assertEqual(dict(warm), dict(cold), "состав словаря обязан совпадать")
+        self.assertNotEqual(
+            list(warm), list(cold), "иначе тест не проверяет расхождение порядка"
+        )
+
+        draws = {
+            pick_replacement(
+                "кошка", source, excluded_tokens=frozenset(), rng=random.Random(seed)
+            )
+            for source in (warm, cold)
+            for seed in range(30)
+        }
+        self.assertNotIn(None, draws, "пул замен пуст — тест ничего не проверяет")
+        self.assertGreater(len(draws), 1, "все сиды дали одно слово — пул вырожден")
+
+        for seed in range(30):
+            self.assertEqual(
+                pick_replacement(
+                    "кошка", warm, excluded_tokens=frozenset(), rng=random.Random(seed)
+                ),
+                pick_replacement(
+                    "кошка", cold, excluded_tokens=frozenset(), rng=random.Random(seed)
+                ),
+                f"тёплый и холодный путь разошлись на сиде {seed}",
+            )
+
     # --- отсрочка тяжёлой статистики ---
 
     async def test_idf_rebuilds_after_the_deferred_threshold(self) -> None:

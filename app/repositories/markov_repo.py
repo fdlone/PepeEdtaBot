@@ -230,6 +230,19 @@ class MarkovRepo(BaseRepo):
         learned token occurrence except the two openers of each message is
         represented; short tokens (punctuation, particles) are trimmed in SQL
         to keep the result compact.
+
+        Ordered by word: this read feeds slot-mutation sampling, and every read
+        that feeds a draw carries a total order (``generation-sampling-
+        determinism``). ``w3`` is the grouping key, so ordering by it is total.
+
+        The clause is a contract pin, not a fix: SQLite already returns grouped
+        rows in group-key order under both plans this query gets (temp B-tree
+        and index scan), so adding it changes no result today. It is here so a
+        later rewrite of the query cannot silently drop the property — and
+        because the property was never actually the divergence. The warm cache
+        appends newly learned words at the end while this read is sorted, and
+        that gap is closed where the order becomes a draw, in
+        ``pick_replacement``.
         """
         rows = await self._fetch_all(
             """
@@ -237,6 +250,7 @@ class MarkovRepo(BaseRepo):
             FROM transitions
             WHERE chat_id = ? AND LENGTH(w3) >= ?
             GROUP BY w3
+            ORDER BY w3
             """,
             (chat_id, min_word_len),
         )

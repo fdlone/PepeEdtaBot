@@ -108,6 +108,39 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
         )
         self.assertGreater(len(transitions), 1)
 
+    async def test_word_frequency_rows_are_ordered(self) -> None:
+        """Словарь частот приходит упорядоченным, а не в порядке хранилища.
+
+        Он питает розыгрыш слот-мутаций, а всякое чтение, питающее розыгрыш,
+        обязано иметь тотальный порядок. Слова здесь выучены в намеренно
+        неалфавитном порядке.
+
+        Оговорка про силу теста: сегодня он прошёл бы и без ``ORDER BY`` —
+        SQLite отдаёт сгруппированные строки в порядке ключа группировки при
+        обоих планах, которые получает этот запрос. Тест сторожит **свойство**,
+        а не конкретную клаузу: он упадёт, если запрос перепишут так, что
+        порядок потеряется (другой ключ группировки, UNION, постобработка в
+        Python).
+        """
+        chat_id = 4848
+        for tokens in (
+            ["раз", "два", "яблоко", "груша"],
+            ["раз", "два", "апельсин", "банан"],
+            ["раз", "два", "манго", "вишня"],
+        ):
+            await self.db.save_message_and_update_model(
+                chat_id=chat_id, raw_text=" ".join(tokens), tokens=tokens
+            )
+
+        frequencies = await self.db.markov.get_word_frequencies(
+            chat_id, min_word_len=3
+        )
+        words = list(frequencies)
+        self.assertEqual(words, sorted(words))
+        # Иначе тест проходил бы на пустом словаре и ничего не сторожил.
+        self.assertGreater(len(words), 1)
+        self.assertNotEqual(words, ["яблоко", "груша", "апельсин", "банан"][: len(words)])
+
     async def test_token_volume_reads_the_counter_not_the_aggregate(self) -> None:
         """Горячий путь чтения объёма не сканирует таблицы переходов.
 
