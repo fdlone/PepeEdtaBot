@@ -43,6 +43,21 @@ db_prod_copy/
 Screenshot_*.jpg
 scrin/
 
+# Раунды ручной разметки мемов: список, ключ и ответы оценщиков — это
+# дословные фразы приватного чата (docs/MEME_RATING_ROUND.md). В .gitignore
+# они с самого начала, здесь строка была пропущена — то есть каталог уходил
+# демону в контексте сборки, хотя правило файла требует обратного.
+rating_rounds/
+
+# Coverage: локальное состояние прогона, рантайму не нужно.
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# IDE
+.vscode/
+
 # Local test scratch data
 .test_tmp/
 test_*.sqlite
