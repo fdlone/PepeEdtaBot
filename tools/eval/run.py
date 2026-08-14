@@ -67,6 +67,18 @@ PROTOCOL_SEEDS = (42, 1337, 2026)  # doc 05 §1.3
 DEFAULT_GENERATIONS = 500  # 125 x 4 categories
 SMOKE_GENERATIONS = 40  # doc 05 §7
 
+# M3R-140: the two modes every PRE gate is measured in. ``ctx`` is what every
+# run before 2026-08-14 did — the prompt goes in as context. ``noctx`` sends the
+# same prompt through prompt selection and the RNG but hands the generator no
+# context tokens, which is how a self-initiated reply reaches it in production
+# (`ReplyPipeline._context_tokens` returns an empty list there).
+#
+# ``current_message_normalized`` stays populated in BOTH modes on purpose: it
+# feeds the echo gate and the seeded channel's anchors, neither of which the
+# mode is about. Blanking it too would silently turn off seeded generation and
+# make the noctx arm measure a different machine, not a different input.
+CONTEXT_MODES = ("ctx", "noctx")
+
 
 @dataclass(slots=True)
 class ConfigRun:
@@ -129,6 +141,7 @@ async def run_config_seed(
     generations: int,
     fresh_tokens: frozenset[str] | None = None,
     evaluation_moment: int | None = None,
+    context_mode: str = "ctx",
 ) -> tuple[list[GenRecord], dict[str, float | int | None]]:
     """One (configuration, seed) protocol run — fresh DB copy, cold process state.
 
@@ -136,6 +149,8 @@ async def run_config_seed(
     (cache hit-rate, shadow order-4 counters) for the report's machinery
     section."""
     log_masking.init_masking("markov2r-eval-protocol")
+    if context_mode not in CONTEXT_MODES:
+        raise ValueError(f"unknown context mode {context_mode!r}")
     per_category = max(1, generations // len(prompt_set.categories))
     db_copy, temp_dir = copy_database(db_source)
     saved_log_selection = gen_trace_log.log_selection
@@ -233,7 +248,15 @@ async def run_config_seed(
                             chat_id=resolved_chat,
                             # Always a list: the pipeline's own convention is an
                             # empty list when there is no context (never None).
-                            context_tokens=prompt_tokens,
+                            # M3R-140: that empty list IS the noctx mode — the
+                            # prompt still selects the generation and seeds the
+                            # RNG, so the two modes stay paired per prompt and
+                            # the affinity metrics keep measuring against the
+                            # prompt (in noctx that is the question: how topical
+                            # is a reply whose topic was never shown to it).
+                            context_tokens=(
+                                prompt_tokens if context_mode == "ctx" else []
+                            ),
                             seed=None,
                             current_message_normalized=sanitize_text(prompt).lower(),
                             # M2R-210: a fixed moment, so a time-dependent
@@ -319,6 +342,7 @@ async def run_matrix(
     generations: int,
     fresh_tokens: frozenset[str] | None = None,
     evaluation_moment: int | None = None,
+    context_mode: str = "ctx",
 ) -> tuple[dict[str, ConfigRun], list[str]]:
     """Run every available configuration; alias ones resolving to identical
     overrides (spec: degenerate matrix before any V2 feature exists)."""
@@ -357,6 +381,7 @@ async def run_matrix(
                 generations=generations,
                 fresh_tokens=fresh_tokens,
                 evaluation_moment=evaluation_moment,
+                context_mode=context_mode,
             )
             records.extend(seed_records)
             snapshots.append(snapshot)

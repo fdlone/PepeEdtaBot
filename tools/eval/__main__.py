@@ -41,6 +41,7 @@ from tools.eval.prompts import (  # noqa: E402
 )
 from tools.eval.report import build_report, metrics_summary  # noqa: E402
 from tools.eval.run import (  # noqa: E402
+    CONTEXT_MODES,
     DEFAULT_GENERATIONS,
     PROTOCOL_SEEDS,
     SMOKE_GENERATIONS,
@@ -177,6 +178,7 @@ async def _protocol(args: argparse.Namespace) -> int:
             generations=args.generations,
             fresh_tokens=fresh_tokens,
             evaluation_moment=evaluation_moment,
+            context_mode=args.context_mode,
         )
     finally:
         if fixture_dir is not None:
@@ -194,14 +196,20 @@ async def _protocol(args: argparse.Namespace) -> int:
         revision=_revision(),
         date=date,
         notes=notes,
+        context_mode=args.context_mode,
     )
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = REPORTS_DIR / f"eval_{date}_{args.label}.md"
+    # The mode is part of the file name, not only of the header: two runs of the
+    # same label differing only by mode are two different measurements, and the
+    # second must not overwrite the first (M3R-140).
+    out_path = REPORTS_DIR / f"eval_{date}_{args.label}_{args.context_mode}.md"
     out_path.write_text(report, encoding="utf-8")
     print(f"report: {out_path}")
     if args.json_out:
         Path(args.json_out).write_text(
-            json.dumps(metrics_summary(runs), indent=2, sort_keys=True),
+            json.dumps(
+                metrics_summary(runs, args.context_mode), indent=2, sort_keys=True
+            ),
             encoding="utf-8",
         )
         print(f"metrics summary: {args.json_out}")
@@ -250,6 +258,17 @@ def main() -> None:
         type=float,
         default=DEFAULT_FRESH_DAYS,
         help="window that defines the fixture's fresh slice (default 14)",
+    )
+    parser.add_argument(
+        "--context-mode",
+        choices=CONTEXT_MODES,
+        default="ctx",
+        help=(
+            "M3R-140: 'ctx' supplies the prompt as context (the historical "
+            "default); 'noctx' supplies none. Fixed per run — a report never "
+            "mixes modes into one number, and a gate declared two-mode reports "
+            "insufficient data until both runs exist"
+        ),
     )
     args = parser.parse_args()
 

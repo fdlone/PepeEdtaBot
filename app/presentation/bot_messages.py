@@ -98,6 +98,32 @@ def format_stats_message(
         )
     if telemetry and telemetry.get("generations"):
         lines.append(f"генераций с рестарта: {telemetry['generations']}")
+        # M3R-140/141: доля режима — вес, с которым вердикт гейта переносится на
+        # прод, и она нигде не хранится, кроме этих счётчиков. Рядом —
+        # молчаливая потеря контекста: тот же режим, но испортившийся по дороге.
+        ctx_share = telemetry.get("ctx_generation_share")
+        if ctx_share is not None:
+            dropped = telemetry.get("context_dropped_rate")
+            dropped_text = (
+                f", контекст терялся в {dropped:.0%} из них"
+                if dropped is not None
+                else ""
+            )
+            lines.append(f"с контекстом: {ctx_share:.0%} ответов{dropped_text}")
+        # Каналы, выключенные данными: ноль в числителе при живом знаменателе
+        # значит «спросили и ответил», а не «никто не спрашивал».
+        no_corpus = telemetry.get("seed_ranking_no_corpus_rate")
+        if no_corpus is not None:
+            lines.append(
+                f"seeded: корпус пуст в {no_corpus:.0%} из "
+                f"{telemetry.get('seed_ranking_asked')} обращений"
+            )
+        hot_empty = telemetry.get("hot_ngram_empty_rate")
+        if hot_empty is not None:
+            lines.append(
+                f"горячие фразы: пусто в {hot_empty:.0%} из "
+                f"{telemetry.get('hot_ngram_draws')} розыгрышей"
+            )
         mean_entropy = telemetry.get("mean_normalized_entropy")
         mean_branching = telemetry.get("mean_branching")
         if mean_entropy is not None and mean_branching is not None:

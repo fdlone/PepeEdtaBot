@@ -160,6 +160,15 @@ phase9_interp:
   # interpolated generation was measured. Source of the conditions:
   # docs/v2/M2R_PHASE9_INTERPOLATION.md §7.
   #
+  # Two-mode requirement (M3R-140, added 2026-08-14, still before any grid run).
+  # The phase spec's noctx amendment already said the grid runs in both modes —
+  # without a context bias steering the widened pools, incoherence is the risk
+  # that mode carries and it has to be measured on its own. Until this change
+  # the runner had no noctx mode at all, so the requirement had no way to bind.
+  # It can only make a verdict stricter (`insufficient data` instead of `pass`)
+  # and never looser, which is why adding it after registration is legitimate.
+  requires_both_modes: true
+  #
   # Why this phase gets a gate shaped differently from Phase 2/3: those two were
   # inert because 97.9% of order-3 states have exactly one continuation — there
   # was nothing to reweight. Interpolation is the first mechanism that CREATES

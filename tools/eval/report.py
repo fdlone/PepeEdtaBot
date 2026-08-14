@@ -73,9 +73,17 @@ def _delta_cell(base: list[float] | None, other: list[float] | None) -> str:
     return f"{_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]{marker}"
 
 
-def metrics_summary(runs: dict[str, ConfigRun]) -> dict[str, Any]:
+def metrics_summary(
+    runs: dict[str, ConfigRun], context_mode: str = "ctx"
+) -> dict[str, Any]:
     """Deterministic metric points per configuration, latency excluded —
-    the object the bit-for-bit reproducibility check compares."""
+    the object the bit-for-bit reproducibility check compares.
+
+    ``context_mode`` travels INSIDE each configuration's entry rather than as a
+    sibling key: the entries are what gets sliced out, quoted and compared
+    between reports, and a mode that lives one level up is a mode that gets
+    lost on the way (M3R-140).
+    """
     summary: dict[str, Any] = {}
     for config_id, run in sorted(runs.items()):
         values = metric_values(run.records)
@@ -83,6 +91,7 @@ def metrics_summary(runs: dict[str, ConfigRun]) -> dict[str, Any]:
         d2, basis2 = distinct_n(replies, 2)
         d3, basis3 = distinct_n(replies, 3)
         summary[config_id] = {
+            "context_mode": context_mode,
             "shared_with": run.shared_with,
             "n_records": len(run.records),
             "metrics": {
@@ -680,10 +689,35 @@ def _phase6_verdict(
     )
 
 
+def _apply_mode_requirement(
+    row: tuple[str, str, str], thresholds: dict[str, Any], context_mode: str
+) -> tuple[str, str, str]:
+    """Downgrade a two-mode gate measured in one mode (M3R-140).
+
+    Applied after the gate computed its numbers, not instead of it: the ctx half
+    of a two-mode gate is worth printing, it is just not worth calling a pass.
+    Declared per gate by ``requires_both_modes`` in the thresholds file, so the
+    rule reaches only the gates registered under it — the closed phases are not
+    retroactively reopened as `insufficient data`.
+    """
+    gate, verdict, detail = row
+    name = gate.split("[", 1)[0]
+    if not thresholds.get(name, {}).get("requires_both_modes"):
+        return row
+    absent = "noctx" if context_mode == "ctx" else "ctx"
+    return (
+        gate,
+        INSUFFICIENT,
+        f"{detail}; gate requires both context modes, this run measured "
+        f"{context_mode} only ({absent} not measured)",
+    )
+
+
 def evaluate_gates(
     runs: dict[str, ConfigRun],
     thresholds: dict[str, Any],
     manual_rating: dict[str, Any] | None = None,
+    context_mode: str = "ctx",
 ) -> list[tuple[str, str, str]]:
     """(gate, verdict, detail) rows. Phase 0: most gates lack their data by
     construction — that is reported, never guessed."""
@@ -827,7 +861,7 @@ def evaluate_gates(
             "distribution-lookup instrumentation lands in Phase 1",
         )
     )
-    return rows
+    return [_apply_mode_requirement(row, thresholds, context_mode) for row in rows]
 
 
 def manual_summary(manual: dict[str, Any] | None) -> list[str]:
@@ -893,14 +927,28 @@ def build_report(
     date: str,
     notes: list[str],
     manual_rating: dict[str, Any] | None = None,
+    context_mode: str = "ctx",
 ) -> str:
     lines: list[str] = []
     lines.append(
         f"# Eval report {date} snapshot={snapshot_label} "
-        f"prompts={prompt_set.version} seeds={','.join(map(str, seeds))}"
+        f"prompts={prompt_set.version} seeds={','.join(map(str, seeds))} "
+        f"mode={context_mode}"
     )
     lines.append("")
     lines.append(f"Revision: `{revision}`. Generations per configuration: {generations}.")
+    # M3R-140: the mode is stated twice — in the title line a reader copies and
+    # in a sentence they cannot skim past. Every number below belongs to this
+    # mode alone; a gate that requires both is reported `insufficient data`.
+    lines.append(
+        f"Context mode: **{context_mode}** — "
+        + (
+            "the prompt is supplied to the generator as context."
+            if context_mode == "ctx"
+            else "no context tokens are supplied; the prompt only selects the "
+            "generation and seeds the RNG."
+        )
+    )
     for note in notes:
         lines.append(f"- {note}")
     lines.append("")
@@ -1047,7 +1095,9 @@ def build_report(
 
     lines.append("## Gates")
     lines.append("")
-    for gate, verdict, detail in evaluate_gates(runs, thresholds, manual_rating):
+    for gate, verdict, detail in evaluate_gates(
+        runs, thresholds, manual_rating, context_mode
+    ):
         lines.append(f"- **{gate}**: {verdict} — {detail}")
     if "C0" in runs:
         verdict, missing = meme_regression(runs["C0"].records, len(prompt_set.memes))

@@ -782,6 +782,13 @@ class ResponseGenerator:
         candidate_target: int = CANDIDATE_TARGET,
     ) -> ResponseGenerationResult:
         generation_rng = rng or random.Random()
+        # M3R-140: the mode is noted before anything can fail, so a generation
+        # that collects no candidates still counts. The share of the two modes
+        # is what weights every PRE gate verdict, and it is unrecoverable
+        # afterwards — nothing persists whether a reply was asked with context.
+        self.generator.telemetry.note_context_mode(
+            with_context=bool(request.context_tokens)
+        )
         modifiers = self.mood_modifiers or NEUTRAL_MODIFIERS
         seed = request.seed
         target = max(1, min(candidate_target, GENERATION_ATTEMPT_BUDGET))
@@ -882,12 +889,25 @@ class ResponseGenerator:
             verbatim_penalty_strength=verbatim_penalty_strength,
         )
 
+        # M3R-141: a generation that starts with context and runs past the
+        # with-context budget finishes on a different mechanism than the one it
+        # was asked with — measured at 37% of ctx-answers (map §1.3) and, until
+        # now, invisible: neither the trace nor telemetry said it happened.
+        context_dropped = False
         for attempt in range(GENERATION_ATTEMPT_BUDGET):
             attempt_context_tokens = (
                 request.context_tokens
                 if attempt < GENERATION_ATTEMPTS_WITH_CONTEXT
                 else None
             )
+            if request.context_tokens and attempt_context_tokens is None:
+                if not context_dropped:
+                    gen_trace_log.log_context_dropped(
+                        request.chat_id,
+                        attempt + 1,
+                        attempts_with_context=GENERATION_ATTEMPTS_WITH_CONTEXT,
+                    )
+                context_dropped = True
             attempt_randomness_strength = escalated_randomness_strength(
                 effective_randomness,
                 attempt,
@@ -1139,6 +1159,9 @@ class ResponseGenerator:
                         )
 
             seed = None
+
+        if context_dropped:
+            self.generator.telemetry.note_context_dropped()
 
         # M2R-410 lexical anchoring: seeded candidates join the pool and compete
         # with no priority (ADR-008). Guarded by the ratio so the neutral default

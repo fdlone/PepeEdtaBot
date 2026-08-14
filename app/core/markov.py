@@ -1757,8 +1757,14 @@ class MarkovGenerator:
             if is_scorable(token, min_token_len=min_token_len)
         ]
         if not eligible:
+            self.telemetry.note_seed_ranking(no_corpus=False)
             return []
         n_docs = await self.db.get_n_docs(chat_id)
+        # M3R-141: an empty df aggregate silently disables the whole seeded
+        # channel — from the outside it looks exactly like a channel whose knob
+        # is off. Counted here rather than at the caller because this is the
+        # only place that knows *which* emptiness happened.
+        self.telemetry.note_seed_ranking(no_corpus=n_docs <= 0)
         if n_docs <= 0:
             return []
         df_of: dict[str, int] = {}
