@@ -8,6 +8,7 @@ insufficient data, with the numbers that produced them.
 
 from __future__ import annotations
 
+from collections import Counter
 from statistics import mean
 from typing import Any
 
@@ -50,6 +51,11 @@ METRIC_ORDER = (
     "seeded_win_rate_given_present",
     "freshness_reflection",
     "historical_meme_rate",
+    # M3R-011: printed as a pair and adjacent on purpose — the gap between the
+    # pool and the window is the finding, and a reader scanning one row must
+    # land on the other.
+    "structural_pool_ecb",
+    "structural_window_escape",
 )
 INSUFFICIENT = "insufficient data"
 
@@ -689,6 +695,64 @@ def _phase6_verdict(
     )
 
 
+def _structural_escape_rows(
+    runs: dict[str, ConfigRun], thresholds: dict[str, Any]
+) -> list[tuple[str, str, str]]:
+    """One structural-escape row per configuration (M3R-011).
+
+    Per configuration rather than per arm-against-C0: the headline claim is
+    absolute ("this input yields >= 2 different trajectories in the window"),
+    not comparative. A route that doubles the window count while staying under
+    two has still not opened the space, and a delta would hide that.
+
+    The two numbers are checked together on purpose — the pool floor is what
+    stops a change from buying window diversity by shrinking the pool.
+    """
+    config = thresholds.get("structural_escape", {})
+    window_min = float(config.get("window_escape_min", 2.0))
+    pool_min = float(config.get("pool_ecb_min", 4.0))
+    rows: list[tuple[str, str, str]] = []
+    for config_id in sorted(runs):
+        values = metric_values(runs[config_id].records)
+        pool = values.get("structural_pool_ecb")
+        window = values.get("structural_window_escape")
+        parts: list[str] = []
+        failures: list[str] = []
+        missing: list[str] = []
+        if not pool or not window:
+            missing.append("structural samples")
+        else:
+            pool_mean, pool_lo, pool_hi = bootstrap_ci(pool)
+            window_mean, window_lo, window_hi = bootstrap_ci(window)
+            # Always both, never one: the gap between them is the finding.
+            parts.append(
+                f"window escape {_fmt(window_mean)} [{_fmt(window_lo)}, "
+                f"{_fmt(window_hi)}] (min {window_min:.1f}); "
+                f"pool ECB {_fmt(pool_mean)} [{_fmt(pool_lo)}, {_fmt(pool_hi)}] "
+                f"(floor {pool_min:.1f})"
+            )
+            # Distribution, not only the mean: it is what says whether the
+            # verdict hangs on the overlap threshold. A run whose window count
+            # is 1 almost everywhere would not change its verdict at any
+            # neighbouring threshold, and a reader can see that instead of
+            # having to re-run with another value.
+            buckets = Counter(int(value) for value in window)
+            spread = ", ".join(
+                f"{count}:{buckets[count] / len(window):.0%}"
+                for count in sorted(buckets)
+            )
+            parts.append(f"window distribution {spread}")
+            if window_mean < window_min:
+                failures.append("window escape below the registered minimum")
+            if pool_mean < pool_min:
+                failures.append("pool ECB below the safety floor")
+        verdict, detail = _verdict(parts, failures, missing)
+        rows.append((f"structural_escape[{config_id}]", verdict, detail))
+    if not rows:
+        rows.append(("structural_escape", INSUFFICIENT, "no configurations in this run"))
+    return rows
+
+
 def _apply_mode_requirement(
     row: tuple[str, str, str], thresholds: dict[str, Any], context_mode: str
 ) -> tuple[str, str, str]:
@@ -797,6 +861,8 @@ def evaluate_gates(
         for arm_id in phase9_arms:
             verdict, detail = _phase9_arm_verdict(baseline, runs[arm_id], thresholds)
             rows.append((f"phase9_interp[{arm_id}]", verdict, detail))
+
+    rows.extend(_structural_escape_rows(runs, thresholds))
 
     rows.append(("phase6_anticycle", *_phase6_verdict(baseline, thresholds)))
 

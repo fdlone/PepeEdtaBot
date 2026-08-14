@@ -232,6 +232,41 @@ phase9_interp:
   # share would inflate it by letting the rater stop early.
   manual_rated_min: 30
 
+structural_escape:
+  # M3R-011, registered 2026-08-14 BEFORE the metric produced a single number.
+  # This is the project's headline gate (PRE roadmap, Success criteria): PRE is
+  # structurally successful only if an input yields >= 2 substantially different
+  # trajectories INSIDE the selection window — not variants of one nearly
+  # deterministic path.
+  #
+  # Why it is registered now rather than with the first route: a route grid that
+  # arrives before the gate would report "quality rose by X%" with no answer to
+  # whether the space rose at all, and the threshold would then be chosen with
+  # the numbers already in view.
+  #
+  # "Substantially different" = edge overlap below this value, where overlap is
+  # the share of shared adjacent content-token pairs normalized by the smaller
+  # of the two sets. 0.5 reads as "half the walk is shared" — the same walk with
+  # a different tail rather than a different walk. Chosen by argument, not by
+  # data, and therefore frozen: moving it later would be fitting the ruler to
+  # the result. A different value means a differently NAMED gate.
+  edge_overlap_similar: 0.5
+  # The headline bar, as a mean over the run: >= 2 different trajectories in the
+  # window. If the C0 baseline itself comes out below this, that is the finding
+  # — the current configuration does not clear the project's main gate — and NOT
+  # a reason to lower the number.
+  window_escape_min: 2.0
+  # Safety invariant of the roadmap (ECB >= 4/5 over the pool), so that a change
+  # which raises window diversity by shrinking the pool cannot pass. The
+  # roadmap's C0 reference is 4.73/4.68 from the R1 reconnaissance, whose JSON
+  # never entered the repository; 4.0 is a floor, not a target, and comparability
+  # with those numbers is not claimed.
+  pool_ecb_min: 4.0
+  # M3R-140: the window is defined through the score, and the scorer's scale
+  # differs between modes (map §1.2) — so the window's width does too. A
+  # one-mode verdict would be especially misleading here.
+  requires_both_modes: true
+
 performance:
   # TZ §17, checked from Phase 1 onward on every protocol run.
   lookup_p95_ms_max: 10

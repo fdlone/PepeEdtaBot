@@ -32,7 +32,10 @@ from tools.eval.config import (  # noqa: E402
     load_matrix,
     load_thresholds,
 )
-from tools.eval.metrics import metric_values  # noqa: E402
+from tools.eval.metrics import (  # noqa: E402
+    DEFAULT_EDGE_OVERLAP_SIMILAR,
+    metric_values,
+)
 from tools.eval.prompts import (  # noqa: E402
     PROMPTS_PATH,
     generate_prompts,
@@ -179,6 +182,15 @@ async def _protocol(args: argparse.Namespace) -> int:
             fresh_tokens=fresh_tokens,
             evaluation_moment=evaluation_moment,
             context_mode=args.context_mode,
+            # M3R-011: the similarity threshold is a pre-registered gate input,
+            # so it comes from the thresholds file — never from a default baked
+            # into the metric module, which would let a run and its gate
+            # disagree about what "substantially different" means.
+            edge_overlap_similar=float(
+                thresholds.get("structural_escape", {}).get(
+                    "edge_overlap_similar", DEFAULT_EDGE_OVERLAP_SIMILAR
+                )
+            ),
         )
     finally:
         if fixture_dir is not None:
