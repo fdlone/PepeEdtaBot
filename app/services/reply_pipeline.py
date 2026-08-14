@@ -660,6 +660,12 @@ class ReplyPipeline:
             recency_share=state.hot_ngram_recency_share,
             meme_ordering=state.markov_hot_ngram_meme_ordering,
         )
+        # M3R-141: counted only once the roll has already decided to seed, so
+        # the denominator is "draws that asked for a hot n-gram". At the default
+        # thresholds this selection returns nothing at all (map §3.2б) — a
+        # channel switched off by data, indistinguishable until now from one
+        # switched off by its knob.
+        self._generator.telemetry.note_hot_ngram_draw(empty=not hot_ngrams)
         if not hot_ngrams:
             return None
         # Only the length is logged, never the n-gram text: chat content stays

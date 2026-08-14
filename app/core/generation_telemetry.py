@@ -81,6 +81,25 @@ class GenerationTelemetry:
     route_present: dict[str, int] = field(default_factory=dict)
     route_won: dict[str, int] = field(default_factory=dict)
     route_rejected: dict[str, dict[str, int]] = field(default_factory=dict)
+    # M3R-140: the mode each reply was *requested* in — with context tokens or
+    # without. Decided by the request the pipeline built, never by whether the
+    # answer turned out anchored (that is a quality metric with its own life).
+    # The share is the weight a gate verdict is carried by (roadmap §4) and it
+    # exists nowhere else: no table records whether a reply had context.
+    ctx_generations: int = 0
+    noctx_generations: int = 0
+    # M3R-141: channels that ran and had nothing to answer with. Each is a pair
+    # with its own denominator — "the channel was asked for" — so a zero
+    # numerator reads as "asked and always answered" instead of "never asked".
+    # That ambiguity is not hypothetical: a bare seeded win-rate without its
+    # denominator is what phase 5 had to redo.
+    seed_ranking_asked: int = 0
+    seed_ranking_no_corpus: int = 0
+    hot_ngram_draws: int = 0
+    hot_ngram_empty: int = 0
+    # Denominator of this one is ctx_generations: only a generation that
+    # started with context can lose it.
+    context_dropped: int = 0
 
     def note_cache(self, *, hit: bool) -> None:
         if hit:
@@ -167,6 +186,43 @@ class GenerationTelemetry:
             self.route_rejected.setdefault(route, {}).get(reason, 0) + 1
         )
 
+    def note_context_mode(self, *, with_context: bool) -> None:
+        """One generation's requested mode (M3R-140), exactly once per call.
+
+        Counted at the start of the generation, so a reply that collects no
+        candidates still lands in the denominator: the mode is a property of
+        what was asked, not of what came out.
+        """
+        if with_context:
+            self.ctx_generations += 1
+        else:
+            self.noctx_generations += 1
+
+    def note_seed_ranking(self, *, no_corpus: bool) -> None:
+        """One seed-ranking request and whether the chat had no corpus (M3R-141).
+
+        ``no_corpus`` is the ``n_docs == 0`` case specifically — the df
+        aggregate has not accumulated yet, so the channel cannot score anything
+        however good the message is. Other empty outcomes (no eligible tokens,
+        every score below the floor) are not this counter's business.
+        """
+        self.seed_ranking_asked += 1
+        if no_corpus:
+            self.seed_ranking_no_corpus += 1
+
+    def note_hot_ngram_draw(self, *, empty: bool) -> None:
+        """One hot-n-gram seed draw and whether the selection came back empty."""
+        self.hot_ngram_draws += 1
+        if empty:
+            self.hot_ngram_empty += 1
+
+    def note_context_dropped(self) -> None:
+        """One generation that started with context and ran out of with-context
+        attempts (M3R-141). Per generation, never per attempt: the finding it
+        measures is a share of answers, and a per-attempt count would move with
+        the attempt budget instead."""
+        self.context_dropped += 1
+
     def route_breakdown(self) -> dict[str, dict[str, float | int | None]]:
         """Per-route share, win-rate and rejection reasons.
 
@@ -199,7 +255,32 @@ class GenerationTelemetry:
         steps = self.diagnostic_steps
         lookups = self.cache_hits + self.cache_misses
         eligible = self.shadow_order4_eligible
+        modes = self.ctx_generations + self.noctx_generations
         return {
+            # M3R-140/141: every one of these is a rate with its own
+            # denominator next to it, so "never asked" is readable as None
+            # rather than as a healthy zero.
+            "context_mode_generations": modes,
+            "ctx_generation_share": (
+                self.ctx_generations / modes if modes else None
+            ),
+            "seed_ranking_asked": self.seed_ranking_asked,
+            "seed_ranking_no_corpus_rate": (
+                self.seed_ranking_no_corpus / self.seed_ranking_asked
+                if self.seed_ranking_asked
+                else None
+            ),
+            "hot_ngram_draws": self.hot_ngram_draws,
+            "hot_ngram_empty_rate": (
+                self.hot_ngram_empty / self.hot_ngram_draws
+                if self.hot_ngram_draws
+                else None
+            ),
+            "context_dropped_rate": (
+                self.context_dropped / self.ctx_generations
+                if self.ctx_generations
+                else None
+            ),
             "generations": self.generations,
             "mean_entropy_bits": self.entropy_bits_sum / steps if steps else None,
             "mean_normalized_entropy": (

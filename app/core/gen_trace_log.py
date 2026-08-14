@@ -133,6 +133,30 @@ def log_attempt_failed(_chat_id: int, attempt: int, *, context_used: bool) -> No
     )
 
 
+def log_context_dropped(
+    _chat_id: int,
+    attempt: int,
+    *,
+    attempts_with_context: int,
+) -> None:
+    """The generation ran out of with-context attempts and carries on without.
+
+    Emitted once per generation, on the first attempt that loses the context.
+    The per-attempt ``[context=off]`` markers below say the same thing
+    implicitly, and reading them as "the context was dropped here" required
+    knowing the budget — which is exactly why the drop went unnoticed until it
+    was measured externally (map §1.3).
+    """
+    if not enabled():
+        return
+    gen_logger.info(
+        "  attempt %02d -> CONTEXT DROPPED (budget of %d with-context attempts "
+        "spent; remaining attempts run without it)",
+        attempt,
+        attempts_with_context,
+    )
+
+
 def log_attempt_rejected(
     _chat_id: int,
     attempt: int,

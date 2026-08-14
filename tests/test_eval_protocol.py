@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from typing import Any
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -30,12 +31,13 @@ from tools.eval.metrics import (
 )
 from tools.eval.prompts import generate_prompts
 from tools.eval.report import (
+    _apply_mode_requirement,
     build_report,
     evaluate_gates,
     manual_summary,
     metrics_summary,
 )
-from tools.eval.run import ConfigRun, run_matrix
+from tools.eval.run import ConfigRun, run_config_seed, run_matrix
 from tools.eval.synthetic import SYNTHETIC_CHAT_ID, build_synthetic_snapshot
 
 
@@ -273,6 +275,34 @@ class TestPhase6Gate(unittest.TestCase):
         self.assertEqual(verdict, "insufficient data")
 
 
+class TestTwoModeRequirement(unittest.TestCase):
+    """M3R-140: a gate declared two-mode is not passable on one mode."""
+
+    def test_declared_gate_is_downgraded_and_says_why(self) -> None:
+        row = _apply_mode_requirement(
+            ("phase9_interp[C9a]", "pass", "six conditions met"),
+            load_thresholds(),
+            "ctx",
+        )
+        self.assertEqual(row[1], "insufficient data")
+        self.assertIn("requires both context modes", row[2])
+        self.assertIn("noctx not measured", row[2])
+        self.assertIn("six conditions met", row[2])  # numbers survive
+
+    def test_undeclared_gate_is_left_alone(self) -> None:
+        """Закрытые фазы не переоткрываются задним числом: правило действует
+        только на гейты, которые сами его объявили."""
+        row = ("phase2_entropy[C1]", "fail", "distinct-2 delta insignificant")
+        self.assertEqual(
+            _apply_mode_requirement(row, load_thresholds(), "ctx"), row
+        )
+
+    def test_phase9_declares_it(self) -> None:
+        self.assertTrue(
+            load_thresholds()["phase9_interp"].get("requires_both_modes")
+        )
+
+
 class TestPhase2Gate(unittest.TestCase):
     """The Phase 2 gate is four-part and asymmetric (doc 03 Phase 2 acceptance,
     thresholds pre-registered in eval_thresholds.yaml)."""
@@ -487,6 +517,87 @@ class TestSyntheticProtocol(unittest.IsolatedAsyncioTestCase):
             ):
                 self.assertIn(section, report)
             self.assertIn("insufficient data", report)  # temporal/seeded honesty
+            self.assertIn("mode=ctx", report)  # M3R-140: the mode is named
+        finally:
+            if temp_dir is not None:
+                temp_dir.cleanup()
+
+    async def test_noctx_mode_runs_without_context_and_stays_paired(self) -> None:
+        """M3R-140: same prompts, same order, no context tokens.
+
+        The pairing is the point: if the two modes drew different prompts, a
+        ctx-vs-noctx delta would be a delta of prompt sets, and the production
+        weighting the roadmap asks for would be meaningless.
+        """
+        db_path, temp_dir = await build_synthetic_snapshot(messages=80)
+        try:
+            prompt_set = generate_prompts(
+                db_path, chat_id=SYNTHETIC_CHAT_ID, seed=42, snapshot_label="t"
+            )
+            configs = {"C0": load_matrix()["C0"]}
+            kwargs: dict[str, Any] = dict(
+                db_source=db_path,
+                chat_id=SYNTHETIC_CHAT_ID,
+                configs=configs,
+                prompt_set=prompt_set,
+                seeds=(42,),
+                generations=16,
+            )
+            ctx_runs, _ = await run_matrix(**kwargs)
+            noctx_runs, _ = await run_matrix(**kwargs, context_mode="noctx")
+
+            ctx_records = ctx_runs["C0"].records
+            noctx_records = noctx_runs["C0"].records
+            self.assertEqual(
+                [r.prompt_content for r in ctx_records],
+                [r.prompt_content for r in noctx_records],
+            )
+            # Not a pairing check but the mode's own signature: with no context
+            # supplied, no reply can be an exact copy of one.
+            self.assertTrue(all(not r.is_copy for r in noctx_records))
+            self.assertEqual(
+                noctx_runs["C0"].telemetry[0]["ctx_generation_share"], 0.0
+            )
+            self.assertEqual(ctx_runs["C0"].telemetry[0]["ctx_generation_share"], 1.0)
+
+            summary = metrics_summary(noctx_runs, "noctx")
+            self.assertEqual(summary["C0"]["context_mode"], "noctx")
+            report = build_report(
+                runs=noctx_runs,
+                skipped=[],
+                prompt_set=prompt_set,
+                thresholds=load_thresholds(),
+                snapshot_label="synthetic",
+                seeds=(42,),
+                generations=16,
+                revision="test",
+                date="2026-08-14",
+                notes=[],
+                context_mode="noctx",
+            )
+            self.assertIn("mode=noctx", report)
+        finally:
+            if temp_dir is not None:
+                temp_dir.cleanup()
+
+    async def test_unknown_context_mode_is_refused(self) -> None:
+        db_path, temp_dir = await build_synthetic_snapshot(messages=20)
+        try:
+            with self.assertRaises(ValueError):
+                await run_config_seed(
+                    db_source=db_path,
+                    chat_id=SYNTHETIC_CHAT_ID,
+                    overrides={},
+                    prompt_set=generate_prompts(
+                        db_path,
+                        chat_id=SYNTHETIC_CHAT_ID,
+                        seed=42,
+                        snapshot_label="t",
+                    ),
+                    seed=42,
+                    generations=4,
+                    context_mode="both",
+                )
         finally:
             if temp_dir is not None:
                 temp_dir.cleanup()
