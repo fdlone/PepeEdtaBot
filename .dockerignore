@@ -1,86 +1,37 @@
-# Второй рубеж защиты плюс размер build-контекста.
+# Белый список: в контекст сборки уходит только то, что нужно рантайму бота.
 #
-# Первый рубеж — сам Dockerfile: он больше не делает `COPY . .`, а копирует
-# только то, что нужно рантайму (main.py и app/). Поэтому забытая здесь строка
-# уже не запекает данные в слой образа. Но контекст целиком уходит демону при
-# каждой сборке, а на машине разработчика это десятки мегабайт БД и логов, —
-# так что список ниже всё равно поддерживаем.
+# Так же устроен и Dockerfile — он копирует четыре вещи вместо `COPY . .`.
+# Этот файл теперь ему соответствует: `*` исключает всё, а ниже возвращаются
+# ровно те пути, которые Dockerfile копирует. Держать оба списка белыми —
+# единственный способ, при котором новый файл в корне не требует, чтобы о нём
+# кто-то вспомнил.
 #
-# Правило прежнее: всё, что не коммитится из-за чата или локального состояния,
-# должно отсутствовать и здесь.
+# Прежнее правило файла — «зеркалить .gitignore: всё, что не коммитится из-за
+# чата или локального состояния, должно отсутствовать и здесь» — отменено
+# осознанно. Оно перечисляло то, чего быть не должно, и потому обязано было
+# знать про каждый новый файл заранее: так уже терялись `scrin/` (PR #101) и
+# `rating_rounds/` — дословные фразы приватного чата, лежавшие в контексте
+# сборки, пока их не хватились. В корне репозитория одновременно живут рабочая
+# `markov.db`, `bot.log`, `bot_err.log`, `db_prod_copy/` и `rating_rounds/`;
+# перечислять их по одному — проигрышная стратегия.
+#
+# Правило поддержки: строка добавляется здесь **только** вместе с новой
+# COPY-директивой в Dockerfile. Если Dockerfile не копирует — здесь не нужно.
 
-.git
-.github
-.idea
-.venv
-__pycache__
-.pytest_cache
-.mypy_cache
-.ruff_cache
-*.pyc
-*.pyo
-*.pyd
+*
 
-# Secrets
-.env
+# Ровно то, что копирует Dockerfile. `app` и `app/**` — обе строки намеренно:
+# первая возвращает сам каталог, вторая — его содержимое на любой глубине
+# (app/migrations/*.sql читает мигратор на старте). Полагаться на то, что
+# возврат каталога рекурсивен сам по себе, здесь нельзя: проверить локально
+# нечем, а ошибка проявится только в рантайме на деплое.
+!requirements.lock
+!main.py
+!app
+!app/**
+!docker-entrypoint.sh
 
-# Databases: the runtime one is bind-mounted in, never built in. `data/` is the
-# default DB_PATH (see .env.example) and the compose mount point, so on a host
-# that has run the bot it holds the chat corpus and the /pivo subscriptions.
-data/
-markov.db
-markov.db-shm
-markov.db-wal
-*.sqlite
-*.sqlite-shm
-*.sqlite-wal
-db_prod_copy/
-
-# Logs: with GEN_TRACE_LOG=true these carry candidate texts, i.e. chat content.
-*.log
-
-# Local screenshots of the real chat (both the loose form and the folder).
-Screenshot_*.jpg
-scrin/
-
-# Раунды ручной разметки мемов: список, ключ и ответы оценщиков — это
-# дословные фразы приватного чата (docs/MEME_RATING_ROUND.md). В .gitignore
-# они с самого начала, здесь строка была пропущена — то есть каталог уходил
-# демону в контексте сборки, хотя правило файла требует обратного.
-rating_rounds/
-
-# Coverage: локальное состояние прогона, рантайму не нужно.
-.coverage
-.coverage.*
-htmlcov/
-coverage.xml
-
-# IDE
-.vscode/
-
-# Local test scratch data
-.test_tmp/
-test_*.sqlite
-test_*.sqlite-shm
-test_*.sqlite-wal
-
-# Not needed at runtime: dev tooling, tests, docs, specs, agent config.
-# tools/ живёт только в тестах и ручных прогонах (eval, seed, sweeps), в app/
-# и main.py оттуда нет ни одного импорта; в sweeps лежат ещё и прогоны на
-# копии прода с реальным chat_id.
-tests
-tools
-docs
-openspec
-.claude
-AGENTS.md
-CLAUDE.md
-.mcp.json
-skills-lock.json
-README.md
-LICENSE
-.env.example
-.gitattributes
-pyproject.toml
-requirements.txt
-requirements-dev.txt
+# Байткод внутри app/ рантайму не нужен (PYTHONDONTWRITEBYTECODE=1 в образе);
+# на машине разработчика он есть и без этого поехал бы вместе с app/.
+**/__pycache__
+**/*.py[cod]
