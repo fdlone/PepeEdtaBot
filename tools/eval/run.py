@@ -53,9 +53,11 @@ from tools.eval_prod import (  # noqa: E402
 from .config import MatrixConfig, resolve_overrides  # noqa: E402
 from .metrics import (  # noqa: E402
     COPY_RUN_TOKENS,
+    DEFAULT_EDGE_OVERLAP_SIMILAR,
     GenRecord,
     build_snapshot_idf,
     context_affinity,
+    distinct_trajectories,
     has_token_cycle,
     is_repetition_flagged,
     longest_common_run,
@@ -142,6 +144,7 @@ async def run_config_seed(
     fresh_tokens: frozenset[str] | None = None,
     evaluation_moment: int | None = None,
     context_mode: str = "ctx",
+    edge_overlap_similar: float = DEFAULT_EDGE_OVERLAP_SIMILAR,
 ) -> tuple[list[GenRecord], dict[str, float | int | None]]:
     """One (configuration, seed) protocol run — fresh DB copy, cold process state.
 
@@ -203,9 +206,43 @@ async def run_config_seed(
             )
             generator = _TraceCapturingGenerator(db.markov)
             pool_sizes: list[int] = [0]
+            # M3R-011: the hook only CAPTURES the pool — it runs inside the
+            # section the latency metric times, and counting trajectories there
+            # would bill the measurement to the generator (measured: +11 ms on
+            # p95, enough to make latency incomparable with earlier reports).
+            # Five references cost nothing; the counting happens after the timer
+            # stops. The capture has to be here regardless: by the time a record
+            # is written, only the winning text survives.
+            captured_pool: list[tuple[tuple[str, ...], float]] = []
+            captured_margin: list[float] = [0.0]
 
-            def _on_selection(_chat_id: int, candidates: Any, **_kw: Any) -> None:
-                pool_sizes[0] = len(candidates or ())
+            def _on_selection(_chat_id: int, candidates: Any, **kwargs: Any) -> None:
+                pool = list(candidates or ())
+                pool_sizes[0] = len(pool)
+                captured_pool[:] = [
+                    (_content_cf(candidate.text), float(candidate.score.total))
+                    for candidate in pool
+                ]
+                # The margin comes from the selection itself (design D3):
+                # hardcoding SELECTION_SCORE_MARGIN would keep measuring an old
+                # window the day that margin becomes a knob.
+                captured_margin[0] = float(kwargs.get("margin", 0.0))
+
+            def _structural_counts() -> tuple[int, int]:
+                """(pool, window) trajectory counts of the last generation."""
+                if not captured_pool:
+                    return 0, 0
+                texts = [text for text, _ in captured_pool]
+                best = max(score for _, score in captured_pool)
+                window = [
+                    text
+                    for text, score in captured_pool
+                    if score >= best - captured_margin[0]
+                ]
+                return (
+                    distinct_trajectories(texts, similar_at=edge_overlap_similar),
+                    distinct_trajectories(window, similar_at=edge_overlap_similar),
+                )
 
             rg_rejected = [0]
 
@@ -240,6 +277,7 @@ async def run_config_seed(
                     index += 1
                     generator.reset_generation()
                     pool_sizes[0] = 0
+                    captured_pool.clear()
                     rejected_before = sum(generator.rejections.values()) + rg_rejected[0]
                     prompt_tokens = tokenize(prompt)
                     started = time.perf_counter()
@@ -270,6 +308,8 @@ async def run_config_seed(
                         candidate_target=CANDIDATE_TARGET,
                     )
                     latency_ms = (time.perf_counter() - started) * 1000
+                    # After the timer, never inside it (M3R-011).
+                    pool_ecb, window_escape = _structural_counts()
                     rejected = (
                         sum(generator.rejections.values()) + rg_rejected[0] - rejected_before
                     )
@@ -285,6 +325,8 @@ async def run_config_seed(
                                 latency_ms=latency_ms,
                                 pool_size=pool_sizes[0],
                                 rejected_count=rejected,
+                                pool_ecb=pool_ecb,
+                                window_escape=window_escape,
                             )
                         )
                         continue
@@ -309,6 +351,8 @@ async def run_config_seed(
                             latency_ms=latency_ms,
                             pool_size=pool_sizes[0],
                             rejected_count=rejected,
+                            pool_ecb=pool_ecb,
+                            window_escape=window_escape,
                             is_copy=is_copy,
                             has_repetition=is_repetition_flagged(reply_content),
                             has_cycle=has_token_cycle(reply_content),
@@ -343,6 +387,7 @@ async def run_matrix(
     fresh_tokens: frozenset[str] | None = None,
     evaluation_moment: int | None = None,
     context_mode: str = "ctx",
+    edge_overlap_similar: float = DEFAULT_EDGE_OVERLAP_SIMILAR,
 ) -> tuple[dict[str, ConfigRun], list[str]]:
     """Run every available configuration; alias ones resolving to identical
     overrides (spec: degenerate matrix before any V2 feature exists)."""
@@ -382,6 +427,7 @@ async def run_matrix(
                 fresh_tokens=fresh_tokens,
                 evaluation_moment=evaluation_moment,
                 context_mode=context_mode,
+                edge_overlap_similar=edge_overlap_similar,
             )
             records.extend(seed_records)
             snapshots.append(snapshot)

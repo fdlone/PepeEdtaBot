@@ -580,6 +580,34 @@ class TestSyntheticProtocol(unittest.IsolatedAsyncioTestCase):
             if temp_dir is not None:
                 temp_dir.cleanup()
 
+    async def test_structural_pair_is_collected_from_the_real_pool(self) -> None:
+        """M3R-011: обе величины считаются из живого пула, а не подставляются.
+
+        Проверяется соотношение, а не абсолют: окно — подмножество пула, значит
+        различных траекторий в нём не может быть больше.
+        """
+        db_path, temp_dir = await build_synthetic_snapshot(messages=80)
+        try:
+            prompt_set = generate_prompts(
+                db_path, chat_id=SYNTHETIC_CHAT_ID, seed=42, snapshot_label="t"
+            )
+            runs, _ = await run_matrix(
+                db_source=db_path,
+                chat_id=SYNTHETIC_CHAT_ID,
+                configs={"C0": load_matrix()["C0"]},
+                prompt_set=prompt_set,
+                seeds=(42,),
+                generations=16,
+            )
+            records = runs["C0"].records
+            self.assertTrue(any(r.pool_ecb > 0 for r in records))
+            for record in records:
+                self.assertLessEqual(record.window_escape, record.pool_ecb)
+                self.assertLessEqual(record.pool_ecb, max(record.pool_size, 1))
+        finally:
+            if temp_dir is not None:
+                temp_dir.cleanup()
+
     async def test_unknown_context_mode_is_refused(self) -> None:
         db_path, temp_dir = await build_synthetic_snapshot(messages=20)
         try:
