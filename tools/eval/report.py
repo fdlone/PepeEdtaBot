@@ -29,6 +29,11 @@ PHASE3_ARM_PREFIX = "C2"
 # Phase 4 arms (PMI memes + collocation scoring), same prefix convention.
 PHASE4_ARM_PREFIX = "C3"
 
+# Phase 9 arms (order-3 x order-2 interpolation), same prefix convention. C6 and
+# not C5: C5 is taken in matrix.yaml, and since the prefix is what routes an arm
+# to its gate, reusing it would compare a Phase 9 arm against Phase 5 thresholds.
+PHASE9_ARM_PREFIX = "C6"
+
 # Canonical §3 order for the metrics table.
 METRIC_ORDER = (
     "generation_success_rate",
@@ -113,6 +118,33 @@ def _delta_part(
         f"{' *' if significant else ''}"
     )
     return point, significant
+
+
+def _delta_ci_low(
+    label: str,
+    base: list[float] | None,
+    arm: list[float] | None,
+    *,
+    parts: list[str],
+    missing: list[str],
+) -> float | None:
+    """Like ``_delta_part`` but returns the CI LOWER BOUND instead of the point.
+
+    Phase 9 is the first gate that bounds the interval rather than the estimate:
+    earlier phases ask "did this drop significantly", which fails only on a
+    demonstrated move. Interpolation is expected to cost some topicality by
+    construction, so the question changes to "how much drop can we not rule
+    out" — and that is a statement about the bound, not about the point.
+    """
+    if not base or not arm:
+        missing.append(f"{label} samples")
+        return None
+    point, lo, hi, significant = delta_ci(base, arm)
+    parts.append(
+        f"{label} Δ {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]"
+        f"{' *' if significant else ''}"
+    )
+    return lo
 
 
 def _latency_part(
@@ -225,6 +257,115 @@ def _phase5_arm_verdict(
     )
     # Failures are still reported (a p95 blowout is real regardless of df), but
     # the missing prod-df line keeps the verdict out of "pass" by construction.
+    return _verdict(parts, failures, missing)
+
+
+def _phase9_arm_verdict(
+    baseline: ConfigRun, arm: ConfigRun, thresholds: dict[str, Any]
+) -> tuple[str, str]:
+    """Six-part Phase 9 gate for one arm (verdict, detail).
+
+    Two-sided on quality by design: this is the first phase whose target metric
+    (diversity) has a mechanism to move, so the risk is no longer "nothing
+    happens" but "diversity bought with incoherence". A one-sided distinct bar
+    would pass exactly that trade.
+
+    Condition 3 bounds the CI lower bound rather than the point estimate — see
+    ``_delta_ci_low``. Condition 6 (connectedness round) has no automated input:
+    while it is missing the gate reports `insufficient data`, never `pass`, which
+    is the Phase 4 rule applied here — an automatic-only verdict would be a green
+    light bought by measuring the easy half.
+    """
+    if arm.shared_with is not None:
+        return INSUFFICIENT, f"arm resolves to the same overrides as {arm.shared_with}"
+
+    config = thresholds.get("phase9_interp", {})
+    base_values = metric_values(baseline.records)
+    arm_values = metric_values(arm.records)
+    parts: list[str] = []
+    failures: list[str] = []
+    missing: list[str] = []
+
+    base_replies = [r.reply_content for r in baseline.records if r.success]
+    arm_replies = [r.reply_content for r in arm.records if r.success]
+    for n_gram, key in ((2, "distinct2_delta_min"), (3, "distinct3_delta_min")):
+        minimum = float(config.get(key, 0.0))
+        result = distinct_delta_ci(base_replies, arm_replies, n_gram)
+        if result is None:
+            missing.append(f"distinct-{n_gram} basis")
+            continue
+        point, lo, hi, significant = result
+        parts.append(
+            f"distinct-{n_gram} Δ {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]"
+            f"{' *' if significant else ''}"
+        )
+        if not (significant and point > minimum):
+            failures.append(f"distinct-{n_gram} did not rise significantly")
+
+    copy_max = float(config.get("exact_copy_delta_max", 0.0))
+    copy_delta = _delta_part(
+        "copy",
+        base_values.get("exact_context_copy_rate"),
+        arm_values.get("exact_context_copy_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if copy_delta is not None:
+        point, significant = copy_delta
+        if significant and point > copy_max:
+            failures.append("copy rose significantly")
+
+    affinity_floor = float(config.get("affinity_without_copy_delta_ci_low_min", -0.02))
+    affinity_low = _delta_ci_low(
+        "affinity_without_copy",
+        base_values.get("context_affinity_without_copy"),
+        arm_values.get("context_affinity_without_copy"),
+        parts=parts,
+        missing=missing,
+    )
+    if affinity_low is not None and affinity_low <= affinity_floor:
+        failures.append(
+            f"affinity without copies could be down to {_fmt(affinity_low)}"
+        )
+
+    repetition_max = float(config.get("repetition_delta_max", 0.0))
+    repetition_delta = _delta_part(
+        "repetition",
+        base_values.get("repetition_rate"),
+        arm_values.get("repetition_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if repetition_delta is not None:
+        point, significant = repetition_delta
+        if significant and point > repetition_max:
+            failures.append("repetition rose significantly")
+
+    # Safety, not a target: the Phase 6 verdict was measured on a different walk
+    # topology, and interpolation changes that topology.
+    cycle_max = float(config.get("cycle_detection_rate_max", 0.05))
+    cycles = arm_values.get("cycle_detection_rate")
+    if not cycles:
+        missing.append("cycle-detection samples")
+    else:
+        point, lo, hi = bootstrap_ci(cycles)
+        parts.append(f"cycles {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]")
+        if point >= cycle_max:
+            failures.append("cycle rate at or above the safety bound")
+
+    _latency_part(
+        arm,
+        float(config.get("latency_p95_ms_max", 150)),
+        parts=parts,
+        missing=missing,
+        failures=failures,
+    )
+
+    # Condition 6. No automated input exists: the M3R-020 solo protocol is the
+    # instrument (the phase spec was synced 2026-08-14 away from a rater panel,
+    # which the project does not have). Recorded as missing so the gate cannot
+    # report `pass` on the automatic half alone.
+    missing.append("connectedness round (M3R-020 solo protocol)")
     return _verdict(parts, failures, missing)
 
 
@@ -608,6 +749,20 @@ def evaluate_gates(
         for arm_id in phase5_arms:
             verdict, detail = _phase5_arm_verdict(baseline, runs[arm_id], thresholds)
             rows.append((f"phase5_promotion[{arm_id}]", verdict, detail))
+
+    phase9_arms = sorted(arm for arm in runs if arm.startswith(PHASE9_ARM_PREFIX))
+    if baseline is None or not phase9_arms:
+        rows.append(
+            (
+                "phase9_interp",
+                INSUFFICIENT,
+                "no Phase 9 arm in this run" if baseline else "no baseline run",
+            )
+        )
+    else:
+        for arm_id in phase9_arms:
+            verdict, detail = _phase9_arm_verdict(baseline, runs[arm_id], thresholds)
+            rows.append((f"phase9_interp[{arm_id}]", verdict, detail))
 
     rows.append(("phase6_anticycle", *_phase6_verdict(baseline, thresholds)))
 

@@ -44,6 +44,7 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
         "markov_alpha_calm": 0.0,
         "markov_alpha_lively": 0.0,
         "markov_alpha_heated": 0.0,
+        "markov_interp_order2_weight": 0.0,
         "markov_meme_min_joint_count": 3,
         "markov_meme_min_support": 10.0,
         "markov_meme_recency_days": 30.0,
@@ -109,6 +110,31 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
     }
     base.update(overrides)
     return RuntimeState(**base)
+
+
+class TestFixtureMirrorsTheRegistry(unittest.TestCase):
+    """Фикстура выше — рукописное зеркало ``RUNTIME_FIELDS``, и оно разъезжается.
+
+    Новая runtime-ручка в реестре, не добавленная в ``base``, роняет не один
+    тест, а все, кто строит состояние через ``make_runtime_state`` — сегодня это
+    71 падение с ``TypeError: missing 1 required positional argument``, из
+    которого не видно ни причины, ни того, что виноват реестр, а не логика.
+    Проверено на M2R-900: ручка `markov_interp_order2_weight` дала ровно такую
+    картину.
+
+    Этот тест превращает 71 непрозрачное падение в одно внятное.
+    """
+
+    def test_every_runtime_field_is_buildable_by_the_fixture(self) -> None:
+        from app.config.registry import RUNTIME_FIELDS
+
+        state = make_runtime_state()
+        missing = [
+            spec.name for spec in RUNTIME_FIELDS if not hasattr(state, spec.name)
+        ]
+        self.assertEqual(
+            missing, [], "ручки реестра не собираются фикстурой — добавьте их в base"
+        )
 
 
 class TestChatOverrides(unittest.TestCase):

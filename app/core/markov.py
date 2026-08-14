@@ -12,6 +12,7 @@ from typing import Any, NamedTuple, cast
 
 from app.core.context_state_matcher import ContextStateMatcher
 from app.core.generation_telemetry import GenerationTelemetry
+from app.core.interpolation import InterpolatedPool, OrderInterpolation
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
 from app.core.markov_port import MarkovReadPort
 from app.core.morphology import stem_folded, stem_token
@@ -269,6 +270,20 @@ class _DiagnosticsAccumulator:
     # intent; these two prove effect.
     blend_covered_steps: int = 0
     blend_displacement_sum: float = 0.0
+    # M2R-901: the same intent-versus-effect pair for the order interpolation.
+    # A step counts as covered only when the projection actually ADDED a token:
+    # "beta is set but the projection is just as sparse" and "beta is not set"
+    # are different findings, and only this counter separates them.
+    interp_covered_steps: int = 0
+    interp_displacement_sum: float = 0.0
+
+    def note_interp(self, merged: InterpolatedPool | None) -> None:
+        """Record what the interpolation did at this step (nothing, when off)."""
+        if merged is None:
+            return
+        if merged.added > 0:
+            self.interp_covered_steps += 1
+        self.interp_displacement_sum += merged.displacement
 
     def note_blend(self, blended: BlendedPool | None) -> None:
         """Record what the blend did at this step (nothing, when it is off)."""
@@ -372,6 +387,10 @@ class GenerationTrace:
     applied_alpha: float = 0.0
     blend_step_coverage: float = 0.0
     mean_blend_displacement: float = 0.0
+    # M2R-901: доля шагов, где проекция order-2 добавила токен, и среднее
+    # расхождение слитого распределения с чистым P3.
+    interp_step_coverage: float = 0.0
+    mean_interp_displacement: float = 0.0
 
 
 class _GenerationAttempt(NamedTuple):
@@ -405,6 +424,10 @@ class _GenerationAttempt(NamedTuple):
     applied_alpha: float = 0.0
     blend_step_coverage: float = 0.0
     mean_blend_displacement: float = 0.0
+    # M2R-901: доля шагов, где проекция order-2 добавила токен, и среднее
+    # расхождение слитого распределения с чистым P3.
+    interp_step_coverage: float = 0.0
+    mean_interp_displacement: float = 0.0
 
 
 class _ContextualStateSelection(NamedTuple):
@@ -1463,6 +1486,7 @@ class MarkovGenerator:
         context_anchor_splice_probability: float = 0.0,
         entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
+        interpolation: OrderInterpolation = OrderInterpolation(),
         now: int = 0,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
@@ -1494,6 +1518,7 @@ class MarkovGenerator:
             context_anchor_splice_probability=context_anchor_splice_probability,
             entropy_sampling=entropy_sampling,
             temporal_blend=temporal_blend,
+            interpolation=interpolation,
             now=now,
             rng=rng,
             attempt_budget=attempt_budget,
@@ -1527,6 +1552,7 @@ class MarkovGenerator:
         context_anchor_splice_probability: float = 0.0,
         entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
+        interpolation: OrderInterpolation = OrderInterpolation(),
         now: int = 0,
         rng: random.Random | None = None,
         attempt_budget: int = DEFAULT_GENERATION_ATTEMPT_BUDGET,
@@ -1560,6 +1586,7 @@ class MarkovGenerator:
                 context_anchor_splice_probability=context_anchor_splice_probability,
                 entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
+                interpolation=interpolation,
                 now=now,
                 rng=generation_rng,
                 emit_start=True,
@@ -1600,6 +1627,8 @@ class MarkovGenerator:
             applied_alpha=last.applied_alpha,
             blend_step_coverage=last.blend_step_coverage,
             mean_blend_displacement=last.mean_blend_displacement,
+            interp_step_coverage=last.interp_step_coverage,
+            mean_interp_displacement=last.mean_interp_displacement,
         )
         self.telemetry.note_generation(
             entropy_bits_sum=last.mean_entropy_bits * last.diagnostic_steps,
@@ -1615,6 +1644,12 @@ class MarkovGenerator:
             ),
             blend_displacement_sum=(
                 last.mean_blend_displacement * last.diagnostic_steps
+            ),
+            interp_covered_steps=round(
+                last.interp_step_coverage * last.diagnostic_steps
+            ),
+            interp_displacement_sum=(
+                last.mean_interp_displacement * last.diagnostic_steps
             ),
             steps=last.diagnostic_steps,
         )
@@ -2041,6 +2076,12 @@ class MarkovGenerator:
             mean_blend_displacement=(
                 diag.blend_displacement_sum / steps if steps else 0.0
             ),
+            interp_step_coverage=(
+                diag.interp_covered_steps / steps if steps else 0.0
+            ),
+            mean_interp_displacement=(
+                diag.interp_displacement_sum / steps if steps else 0.0
+            ),
         )
 
     async def _run_generation_loop(
@@ -2073,6 +2114,7 @@ class MarkovGenerator:
         diagnostics: _DiagnosticsAccumulator | None = None,
         entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
+        interpolation: OrderInterpolation = OrderInterpolation(),
         now: int = 0,
     ) -> tuple[list[str], int, int, bool]:
         """Walk the Markov chain from ``start3`` until a stop condition.
@@ -2242,6 +2284,28 @@ class MarkovGenerator:
                 blended = temporal_blend.blend(pool, now)
                 if diagnostics is not None:
                     diagnostics.note_blend(blended)
+                # M2R-900: soft interpolation with the order-2 projection of this
+                # state. Guarded by ``enabled`` so a neutral beta never reads the
+                # projection at all — the byte-identity invariant is about the
+                # read as much as about the arithmetic.
+                merged: InterpolatedPool | None = None
+                if interpolation.enabled:
+                    proj2 = await self._get2(chat_id, w2, w3)
+                    blended_proj = temporal_blend.blend(proj2, now)
+                    merged = interpolation.merge(
+                        pool,
+                        proj2,
+                        base3=None if blended is None else blended.weights,
+                        base2=None if blended_proj is None else blended_proj.weights,
+                    )
+                    if diagnostics is not None:
+                        diagnostics.note_interp(merged)
+                if merged is not None:
+                    # The merged distribution rides the same channel the blend
+                    # already uses: pool plus normalized weights, so the sampler
+                    # keeps its 1e-12 floor instead of the count-calibrated 0.01.
+                    pool = merged.rows
+                    blended = BlendedPool(merged.weights, 0.0)
                 step_power = _step_power(
                     diagnostics, pool, next_power, entropy_sampling, blended
                 )
@@ -2347,6 +2411,7 @@ class MarkovGenerator:
         context_anchor_splice_probability: float = 0.0,
         entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
+        interpolation: OrderInterpolation = OrderInterpolation(),
         now: int = 0,
         rng: random.Random | None = None,
         emit_start: bool = True,
@@ -2553,6 +2618,7 @@ class MarkovGenerator:
                 diagnostics=diagnostics,
                 entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
+                interpolation=interpolation,
                 now=now,
             )
         )

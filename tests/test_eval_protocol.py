@@ -176,6 +176,11 @@ class TestConfigFiles(unittest.TestCase):
             "phase5_promotion",
             "phase6_anticycle",
             "phase7_order4",
+            # Опечатка в имени блока не ловится нигде больше: report.py читает
+            # пороги через .get(...) с хардкод-дефолтом, поэтому незнакомый ключ
+            # молча уводит гейт на дефолты и печатает вердикт как ни в чём не
+            # бывало. Этот кортеж — единственная защита.
+            "phase9_interp",
             "performance",
         ):
             self.assertIn(gate, thresholds)

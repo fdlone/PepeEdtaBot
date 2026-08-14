@@ -41,6 +41,13 @@ class GenerationTelemetry:
     # M2R-210: effect of the temporal blend, summed over steps.
     blend_covered_steps: int = 0
     blend_displacement_sum: float = 0.0
+    # M2R-901: effect of the order interpolation, summed over steps. Coverage
+    # counts only steps where the order-2 projection actually ADDED a token, so
+    # "beta is set but the projection is just as sparse" stays distinguishable
+    # from "beta is not set" — the same intent-versus-effect rule the blend
+    # above already follows.
+    interp_covered_steps: int = 0
+    interp_displacement_sum: float = 0.0
     diagnostic_steps: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
@@ -91,6 +98,8 @@ class GenerationTelemetry:
         applied_temperature_sum: float = 0.0,
         blend_covered_steps: int = 0,
         blend_displacement_sum: float = 0.0,
+        interp_covered_steps: int = 0,
+        interp_displacement_sum: float = 0.0,
     ) -> None:
         self.generations += 1
         self.entropy_bits_sum += entropy_bits_sum
@@ -99,6 +108,8 @@ class GenerationTelemetry:
         self.applied_temperature_sum += applied_temperature_sum
         self.blend_covered_steps += blend_covered_steps
         self.blend_displacement_sum += blend_displacement_sum
+        self.interp_covered_steps += interp_covered_steps
+        self.interp_displacement_sum += interp_displacement_sum
         self.diagnostic_steps += steps
 
     def note_shadow(self, *, eligible: int, selected: int) -> None:
@@ -203,6 +214,12 @@ class GenerationTelemetry:
             ),
             "mean_blend_displacement": (
                 self.blend_displacement_sum / steps if steps else None
+            ),
+            "interp_step_coverage": (
+                self.interp_covered_steps / steps if steps else None
+            ),
+            "mean_interp_displacement": (
+                self.interp_displacement_sum / steps if steps else None
             ),
             "cache_hit_rate": self.cache_hits / lookups if lookups else None,
             "shadow_order4_eligible": eligible,
