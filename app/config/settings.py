@@ -72,6 +72,7 @@ class RuntimeTunables:
     markov_alpha_calm: float
     markov_alpha_lively: float
     markov_alpha_heated: float
+    markov_interp_order2_weight: float
     markov_meme_min_joint_count: int
     markov_meme_min_support: float
     markov_meme_recency_days: float

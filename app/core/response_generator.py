@@ -26,6 +26,7 @@ from app.core.candidate_scorer import (
 from app.core.collocations import collocation_effect
 from app.core.emoji import append_emoji_flavor, strip_trailing_emojis
 from app.core.generation_telemetry import CandidateRoute
+from app.core.interpolation import OrderInterpolation
 from app.core.intonation import IntonationProfile, blend_length_weights
 from app.core.markov import (
     JUMP_CONNECTIVE_TOKENS,
@@ -305,6 +306,19 @@ class ResponseGenerator:
         )
 
     @property
+    def interpolation(self) -> OrderInterpolation:
+        """M2R-900 interpolation weight for this chat, from the runtime knob.
+
+        Unlike the temporal blend above, beta does not follow mood: the phase
+        measures one weight per arm, and tying it to mood would make the grid
+        measure two things at once. The default is 0 — the neutral instance
+        whose merge returns None before reading the order-2 projection.
+        """
+        return OrderInterpolation(
+            beta=self.runtime_state.markov_interp_order2_weight
+        )
+
+    @property
     def temporal_blend(self) -> TemporalBlend:
         """M2R-210 blend settings for this chat, resolved from the runtime knobs.
 
@@ -480,6 +494,7 @@ class ResponseGenerator:
             order_mix_probability=state.order_mix_probability,
             entropy_sampling=self.entropy_sampling,
             temporal_blend=self.temporal_blend,
+            interpolation=self.interpolation,
             now=now,
             rng=rng,
             attempt_budget=2,
@@ -848,6 +863,7 @@ class ResponseGenerator:
         )
         entropy_sampling = self.entropy_sampling
         temporal_blend = self.temporal_blend
+        interpolation = self.interpolation
         # M2R-210 / design D3: one moment for the whole generation. Reading the
         # clock per step would make two runs of the same seed differ by however
         # long the run took, and the eval protocol's bit-for-bit requirement —
@@ -899,6 +915,7 @@ class ResponseGenerator:
                 ),
                 entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
+                interpolation=interpolation,
                 now=now,
                 rng=generation_rng,
                 attempt_budget=1,

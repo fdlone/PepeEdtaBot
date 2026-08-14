@@ -155,6 +155,74 @@ phase7_order4:
   order4_selected_share_min: 0.10
   exact_copy_delta_max: 0.0      # significant increase disqualifies
 
+phase9_interp:
+  # Registered 2026-08-14, BEFORE the Phase 9 grid was run and before a single
+  # interpolated generation was measured. Source of the conditions:
+  # docs/v2/M2R_PHASE9_INTERPOLATION.md §7.
+  #
+  # Why this phase gets a gate shaped differently from Phase 2/3: those two were
+  # inert because 97.9% of order-3 states have exactly one continuation — there
+  # was nothing to reweight. Interpolation is the first mechanism that CREATES
+  # choice (simulated: deterministic steps 97.9% -> 72.7% at beta 0.30). So the
+  # target metric finally has a mechanism to move, and the risk flips from
+  # "nothing happens" to "diversity bought with incoherence". The gate is
+  # two-sided on quality for exactly that reason.
+  #
+  # must-improve: distinct-2 AND distinct-3 must rise significantly. Same
+  # convention as phase2_entropy — an insignificant delta is a FAIL, because
+  # diversity is the stated benefit. Comparable only within one run at equal
+  # basis (the report prints distinct_basis_tokens).
+  distinct2_delta_min: 0.0
+  distinct3_delta_min: 0.0
+  # must-not-worsen: only a SIGNIFICANT rise in copying disqualifies (the
+  # protocol cannot resolve deltas below ~3 p.p., doc 05 §8). A drop is expected
+  # here — wider pools mean fewer verbatim replays — but is not required.
+  exact_copy_delta_max: 0.0
+  # must-not-worsen, and DELIBERATELY DIFFERENT from the earlier phases: this is
+  # a bound on the CI LOWER BOUND, not on the point estimate. Earlier gates ask
+  # "did topicality drop significantly"; here the question is "how much drop can
+  # we not rule out". Interpolation is expected to cost some topicality by
+  # construction (order-2 knows less about the state), so a small measured drop
+  # is acceptable while an unbounded one is not. -0.02 is the same class of
+  # protection that rejected M2R-110, expressed as a tolerance rather than zero.
+  affinity_without_copy_delta_ci_low_min: -0.02
+  # must-not-worsen: repetition may not rise significantly.
+  repetition_delta_max: 0.0
+  # Safety, not a target: the Phase 6 verdict (cycles 0.0001) was measured on a
+  # different walk topology, and interpolation changes that topology. An arm that
+  # brings cycles back above this rate fails regardless of its diversity.
+  cycle_detection_rate_max: 0.05
+  # TZ §17 budget. Expected to be tested rather than cleared: merging two
+  # distributions is per-step work, and C4 already sits at p95 ~119 ms.
+  latency_p95_ms_max: 150
+  # Connectedness round (spec §8). Substantive bar: the share of replies rated
+  # "coherent" may not fall more than 10 p.p. below C0.
+  #
+  # The instrument is the M3R-020 solo protocol, NOT a rater panel. Recorded
+  # here because the pre-registration rule requires an edit to explain itself:
+  # the spec originally asked for >=3 raters with Fleiss' kappa >= 0.4, which
+  # references an instrument the project does not have — a panel of >=3
+  # disinterested raters is unavailable (PRE roadmap §3), and the one attempt is
+  # already measured: agreement 0.17 in Phase 4 made that verdict elastic. The
+  # roadmap updated after that finding; the phase spec had not. Fixed 2026-08-14
+  # by owner decision BEFORE this registration — legitimate under the
+  # pre-registration rule, which forbids moving thresholds after data is seen,
+  # not repairing a reference to a nonexistent tool before a run.
+  #
+  # The substantive bar below is unchanged by that fix. Only validity moves:
+  # from panel agreement to self-consistency.
+  manual_connected_delta_floor: -0.10
+  # Validity of the round, not quality of the phase: at least this share of the
+  # sample is presented twice, and the rater must agree with themselves at least
+  # this often. Below it the round is NOT counted — verdict `insufficient data`,
+  # never `fail`. A bad measurement is not a failed phase; merging those two is
+  # how "the round was junk" gets remembered as "interpolation does not work".
+  manual_repeat_share_min: 0.20
+  manual_self_consistency_min: 0.80
+  # Minimum replies rated per arm (spec §8). Rating fewer and reporting the
+  # share would inflate it by letting the rater stop early.
+  manual_rated_min: 30
+
 performance:
   # TZ §17, checked from Phase 1 onward on every protocol run.
   lookup_p95_ms_max: 10

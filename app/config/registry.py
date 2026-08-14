@@ -341,6 +341,26 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _float_in_range(0.0, 1.0)),
     FieldSpec("markov_alpha_heated", "MARKOV_ALPHA_HEATED", "0",
               _float_in_range(0.0, 1.0)),
+    # Markov 2.0R Phase 9 (M2R-900): soft interpolation of the step distribution
+    # with the order-2 projection of the current order-3 state —
+    # P = (1-beta)*P3 + beta*P2proj — instead of the hard "order-3 found, do not
+    # look at order-2" backoff.
+    #
+    # Why this knob exists where temperature and the temporal blend failed: both
+    # of those REWEIGHT the candidates a state already offers, and on this corpus
+    # 97.9% of order-3 states offer exactly one (94.6% of visits), so there was
+    # nothing to reweight. This one ADDS candidates: simulated on the prod copy
+    # at beta 0.30, deterministic steps drop 97.9% -> 72.7% and the middle
+    # entropy zone, where sampling knobs have any leverage at all, goes from
+    # 2 states out of 26 385 to 26.7% of visits.
+    #
+    # Default 0 is the neutral value that takes an early return before any
+    # order-2 read and any merge, keeping generation byte-identical to 1.x.
+    # Raising it is a defaults change that needs the phase9_interp gate to pass;
+    # the grid does not go above 0.5, where 10% of steps land in the
+    # near-uniform zone — the agreed edge of aggressiveness.
+    FieldSpec("markov_interp_order2_weight", "MARKOV_INTERP_ORDER2_WEIGHT", "0",
+              _float_in_range(0.0, 1.0)),
     # Markov 2.0R Phase 4 (M2R-300/310/320, TZ §10): PMI memes and collocations.
     #
     # Minimum joint occurrences for a pair to be analysed at all. The lower

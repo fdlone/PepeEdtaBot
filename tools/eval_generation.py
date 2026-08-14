@@ -248,6 +248,7 @@ async def evaluate_generation(
                 markov_long_compression_beta=0.6,
                 markov_alpha_sleepy=0.0,
                 markov_alpha_calm=0.0,
+                markov_interp_order2_weight=0.0,
                 markov_alpha_lively=0.0,
                 markov_alpha_heated=0.0,
                 markov_meme_min_joint_count=3,

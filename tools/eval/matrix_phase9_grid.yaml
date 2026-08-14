@@ -1,0 +1,51 @@
+# Phase 9 interpolation grid (spec docs/v2/M2R_PHASE9_INTERPOLATION.md §6).
+#
+# Not the protocol matrix — this file exists so the run that decides the shipped
+# beta is reproducible instead of being a command someone typed once.
+#
+# Arm ids start with C6, not C5: C5 is taken in matrix.yaml ("entropy + blend
+# (cumulative core)", currently unavailable). The prefix is what routes an arm to
+# its gate in report.py, so reusing an occupied one would silently compare a
+# Phase 9 arm against another phase's thresholds.
+#
+# Flavor/emoji stay silenced exactly as in C0, so the metrics measure the word
+# model alone.
+#
+# beta 0 is not an arm: it IS C0 by construction (the merge takes its early
+# return), and adding it would only produce an alias row.
+#
+# The grid stops at 0.50 deliberately. Simulated on the prod copy, beta 0.50
+# already sends 10% of steps into the near-uniform zone — the agreed edge of
+# aggressiveness, past which the phase would be testing incoherence rather than
+# choice.
+configurations:
+  - id: C0
+    description: "Markov 1.x frozen baseline (registry defaults, flavor/emoji silenced)"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+
+  # Simulated effect on the prod copy, for reading the results against intent:
+  # at beta 0.30 deterministic steps fall 97.9% -> 72.7% and the middle entropy
+  # zone rises from ~0.0% to 26.7% of visits. The remaining 72.7% are sparse all
+  # the way down — order-2 holds one option there too — and only corpus growth
+  # moves them.
+  - id: C6b15
+    description: "M2R-900, order-2 interpolation weight 0.15"
+    available: true
+    same_as: C0
+    overrides:
+      markov_interp_order2_weight: 0.15
+  - id: C6b30
+    description: "M2R-900, order-2 interpolation weight 0.30"
+    available: true
+    same_as: C0
+    overrides:
+      markov_interp_order2_weight: 0.30
+  - id: C6b50
+    description: "M2R-900, order-2 interpolation weight 0.50"
+    available: true
+    same_as: C0
+    overrides:
+      markov_interp_order2_weight: 0.50
