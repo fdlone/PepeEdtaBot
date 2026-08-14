@@ -1052,6 +1052,27 @@ def build_report(
             if coverages and displacements
             else INSUFFICIENT
         )
+        # M2R-901: same intent-versus-effect pair for the order interpolation.
+        # Was collected from the first day of Phase 9 and printed nowhere, so the
+        # phase's central claim — "the merge fired, the replies did not move" —
+        # had to be argued from branching and entropy instead of from the
+        # mechanism's own counters.
+        interp_coverages = [
+            float(value)
+            for snapshot in run.telemetry
+            if (value := snapshot.get("interp_step_coverage")) is not None
+        ]
+        interp_displacements = [
+            float(value)
+            for snapshot in run.telemetry
+            if (value := snapshot.get("mean_interp_displacement")) is not None
+        ]
+        interp_line = (
+            f"coverage {mean(interp_coverages):.1%}, "
+            f"shift {mean(interp_displacements):.4f}"
+            if interp_coverages and interp_displacements
+            else INSUFFICIENT
+        )
         shadow_line = (
             f"{mean([float(share) for share in shadow_shares]):.1%} "
             "(estimator=window)"
@@ -1068,6 +1089,7 @@ def build_report(
             f"mean normalized entropy: {entropy_line}; "
             f"mean applied temperature: {temperature_line}; "
             f"temporal blend: {blend_line}; "
+            f"order interpolation: {interp_line}; "
             f"shadow order-4 share: {shadow_line}; storage_delta: n/a."
         )
     lines.append("")

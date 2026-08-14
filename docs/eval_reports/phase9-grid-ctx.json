@@ -1,0 +1,110 @@
+{
+  "C0": {
+    "context_mode": "ctx",
+    "distinct_2": 0.646216091,
+    "distinct_3": 0.79759888,
+    "distinct_basis_tokens": {
+      "2": 15077,
+      "3": 13577
+    },
+    "metrics": {
+      "candidate_accept_rate": 0.87947619,
+      "context_affinity": 0.277026173,
+      "context_affinity_without_copy": 0.205182933,
+      "cycle_detection_rate": 0.001333333,
+      "cycle_harm_rate": 0.000666667,
+      "exact_context_copy_rate": 0.214666667,
+      "freshness_reflection": null,
+      "generation_success_rate": 1.0,
+      "historical_meme_rate": 0.317333333,
+      "mean_response_length": 11.051333333,
+      "repetition_rate": 0.002666667,
+      "seeded_present_rate": null,
+      "seeded_win_rate_given_present": null,
+      "unique_token_ratio": 0.985320264
+    },
+    "n_records": 1500,
+    "shared_with": null
+  },
+  "C6b15": {
+    "context_mode": "ctx",
+    "distinct_2": 0.655685799,
+    "distinct_3": 0.807404077,
+    "distinct_basis_tokens": {
+      "2": 14844,
+      "3": 13344
+    },
+    "metrics": {
+      "candidate_accept_rate": 0.883958995,
+      "context_affinity": 0.274710169,
+      "context_affinity_without_copy": 0.209256033,
+      "cycle_detection_rate": 0.0,
+      "cycle_harm_rate": 0.0,
+      "exact_context_copy_rate": 0.204,
+      "freshness_reflection": null,
+      "generation_success_rate": 1.0,
+      "historical_meme_rate": 0.290666667,
+      "mean_response_length": 10.896,
+      "repetition_rate": 0.003333333,
+      "seeded_present_rate": null,
+      "seeded_win_rate_given_present": null,
+      "unique_token_ratio": 0.986512883
+    },
+    "n_records": 1500,
+    "shared_with": null
+  },
+  "C6b30": {
+    "context_mode": "ctx",
+    "distinct_2": 0.647307925,
+    "distinct_3": 0.800328923,
+    "distinct_basis_tokens": {
+      "2": 14877,
+      "3": 13377
+    },
+    "metrics": {
+      "candidate_accept_rate": 0.886601852,
+      "context_affinity": 0.273158048,
+      "context_affinity_without_copy": 0.208011249,
+      "cycle_detection_rate": 0.0,
+      "cycle_harm_rate": 0.0,
+      "exact_context_copy_rate": 0.202,
+      "freshness_reflection": null,
+      "generation_success_rate": 1.0,
+      "historical_meme_rate": 0.288,
+      "mean_response_length": 10.918,
+      "repetition_rate": 0.004666667,
+      "seeded_present_rate": null,
+      "seeded_win_rate_given_present": null,
+      "unique_token_ratio": 0.986391159
+    },
+    "n_records": 1500,
+    "shared_with": null
+  },
+  "C6b50": {
+    "context_mode": "ctx",
+    "distinct_2": 0.646491052,
+    "distinct_3": 0.798271108,
+    "distinct_basis_tokens": {
+      "2": 14919,
+      "3": 13419
+    },
+    "metrics": {
+      "candidate_accept_rate": 0.884470899,
+      "context_affinity": 0.273814401,
+      "context_affinity_without_copy": 0.208183989,
+      "cycle_detection_rate": 0.0,
+      "cycle_harm_rate": 0.0,
+      "exact_context_copy_rate": 0.201333333,
+      "freshness_reflection": null,
+      "generation_success_rate": 1.0,
+      "historical_meme_rate": 0.293333333,
+      "mean_response_length": 10.946,
+      "repetition_rate": 0.004666667,
+      "seeded_present_rate": null,
+      "seeded_win_rate_given_present": null,
+      "unique_token_ratio": 0.985735365
+    },
+    "n_records": 1500,
+    "shared_with": null
+  }
+}
