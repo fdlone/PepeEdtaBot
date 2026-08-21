@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app import log_masking  # noqa: E402
+from app.config.registry import RUNTIME_FIELDS  # noqa: E402
 from app.core.candidate_scorer import meaningful_tokens  # noqa: E402
 from app.core.markov import (  # noqa: E402
     PUNCT_SET,
@@ -210,77 +211,83 @@ async def evaluate_generation(
 
             generator = _InstrumentedMarkovGenerator(db.markov)
             runtime_state = SimpleNamespace(
-                randomness_strength=2.0,
-                candidate_selection_temperature=1.3,
-                reply_flavor_strength=1.0,
-                max_reply_chars=280,
-                max_reply_tokens=45,
-                reply_context_bias=1.8,
-                reply_context_start_bias=2.2,
-                # 1.0 keeps the committed baselines byte-identical: the
-                # affinity boost is measured on the prod-copy eval instead.
-                context_start_affinity=1.0,
-                repetition_penalty_strength=1.0,
-                recent_reply_penalty_strength=recent_reply_penalty_strength,
-                # Off in the synthetic eval: there is no prod corpus index here,
-                # the baselines measure the word model alone.
-                verbatim_penalty_strength=0.0,
-                length_mode_weights=length_mode_weights,
-                # 0.0 keeps the committed baselines byte-identical: the
-                # synthetic context is a fixed placeholder string, so its length
-                # carries no signal. Mirroring is measured on the prod-copy eval.
-                intonation_profile_strength=0.0,
-                length_context_adaptation=0.0,
-                markov_order=3,
-                # Neutral Phase 2 knobs keep the committed baselines
-                # byte-identical: gain 0 is the 1.x sampler, and a degenerate
-                # bound of 0 leaves the candidate target fixed.
-                markov_entropy_temp_gain=0.0,
-                markov_entropy_pivot=0.5,
-                markov_entropy_temp_min=0.5,
-                markov_entropy_temp_max=12.0,
-                markov_branching_degenerate_max=0.0,
-                markov_branching_candidate_floor=2,
-                # M2R-210: neutral temporal blend — every alpha 0, so this
-                # baseline keeps measuring the word model alone.
-                markov_short_half_life_days=3.0,
-                markov_long_compression="log",
-                markov_long_compression_beta=0.6,
-                markov_alpha_sleepy=0.0,
-                markov_alpha_calm=0.0,
-                markov_interp_order2_weight=0.0,
-                markov_alpha_lively=0.0,
-                markov_alpha_heated=0.0,
-                markov_meme_min_joint_count=3,
-                markov_meme_min_support=10.0,
-                markov_meme_recency_days=30.0,
-                markov_collocation_max_entries=100,
-                markov_collocation_bonus=0.0,
-                markov_collocation_break_penalty=0.0,
-                markov_hot_ngram_meme_ordering=False,
-                markov_seeded_candidate_ratio=0.0,
-                markov_seed_branch_min=2.0,
-                markov_seed_branch_ideal=6.0,
-                markov_seed_branch_max=50.0,
-                markov_seed_min_support=5.0,
-                markov_seed_min_score=0.1,
-                markov_seed_min_token_len=3,
-                markov_seed_head_share=0.4,
-                enable_backoff=True,
-                # Keep the M3/M4 channels off in eval so the baselines measure the
-                # word model alone (and no emoji-stats DB reads are attempted).
-                markov_jump_probability=0.0,
-                context_jump_boost=1.0,
-                verbatim_extension_share=0.0,
-                order_mix_probability=0.0,
-                slot_mutation_probability=0.0,
-                context_anchor_splice_probability=0.0,
-                emoji_append_chance=0.0,
-                normalize_lower=normalize_lower,
-                fuzzy_context_casefold=fuzzy_context_casefold,
-                auto_capitalize_replies=False,
-                recent_short_replies={},
-                recent_replies={},
+                **{
+                    # O6: ручки реестра, не названные ниже, приезжают со
+                    # своими дефолтами. Прежде их тут просто не было — 42
+                    # штуки, — и новая ручка ломала инструмент молча.
+                    **{s.name: s.parse(s.default) for s in RUNTIME_FIELDS},
+                    "randomness_strength": 2.0,
+                    "candidate_selection_temperature": 1.3,
+                    "reply_flavor_strength": 1.0,
+                    "max_reply_chars": 280,
+                    "max_reply_tokens": 45,
+                    "reply_context_bias": 1.8,
+                    "reply_context_start_bias": 2.2,
+                    # 1.0 keeps the committed baselines byte-identical: the
+                    # affinity boost is measured on the prod-copy eval instead.
+                    "context_start_affinity": 1.0,
+                    "repetition_penalty_strength": 1.0,
+                    "recent_reply_penalty_strength": recent_reply_penalty_strength,
+                    # Off in the synthetic eval: there is no prod corpus index here,
+                    # the baselines measure the word model alone.
+                    "verbatim_penalty_strength": 0.0,
+                    "length_mode_weights": length_mode_weights,
+                    # 0.0 keeps the committed baselines byte-identical: the
+                    # synthetic context is a fixed placeholder string, so its length
+                    # carries no signal. Mirroring is measured on the prod-copy eval.
+                    "intonation_profile_strength": 0.0,
+                    "length_context_adaptation": 0.0,
+                    "markov_order": 3,
+                    # Neutral Phase 2 knobs keep the committed baselines
+                    # byte-identical: gain 0 is the 1.x sampler, and a degenerate
+                    # bound of 0 leaves the candidate target fixed.
+                    "markov_entropy_temp_gain": 0.0,
+                    "markov_entropy_pivot": 0.5,
+                    "markov_entropy_temp_min": 0.5,
+                    "markov_entropy_temp_max": 12.0,
+                    "markov_branching_degenerate_max": 0.0,
+                    "markov_branching_candidate_floor": 2,
+                    # M2R-210: neutral temporal blend — every alpha 0, so this
+                    # baseline keeps measuring the word model alone.
+                    "markov_short_half_life_days": 3.0,
+                    "markov_long_compression": "log",
+                    "markov_long_compression_beta": 0.6,
+                    "markov_alpha_sleepy": 0.0,
+                    "markov_alpha_calm": 0.0,
+                    "markov_interp_order2_weight": 0.0,
+                    "markov_alpha_lively": 0.0,
+                    "markov_alpha_heated": 0.0,
+                    "markov_meme_min_joint_count": 3,
+                    "markov_meme_min_support": 10.0,
+                    "markov_meme_recency_days": 30.0,
+                    "markov_collocation_max_entries": 100,
+                    "markov_collocation_bonus": 0.0,
+                    "markov_collocation_break_penalty": 0.0,
+                    "markov_hot_ngram_meme_ordering": False,
+                    "markov_seeded_candidate_ratio": 0.0,
+                    "markov_seed_branch_min": 2.0,
+                    "markov_seed_branch_ideal": 6.0,
+                    "markov_seed_branch_max": 50.0,
+                    "markov_seed_min_support": 5.0,
+                    "markov_seed_min_score": 0.1,
+                    "markov_seed_min_token_len": 3,
+                    "markov_seed_head_share": 0.4,
+                    "enable_backoff": True,
+                    # Keep the M3/M4 channels off in eval so the baselines measure the
+                    # word model alone (and no emoji-stats DB reads are attempted).
+                    "markov_jump_probability": 0.0,
+                    "context_jump_boost": 1.0,
+                    "verbatim_extension_share": 0.0,
+                    "order_mix_probability": 0.0,
+                    "slot_mutation_probability": 0.0,
+                    "context_anchor_splice_probability": 0.0,
+                    "emoji_append_chance": 0.0,
+                    "normalize_lower": normalize_lower,
+                    "fuzzy_context_casefold": fuzzy_context_casefold,
+                    "auto_capitalize_replies": False,
+                    "recent_short_replies": {},
+                    "recent_replies": {},
+                }
             )
             response_generator = ResponseGenerator(
                 generator=generator,

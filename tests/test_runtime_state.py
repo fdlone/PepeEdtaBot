@@ -3,131 +3,76 @@ from __future__ import annotations
 import unittest
 from collections import deque
 
+from app.config.registry import RUNTIME_FIELDS
 from app.config.runtime_state import RuntimeState
 
 
 def make_runtime_state(**overrides: object) -> RuntimeState:
+    """Состояние с дефолтами реестра, кроме намеренных отклонений ниже.
+
+    Собирается из ``RUNTIME_FIELDS``, а не перечислением полей руками.
+    Рукописное зеркало реестра расходится с ним молча и роняет разом всех, кто
+    ходит через фикстуру: на M2R-900 одна новая ручка дала 71 падение с
+    ``TypeError: missing 1 required positional argument``, из которого не видно
+    ни причины, ни того, что виноват реестр, а не логика (O6). Теперь новая
+    ручка приезжает со своим дефолтом и не ломает ничего.
+
+    Отклонения ниже перенесены из прежнего рукописного списка **дословно** —
+    ровно затем, чтобы поведение существующих тестов не изменилось.
+    Индивидуальных обоснований у них нигде не записано, поэтому трогать их
+    следует по одному и с прогоном полного сьюта, а не пачкой.
+    """
     base: dict[str, object] = {
-        "reply_probability": 0.08,
-        "min_cooldown_sec": 45,
-        "min_tokens_for_model": 200,
-        "max_reply_chars": 280,
-        "max_reply_tokens": 45,
-        "normalize_lower": False,
-        "auto_capitalize_replies": False,
-        "typing_min_ms": 350,
-        "typing_max_ms": 1100,
-        "typing_per_char_ms": 12,
-        "randomness_strength": 2.0,
-        "candidate_selection_temperature": 0.7,
-        "reply_flavor_strength": 1.0,
-        "emoji_append_chance": 0.15,
-        "repetition_penalty_strength": 1.0,
-        "recent_reply_penalty_strength": 1.0,
-        "verbatim_penalty_strength": 1.0,
-        "length_mode_weights": (0.25, 0.55, 0.2),
-        "intonation_profile_strength": 0.0,
-        "length_context_adaptation": 0.0,
-        "markov_order": 3,
-        "markov_cache_incremental": True,
-        "markov_shadow_order4_enabled": True,
-        "markov_entropy_temp_gain": 0.0,
-        "markov_entropy_pivot": 0.5,
-        "markov_entropy_temp_min": 0.5,
-        "markov_entropy_temp_max": 12.0,
-        "markov_branching_degenerate_max": 0.0,
-        "markov_branching_candidate_floor": 2,
-        "markov_short_half_life_days": 3.0,
-        "markov_long_compression": "log",
-        "markov_long_compression_beta": 0.6,
-        "markov_alpha_sleepy": 0.0,
-        "markov_alpha_calm": 0.0,
-        "markov_alpha_lively": 0.0,
-        "markov_alpha_heated": 0.0,
-        "markov_interp_order2_weight": 0.0,
-        "markov_meme_min_joint_count": 3,
-        "markov_meme_min_support": 10.0,
-        "markov_meme_recency_days": 30.0,
-        "markov_collocation_max_entries": 100,
-        "markov_collocation_bonus": 0.0,
-        "markov_collocation_break_penalty": 0.0,
-        "markov_hot_ngram_meme_ordering": False,
-        "markov_seeded_candidate_ratio": 0.0,
-        "markov_seed_branch_min": 2.0,
-        "markov_seed_branch_ideal": 6.0,
-        "markov_seed_branch_max": 50.0,
-        "markov_seed_min_support": 5.0,
-        "markov_seed_min_score": 0.1,
-        "markov_seed_min_token_len": 3,
-        "markov_seed_head_share": 0.4,
-        "enable_backoff": True,
-        "markov_jump_probability": 0.04,
-        "context_jump_boost": 1.0,
-        "verbatim_extension_share": 0.0,
-        "order_mix_probability": 0.0,
-        "slot_mutation_probability": 0.0,
-        "hot_ngram_seed_chance": 0.05,
-        "hot_ngram_min_count": 3,
-        "hot_ngram_recency_share": 0.5,
-        "rare_event_chance": 0.005,
-        "false_start_chance": 0.03,
-        "rare_event_daily_cap": 3,
-        "user_quirk_chance": 0.1,
-        "user_quirk_min_interactions": 25,
-        "user_quirk_name_share": 0.0,
-        "use_reply_context": True,
-        "fuzzy_context_casefold": False,
-        "reply_context_max_tokens": 12,
-        "reply_context_bias": 1.8,
-        "reply_context_start_bias": 2.2,
-        "context_start_affinity": 3.0,
-        "context_anchor_splice_probability": 0.0,
-        "reply_context_only_for_replies": True,
-        "reply_context_include_current_message": True,
-        "pivo_recent_pool_window": 5,
-        "pivo_temporal_flavor_chance": 0.5,
-        "pivo_mention_by_id": True,
-        "pivo_report_to_owner": True,
-        "mood_enabled": True,
-        "mood_modulation_strength": 1.0,
-        "mood_ewma_alpha": 0.3,
-        "mood_lively_rate_per_min": 12.0,
-        "mood_sleepy_rate_per_min": 2.0,
-        "mood_heated_intensity": 0.4,
-        "mood_mention_heated_share": 0.0,
-        "mood_max_rate_per_min": 120.0,
-        "reply_director_enabled": True,
-        "reply_probability_min": 0.02,
-        "reply_probability_max": 0.30,
-        "reply_burst_boost_sec": 180,
-        "reply_burst_boost_mult": 2.0,
-        "reply_burst_suppress_sec": 600,
-        "reply_burst_suppress_mult": 0.5,
-        "reply_max_per_hour": 20,
-        "mention_cooldown_sec": 5,
-        "runtime_state_ttl_sec": 10,
-        "runtime_state_max_chats": 2,
+        spec.name: spec.parse(spec.default) for spec in RUNTIME_FIELDS
     }
+    base.update(
+        {
+            # Не из реестра: живое состояние процесса, у ``RuntimeState`` без
+            # дефолтов. Значения маленькие — на них и проверяется вытеснение.
+            "runtime_state_ttl_sec": 10,
+            "runtime_state_max_chats": 2,
+            # Отклонения от дефолтов реестра, сохранённые дословно.
+            "normalize_lower": False,
+            "fuzzy_context_casefold": False,
+            "context_start_affinity": 3.0,
+            "context_jump_boost": 1.0,
+            "context_anchor_splice_probability": 0.0,
+            "markov_jump_probability": 0.04,
+            "markov_entropy_pivot": 0.5,
+            "order_mix_probability": 0.0,
+            "slot_mutation_probability": 0.0,
+            "verbatim_penalty_strength": 1.0,
+            "verbatim_extension_share": 0.0,
+            "recent_reply_penalty_strength": 1.0,
+            "length_context_adaptation": 0.0,
+            "hot_ngram_seed_chance": 0.05,
+            "rare_event_chance": 0.005,
+            "false_start_chance": 0.03,
+            "mood_mention_heated_share": 0.0,
+        }
+    )
     base.update(overrides)
     return RuntimeState(**base)
 
 
 class TestFixtureMirrorsTheRegistry(unittest.TestCase):
-    """Фикстура выше — рукописное зеркало ``RUNTIME_FIELDS``, и оно разъезжается.
+    """Реестр и dataclass обязаны соглашаться друг с другом.
 
-    Новая runtime-ручка в реестре, не добавленная в ``base``, роняет не один
-    тест, а все, кто строит состояние через ``make_runtime_state`` — сегодня это
-    71 падение с ``TypeError: missing 1 required positional argument``, из
-    которого не видно ни причины, ни того, что виноват реестр, а не логика.
-    Проверено на M2R-900: ручка `markov_interp_order2_weight` дала ровно такую
-    картину.
+    Изначально этот тест страховал рукописное зеркало ``RUNTIME_FIELDS`` внутри
+    фикстуры: новая ручка, не дописанная в ``base``, роняла не один тест, а всех,
+    кто ходит через ``make_runtime_state`` — на M2R-900 это дало 71 падение с
+    ``TypeError: missing 1 required positional argument``, из которого не видно
+    ни причины, ни того, что виноват реестр, а не логика.
 
-    Этот тест превращает 71 непрозрачное падение в одно внятное.
+    Зеркала больше нет — фикстура собирается из реестра (O6), — но тест не стал
+    лишним: он сменил охраняемый инвариант. Теперь он ловит **расхождение
+    реестра с ``RuntimeState``**. Ручка, добавленная в ``RUNTIME_FIELDS``, но не
+    объявленная в dataclass, роняет саму сборку; объявленная, но выпавшая из
+    реестра — не приезжает в состояние и видна как отсутствующий атрибут.
+    Оба случая читаются здесь одним внятным падением.
     """
 
     def test_every_runtime_field_is_buildable_by_the_fixture(self) -> None:
-        from app.config.registry import RUNTIME_FIELDS
-
         state = make_runtime_state()
         missing = [
             spec.name for spec in RUNTIME_FIELDS if not hasattr(state, spec.name)

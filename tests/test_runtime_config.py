@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from app.config.registry import (
+    RUNTIME_FIELDS,
     UNKNOWN_RUNTIME_KEY_MESSAGE,
     InvalidRuntimeSettingValueError,
     UnknownRuntimeSettingError,
@@ -12,75 +13,33 @@ from app.config.registry import (
 
 
 def make_state() -> SimpleNamespace:
+    """Состояние с дефолтами реестра, кроме намеренных отклонений ниже.
+
+    Собирается из ``RUNTIME_FIELDS``, а не перечислением полей руками:
+    рукописный список расходится с реестром молча, и новая ручка ломает
+    тесты, к которым отношения не имеет (O6). В прежнем списке уже
+    недоставало 29 ручки — то есть расхождение было не гипотезой.
+
+    Отклонения ниже перенесены из прежнего списка дословно, чтобы
+    поведение существующих тестов не изменилось.
+    """
     return SimpleNamespace(
-        reply_probability=0.08,
-        min_cooldown_sec=45,
-        min_tokens_for_model=200,
-        max_reply_chars=280,
-        max_reply_tokens=45,
-        normalize_lower=False,
-        auto_capitalize_replies=False,
-        typing_min_ms=350,
-        typing_max_ms=1100,
-        typing_per_char_ms=12,
-        randomness_strength=2.0,
-        candidate_selection_temperature=0.7,
-        reply_flavor_strength=1.0,
-        emoji_append_chance=0.15,
-        repetition_penalty_strength=1.0,
-        recent_reply_penalty_strength=1.0,
-        verbatim_penalty_strength=1.0,
-        length_mode_weights=(0.25, 0.55, 0.2),
-        intonation_profile_strength=0.0,
-        length_context_adaptation=0.0,
-        markov_order=3,
-        markov_seeded_candidate_ratio=0.0,
-        markov_seed_branch_min=2.0,
-        markov_seed_branch_ideal=6.0,
-        markov_seed_branch_max=50.0,
-        markov_seed_min_support=5.0,
-        markov_seed_min_score=0.1,
-        markov_seed_min_token_len=3,
-        markov_seed_head_share=0.4,
-        enable_backoff=True,
-        markov_jump_probability=0.04,
-        context_jump_boost=1.0,
-        verbatim_extension_share=0.0,
-        order_mix_probability=0.0,
-        slot_mutation_probability=0.0,
-        hot_ngram_seed_chance=0.05,
-        hot_ngram_min_count=3,
-        hot_ngram_recency_share=0.5,
-        rare_event_chance=0.005,
-        false_start_chance=0.03,
-        rare_event_daily_cap=3,
-        user_quirk_chance=0.1,
-        user_quirk_min_interactions=25,
-        user_quirk_name_share=0.0,
-        use_reply_context=True,
-        fuzzy_context_casefold=False,
-        reply_context_max_tokens=12,
-        reply_context_bias=1.8,
-        reply_context_start_bias=2.2,
-        reply_context_only_for_replies=True,
-        reply_context_include_current_message=True,
-        pivo_recent_pool_window=5,
-        pivo_temporal_flavor_chance=0.5,
-        mood_enabled=True,
-        mood_modulation_strength=1.0,
-        mood_ewma_alpha=0.3,
-        mood_lively_rate_per_min=12.0,
-        mood_sleepy_rate_per_min=2.0,
-        mood_heated_intensity=0.4,
-        mood_max_rate_per_min=120.0,
-        reply_director_enabled=True,
-        reply_probability_min=0.02,
-        reply_probability_max=0.30,
-        reply_burst_boost_sec=180,
-        reply_burst_boost_mult=2.0,
-        reply_burst_suppress_sec=600,
-        reply_burst_suppress_mult=0.5,
-        reply_max_per_hour=20,
+        **{
+            **{spec.name: spec.parse(spec.default) for spec in RUNTIME_FIELDS},
+            "normalize_lower": False,
+            "fuzzy_context_casefold": False,
+            "context_jump_boost": 1.0,
+            "markov_jump_probability": 0.04,
+            "order_mix_probability": 0.0,
+            "slot_mutation_probability": 0.0,
+            "verbatim_penalty_strength": 1.0,
+            "verbatim_extension_share": 0.0,
+            "recent_reply_penalty_strength": 1.0,
+            "length_context_adaptation": 0.0,
+            "hot_ngram_seed_chance": 0.05,
+            "rare_event_chance": 0.005,
+            "false_start_chance": 0.03,
+        },
     )
 
 
