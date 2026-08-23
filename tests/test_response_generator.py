@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from app.core.candidate_scorer import CandidateScore
+from app.core.generation_telemetry import GenerationTelemetry
 from app.core.mood import MoodModifiers
 from app.core.response_generator import (
     CANDIDATE_TARGET,
@@ -102,6 +103,9 @@ def _traced_generator() -> AsyncMock:
     plain generate_text AsyncMock tests configure, wrapping the text in the
     (text, trace) tuple the ResponseGenerator consumes."""
     generator = AsyncMock()
+    # Реальная телеметрия, а не мок: у AsyncMock каждый note_* возвращает
+    # корутину, которую никто не ждёт, — предупреждение вместо учёта.
+    generator.telemetry = GenerationTelemetry()
 
     async def _delegate(*args: object, **kwargs: object) -> tuple[str, SimpleNamespace]:
         text = await generator.generate_text(*args, **kwargs)

@@ -14,6 +14,11 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from app.services.pivo_service import PivoCallMessage
 
+# Один генератор-мок на весь сьют: копия этого хелпера уже расходилась с
+# оригиналом (у неё не было телеметрии), а рукописные зеркала проект уже
+# однажды оплатил падениями фикстур (O6).
+from tests.test_response_generator import _traced_generator
+
 
 def _real_runtime_state() -> object:
     """A genuine RuntimeState — overlay tests need real behaviour, not a mock."""
@@ -25,20 +30,6 @@ def _real_runtime_state() -> object:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _traced_generator() -> AsyncMock:
-    """MarkovGenerator mock whose generate_text_with_trace delegates to the
-    plain generate_text AsyncMock tests configure, wrapping the text in the
-    (text, trace) tuple the ResponseGenerator consumes."""
-    generator = AsyncMock()
-
-    async def _delegate(*args: object, **kwargs: object) -> tuple[str, SimpleNamespace]:
-        text = await generator.generate_text(*args, **kwargs)
-        return text, SimpleNamespace(markov_order_used=3, start_source="global")
-
-    generator.generate_text_with_trace = AsyncMock(side_effect=_delegate)
-    return generator
-
 
 def _pivo_stub() -> AsyncMock:
     """PivoService mock: on_text_message refreshes the sender's /pivo profile."""
@@ -585,7 +576,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         state.user_quirk_min_interactions = 25
         learning_service = AsyncMock()
         learning_service.get_user_interaction_stats = AsyncMock(
-            return_value=(4, 31, 1)
+            return_value=(4, 31, 1, ((1, 6, 2), (6, 12, 1), (12, 18, 0), (18, 25, 0), (25, 0, 1)))
         )
 
         await cmd_quirk_stats(msg, state, learning_service)
@@ -604,7 +595,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         state.user_quirk_min_interactions = 25
         learning_service = AsyncMock()
         learning_service.get_user_interaction_stats = AsyncMock(
-            return_value=(3, 6, 0)
+            return_value=(3, 6, 0, ((1, 6, 2), (6, 12, 1), (12, 18, 0), (18, 25, 0), (25, 0, 0)))
         )
 
         await cmd_quirk_stats(msg, state, learning_service)
@@ -618,7 +609,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         state = _fake_state()
         learning_service = AsyncMock()
         learning_service.get_user_interaction_stats = AsyncMock(
-            return_value=(0, 0, 0)
+            return_value=(0, 0, 0, ())
         )
 
         await cmd_quirk_stats(msg, state, learning_service)
@@ -634,7 +625,7 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         state.user_quirk_min_interactions = 25
         learning_service = AsyncMock()
         learning_service.get_user_interaction_stats = AsyncMock(
-            return_value=(4, 31, 1)
+            return_value=(4, 31, 1, ((1, 6, 2), (6, 12, 1), (12, 18, 0), (18, 25, 0), (25, 0, 1)))
         )
 
         await cmd_quirk_stats(msg, state, learning_service)
@@ -643,8 +634,55 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         # Counters are anonymous by construction; diagnostics must not undo it.
         self.assertNotIn("777", text)
         self.assertNotIn("100", text)
+        # 4.4: строка распределения — только диапазоны и числа, без имён и
+        # хэшей; форма проверяется целиком, а не отсутствием одной подстроки.
+        distribution = next(
+            line for line in text.splitlines() if line.startswith("распределение")
+        )
+        self.assertRegex(distribution, r"^распределение: [0-9+–:, ]+$")
         # And the service is asked for an aggregate, not for anyone's count.
         learning_service.get_user_interaction_count.assert_not_called()
+
+    async def test_quirk_stats_shows_the_distribution_as_ranges(self) -> None:
+        """4.3: форма распределения, а не значение на человека."""
+        from app.handlers.admin import cmd_quirk_stats
+
+        msg = _fake_message(text="/quirk_stats", chat_id=100)
+        state = _fake_state()
+        state.user_quirk_min_interactions = 25
+        learning_service = AsyncMock()
+        learning_service.get_user_interaction_stats = AsyncMock(
+            return_value=(
+                5,
+                31,
+                1,
+                ((1, 6, 2), (6, 12, 1), (12, 18, 1), (18, 25, 0), (25, 0, 1)),
+            )
+        )
+
+        await cmd_quirk_stats(msg, state, learning_service)
+
+        text = msg.reply.await_args.args[0]
+        self.assertIn(
+            "распределение: 1–5: 2, 6–11: 1, 12–17: 1, 18–24: 0, 25+: 1", text
+        )
+
+    async def test_quirk_stats_changes_nothing(self) -> None:
+        """4.5: команда только читает — счётчики после вызова прежние."""
+        from app.handlers.admin import cmd_quirk_stats
+
+        msg = _fake_message(text="/quirk_stats", chat_id=100)
+        state = _fake_state()
+        state.user_quirk_min_interactions = 25
+        learning_service = AsyncMock()
+        learning_service.get_user_interaction_stats = AsyncMock(
+            return_value=(4, 31, 1, ((1, 6, 3), (6, 12, 0), (12, 18, 0), (18, 25, 0), (25, 0, 1)))
+        )
+
+        await cmd_quirk_stats(msg, state, learning_service)
+
+        learning_service.record_user_interaction.assert_not_called()
+        learning_service.get_user_interaction_stats.assert_awaited_once_with(100, 25)
 
     async def test_quirk_stats_denied_for_non_owner(self) -> None:
         from app.handlers.admin import cmd_quirk_stats_denied

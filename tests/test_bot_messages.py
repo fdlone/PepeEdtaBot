@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from app.config.registry import RUNTIME_FIELDS
+from app.core.generation_telemetry import GenerationTelemetry, UserQuirkGate
 from app.presentation.bot_messages import (
     TELEGRAM_COMMANDS,
     format_clear_confirmation_message,
@@ -147,6 +148,50 @@ class TestBotMessages(unittest.TestCase):
         text = format_stats_message({"volume": 250}, telemetry=telemetry)
         self.assertIn("мем-анализ: 2 проходов, пар оценено 500", text)
         self.assertIn("41 мс", text)
+
+    def test_stats_message_shows_the_quirk_funnel(self) -> None:
+        """Каждый гейт причуд — со своим знаменателем, воронкой сверху вниз."""
+        telemetry = GenerationTelemetry()
+        telemetry.note_user_quirk_outcome(UserQuirkGate.ADDRESSED)
+        telemetry.note_user_quirk_outcome(UserQuirkGate.ROLL)
+        telemetry.note_user_quirk_outcome(None)
+
+        text = format_stats_message({"volume": 250}, telemetry=telemetry.snapshot())
+
+        self.assertIn("причуды: сработало 1 из 3 ответов", text)
+        self.assertIn(
+            "причуды по гейтам: адресность 1/3, ручка 0/2, сутки 0/2, "
+            "розыгрыш 1/2, порог 0/1",
+            text,
+        )
+
+    def test_quirk_funnel_is_printed_even_with_the_knob_at_zero(self) -> None:
+        """Исчезающая строка неотличима от выключенного канала — печатаем нули."""
+        text = format_stats_message(
+            {"volume": 250}, telemetry=GenerationTelemetry().snapshot()
+        )
+
+        self.assertIn("причуды: сработало 0 из 0 ответов", text)
+        self.assertIn("адресность 0/0", text)
+        self.assertIn("порог 0/0", text)
+
+    def test_quirk_funnel_line_carries_numbers_only(self) -> None:
+        """Приватность: в воронке нет имён, идентификаторов и хэшей.
+
+        Проверяется формой строки, а не отсутствием конкретной подстроки:
+        счётчики агрегатны по процессу, и любое имя собственное в них — дефект.
+        """
+        telemetry = GenerationTelemetry()
+        telemetry.note_user_quirk_outcome(UserQuirkGate.THRESHOLD)
+
+        text = format_stats_message({"volume": 250}, telemetry=telemetry.snapshot())
+        funnel = [
+            line for line in text.splitlines() if line.startswith("причуды")
+        ]
+
+        self.assertEqual(len(funnel), 2)
+        for line in funnel:
+            self.assertRegex(line, r"^[А-Яа-яёЁ ]+: [А-Яа-яёЁ0-9 /,]+$")
 
     def test_set_help_message_shows_common_keys(self) -> None:
         text = format_set_help_message()
