@@ -166,18 +166,62 @@ class TestDatabaseUserInteractionDelegates(unittest.IsolatedAsyncioTestCase):
         # A neighbouring chat must not leak into the aggregate.
         await self.db.chat_user_interactions.bump(OTHER_CHAT, "e" * 64)
 
-        people, max_count, at_or_above = await self.db.chat_user_interactions.get_stats(
-            CHAT, 3
-        )
+        (
+            people,
+            max_count,
+            at_or_above,
+            _buckets,
+        ) = await self.db.chat_user_interactions.get_stats(CHAT, 3)
 
         self.assertEqual(people, 3)
         self.assertEqual(max_count, 5)
         self.assertEqual(at_or_above, 2)
 
-    async def test_stats_on_empty_chat_are_zeros_not_an_error(self) -> None:
+    async def test_stats_group_people_into_threshold_relative_buckets(self) -> None:
+        """Границы привязаны к порогу: вопрос — «что даст его понижение»."""
+        for count, user in ((1, "b"), (7, "c"), (13, "d"), (19, "e"), (30, "f")):
+            for _ in range(count):
+                await self.db.chat_user_interactions.bump(CHAT, user * 64)
+
+        *_, buckets = await self.db.chat_user_interactions.get_stats(CHAT, 25)
+
+        # Порог 25 → четверти 6/12/18 и сам порог; верхний диапазон открыт.
         self.assertEqual(
-            await self.db.chat_user_interactions.get_stats(OTHER_CHAT, 25), (0, 0, 0)
+            buckets,
+            ((1, 6, 1), (6, 12, 1), (12, 18, 1), (18, 25, 1), (25, 0, 1)),
         )
+
+    async def test_bucket_edges_are_inclusive_lower_exclusive_upper(self) -> None:
+        """Границы проверяются в точке, а не в середине диапазона."""
+        # 5 — последний в первом диапазоне, 6 — первый во втором.
+        for count, user in ((5, "b"), (6, "c"), (24, "d"), (25, "e")):
+            for _ in range(count):
+                await self.db.chat_user_interactions.bump(CHAT, user * 64)
+
+        *_, buckets = await self.db.chat_user_interactions.get_stats(CHAT, 25)
+
+        self.assertEqual([count for _, _, count in buckets], [1, 1, 0, 1, 1])
+
+    async def test_degenerate_threshold_collapses_the_ladder(self) -> None:
+        """Порог 1 и 0 не должны давать пустых или пересекающихся диапазонов."""
+        await self.db.chat_user_interactions.bump(CHAT, "b" * 64)
+
+        for threshold in (0, 1):
+            with self.subTest(threshold=threshold):
+                *_, buckets = await self.db.chat_user_interactions.get_stats(
+                    CHAT, threshold
+                )
+                self.assertEqual(buckets, ((1, 0, 1),))
+
+    async def test_stats_on_empty_chat_are_zeros_not_an_error(self) -> None:
+        people, max_count, at_or_above, buckets = (
+            await self.db.chat_user_interactions.get_stats(OTHER_CHAT, 25)
+        )
+
+        self.assertEqual((people, max_count, at_or_above), (0, 0, 0))
+        # Пустой чат отдаёт лестницу нулями, а не отсутствие распределения:
+        # «никого нет» и «не спрашивали» должны читаться по-разному.
+        self.assertEqual([count for _, _, count in buckets], [0, 0, 0, 0, 0])
 
     async def test_stats_do_not_change_the_counters(self) -> None:
         await self.db.chat_user_interactions.bump(CHAT, USER_HASH)

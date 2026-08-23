@@ -434,10 +434,11 @@ class LearningService:
 
     async def get_user_interaction_stats(
         self, chat_id: int, threshold: int
-    ) -> tuple[int, int, int]:
-        """``(people, max_count, at_or_above)`` for the chat — numbers only.
+    ) -> tuple[int, int, int, tuple[tuple[int, int, int], ...]]:
+        """``(people, max_count, at_or_above, buckets)`` — numbers only.
 
-        Answers "is the regulars threshold reachable in this chat?" without
+        Answers "is the regulars threshold reachable in this chat?" and, with
+        the buckets, "would lowering the threshold change anything" — without
         touching the anonymity of the counters themselves.
         """
         return await self._db.chat_user_interactions.get_stats(chat_id, threshold)

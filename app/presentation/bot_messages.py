@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from app.config.registry import field_hint
+from app.core.generation_telemetry import UserQuirkGate
 
 if TYPE_CHECKING:
     from app.config.runtime_state import RuntimeState
@@ -73,6 +74,17 @@ def format_help_message() -> str:
         "Админское:\n"
         "/clear - инструкция по очистке данных чата"
     )
+
+
+# Отказы гейтов причуд по-русски, в порядке исполнения: воронка читается
+# сверху вниз, и знаменатель каждого гейта — то, что пропустил предыдущий.
+_QUIRK_GATE_LABELS = {
+    UserQuirkGate.ADDRESSED: "адресность",
+    UserQuirkGate.CHANCE: "ручка",
+    UserQuirkGate.DAILY_LIMIT: "сутки",
+    UserQuirkGate.ROLL: "розыгрыш",
+    UserQuirkGate.THRESHOLD: "порог",
+}
 
 
 def format_stats_message(
@@ -178,6 +190,22 @@ def format_stats_message(
                 f"штрафов {telemetry.get('collocation_penalty_hits')}, "
                 f"удержано {telemetry.get('collocation_withheld')}"
             )
+    # Воронка причуд L2 — вне блока генераций и без гейта на ненулевые числа:
+    # канал молчит с 2026-07-16, и «строки нет» здесь неотличимо от «канал
+    # выключен ручкой». Обе стороны пары печатаются всегда, включая нули.
+    if telemetry is not None and "user_quirk_reached" in telemetry:
+        lines.append(
+            f"причуды: сработало {telemetry['user_quirk_fired']} "
+            f"из {telemetry['user_quirk_reached']} ответов"
+        )
+        lines.append(
+            "причуды по гейтам: "
+            + ", ".join(
+                f"{label} {telemetry[f'user_quirk_rejected_{gate}']}"
+                f"/{telemetry[f'user_quirk_reached_{gate}']}"
+                for gate, label in _QUIRK_GATE_LABELS.items()
+            )
+        )
     # M2R-300: стоимость суточного анализа — вне блока генераций, проход
     # случается и до первой генерации после рестарта.
     if telemetry and telemetry.get("meme_passes"):

@@ -29,6 +29,7 @@ from datetime import UTC, datetime
 
 from app.config.runtime_state import RuntimeState
 from app.core.emoji import count_emojis
+from app.core.generation_telemetry import UserQuirkGate
 from app.core.hot_ngrams import extract_content_ngrams
 from app.core.markov import (
     MarkovGenerator,
@@ -693,17 +694,29 @@ class ReplyPipeline:
         пару (чат, пользователь) в сутки UTC. ``None`` — причуда не сработала.
         """
         state = self._runtime_state
-        if not (
-            obs.address_reply
-            and state.user_quirk_chance > 0.0
-            and state.can_fire_user_quirk(msg.chat_id, msg.user_id, today_iso)
-            and random.random() < state.user_quirk_chance
-        ):
+        telemetry = self._generator.telemetry
+        # Гейты идут цепочкой ранних возвратов, а не одним коротко замкнутым
+        # `and`: из слитого условия нельзя узнать, какое звено отказало. Цепочка
+        # вычисляет те же звенья в том же порядке и останавливается в той же
+        # точке, поэтому розыгрыш по-прежнему берётся четвёртым и только при
+        # прошедших первых трёх — число обращений к ГСЧ не меняется.
+        if not obs.address_reply:
+            telemetry.note_user_quirk_outcome(UserQuirkGate.ADDRESSED)
+            return None
+        if state.user_quirk_chance <= 0.0:
+            telemetry.note_user_quirk_outcome(UserQuirkGate.CHANCE)
+            return None
+        if not state.can_fire_user_quirk(msg.chat_id, msg.user_id, today_iso):
+            telemetry.note_user_quirk_outcome(UserQuirkGate.DAILY_LIMIT)
+            return None
+        if random.random() >= state.user_quirk_chance:
+            telemetry.note_user_quirk_outcome(UserQuirkGate.ROLL)
             return None
         interactions = await self._learning_service.get_user_interaction_count(
             msg.chat_id, msg.user_id
         )
         if interactions < state.user_quirk_min_interactions:
+            telemetry.note_user_quirk_outcome(UserQuirkGate.THRESHOLD)
             return None
         # L2.1: part of the quirks address the regular by first name. The name
         # is read live from this update and sanitized; it is never stored (the
@@ -720,6 +733,7 @@ class ReplyPipeline:
             reply_text,
         ]
         state.note_user_quirk(msg.chat_id, msg.user_id, today_iso)
+        telemetry.note_user_quirk_outcome(None)
         # Event kind only: no user id, no count, no vocative text in logs
         # (project log-masking policy).
         logger.debug("User quirk fired: chat=%s", mask_chat_id(msg.chat_id))
