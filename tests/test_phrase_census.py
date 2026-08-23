@@ -15,7 +15,12 @@ from contextlib import closing
 from pathlib import Path
 
 from app.core.hot_ngrams import extract_content_ngrams, is_content_ngram
-from tools.eval.phrase_census import _counts, main
+from tools.eval.phrase_census import (
+    _attachment_points,
+    _counts,
+    _self_standing,
+    main,
+)
 
 # Синтетические ID: инвариант tests/test_no_real_chat_ids.
 CHAT = 4321
@@ -86,7 +91,7 @@ class TestCensusReadsTheChain(unittest.TestCase):
             ]
         )
 
-        trigrams, bigrams = _counts(path, CHAT)
+        trigrams, bigrams, _states = _counts(path, CHAT)
 
         # Триграмма с пунктуацией отсеяна, но её вхождения — часть биграммы:
         # пара «пепе сломал» встретилась шесть раз, чем бы она ни кончалась.
@@ -113,13 +118,47 @@ class TestCensusReadsTheChain(unittest.TestCase):
             conn.commit()
         self.addCleanup(path.unlink)
 
-        _, bigrams = _counts(path, None)
+        _, bigrams, _states = _counts(path, None)
 
         self.assertEqual(dict(bigrams), {("другой", "чат"): 50})
 
     def test_missing_database_is_a_message_not_a_traceback(self) -> None:
         with self.assertRaises(SystemExit):
             main(["--db", "no/such/markov.db"])
+
+
+class TestThresholdTradeoff(unittest.TestCase):
+    """Числа, по которым выбирается порог поддержки, а не просто счётчик фраз."""
+
+    def test_a_bigram_inside_a_passing_trigram_is_not_new_material(self) -> None:
+        trigrams = {("бобёр", "сломал", "сборку")}
+        bigrams = {("бобёр", "сломал"), ("сломал", "сборку"), ("ёжик", "починил")}
+
+        # Обе половины триграммы — не самостоятельный материал; третья пара —
+        # самостоятельный. Итого 1 триграмма + 1 биграмма.
+        self.assertEqual(_self_standing(trigrams, bigrams), 2)
+
+    def test_a_bigram_that_is_not_a_slice_counts(self) -> None:
+        trigrams = {("бобёр", "сломал", "сборку")}
+        bigrams = {("бобёр", "сборку")}
+
+        # Пара «бобёр сборку» смежностью внутри триграммы не является:
+        # проверяются только края, а не любое сочетание её слов.
+        self.assertEqual(_self_standing(trigrams, bigrams), 2)
+
+    def test_attachment_needs_the_opening_to_be_a_chain_state(self) -> None:
+        states = {("бобёр", "сломал")}
+        trigrams = {("бобёр", "сломал", "сборку"), ("ёжик", "починил", "прогон")}
+        bigrams = {("бобёр", "сломал")}
+
+        # Две фразы открываются существующим состоянием, но точка прицепа у них
+        # одна и та же — считаются места, а не фразы. Третья не прицепится.
+        self.assertEqual(_attachment_points(trigrams, bigrams, states), 1)
+
+    def test_nothing_attaches_to_an_empty_chain(self) -> None:
+        self.assertEqual(
+            _attachment_points({("бобёр", "сломал", "сборку")}, set(), set()), 0
+        )
 
 
 if __name__ == "__main__":
