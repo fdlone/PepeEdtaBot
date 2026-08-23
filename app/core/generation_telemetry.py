@@ -31,6 +31,22 @@ class CandidateRoute(StrEnum):
     EXTENSION = "extension"
 
 
+class UserQuirkGate(StrEnum):
+    """Conditions the L2 user-quirk channel passes, in execution order.
+
+    Ordered on purpose: the funnel is read top to bottom, and the denominator
+    of each gate is what the one above it let through. Membership is closed for
+    the same reason ``CandidateRoute`` is — a typo must be an error, not a new
+    category nobody notices.
+    """
+
+    ADDRESSED = "addressed"
+    CHANCE = "chance"
+    DAILY_LIMIT = "daily_limit"
+    ROLL = "roll"
+    THRESHOLD = "threshold"
+
+
 @dataclass(slots=True)
 class GenerationTelemetry:
     generations: int = 0
@@ -100,6 +116,14 @@ class GenerationTelemetry:
     # Denominator of this one is ctx_generations: only a generation that
     # started with context can lose it.
     context_dropped: int = 0
+    # L2 quirks: the channel passes five gates in a row and only the last two
+    # were observable, so "never fires" could not be told apart from "fires and
+    # loses the roll". One counter per gate is deliberately NOT enough — the
+    # denominators below are derived by walking the funnel, and a gate with a
+    # zero denominator means "nothing ever reached it", not "it never rejected".
+    quirk_reached: int = 0
+    quirk_rejected: dict[str, int] = field(default_factory=dict)
+    quirk_fired: int = 0
 
     def note_cache(self, *, hit: bool) -> None:
         if hit:
@@ -223,6 +247,40 @@ class GenerationTelemetry:
         the attempt budget instead."""
         self.context_dropped += 1
 
+    def note_user_quirk_outcome(self, rejected_by: UserQuirkGate | None) -> None:
+        """One pass of the L2 quirk channel: which gate stopped it, or none.
+
+        Exactly one call per pass, made from the gate that returned — so the
+        funnel cannot double-count and cannot lose a case. ``None`` means every
+        gate passed and the quirk fired.
+
+        Counting only: no draw is taken here, and the caller's sequence of
+        ``random`` calls is unchanged by construction.
+        """
+        self.quirk_reached += 1
+        if rejected_by is None:
+            self.quirk_fired += 1
+            return
+        self.quirk_rejected[rejected_by] = self.quirk_rejected.get(rejected_by, 0) + 1
+
+    def user_quirk_funnel(self) -> dict[str, int]:
+        """Per-gate ``(reached, rejected)`` pairs, flattened for ``/stats``.
+
+        The denominator of each gate is what the previous one let through, so
+        the numbers converge arithmetically: whatever survives the last gate is
+        ``user_quirk_fired``. A gate never reached shows ``0/0`` rather than
+        disappearing — the distinction the channel was blind to.
+        """
+        funnel: dict[str, int] = {"user_quirk_reached": self.quirk_reached}
+        reached = self.quirk_reached
+        for gate in UserQuirkGate:
+            rejected = self.quirk_rejected.get(gate, 0)
+            funnel[f"user_quirk_reached_{gate}"] = reached
+            funnel[f"user_quirk_rejected_{gate}"] = rejected
+            reached -= rejected
+        funnel["user_quirk_fired"] = self.quirk_fired
+        return funnel
+
     def route_breakdown(self) -> dict[str, dict[str, float | int | None]]:
         """Per-route share, win-rate and rejection reasons.
 
@@ -256,7 +314,7 @@ class GenerationTelemetry:
         lookups = self.cache_hits + self.cache_misses
         eligible = self.shadow_order4_eligible
         modes = self.ctx_generations + self.noctx_generations
-        return {
+        values: dict[str, float | int | None] = {
             # M3R-140/141: every one of these is a rate with its own
             # denominator next to it, so "never asked" is readable as None
             # rather than as a healthy zero.
@@ -329,3 +387,8 @@ class GenerationTelemetry:
                 else None
             ),
         }
+        # Absolute counts, not rates: the funnel is read by comparing a gate's
+        # rejections against what reached it, and a pre-divided share would
+        # throw away exactly the denominator that makes it readable.
+        values.update(self.user_quirk_funnel())
+        return values

@@ -318,9 +318,12 @@ async def cmd_quirk_stats(
     отменяет.
     """
     threshold = runtime_state.user_quirk_min_interactions
-    people, max_count, at_or_above = await learning_service.get_user_interaction_stats(
-        message.chat.id, threshold
-    )
+    (
+        people,
+        max_count,
+        at_or_above,
+        buckets,
+    ) = await learning_service.get_user_interaction_stats(message.chat.id, threshold)
     if people == 0:
         await reply_humanized_state(
             message,
@@ -329,11 +332,20 @@ async def cmd_quirk_stats(
         )
         return
 
+    # Распределение — группировкой, а не значением на человека: перечень
+    # счётчиков превратил бы обезличенный агрегат в профиль участников.
+    # Границы привязаны к действующему порогу, поэтому суммирование справа
+    # прямо отвечает на «сколько добавится, если порог опустить».
+    distribution = ", ".join(
+        f"{lower}+: {count}" if upper == 0 else f"{lower}–{upper - 1}: {count}"
+        for lower, upper, count in buckets
+    )
     text = (
         f"Счётчики обращений (порог завсегдатая: {threshold}):\n"
         f"людей со счётчиком: {people}\n"
         f"максимум: {max_count}\n"
-        f"достигли порога: {at_or_above}"
+        f"достигли порога: {at_or_above}\n"
+        f"распределение: {distribution}"
     )
     if at_or_above == 0:
         text += "\n\nПорог пока не взял никто — причуды не срабатывают поэтому."
