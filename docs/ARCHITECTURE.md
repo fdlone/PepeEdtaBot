@@ -102,7 +102,7 @@ n-граммы и функции построения окон 4-грамм, а 
 | `core/` | `markov.py`, `markov_port.py`, `response_generator.py`, `candidate_scorer.py`, `context_state_matcher.py`, `morphology.py`, `gen_trace_log.py`, `reply_flavor.py`, `emoji.py`, `hot_ngrams.py`, `mood.py`, `intonation.py`, `slot_mutation.py`, `lexicon.py`, `privacy_filter.py`, `reply_policy.py`, `text.py`; слой Markov 2.0R — `generation_telemetry.py`, `collocations.py`, `temporal.py`, `seed.py`, `shadow_order.py`, `interpolation.py` |
 | `services/` | `reply_pipeline.py`, `learning_service.py`, `meme_analyzer.py`, `pivo_service.py`, `pivo_message_builder.py`, `pivo_parser.py` |
 | `handlers/` | `common.py`, `admin.py`, `pivo.py`, `learning.py`, `errors.py` — `aiogram.Router` на файл; `_helpers.py` — отправка с имитацией набора |
-| `repositories/` | `base_repo.py` (общий доступ к соединению), `markov_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py`, `pivo_pool_usage_repo.py`, `chat_emoji_stats_repo.py`, `chat_hot_ngrams_repo.py`, `chat_user_interactions_repo.py`, `collocations_repo.py` |
+| `repositories/` | `base_repo.py` (общий доступ к соединению), `markov_repo.py`, `chat_members_repo.py`, `pivo_usage_repo.py`, `pivo_pool_usage_repo.py`, `chat_emoji_stats_repo.py`, `chat_hot_ngrams_repo.py`, `chat_phrase_ngrams_repo.py`, `chat_user_interactions_repo.py`, `collocations_repo.py` |
 | `domain/` | `pivo.py` (`PivoSecurity`, `PivoMember`), `pivo_templates.py` |
 | `presentation/` | `bot_messages.py`, `fallback_phrases.py` |
 | `config/` | `settings.py`, `runtime_state.py`, `registry.py`, `defaults.py` |
@@ -204,6 +204,7 @@ cross-field инвариант, ветка в `validate_cross_fields`.
 | `chat_emoji_stats` | Частоты эмодзи per chat для эмодзи-канала. Ключ — сырой `chat_id`, как у таблиц модели; чистится в `clear_chat`, стареющие строки затухают. Миграция 011. |
 | `chat_hot_ngrams` | Скользящее окно контентных n-грамм per chat; «горячесть» = доля оконного счётчика от всевременного в `transitions`. Миграция 012. |
 | `chat_user_interactions` | Счётчик отвеченных обращений per user per chat для причуд завсегдатаев; `user_hash` — HMAC-SHA256, никаких имён и username. Миграция 014. |
+| `chat_phrase_ngrams` | Пер-чатовый индекс контентных би/триграмм со всевременным счётчиком — **производное представление `transitions`**, а не второй накопитель: пересобирается суточным пассом целиком, собственной истории не имеет и потому не может с цепью разойтись. Форма как у `chat_hot_ngrams` (биграмма с `w3 = ''`), но затухание к ней не применяется. Читателей нет до фразового маршрута M3R-210. Миграция 022. |
 | `schema_migrations` | Учёт применённых миграций. |
 
 Затухание «личностных» таблиц (`chat_emoji_stats`, `chat_hot_ngrams`,

@@ -14,15 +14,15 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-from app.core.hot_ngrams import extract_content_ngrams
-from tools.eval.phrase_census import _counts, _qualifies, main
+from app.core.hot_ngrams import extract_content_ngrams, is_content_ngram
+from tools.eval.phrase_census import _counts, main
 
 # Синтетические ID: инвариант tests/test_no_real_chat_ids.
 CHAT = 4321
 
 
 class TestFilterMatchesExtraction(unittest.TestCase):
-    """`_qualifies` — тот же предикат, что внутри `extract_content_ngrams`."""
+    """`is_content_ngram` — тот же предикат, что внутри `extract_content_ngrams`."""
 
     def test_the_two_filters_agree_on_every_ngram_of_a_message(self) -> None:
         tokens = [
@@ -46,15 +46,15 @@ class TestFilterMatchesExtraction(unittest.TestCase):
                     continue
                 ngram = tuple(tokens[i : i + size])
                 with self.subTest(ngram=ngram):
-                    self.assertEqual(_qualifies(ngram), ngram in extracted)
+                    self.assertEqual(is_content_ngram(ngram), ngram in extracted)
 
     def test_punctuation_disqualifies_the_whole_ngram(self) -> None:
-        self.assertFalse(_qualifies(("сломал", ".")))
-        self.assertFalse(_qualifies(("сломал", ".", "сборку")))
+        self.assertFalse(is_content_ngram(("сломал", ".")))
+        self.assertFalse(is_content_ngram(("сломал", ".", "сборку")))
 
     def test_an_ngram_of_stopwords_alone_does_not_qualify(self) -> None:
-        self.assertFalse(_qualifies(("он", "же")))
-        self.assertTrue(_qualifies(("он", "сломал")))
+        self.assertFalse(is_content_ngram(("он", "же")))
+        self.assertTrue(is_content_ngram(("он", "сломал")))
 
 
 class TestCensusReadsTheChain(unittest.TestCase):

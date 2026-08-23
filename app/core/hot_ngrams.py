@@ -31,6 +31,23 @@ def _is_content_token(token: str) -> bool:
     )
 
 
+def is_content_ngram(ngram: tuple[str, ...]) -> bool:
+    """Whether an adjacent n-gram counts as a content phrase.
+
+    Named and public because the phrase index derives the same phrases from the
+    stored chain rather than from the message stream, and the two must not drift
+    apart on what a phrase is (generation-phrase-index spec). Previously this
+    lived inline in the loop below, where nothing else could reach it.
+
+    Punctuation disqualifies the whole n-gram: a phrase must be a traversable
+    adjacency, otherwise inserting it as a unit produces text the chat never
+    said.
+    """
+    return all(_is_wordlike(token) for token in ngram) and any(
+        _is_content_token(token) for token in ngram
+    )
+
+
 def extract_content_ngrams(
     tokens: list[str],
     *,
@@ -52,9 +69,7 @@ def extract_content_ngrams(
             ngram = tuple(tokens[i : i + size])
             if ngram in seen:
                 continue
-            if not all(_is_wordlike(token) for token in ngram):
-                continue
-            if not any(_is_content_token(token) for token in ngram):
+            if not is_content_ngram(ngram):
                 continue
             seen.add(ngram)
             result.append(ngram)

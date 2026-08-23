@@ -1,6 +1,7 @@
 from app.repositories.chat_emoji_stats_repo import ChatEmojiStatsRepo
 from app.repositories.chat_hot_ngrams_repo import ChatHotNgramsRepo
 from app.repositories.chat_members_repo import ChatMembersRepo
+from app.repositories.chat_phrase_ngrams_repo import ChatPhraseNgramsRepo
 from app.repositories.chat_user_interactions_repo import ChatUserInteractionsRepo
 from app.repositories.collocations_repo import CollocationsRepo
 from app.repositories.markov_repo import MarkovRepo
@@ -11,6 +12,7 @@ __all__ = [
     "ChatEmojiStatsRepo",
     "ChatHotNgramsRepo",
     "ChatMembersRepo",
+    "ChatPhraseNgramsRepo",
     "ChatUserInteractionsRepo",
     "CollocationsRepo",
     "MarkovRepo",

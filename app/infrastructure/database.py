@@ -26,6 +26,7 @@ from app.repositories import (
     ChatEmojiStatsRepo,
     ChatHotNgramsRepo,
     ChatMembersRepo,
+    ChatPhraseNgramsRepo,
     ChatUserInteractionsRepo,
     CollocationsRepo,
     MarkovRepo,
@@ -97,6 +98,7 @@ class Database:
         self._pivo_pool_usage: PivoPoolUsageRepo | None = None
         self._chat_emoji_stats: ChatEmojiStatsRepo | None = None
         self._chat_hot_ngrams: ChatHotNgramsRepo | None = None
+        self._chat_phrase_ngrams: ChatPhraseNgramsRepo | None = None
         self._chat_user_interactions: ChatUserInteractionsRepo | None = None
         self._collocations: CollocationsRepo | None = None
         # Monotonic-время, раньше которого следующий прогон decay не начинается
@@ -164,6 +166,10 @@ class Database:
         return self._require(self._chat_hot_ngrams)
 
     @property
+    def chat_phrase_ngrams(self) -> ChatPhraseNgramsRepo:
+        return self._require(self._chat_phrase_ngrams)
+
+    @property
     def chat_user_interactions(self) -> ChatUserInteractionsRepo:
         return self._require(self._chat_user_interactions)
 
@@ -208,6 +214,9 @@ class Database:
             self._pivo_pool_usage = PivoPoolUsageRepo(self._get_conn, self._lock)
             self._chat_emoji_stats = ChatEmojiStatsRepo(self._get_conn, self._lock)
             self._chat_hot_ngrams = ChatHotNgramsRepo(self._get_conn, self._lock)
+            self._chat_phrase_ngrams = ChatPhraseNgramsRepo(
+                self._get_conn, self._lock
+            )
             self._chat_user_interactions = ChatUserInteractionsRepo(
                 self._get_conn, self._lock
             )
@@ -233,6 +242,7 @@ class Database:
         self._pivo_pool_usage = None
         self._chat_emoji_stats = None
         self._chat_hot_ngrams = None
+        self._chat_phrase_ngrams = None
         self._chat_user_interactions = None
         self._collocations = None
 
@@ -742,6 +752,7 @@ class Database:
             "chat_model_volume",
             "chat_emoji_stats",
             "chat_hot_ngrams",
+            "chat_phrase_ngrams",
             "chat_user_interactions",
             "chat_verbatim_ngrams",
         )

@@ -13,7 +13,7 @@ phrase index is not something to accumulate — it is a filter over what the
 chain already holds, and this script measures how much that is.
 
 The filter is imported from ``app.core.hot_ngrams`` rather than restated, so
-the number cannot drift from the extraction the index will actually use.
+the number cannot drift from the extraction the index actually uses.
 
 Read-only: opens the database via a URI in ``mode=ro`` and never writes.
 
@@ -30,32 +30,7 @@ from collections import Counter
 from contextlib import closing
 from pathlib import Path
 
-from app.core.hot_ngrams import MIN_CONTENT_TOKEN_LEN
-from app.core.lexicon import STOPWORDS
-
-
-def _is_wordlike(token: str) -> bool:
-    return any(ch.isalnum() for ch in token)
-
-
-def _is_content(token: str) -> bool:
-    return (
-        len(token) >= MIN_CONTENT_TOKEN_LEN
-        and token.casefold() not in STOPWORDS
-        and _is_wordlike(token)
-    )
-
-
-def _qualifies(ngram: tuple[str, ...]) -> bool:
-    """The ``extract_content_ngrams`` predicate, applied to a stored n-gram.
-
-    Punctuation disqualifies the whole n-gram, which is also what keeps this
-    equivalent to extraction from the message stream: a phrase that crossed a
-    punctuation mark cannot pass here either.
-    """
-    return all(_is_wordlike(token) for token in ngram) and any(
-        _is_content(token) for token in ngram
-    )
+from app.core.hot_ngrams import is_content_ngram
 
 
 def _counts(
@@ -81,11 +56,11 @@ def _counts(
             "SELECT w1, w2, w3, cnt FROM transitions WHERE chat_id = ?",
             (chat_id,),
         ):
-            if _qualifies((w1, w2, w3)):
+            if is_content_ngram((w1, w2, w3)):
                 trigrams[(w1, w2, w3)] += int(cnt)
             # The bigram's all-time count is the row group's sum over w3 — the
             # same aggregation ChatHotNgramsRepo.get_hot uses for its bigram arm.
-            if _qualifies((w1, w2)):
+            if is_content_ngram((w1, w2)):
                 bigrams[(w1, w2)] += int(cnt)
     return trigrams, bigrams
 
