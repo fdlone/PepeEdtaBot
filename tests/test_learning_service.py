@@ -580,3 +580,119 @@ class TestMaintenanceAlerts(unittest.IsolatedAsyncioTestCase):
         # Состояние сброшено: следующая поломка снова копит свой час.
         self._returns("FAILED")
         self.assertIsNone(await self.svc.run_due_maintenance())
+
+
+class TestPhraseIndexRebuildInTheDailyPass(unittest.IsolatedAsyncioTestCase):
+    """Пересборка фразового индекса — фоновая бухгалтерия на learn-пути.
+
+    Требования к ней те же, что к мем-пассу рядом, и по той же причине: её сбой
+    не должен стоить выученного сообщения. Плюс одно своё — она обходит все
+    чаты, поэтому не имеет права читать настройки чата-триггера.
+    """
+
+    def _service(self, *, chat_ids: list[int], rebuild: object):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from app.infrastructure.database import MaintenanceOutcome
+        from app.services.learning_service import LearningService
+
+        db = MagicMock()
+        db.decay_flavor_stats_if_due = AsyncMock(return_value=MaintenanceOutcome.DONE)
+        db.list_chat_ids = AsyncMock(return_value=chat_ids)
+        db.chat_phrase_ngrams.rebuild_chat = rebuild
+        generator = _make_generator()
+        generator.telemetry = MagicMock()
+        return LearningService(db, generator), db
+
+    async def test_every_chat_is_rebuilt(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        rebuild = AsyncMock(return_value=3)
+        service, _ = self._service(chat_ids=[11, 22], rebuild=rebuild)
+
+        with patch(
+            "app.services.learning_service.analyze_chat_memes", AsyncMock()
+        ), patch("app.services.learning_service.mask_chat_id", return_value="chat"):
+            await service.run_due_maintenance()
+
+        self.assertEqual(
+            [call.args[0] for call in rebuild.await_args_list], [11, 22]
+        )
+
+    async def test_a_failing_chat_does_not_stop_the_pass(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        rebuild = AsyncMock(side_effect=[RuntimeError("database is locked"), 5])
+        service, _ = self._service(chat_ids=[11, 22], rebuild=rebuild)
+
+        with patch(
+            "app.services.learning_service.analyze_chat_memes", AsyncMock()
+        ), patch("app.services.learning_service.mask_chat_id", return_value="chat"):
+            # Не пробрасывается наружу: наверху этого вызова — выученное
+            # сообщение, и оно дороже пересборки индекса.
+            await service.run_due_maintenance()
+
+        self.assertEqual(rebuild.await_count, 2)
+
+    async def test_listing_chats_failing_does_not_stop_the_pass(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        rebuild = AsyncMock()
+        service, db = self._service(chat_ids=[], rebuild=rebuild)
+        db.list_chat_ids = AsyncMock(side_effect=RuntimeError("database is locked"))
+
+        with patch(
+            "app.services.learning_service.analyze_chat_memes", AsyncMock()
+        ), patch("app.services.learning_service.mask_chat_id", return_value="chat"):
+            await service.run_due_maintenance()
+
+        rebuild.assert_not_awaited()
+
+    async def test_rebuild_is_called_with_a_chat_and_nothing_else(self) -> None:
+        """Ни одной ручки: иначе пасс применил бы настройки чата-триггера ко всем."""
+        from unittest.mock import AsyncMock, patch
+
+        rebuild = AsyncMock(return_value=0)
+        service, _ = self._service(chat_ids=[11], rebuild=rebuild)
+
+        with patch(
+            "app.services.learning_service.analyze_chat_memes", AsyncMock()
+        ), patch("app.services.learning_service.mask_chat_id", return_value="chat"):
+            from app.services.meme_analyzer import MemeSettings
+
+            await service.run_due_maintenance(
+                MemeSettings(
+                    min_joint_count=5,
+                    min_support=20.0,
+                    recency_days=7.0,
+                    max_entries=50,
+                )
+            )
+
+        self.assertEqual(rebuild.await_args.args, (11,))
+        self.assertEqual(rebuild.await_args.kwargs, {})
+
+    async def test_the_log_carries_numbers_and_no_phrases(self) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from app import log_masking
+
+        # Настоящее маскирование, а не подменённое: проверяется как раз то,
+        # что сырой chat_id в строку не попадает.
+        log_masking.init_masking("test-secret-for-phrase-index")
+        rebuild = AsyncMock(return_value=7)
+        service, _ = self._service(chat_ids=[-1001234567890], rebuild=rebuild)
+
+        with patch(
+            "app.services.learning_service.analyze_chat_memes", AsyncMock()
+        ), self.assertLogs("chat_markov", level="INFO") as logs:
+            await service.run_due_maintenance()
+
+        line = next(line for line in logs.output if "phrase index" in line)
+        self.assertIn("phrases=7", line)
+        # Сырого chat_id в строке нет — он маскируется, как везде (§4 CLAUDE.md).
+        self.assertNotIn("1001234567890", line)
+
+
+if __name__ == "__main__":
+    unittest.main()

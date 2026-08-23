@@ -496,6 +496,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
                 "chat_hot_ngrams",
                 "chat_members",
                 "chat_model_volume",
+                "chat_phrase_ngrams",
                 "chat_user_interactions",
                 "chat_verbatim_ngrams",
                 "markov_collocations",

@@ -190,6 +190,12 @@ class LearningService:
         # the message the learn path is in the middle of handling.
         if outcome is MaintenanceOutcome.DONE:
             await self._run_meme_analysis(meme_settings or self._meme_settings)
+            # M3R-000: фразовый индекс — производное представление цепи, и
+            # единственное место, где оно пересчитывается. Едет на той же
+            # суточной каденции по той же причине: своего расписания в проекте
+            # нет, а learn-путь — единственная точка, куда регулярно приходит
+            # управление.
+            await self._rebuild_phrase_index()
 
         if outcome is MaintenanceOutcome.DONE:
             failing_since = self._maintenance_failing_since
@@ -306,6 +312,42 @@ class LearningService:
             self._generator.telemetry.note_meme_pass(
                 scored_pairs=result.scored_pairs,
                 duration_ms=result.duration_ms,
+            )
+
+    async def _rebuild_phrase_index(self) -> None:
+        """Пересборка фразового индекса по всем чатам, сбои контейнятся.
+
+        Устройство и мотивы — как у ``_run_meme_analysis`` выше: фоновая
+        бухгалтерия, едущая на learn-пути, и её сбой не должен стоить
+        выученного сообщения. Прошлое содержимое индекса остаётся пригодным,
+        следующий проход повторит.
+
+        Ручек не читает вообще — ни глобальных, ни чатовых. Это не случайность:
+        пасс обходит все чаты, а ручки ему передал бы чат-триггер, и его
+        настройки применились бы ко всем (``CLAUDE.md`` §5).
+        """
+        try:
+            chat_ids = await self._db.list_chat_ids()
+        except Exception:
+            logger.exception("phrase index could not list chats")
+            return
+        for chat_id in chat_ids:
+            started = time.monotonic()
+            try:
+                rows = await self._db.chat_phrase_ngrams.rebuild_chat(chat_id)
+            except Exception:
+                logger.exception(
+                    "phrase index rebuild failed for chat %s", mask_chat_id(chat_id)
+                )
+                continue
+            # Числа прохода, без единой фразы в логе: индекс хранит сказанное
+            # людьми, и печатать его содержимое — не то же самое, что печатать
+            # его размер.
+            logger.info(
+                "phrase index chat=%s phrases=%d took=%.1fms",
+                mask_chat_id(chat_id),
+                rows,
+                (time.monotonic() - started) * 1000.0,
             )
 
     async def reset_short_layer(self, chat_id: int | None) -> None:

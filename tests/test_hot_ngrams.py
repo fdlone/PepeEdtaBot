@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from app.core.hot_ngrams import extract_content_ngrams
+from app.core.hot_ngrams import (
+    MIN_CONTENT_TOKEN_LEN,
+    extract_content_ngrams,
+    is_content_ngram,
+)
 
 
 class ExtractContentNgramsTest(unittest.TestCase):
@@ -46,6 +50,45 @@ class ExtractContentNgramsTest(unittest.TestCase):
     def test_short_input_returns_empty(self) -> None:
         self.assertEqual(extract_content_ngrams(["бобёр"]), [])
         self.assertEqual(extract_content_ngrams([]), [])
+
+
+
+class IsContentNgramTest(unittest.TestCase):
+    """Предикат стал публичным: по нему фразовый индекс отбирает из цепи.
+
+    Раньше он жил внутри цикла извлечения, и добраться до него было нечем —
+    поэтому границы проверялись только через готовый список n-грамм. Проверка
+    в точке границы, а не в середине диапазона: середина проходит и у неверно
+    сдвинутого порога.
+    """
+
+    def test_length_boundary_is_checked_in_the_point(self) -> None:
+        short = "б" * (MIN_CONTENT_TOKEN_LEN - 1)
+        exact = "б" * MIN_CONTENT_TOKEN_LEN
+
+        self.assertFalse(is_content_ngram((short, short)))
+        self.assertTrue(is_content_ngram((short, exact)))
+
+    def test_punctuation_disqualifies_the_whole_ngram(self) -> None:
+        self.assertFalse(is_content_ngram(("бобёр", ".")))
+        self.assertFalse(is_content_ngram(("бобёр", ".", "пришёл")))
+
+    def test_stopwords_alone_do_not_qualify(self) -> None:
+        self.assertFalse(is_content_ngram(("он", "же")))
+        self.assertTrue(is_content_ngram(("он", "пришёл")))
+
+    def test_the_predicate_decides_what_extraction_keeps(self) -> None:
+        """Извлечение и предикат — одно правило, а не два похожих."""
+        tokens = ["бобёр", "опять", "сломал", "сборку", ".", "он", "же", "не", "я"]
+        extracted = set(extract_content_ngrams(tokens))
+
+        for i in range(len(tokens) - 1):
+            for size in (2, 3):
+                if i + size > len(tokens):
+                    continue
+                ngram = tuple(tokens[i : i + size])
+                with self.subTest(ngram=ngram):
+                    self.assertEqual(is_content_ngram(ngram), ngram in extracted)
 
 
 if __name__ == "__main__":
