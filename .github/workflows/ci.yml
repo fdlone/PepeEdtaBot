@@ -82,13 +82,36 @@ jobs:
       # остаётся зелёной, даже если из образа выпало что-то нужное, поэтому
       # проверяем, что импорты живые и миграции на месте: без них бот падает
       # уже в рантайме, при первом подключении к БД.
+      #
+      # Сверка миграций — **по именам**, а не по количеству: замена файла один
+      # к одному (переименование, подмена .sql на .py) количество сохраняет, и
+      # такой пропуск было бы видно только на проде, где мигратор молча не
+      # применит недостающий шаг.
+      #
+      # Идёт через **штатный** ENTRYPOINT, а не `--entrypoint python`: между
+      # `docker run` и процессом бота стоит `runuser -u bot`, и штамп сборки
+      # читает уже пользователь `bot`. Проверка в обход entrypoint доказывала бы
+      # не то, что нужно: файл пишется от root, а читать его должен bot.
       - name: Smoke-test image
         run: |
-          host_migrations=$(ls app/migrations | grep -cE '^[0-9]{3}_\w+\.(sql|py)$')
-          docker run --rm --entrypoint python pepe-bot:latest -c "
+          host_migrations=$(ls app/migrations | grep -E '^[0-9]{3}_\w+\.(sql|py)$' | sort | paste -sd' ' -)
+          docker run --rm pepe-bot:latest python -c "
+          import os
+          from datetime import datetime
           import main  # noqa: F401 -- every runtime module must be importable
           from app.infrastructure.migrator import _MIGRATIONS_DIR, _MIGRATION_RE
-          found = [p.name for p in _MIGRATIONS_DIR.iterdir() if _MIGRATION_RE.match(p.name)]
-          assert len(found) == $host_migrations, f'migrations in image: {len(found)}, expected $host_migrations'
-          print(f'ok: {len(found)} migrations')
+          from app.presentation.bot_messages import format_stats_message
+          found = sorted(p.name for p in _MIGRATIONS_DIR.iterdir() if _MIGRATION_RE.match(p.name))
+          host = '$host_migrations'.split()
+          missing, extra = sorted(set(host) - set(found)), sorted(set(found) - set(host))
+          assert not missing and not extra, f'migrations differ: missing {missing}, extra {extra}'
+          # Штамп сборки — единственный способ отличить «счётчика нет» от
+          # «сборка старая» (docs/OPERATIONS.md). Проверяем не наличие файла, а
+          # то, что до /stats доходит разбираемая дата: путь до штампа задан
+          # относительно пакета и молча деградирует в 'unknown'.
+          build = format_stats_message({'volume': 0}).splitlines()[0]
+          stamp = build.removeprefix('сборка: ')
+          assert stamp != 'unknown', f'build stamp missing from the image: {build!r}'
+          datetime.fromisoformat(stamp)
+          print(f'ok: {len(found)} migrations, build {stamp}, uid {os.getuid()}')
           "

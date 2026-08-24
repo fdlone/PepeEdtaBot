@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.config.registry import field_hint
@@ -87,6 +88,27 @@ _QUIRK_GATE_LABELS = {
 }
 
 
+# `/app/BUILD_AT` — штамп времени сборки, который пишет `RUN date -Is` в
+# Dockerfile. Путь считается от пакета, а не задан абсолютом: в контейнере это
+# и есть `/app/BUILD_AT`, при локальном запуске — корень репозитория, где файла
+# нет, и строка честно говорит `unknown`.
+_BUILD_STAMP_PATH = Path(__file__).parents[2] / "BUILD_AT"
+
+
+def _build_stamp() -> str:
+    """Время сборки образа либо ``unknown``, если штампа нет.
+
+    Читается на каждый ``/stats``, а не кэшируется на импорте: команда редкая,
+    файл — одна строка, а кэш пришлось бы обходить в тестах.
+    """
+    try:
+        return _BUILD_STAMP_PATH.read_text(encoding="utf-8").strip() or "unknown"
+    except OSError:
+        # Файла нет (локальный запуск) либо он не читается — оба случая для
+        # читателя означают одно: сборка не опознана.
+        return "unknown"
+
+
 def format_stats_message(
     stats: dict[str, int],
     telemetry: dict[str, float | int | None] | None = None,
@@ -99,7 +121,16 @@ def format_stats_message(
     размер реестра коллокаций чата по статусам (M2R-300); пустой реестр
     строку не печатает.
     """
-    lines = [f"объём модели: {stats['volume']}"]
+    # Идентичность сборки — первой строкой и **всегда**, включая `unknown`.
+    # Всё ниже читается через неё: отсутствие любой строки счётчиков значит
+    # «нечего показать» только при известной сборке, иначе — «счётчика нет в
+    # выкаченной сборке» (`docs/OPERATIONS.md`). Печатать её условно означало бы
+    # вернуть ровно ту неоднозначность, ради которой строка и появилась: рестарт
+    # 14.08.2026 увёз сборку старше M3R-140, и различить это было нечем.
+    lines = [
+        f"сборка: {_build_stamp()}",
+        f"объём модели: {stats['volume']}",
+    ]
     if collocations:
         lines.append(
             "коллокации: "
