@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from app.config.registry import RUNTIME_FIELDS
 from app.core.generation_telemetry import GenerationTelemetry, UserQuirkGate
@@ -13,6 +18,24 @@ from app.presentation.bot_messages import (
     format_set_help_message,
     format_stats_message,
 )
+
+
+@contextmanager
+def build_stamp(content: str | None) -> Iterator[None]:
+    """Подменить штамп сборки: ``None`` — файла нет, строка — таково содержимое.
+
+    Через реальный файл, а не мок чтения: проверяется в том числе то, что
+    штамп читается с диска и обрезается по краям, а мок ``read_text``
+    обошёл бы ровно эту часть.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "BUILD_AT"
+        if content is not None:
+            path.write_text(content, encoding="utf-8")
+        with mock.patch(
+            "app.presentation.bot_messages._BUILD_STAMP_PATH", path
+        ):
+            yield
 
 
 def make_state() -> SimpleNamespace:
@@ -86,13 +109,32 @@ class TestBotMessages(unittest.TestCase):
         self.assertNotIn("seed", command_names)
 
     def test_stats_message_is_compact_and_readable(self) -> None:
-        text = format_stats_message({"messages": 10, "volume": 250})
+        # С переводом строки на конце: именно так его пишет `date -Is >`.
+        with build_stamp("2026-08-24T12:33:01+00:00\n"):
+            text = format_stats_message({"messages": 10, "volume": 250})
 
-        self.assertEqual("объём модели: 250", text)
+        self.assertEqual(
+            "сборка: 2026-08-24T12:33:01+00:00\nобъём модели: 250", text
+        )
         self.assertNotIn("сообщений", text)
         self.assertNotIn("готовность", text)
         self.assertNotIn("250/200", text)
         self.assertNotIn("transitions", text)
+
+    def test_stats_message_always_names_the_build(self) -> None:
+        """Без штампа строка обязана остаться и сказать `unknown`.
+
+        Условная печать вернула бы неоднозначность, ради которой строка и
+        появилась: отсутствие строки счётчика ниже читается как «нечего
+        показать» только при известной сборке. Пустой файл проверяется отдельно
+        от отсутствующего: `date` с перенаправлением создаёт файл раньше, чем
+        пишет в него, поэтому пустой штамп — достижимое состояние, а не
+        гипотеза.
+        """
+        for label, content in (("нет файла", None), ("пустой файл", "")):
+            with self.subTest(label), build_stamp(content):
+                first = format_stats_message({"volume": 1}).splitlines()[0]
+                self.assertEqual("сборка: unknown", first)
 
     def test_config_message_defaults_to_short_view(self) -> None:
         text = format_config_message(make_state())

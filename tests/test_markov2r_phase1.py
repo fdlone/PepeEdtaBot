@@ -126,8 +126,11 @@ class TestTelemetryAndStats(unittest.TestCase):
         )
 
     def test_stats_message_without_telemetry(self) -> None:
+        # Строка сборки печатается всегда (см. test_bot_messages), поэтому
+        # сверка блока телеметрии смотрит на хвост, а не на всё сообщение.
         self.assertEqual(
-            format_stats_message({"volume": 42}), "объём модели: 42"
+            format_stats_message({"volume": 42}).splitlines()[-1],
+            "объём модели: 42",
         )
 
     def test_stats_message_with_telemetry(self) -> None:
