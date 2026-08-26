@@ -25,6 +25,22 @@ class _MaintenanceCounter:
     value: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class ReplySlot:
+    """Талон занятого бюджета ответа: чем откатывать, если ответ не состоялся.
+
+    Хранит момент резервации и предыдущее значение кулдауна, потому что откат
+    обязан снять **свою** метку. Между резервацией и откатом лежит генерация,
+    за которую другой апдейт мог занять слот законно, и его занятие отменять
+    нельзя.
+    """
+
+    chat_id: int
+    now: float
+    previous_last_ts: float | None
+    counted: bool
+
+
 @dataclass(slots=True)
 class RuntimeState(RuntimeTunables):
     # Все runtime-mutable поля объявлены один раз в RuntimeTunables
@@ -124,6 +140,64 @@ class RuntimeState(RuntimeTunables):
         cutoff = now - 3600.0
         while history and history[0] < cutoff:
             history.popleft()
+
+    def reserve_reply_slot(
+        self, chat_id: int, now: float, *, unprompted: bool = True
+    ) -> ReplySlot:
+        """Занять бюджет ответа немедленно, до подготовки самого ответа.
+
+        Отличается от ``note_reply_sent`` только моментом вызова и тем, что
+        возвращает талон для отката. Смысл переноса: между проверкой кулдауна
+        и записью о факте ответа лежит вся генерация, а апдейты
+        обрабатываются конкурентно (aiogram заводит задачу на каждый, а
+        ``getUpdates`` отдаёт их пачками). Пока запись стояла после отправки,
+        пачка сообщений успевала пройти все проверки до первой записи — и
+        кулдаун с часовым капом не давали того, что обещают, ровно в
+        burst-режиме, ради которого заведены.
+
+        Примитива синхронизации здесь нет намеренно: участок от проверки до
+        этой записи не содержит ``await``, а внутри одного event loop такой
+        участок не прерывается. Он понадобится вместе со вторым инстансом —
+        то есть вместе со всем остальным из «осознанно отложено».
+        """
+        previous_last_ts = self.last_reply_ts.get(chat_id)
+        self.note_reply_sent(chat_id, now, unprompted=unprompted)
+        return ReplySlot(
+            chat_id=chat_id,
+            now=now,
+            previous_last_ts=previous_last_ts,
+            counted=unprompted,
+        )
+
+    def release_reply_slot(self, slot: ReplySlot) -> None:
+        """Вернуть бюджет: ответ не состоялся.
+
+        Возврат разрешает ответ на **следующее** сообщение и не переигрывает
+        текущее — иначе неудачная генерация превращалась бы в цикл ретраев на
+        горячем пути.
+
+        Снимается именно своя метка, а не последняя: между резервацией и
+        откатом лежат ``await``, за которые другой апдейт мог занять слот, и
+        его резервация остаётся в силе. По той же причине ``last_reply_ts``
+        восстанавливается только если он всё ещё наш.
+        """
+        if self.last_reply_ts.get(slot.chat_id) == slot.now:
+            if slot.previous_last_ts is None:
+                self.last_reply_ts.pop(slot.chat_id, None)
+            else:
+                self.last_reply_ts[slot.chat_id] = slot.previous_last_ts
+        if not slot.counted:
+            return
+        history = self.recent_reply_times.get(slot.chat_id)
+        if history is None:
+            return
+        try:
+            history.remove(slot.now)
+        except ValueError:
+            # Метки уже нет — её вытеснил часовой срез. Возвращать нечего.
+            pass
+        if not history:
+            self.recent_reply_times.pop(slot.chat_id, None)
 
     def can_fire_rare_event(self, chat_id: int, today_iso: str) -> bool:
         """True while the chat's combined daily event budget is not exhausted."""

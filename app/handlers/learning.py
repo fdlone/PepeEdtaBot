@@ -149,8 +149,8 @@ async def on_text_message(
     if observation is None:
         return
 
-    async def send(parts: Sequence[str]) -> None:
-        await reply_humanized_sequence_state(
+    async def send(parts: Sequence[str]) -> int:
+        return await reply_humanized_sequence_state(
             message, parts, runtime_state, per_char=True
         )
 

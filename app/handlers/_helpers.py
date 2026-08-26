@@ -9,6 +9,9 @@ from typing import TYPE_CHECKING
 from aiogram.enums import ChatAction, ChatType
 from aiogram.types import Message
 
+from app.log_masking import mask_chat_ids_in_text
+from app.services.reply_pipeline import PartialDeliveryError
+
 if TYPE_CHECKING:
     from app.config.runtime_state import RuntimeState
 
@@ -65,13 +68,15 @@ async def reply_humanized_sequence_state(
     runtime_state: RuntimeState,
     *,
     per_char: bool = False,
-) -> None:
+) -> int:
     """``reply_humanized_sequence`` sourcing the typing pause from ``runtime_state``.
 
     The single point that resolves the runtime typing knobs: the single-message
     ``reply_humanized_state`` delegates here rather than reading them itself.
+
+    Число доставленных частей прокидывается наверх — см. контракт ``Sender``.
     """
-    await reply_humanized_sequence(
+    return await reply_humanized_sequence(
         message,
         texts,
         runtime_state.typing_min_ms,
@@ -88,14 +93,25 @@ async def reply_humanized_sequence(
     *,
     typing_per_char_ms: int = 0,
     rng: random.Random | None = None,
-) -> None:
+) -> int:
     """Send a sequence of messages with a humanized typing pause before each.
 
     The first non-empty part replies to the triggering message; follow-ups go
     as plain chat messages (send-then-send — edits look botty in Telegram
     clients). Chat-action/pause failures never block sending.
+
+    Возвращает число **доставленных** частей. Вызывающему это нужно, чтобы
+    отличить «ответа в чате нет» от «ответ ушёл частично»: ответ бота бывает
+    многочастным (фальстарт, двойное сообщение, причуда завсегдатая), и сбой
+    на второй части оставляет первую в чате. Без этого числа откат бюджета и
+    анти-повтор не могли решить, состоялся ответ или нет, и трактовали
+    частичную доставку как полное отсутствие ответа.
+
+    При исключении число уже доставленных частей уходит вместе с ним
+    (``PartialDeliveryError``), иначе оно теряется при пробросе.
     """
     first = True
+    delivered = 0
     for text in texts:
         if not text:
             continue
@@ -114,9 +130,29 @@ async def reply_humanized_sequence(
             await asyncio.sleep(delay_ms / 1000)
         except Exception as exc:
             # Ошибка chat action не должна блокировать отправку обычного ответа.
-            logger.debug("send_chat_action/typing delay failed: %s", exc)
-        if first:
-            await message.reply(text)
-            first = False
-        else:
-            await message.answer(text)
+            # Текст маскируется по тем же основаниям, что в errors.py:
+            # send_chat_action принимает chat_id, и aiogram кладёт его сырым в
+            # сообщение части исключений, а этот except до общего обработчика
+            # не доводит. Путь горячий — вызывается перед каждым ответом.
+            logger.debug(
+                "send_chat_action/typing delay failed: %s",
+                mask_chat_ids_in_text(str(exc)),
+            )
+        try:
+            if first:
+                await message.reply(text)
+                first = False
+            else:
+                await message.answer(text)
+        except Exception as exc:
+            # Оборачиваем только частичную доставку — случай, ради которого
+            # исключение и заведено. Когда не ушло ничего, исходное исключение
+            # летит как прежде: его тип читают и обработчик ошибок
+            # (TelegramAPIError), и все команды, которые шлют ответ через эту
+            # же функцию. Подменять его всюду ради одной ветки конвейера
+            # значило бы менять поведение там, где менять нечего.
+            if delivered:
+                raise PartialDeliveryError(delivered) from exc
+            raise
+        delivered += 1
+    return delivered
