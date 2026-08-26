@@ -23,12 +23,16 @@ from app.filters import (
     is_admin_or_owner,
     is_owner,
 )
-from app.handlers._helpers import reply_humanized_state
+from app.handlers._helpers import (
+    reply_humanized_sequence_state,
+    reply_humanized_state,
+)
 from app.infrastructure.database import Database
 from app.presentation.bot_messages import (
     format_clear_confirmation_message,
     format_config_message,
     format_set_help_message,
+    split_for_telegram,
 )
 from app.services import LearningService, PivoService
 
@@ -96,7 +100,13 @@ async def cmd_config(
         full=full,
         overridden=runtime_state_base.chat_overrides.get(message.chat.id, {}),
     )
-    await reply_humanized_state(message, text, runtime_state)
+    # Полная форма растёт с каждой ручкой реестра и однажды перестанет
+    # помещаться в одно сообщение. Резать её заранее дешевле, чем узнать об
+    # этом отказом sendMessage: усечение противоречило бы слову «полный» так
+    # же, как пропущенная настройка. Краткая форма проходит одной частью.
+    await reply_humanized_sequence_state(
+        message, split_for_telegram(text), runtime_state
+    )
 
 
 # O5 (docs/OPEN.md) was about reach, not about who asks: /set used to retune
@@ -291,8 +301,22 @@ async def cmd_setprob(
         return
 
     scope = "глобально, во всех чатах" if is_global else "в этом чате"
+    # Ручка записана, но при включённом директоре она не участвует в решении
+    # отвечать: полосу задают reply_probability_min/max. Молчаливое
+    # подтверждение «теперь 0.2» отправляло человека искать причину в
+    # генерации, хотя причина в том, что он крутит не ту ручку.
+    note = (
+        ""
+        if not runtime_state.reply_director_enabled
+        else (
+            "\nДиректор ответов включён, поэтому шанс ведёт полоса "
+            f"{runtime_state.reply_probability_min}..{runtime_state.reply_probability_max}; "
+            "эта ручка сейчас не действует. Менять — /set reply_probability_min|max, "
+            "выключить директора — /set reply_director_enabled false"
+        )
+    )
     await reply_humanized_state(
-        message, f"REPLY_PROBABILITY теперь: {parts[0]} ({scope})", runtime_state
+        message, f"REPLY_PROBABILITY теперь: {parts[0]} ({scope}){note}", runtime_state
     )
 
 

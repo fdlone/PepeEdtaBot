@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from app.config.registry import RUNTIME_FIELDS
+from app.config.registry import RUNTIME_FIELDS, runtime_field_names
 from app.core.generation_telemetry import GenerationTelemetry, UserQuirkGate
 from app.presentation.bot_messages import (
     TELEGRAM_COMMANDS,
@@ -12,6 +12,7 @@ from app.presentation.bot_messages import (
     format_help_message,
     format_set_help_message,
     format_stats_message,
+    split_for_telegram,
 )
 
 
@@ -97,9 +98,102 @@ class TestBotMessages(unittest.TestCase):
     def test_config_message_defaults_to_short_view(self) -> None:
         text = format_config_message(make_state())
 
-        self.assertIn("шанс ответа: 0.08", text)
         self.assertIn("длина ответа: 45 токенов", text)
         self.assertNotIn("reply_context_start_bias", text)
+
+    def test_config_shows_the_band_while_the_director_is_on(self) -> None:
+        """При включённом директоре печатается полоса, а не плоская ручка.
+
+        `reply_probability` при `reply_director_enabled=true` (дефолт реестра)
+        не читается вовсе: шанс ведёт полоса [min..max] по моментуму беседы.
+        Прежняя форма теста пинила `шанс ответа: 0.08` — то есть закрепляла
+        как контракт показ ручки, которая ни на что не влияет, и именно она
+        стоит первой строкой, куда человек смотрит раньше всего.
+        """
+        state = make_state()
+        state.reply_director_enabled = True
+
+        text = format_config_message(state)
+
+        self.assertIn(
+            f"шанс ответа: {state.reply_probability_min}..{state.reply_probability_max}",
+            text,
+        )
+        self.assertIn("директор", text)
+
+    def test_config_shows_the_flat_knob_when_the_director_is_off(self) -> None:
+        """Выключенный директор возвращает прежнюю форму — ручка снова живая."""
+        state = make_state()
+        state.reply_director_enabled = False
+
+        text = format_config_message(state)
+
+        self.assertIn(f"шанс ответа: {state.reply_probability}", text)
+        self.assertNotIn("директор", text)
+
+    def test_tempo_lines_print_without_any_generation(self) -> None:
+        """Темп и обращения видны, даже когда бот с рестарта не отвечал.
+
+        Блок телеметрии стоит за гейтом «были ли генерации», и это верно для
+        счётчиков генерации. Темп чата и обращения наблюдаются на входящих
+        сообщениях, а чат, где бот молчит, — ровно тот случай, ради которого
+        счётчик заведён (O14/O15). Спрятать их за тем же гейтом значило бы
+        гасить измерение там, где оно информативнее всего.
+        """
+        telemetry: dict[str, float | int | None] = {
+            "generations": 0,
+            "tempo_observations": 4,
+            "tempo_share_штиль": 0.5,
+            "tempo_share_кипит": 0.25,
+            "mentions_observed": 2,
+            "mention_answer_share": 0.5,
+            "mention_answers_peak_hour": 1,
+        }
+
+        text = format_stats_message({"messages": 10, "volume": 250}, telemetry)
+
+        self.assertIn("темп чата", text)
+        self.assertIn("обращений: 2", text)
+        self.assertNotIn("генераций с рестарта", text)
+
+    def test_tempo_lines_absent_when_nothing_observed(self) -> None:
+        """Пустой знаменатель — строки нет вовсе, а не нуля."""
+        text = format_stats_message({"messages": 10, "volume": 250}, {})
+
+        self.assertNotIn("темп чата", text)
+        self.assertNotIn("обращений:", text)
+        self.assertNotIn("берст-ритм", text)
+
+    def test_config_full_covers_every_runtime_field(self) -> None:
+        """«Полный список» проверяем, а не обещаем.
+
+        Спека chat-scoped-settings требовала «полный набор действующих
+        значений» с самого начала, но блок вёлся руками и показывал 52 ключа
+        из 97: невидимыми были весь директор ответа, настроение, причуды,
+        слот-мутации и `pivo_mention_by_id` — ручка отката O2. Расхождение
+        прожило незамеченным именно потому, что требование держалось словом.
+        Здесь оно держится реестром.
+        """
+        text = format_config_message(make_state(), full=True)
+
+        missing = [
+            name for name in runtime_field_names() if f"{name}=" not in text
+        ]
+        self.assertEqual(missing, [], f"не попали в /config full: {missing}")
+
+    def test_config_full_is_split_before_the_telegram_limit(self) -> None:
+        """Вывод режется по строкам и не теряет ни одной настройки."""
+        text = format_config_message(make_state(), full=True)
+        parts = split_for_telegram(text, limit=400)
+
+        self.assertGreater(len(parts), 1, "тест не проверяет разбиение")
+        for part in parts:
+            self.assertLessEqual(len(part), 400)
+        rejoined = "\n".join(parts)
+        missing = [
+            name for name in runtime_field_names() if f"{name}=" not in rejoined
+        ]
+        self.assertEqual(missing, [], f"потеряны при разбиении: {missing}")
 
     def test_config_message_full_includes_advanced_values(self) -> None:
         text = format_config_message(make_state(), full=True)
