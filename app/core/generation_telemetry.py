@@ -93,6 +93,28 @@ class GenerationTelemetry:
     # putting a candidate in the pool: that pair is what separates "the route is
     # off" from "the route is on and produced nothing" from "it produced and
     # lost". Without it a zero win-rate is unreadable.
+    # E2-1/E2-2 (ревью 2026-08-26): темп ответов наблюдаем, а не выводим из
+    # формулы. Оба дефекта — недостижимая фаза отхода берста и отсутствие
+    # пер-чатового предела на обращения — зависят от реального темпа чата, а
+    # он не измерялся ни разу. Правило §5: пока нет счётчика со знаменателем,
+    # «канал не нагружен» неотличимо от «канал не измеряется».
+    #
+    # Темп — распределением, не средним: поведение переключается скачком на
+    # границах, а чат, который то спит, то кипит, даёт среднее, не
+    # соответствующее ни одному своему режиму.
+    tempo_buckets: dict[str, int] = field(default_factory=dict)
+    # Пара со знаменателем: обращений было / на скольких бот ответил. Путь
+    # обращений не подчиняется ни кулдауну, ни часовому капу, поэтому своего
+    # счётчика у него нет нигде больше.
+    mentions_observed: int = 0
+    mentions_answered: int = 0
+    # Верхняя оценка нагрузки на этот путь: максимум ответов на обращения,
+    # пришедшийся на один час работы процесса.
+    mention_answers_by_hour: dict[int, int] = field(default_factory=dict)
+    # Прямой замер E2-1: устойчивый ноль в фазе подавления при ненулевом
+    # усилении означает, что фаза недостижима — по факту, а не по расчёту.
+    burst_phase_boost: int = 0
+    burst_phase_suppress: int = 0
     route_attempts: dict[str, int] = field(default_factory=dict)
     route_present: dict[str, int] = field(default_factory=dict)
     route_won: dict[str, int] = field(default_factory=dict)
@@ -247,6 +269,61 @@ class GenerationTelemetry:
         the attempt budget instead."""
         self.context_dropped += 1
 
+    def note_chat_tempo(self, rate_per_min: float, *, lively_at: float) -> None:
+        """Один наблюдённый темп чата, разложенный по диапазонам (E2-1).
+
+        Границы привязаны к ``lively_at`` — тому самому порогу, которым темп
+        переключает настроение и насыщает моментум, — а не к круглым числам:
+        распределение должно отвечать на вопрос «в каком режиме живёт чат», а
+        не на «какие числа красивее печатать».
+        """
+        if rate_per_min < lively_at / 6.0:
+            bucket = "штиль"
+        elif rate_per_min < lively_at / 2.0:
+            bucket = "медленно"
+        elif rate_per_min < lively_at:
+            bucket = "оживлённо"
+        else:
+            bucket = "кипит"
+        self.tempo_buckets[bucket] = self.tempo_buckets.get(bucket, 0) + 1
+
+    def note_mention_seen(self) -> None:
+        """Знаменатель: бота упомянули (E2-2).
+
+        Считается **сырое** упоминание, до гейта `mention_cooldown_sec`.
+        Первая редакция считала уже отфильтрованный признак `address_reply`,
+        и доля ответов получалась тождественно равной 100%: решение отвечать
+        на обращение принимается безусловно (`should_reply_to_message`:
+        `if mentioned: return True`), поэтому ветка «обращение без ответа»
+        была недостижима. Счётчик, заведённый ради решения по O15, не мог
+        показать ничего, кроме единицы.
+
+        Упоминание, погашенное кулдауном обращений, — это тоже нагрузка на
+        путь, у которого нет ни кулдауна между ответами, ни часового предела.
+        Именно она и должна быть видна.
+        """
+        self.mentions_observed += 1
+
+    def note_mention_answered(self, *, hour: int | None = None) -> None:
+        """Числитель: бот ответил на обращение."""
+        self.mentions_answered += 1
+        if hour is not None:
+            self.mention_answers_by_hour[hour] = (
+                self.mention_answers_by_hour.get(hour, 0) + 1
+            )
+
+    def note_burst_phase(self, *, suppressing: bool) -> None:
+        """Один ответ, сыгранный в фазе усиления или подавления берст-ритма.
+
+        Нейтральная фаза не считается: вопрос ровно в том, попадает ли хоть
+        один ответ в окно отхода, — а ответы вне обоих окон на него не
+        отвечают.
+        """
+        if suppressing:
+            self.burst_phase_suppress += 1
+        else:
+            self.burst_phase_boost += 1
+
     def note_user_quirk_outcome(self, rejected_by: UserQuirkGate | None) -> None:
         """One pass of the L2 quirk channel: which gate stopped it, or none.
 
@@ -391,4 +468,31 @@ class GenerationTelemetry:
         # rejections against what reached it, and a pre-divided share would
         # throw away exactly the denominator that makes it readable.
         values.update(self.user_quirk_funnel())
+        # E2-1/E2-2: доли рядом со своими знаменателями, как у соседей выше.
+        # Пустой знаменатель даёт None, а не ноль: «не наблюдали» и «наблюдали
+        # и вышел ноль» — разные утверждения.
+        tempo_total = sum(self.tempo_buckets.values())
+        values["tempo_observations"] = tempo_total or None
+        for bucket in ("штиль", "медленно", "оживлённо", "кипит"):
+            values[f"tempo_share_{bucket}"] = (
+                self.tempo_buckets.get(bucket, 0) / tempo_total
+                if tempo_total
+                else None
+            )
+        values["mentions_observed"] = self.mentions_observed or None
+        values["mention_answer_share"] = (
+            self.mentions_answered / self.mentions_observed
+            if self.mentions_observed
+            else None
+        )
+        values["mention_answers_peak_hour"] = (
+            max(self.mention_answers_by_hour.values())
+            if self.mention_answers_by_hour
+            else None
+        )
+        burst_total = self.burst_phase_boost + self.burst_phase_suppress
+        values["burst_phase_replies"] = burst_total or None
+        values["burst_suppress_share"] = (
+            self.burst_phase_suppress / burst_total if burst_total else None
+        )
         return values

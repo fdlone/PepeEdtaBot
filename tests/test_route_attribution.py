@@ -132,3 +132,72 @@ class TestRoutePrivacy(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReplyTempoObservability(unittest.TestCase):
+    """E2-1/E2-2: темп ответов наблюдаем, а не выводится из формулы.
+
+    Оба дефекта — недостижимая фаза отхода берста и отсутствие пер-чатового
+    предела на обращения — зависят от реального темпа чата, который не
+    измерялся ни разу. Пока нет счётчика со знаменателем, «канал не нагружен»
+    неотличимо от «канал не измеряется» (§5 CLAUDE.md).
+    """
+
+    def test_tempo_is_a_distribution_not_a_mean(self) -> None:
+        tel = GenerationTelemetry()
+        # Порог оживлённости 12: границы диапазонов берутся от него.
+        for rate in (0.5, 1.0, 4.0, 8.0, 20.0):
+            tel.note_chat_tempo(rate, lively_at=12.0)
+
+        values = tel.snapshot()
+        self.assertEqual(values["tempo_observations"], 5)
+        self.assertAlmostEqual(values["tempo_share_штиль"], 2 / 5)
+        self.assertAlmostEqual(values["tempo_share_кипит"], 1 / 5)
+
+    def test_tempo_absent_reads_as_not_observed(self) -> None:
+        values = GenerationTelemetry().snapshot()
+        self.assertIsNone(values["tempo_observations"])
+        self.assertIsNone(values["tempo_share_кипит"])
+
+    def test_mention_denominator_grows_without_an_answer(self) -> None:
+        """Обращение без ответа — тоже нагрузка на путь без предела.
+
+        Знаменатель и числитель — две разные точки: упоминание видно в
+        `observe` до всех гейтов, ответ решается в `respond`. Первая редакция
+        считала их одним вызовом с булевым флагом, и доля выходила
+        тождественно равной единице (проводка проверяется в
+        `tests/test_reply_pipeline.py::TestTempoCountersWiring`).
+        """
+        tel = GenerationTelemetry()
+        tel.note_mention_seen()
+        tel.note_mention_answered(hour=10)
+        tel.note_mention_seen()  # это обращение ответа не получило
+
+        values = tel.snapshot()
+        self.assertEqual(values["mentions_observed"], 2)
+        self.assertAlmostEqual(values["mention_answer_share"], 0.5)
+
+    def test_mention_peak_hour_is_the_busiest_one(self) -> None:
+        tel = GenerationTelemetry()
+        for _ in range(3):
+            tel.note_mention_seen()
+            tel.note_mention_answered(hour=10)
+        tel.note_mention_seen()
+        tel.note_mention_answered(hour=11)
+
+        self.assertEqual(tel.snapshot()["mention_answers_peak_hour"], 3)
+
+    def test_burst_phases_are_counted_separately(self) -> None:
+        """Ноль в фазе отхода при ненулевом усилении — доказательство E2-1."""
+        tel = GenerationTelemetry()
+        for _ in range(4):
+            tel.note_burst_phase(suppressing=False)
+
+        values = tel.snapshot()
+        self.assertEqual(values["burst_phase_replies"], 4)
+        self.assertEqual(values["burst_suppress_share"], 0.0)
+
+    def test_burst_share_is_none_without_replies(self) -> None:
+        values = GenerationTelemetry().snapshot()
+        self.assertIsNone(values["burst_phase_replies"])
+        self.assertIsNone(values["burst_suppress_share"])

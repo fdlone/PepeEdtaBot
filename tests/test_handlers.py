@@ -153,6 +153,17 @@ def _fake_state(**kwargs: object) -> MagicMock:
     # Mood off by default so the existing behavioural assertions see the
     # unmodulated path; dedicated mood tests enable it explicitly.
     s.mood_enabled = False
+    # Числовое значение обязательно: счётчик темпа (O14) сравнивает с ним
+    # rate_ewma, а голый MagicMock не поддерживает сравнение и даёт TypeError,
+    # из которого не видно ни причины, ни того, что виноват реестр.
+    #
+    # Это уже вторая ручка, добавленная в реестр и уронившая тесты здесь по
+    # той же причине (первая — на M2R-900, 71 падение). Фикстура остаётся
+    # рукописным зеркалом RUNTIME_FIELDS поверх MagicMock — единственным из
+    # оставшихся: три других зеркала сняты по O6 и собираются из реестра.
+    # Пока это не сделано и здесь, каждая новая ручка будет ломать этот файл
+    # заново. Заведено ревью 2026-08-26 как A-9/D-3.
+    s.mood_lively_rate_per_min = 12.0
     # M2 director off by default so the flat reply_probability path is exercised
     # by the existing tests; dedicated director tests enable it explicitly.
     s.reply_director_enabled = False

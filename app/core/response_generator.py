@@ -1188,7 +1188,36 @@ class ResponseGenerator:
                 rng=generation_rng,
             )
 
+        # M3R-103. ``attempted`` is deliberately not "every route in the enum":
+        # a route whose knob is off must stay distinguishable from one that ran
+        # and produced nothing, and only the knobs know which is which.
+        # Computed before the empty-pool return for the same reason
+        # ``note_context_mode`` is called first: a generation where every route
+        # ran and every candidate was rejected is precisely the case the pair of
+        # denominators exists to show. Counting it only on success inflates both
+        # route_present/route_attempts and route_won/route_present, and it
+        # inflates them towards "the route is useful" — the worst direction for
+        # a promotion gate (M3R-220).
+        attempted = {CandidateRoute.VANILLA, CandidateRoute.EXTENSION}
+        if self.runtime_state.markov_seeded_candidate_ratio > 0.0:
+            attempted.add(CandidateRoute.SEEDED)
+        if self.runtime_state.slot_mutation_probability > 0.0:
+            attempted.add(CandidateRoute.MUTATED)
+
         if not candidates:
+            self.generator.telemetry.note_routes(
+                attempted=attempted,
+                present=set(),
+                winner=None,
+            )
+            # `note_seeded` — по тем же основаниям и в ту же сторону. Первая
+            # редакция этой правки его пропустила, и знаменатель
+            # `seeded_generations` остался считаться только на успешном пути:
+            # `seeded_present_rate` и `seeded_win_rate_given_present` были
+            # завышены ровно на долю провальных генераций. Именно по этим двум
+            # числам в /stats принимается решение M2R-430.
+            if self.runtime_state.markov_seeded_candidate_ratio > 0.0:
+                self.generator.telemetry.note_seeded(present=False, won=False)
             gen_trace_log.log_selection(
                 request.chat_id,
                 candidates,
@@ -1207,14 +1236,6 @@ class ResponseGenerator:
                 present=bool(seeded_texts),
                 won=selected.text in seeded_texts,
             )
-        # M3R-103. ``attempted`` is deliberately not "every route in the enum":
-        # a route whose knob is off must stay distinguishable from one that ran
-        # and produced nothing, and only the knobs know which is which.
-        attempted = {CandidateRoute.VANILLA, CandidateRoute.EXTENSION}
-        if self.runtime_state.markov_seeded_candidate_ratio > 0.0:
-            attempted.add(CandidateRoute.SEEDED)
-        if self.runtime_state.slot_mutation_probability > 0.0:
-            attempted.add(CandidateRoute.MUTATED)
         self.generator.telemetry.note_routes(
             attempted=attempted,
             present={candidate.route for candidate in candidates},
