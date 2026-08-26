@@ -12,6 +12,7 @@ from app.infrastructure.database import (
     Database,
     MaintenanceOutcome,
 )
+from app.repositories.chat_emoji_stats_repo import EMOJI_STATS_SQL
 
 CHAT = 4242
 
@@ -40,6 +41,31 @@ class TestChatEmojiStatsRepo(unittest.IsolatedAsyncioTestCase):
         await self.db.chat_emoji_stats.bump(CHAT, {"😂": 0, "🔥": -2})
         await self.db.chat_emoji_stats.bump(CHAT, {})
         self.assertEqual(await self.db.chat_emoji_stats.get_stats(CHAT), {})
+
+    async def test_stats_come_back_in_a_total_order(self) -> None:
+        """Чтение, питающее розыгрыш, несёт полный порядок (§5 CLAUDE.md).
+
+        `sample_emoji` строит population/weights в порядке этого словаря и
+        отдаёт их в `rng.choices`, который при фиксированном зерне зависит от
+        порядка популяции. Без `ORDER BY` свойство держалось планом запроса:
+        таблица rowid'ная, `decay_stale` строки переписывает, и скан вернул бы
+        порядок вставки. Тот же класс дефекта дважды прожил до внешней
+        разведки при зелёном гарде — `generation_hash` эмодзи-канал выключает
+        и увидеть расхождение не может.
+        """
+        await self.db.chat_emoji_stats.bump(CHAT, {"🔥": 1, "😂": 1, "🎉": 1})
+        # Переписываем строки: после затухания порядок rowid отличается от
+        # алфавитного, если запрос его не задаёт.
+        await self.db.chat_emoji_stats.bump(CHAT, {"🔥": 5})
+
+        keys = list((await self.db.chat_emoji_stats.get_stats(CHAT)).keys())
+        self.assertEqual(keys, sorted(keys))
+        # Сравнения порядка недостаточно, и это проверено мутацией: план идёт
+        # по автоиндексу (chat_id, emoji), поэтому снятие `ORDER BY` порядок
+        # не меняет и тест остаётся зелёным. Гардом делает сверка запроса,
+        # который РЕАЛЬНО уходит в базу, — тот же приём, что в
+        # `markov_repo.REVERSE_TRANSITIONS_SQL`.
+        self.assertIn("ORDER BY", EMOJI_STATS_SQL, "клауза порядка потеряна")
 
     async def test_stats_are_per_chat(self) -> None:
         await self.db.chat_emoji_stats.bump(CHAT, {"😂": 1})

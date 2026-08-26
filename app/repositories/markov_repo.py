@@ -21,6 +21,22 @@ def _transition_row(row: aiosqlite.Row) -> TransitionRow:
     )
 
 
+# Вынесены в константы, чтобы тест плана запроса читал тот же текст, что
+# уходит в базу. Прежний гард строил EXPLAIN по рукописной копии и потому
+# ничего не охранял: копия разошлась с кодом, а тест остался зелёным.
+REVERSE_TRANSITIONS_SQL = """
+    SELECT w1, cnt, s_value, s_updated_at
+    FROM transitions INDEXED BY idx_transitions_reverse
+    WHERE chat_id = ? AND w2 = ? AND w3 = ?
+    ORDER BY w1
+"""
+
+REVERSE_BRANCH_SQL = (
+    "SELECT COUNT(*) FROM (SELECT DISTINCT w1 FROM transitions "
+    "INDEXED BY idx_transitions_reverse WHERE chat_id = ? AND w2 = ?)"
+)
+
+
 class MarkovRepo(BaseRepo):
     """Read-only доступ к таблицам starts/transitions/transitions3/messages."""
 
@@ -121,19 +137,21 @@ class MarkovRepo(BaseRepo):
         """Which tokens preceded state ``(w2, w3)``, with the temporal record.
 
         M2R-400 (TZ §9.2, design D1): a reverse order-2 transition IS the
-        forward row read by its last two columns — served by
-        ``idx_transitions_reverse``, never a scan. No production caller until
+        forward row read by its last two columns. No production caller until
         seeded generation (M2R-410) lands behind its own gate.
+
+        ``INDEXED BY`` — не оптимизация, а принуждение. Утверждение «served by
+        ``idx_transitions_reverse``, never a scan`` стояло здесь с миграции 020
+        и было неверным: в базе нет ``sqlite_stat1`` (``ANALYZE`` не
+        выполняется нигде в проекте), и без статистики SQLite предпочитает
+        PK-индекс — скан всего чата в порядке ``w1`` бесплатно удовлетворяет
+        ``ORDER BY``. Замер на прод-копии 2026-08-26: 1.42 мс против 0.036 мс
+        с индексом, то есть 40×. Результат идентичен — при фиксированных
+        ``(chat_id, w2, w3)`` значение ``w1`` уникально по первичному ключу,
+        поэтому ``ORDER BY w1`` остаётся тотальным. Гейт ``generation_hash``
+        такую разницу не видит по построению: байты те же, отличается время.
         """
-        rows = await self._fetch_all(
-            """
-            SELECT w1, cnt, s_value, s_updated_at
-            FROM transitions
-            WHERE chat_id = ? AND w2 = ? AND w3 = ?
-            ORDER BY w1
-            """,
-            (chat_id, w2, w3),
-        )
+        rows = await self._fetch_all(REVERSE_TRANSITIONS_SQL, (chat_id, w2, w3))
         return [_transition_row(r) for r in rows]
 
     async def get_seed_forward(
@@ -164,14 +182,17 @@ class MarkovRepo(BaseRepo):
         """How many distinct tokens the seed can be preceded by (M2R-410).
 
         The seed's reverse branching for the seed score: distinct ``w1`` over
-        rows where the seed is the pair's first member (``w2 = token``). Served
-        by the ``idx_transitions_reverse`` prefix ``(chat_id, w2)``.
+        rows where the seed is the pair's first member (``w2 = token``).
+
+        ``INDEXED BY`` по тем же основаниям, что у ``get_reverse_transitions``:
+        без ``sqlite_stat1`` планировщик выбирал PK-индекс и сканировал чат
+        целиком. Замер на прод-копии 2026-08-26: 1.16 мс против 0.086 мс, 13×.
+        Этот запрос зовётся по одному разу на каждый eligible-токен входящего
+        сообщения (``rank_seeds``), поэтому цена умножается на длину
+        сообщения — при включении ``markov_seeded_candidate_ratio`` (M2R-430)
+        это десятки миллисекунд из бюджета p95 150 мс.
         """
-        rows = await self._fetch_all(
-            "SELECT COUNT(*) FROM (SELECT DISTINCT w1 FROM transitions "
-            "WHERE chat_id = ? AND w2 = ?)",
-            (chat_id, token),
-        )
+        rows = await self._fetch_all(REVERSE_BRANCH_SQL, (chat_id, token))
         return int(rows[0][0]) if rows else 0
 
     async def get_token_df(self, chat_id: int, token: str) -> int:

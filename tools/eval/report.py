@@ -8,11 +8,12 @@ insufficient data, with the numbers that produced them.
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 from statistics import mean
 from typing import Any
 
-from .bootstrap import bootstrap_ci, delta_ci, distinct_delta_ci
+from .bootstrap import bootstrap_ci, complete_pairs, delta_ci, distinct_delta_ci
 from .metrics import distinct_n, latency_percentiles, meme_regression, metric_values
 from .prompts import PromptSet
 from .run import ConfigRun
@@ -79,6 +80,18 @@ def _delta_cell(base: list[float] | None, other: list[float] | None) -> str:
     return f"{_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]{marker}"
 
 
+def _finite(samples: list[float] | None) -> list[float]:
+    """Отбросить метки `nan` («записи в метрике нет»).
+
+    Метрики с фильтром выровнены по списку записей, чтобы парная дельта могла
+    сшивать наблюдения одного промпта. Всё, что читает такой список как
+    выборку, обязано метки убрать.
+    """
+    if not samples:
+        return []
+    return [value for value in samples if not math.isnan(value)]
+
+
 def metrics_summary(
     runs: dict[str, ConfigRun], context_mode: str = "ctx"
 ) -> dict[str, Any]:
@@ -101,7 +114,12 @@ def metrics_summary(
             "shared_with": run.shared_with,
             "n_records": len(run.records),
             "metrics": {
-                name: (round(mean(samples), 9) if samples else None)
+                # `nan` — метка «этой записи в метрике нет» (метрики с
+                # фильтром выровнены по списку записей, чтобы дельта строила
+                # пары). В сводку она попасть не должна: сводка сравнивается
+                # на побитовую воспроизводимость, а `nan != nan` — прогон
+                # переставал равняться самому себе.
+                name: (round(mean(clean), 9) if (clean := _finite(samples)) else None)
                 for name, samples in values.items()
             },
             "distinct_2": None if d2 is None else round(d2, 9),
@@ -126,6 +144,13 @@ def _delta_part(
     """
     if not base or not arm:
         missing.append(f"{label} samples")
+        return None
+    # Полных пар может не оказаться и на непустых списках: армы отвечают на
+    # разных промптах, и после выравнивания метками пересечение бывает
+    # пустым. Это отсутствие данных, а не сбой прогона — гейт обязан уйти в
+    # `insufficient`, как и при пустой выборке.
+    if not complete_pairs(base, arm)[0]:
+        missing.append(f"{label} paired samples")
         return None
     point, lo, hi, significant = delta_ci(base, arm)
     parts.append(
@@ -153,6 +178,13 @@ def _delta_ci_low(
     """
     if not base or not arm:
         missing.append(f"{label} samples")
+        return None
+    # Полных пар может не оказаться и на непустых списках: армы отвечают на
+    # разных промптах, и после выравнивания метками пересечение бывает
+    # пустым. Это отсутствие данных, а не сбой прогона — гейт обязан уйти в
+    # `insufficient`, как и при пустой выборке.
+    if not complete_pairs(base, arm)[0]:
+        missing.append(f"{label} paired samples")
         return None
     point, lo, hi, significant = delta_ci(base, arm)
     parts.append(
@@ -731,6 +763,22 @@ def _structural_escape_rows(
                 f"pool ECB {_fmt(pool_mean)} [{_fmt(pool_lo)}, {_fmt(pool_hi)}] "
                 f"(floor {pool_min:.1f})"
             )
+            # Доля рядом с абсолютом. Пол `pool_ecb_min` — счёт траекторий, и
+            # он тривиально берётся растущим пулом: seeded добавляет
+            # кандидатов сверх `effective_target`, каждый маршрут Track B
+            # добавит ещё. Порог не двигается (пре-регистрация), но читатель
+            # обязан видеть величину, которую порог должен был мерить, —
+            # иначе первый же маршрутный отчёт покажет зелёный ECB, ничего не
+            # означающий. Имя отдельное, ровно как «доля входов ниже 2».
+            share = values.get("structural_pool_ecb_share")
+            if share:
+                share_mean, share_lo, share_hi = bootstrap_ci(share)
+                parts.append(
+                    f"pool ECB share {_fmt(share_mean)} "
+                    f"[{_fmt(share_lo)}, {_fmt(share_hi)}] "
+                    "(доля различных траекторий в пуле; порога нет — "
+                    "справочно к полу выше)"
+                )
             # Distribution, not only the mean: it is what says whether the
             # verdict hangs on the overlap threshold. A run whose window count
             # is 1 almost everywhere would not change its verdict at any
@@ -1035,8 +1083,21 @@ def build_report(
     lines.append("## Metrics table")
     lines.append("")
     lines.append(
-        "Value [95% CI] per configuration; delta vs C0 [95% CI], `*` = significant "
-        "(interval excludes 0, doc 05 §4)."
+        "Value [95% CI] per configuration; delta vs C0 [95% CI **парный**], "
+        "`*` = significant (interval excludes 0, doc 05 §4)."
+    )
+    lines.append("")
+    lines.append(
+        "> Интервал дельты в ЭТОЙ таблице — **парный**: армы идут по одним и тем же промптам "
+        "и сидам, поэтому ресэмплируются пары наблюдений, а не два арма "
+        "независимо. С отчётами до 2026-08-26 ширина интервалов "
+        "**несопоставима** — там дельта считалась независимым ресэмплингом и "
+        "интервал был шире истинного тем сильнее, чем выше корреляция армов. "
+        "Точечные оценки сопоставимы: они не изменились. "
+        "**distinct-2/3 парность НЕ получили** — их дельта считается по целым "
+        "ответам (`distinct_delta_ci`) и остаётся непарной; там интервал "
+        "по-прежнему шире истинного, то есть вердикт консервативен, но "
+        "сравнивать его ширину с таблицей выше нельзя."
     )
     lines.append("")
     columns = ["metric"]
@@ -1149,7 +1210,9 @@ def build_report(
         lines.append(
             f"{config_id}: distinct-2 = {d2 and _fmt(d2)} (basis {basis2}), "
             f"distinct-3 = {d3 and _fmt(d3)} (basis {basis3}) — type/token ratios, "
-            "comparable only at equal basis; "
+            "comparable only at equal basis; их дельта считается НЕпарным "
+            "бутстрапом (`distinct_delta_ci`), в отличие от таблицы метрик — "
+            "интервал шире истинного, вердикт консервативен; "
             f"latency p50/p95 = {latencies['latency_p50']:.1f}/"
             f"{latencies['latency_p95']:.1f} ms; cache_hit_rate: {hit_line}; "
             f"mean normalized entropy: {entropy_line}; "

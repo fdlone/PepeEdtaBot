@@ -15,6 +15,10 @@ from unittest.mock import AsyncMock
 
 from app.core.markov import tokenize
 from app.infrastructure.database import Database
+from app.repositories.markov_repo import (
+    REVERSE_BRANCH_SQL,
+    REVERSE_TRANSITIONS_SQL,
+)
 
 CHAT = 4242
 
@@ -59,17 +63,35 @@ class TestReverseLookups(_DatabaseCase):
         self.assertEqual(reverse, forward)
 
     async def test_reverse_lookup_rides_the_index_not_a_scan(self) -> None:
+        """План проверяется у запроса, который репозиторий реально выполняет.
+
+        Прежняя редакция теста строила EXPLAIN по **рукописной копии** SQL и
+        потому ничего не охраняла: на тестовой базе из одного сообщения
+        планировщик выбирает индекс сам, а в проде — нет. Замер на прод-копии
+        2026-08-26: без принуждения оба реверсных запроса шли сканом чата
+        (1.42 и 1.16 мс), потому что `sqlite_stat1` в базе нет — `ANALYZE` не
+        выполняется нигде в проекте, — и без статистики SQLite предпочитает
+        PK-индекс, который бесплатно даёт `ORDER BY w1`. Утверждение
+        докстринга «served by idx_transitions_reverse, never a scan» прожило
+        так с миграции 020.
+
+        Здесь тест и репозиторий читают **одну константу** с текстом запроса,
+        поэтому копия разойтись не может: EXPLAIN строится ровно по тому SQL,
+        который уйдёт в базу.
+        """
         await self._learn("а б в г")
         conn = await self.db._get_conn()
-        cursor = await conn.execute(
-            "EXPLAIN QUERY PLAN "
-            "SELECT w1, cnt, s_value, s_updated_at FROM transitions "
-            "WHERE chat_id = ? AND w2 = ? AND w3 = ?",
-            (CHAT, "б", "в"),
-        )
-        plan = " | ".join(str(row[3]) for row in await cursor.fetchall())
-        self.assertIn("idx_transitions_reverse", plan)
-        self.assertNotIn("SCAN transitions", plan)
+
+        for sql, params in (
+            (REVERSE_TRANSITIONS_SQL, (CHAT, "б", "в")),
+            (REVERSE_BRANCH_SQL, (CHAT, "б")),
+        ):
+            cursor = await conn.execute("EXPLAIN QUERY PLAN " + sql, params)
+            plan = " | ".join(str(row[3]) for row in await cursor.fetchall())
+            self.assertIn(
+                "idx_transitions_reverse", plan, f"скан вместо индекса: {plan}"
+            )
+            self.assertNotIn("SCAN transitions", plan)
 
     async def test_wiped_with_the_chat(self) -> None:
         await self._learn("а б в г")
