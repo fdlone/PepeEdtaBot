@@ -20,6 +20,7 @@ from app.domain.pivo_templates import (
 from app.services.pivo_message_builder import (
     PivoMessageContext,
     PivoMessageGenerator,
+    _format_time_value,
     build_pivo_message_context,
 )
 
@@ -674,3 +675,30 @@ class TestPivoSubSlots(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEveryParsedTimeFormIsLocalized(unittest.TestCase):
+    """Каждая форма, которую принимает парсер, имеет локализацию.
+
+    «/pivo завтра 19:00» давало «собираемся завтра 19:00» без предлога, а
+    «/pivo tomorrow 19:00» — правильное «завтра в 19:00»: в таблице префиксов
+    были голые английские формы и не было голых русских. Русский ввод в
+    русском чате обслуживался хуже английского. Найдено E-06 (раунд 1),
+    подтверждено независимым замером W-1 (раунд 3).
+    """
+
+    def test_bare_day_plus_clock_gets_the_preposition(self) -> None:
+        for value, expected in (
+            ("завтра 19:00", "завтра в 19:00"),
+            ("сегодня 19:00", "сегодня в 19:00"),
+            ("tomorrow 19:00", "завтра в 19:00"),
+            ("today 19:00", "сегодня в 19:00"),
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(_format_time_value(value), expected)
+
+    def test_forms_that_already_worked_are_untouched(self) -> None:
+        """Длинные формы проверяются раньше — предлог не дублируется."""
+        for value in ("сегодня в 19:00", "завтра в 21:00", "завтра вечером", "сегодня"):
+            with self.subTest(value=value):
+                self.assertEqual(_format_time_value(value), value)
