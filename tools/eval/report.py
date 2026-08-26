@@ -149,7 +149,14 @@ def _delta_part(
     # отсутствие данных ведёт в «insufficient», а не роняет прогон.
     result = delta_ci(base, arm)
     if result is None:
-        missing.append(f"{label} samples")
+        # Две разные причины и два разных действия: пустая сторона — чинить
+        # прогон, пустое пересечение непустых списков — смотреть выравнивание
+        # (армы ответили на непересекающихся промптах). Первая редакция
+        # правки схлопнула их в одну строку, и вердикт `insufficient data`
+        # перестал говорить, что именно чинить.
+        missing.append(
+            f"{label} samples" if not base or not arm else f"{label} paired samples"
+        )
         return None
     point, lo, hi, significant = result
     parts.append(
@@ -181,7 +188,14 @@ def _delta_ci_low(
     # отсутствие данных ведёт в «insufficient», а не роняет прогон.
     result = delta_ci(base, arm)
     if result is None:
-        missing.append(f"{label} samples")
+        # Две разные причины и два разных действия: пустая сторона — чинить
+        # прогон, пустое пересечение непустых списков — смотреть выравнивание
+        # (армы ответили на непересекающихся промптах). Первая редакция
+        # правки схлопнула их в одну строку, и вердикт `insufficient data`
+        # перестал говорить, что именно чинить.
+        missing.append(
+            f"{label} samples" if not base or not arm else f"{label} paired samples"
+        )
         return None
     point, lo, hi, significant = result
     parts.append(

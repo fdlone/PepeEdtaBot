@@ -36,7 +36,9 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import re
+import traceback
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -122,3 +124,43 @@ def _mask_match(match: re.Match[str]) -> str:
         return mask_chat_id(int(match.group(0)))
     except LogMaskingNotInitialized:
         return UNMASKED_PLACEHOLDER
+
+
+class MaskingFilter(logging.Filter):
+    """Маскирование `chat_id` на уровне логгера, а не на каждом вызове.
+
+    Правило §4 CLAUDE.md — «маскировать везде, включая текст чужих
+    исключений» — трижды держалось перечислением точек и трижды промахивалось:
+    сперва общий обработчик ошибок (2026-08-05), потом фильтр прав и путь
+    отправки (B-2/E-04), потом обёртка `PartialDeliveryError`, уводившая
+    исключение мимо ветки маскирования (V-1), и наконец восемь `exc_info` в
+    обработчиках `/pivo` и обучения (W3-1). Каждый раз правило было записано,
+    и каждый раз новое место о нём не знало.
+
+    Фильтр снимает зависимость от внимательности: он видит **все** записи
+    логгера, включая трассы `exc_info`, которые точечная обёртка вокруг
+    `str(exc)` не покрывает в принципе. Исключение форматируется здесь же и
+    кладётся в `exc_text` уже замаскированным — форматтер использует готовый
+    текст и повторно к `exc_info` не обращается.
+
+    Записи ниже действующего уровня логирования сюда не доходят, поэтому
+    отладочные вызовы на горячем пути за регулярку не платят.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.exc_info and record.exc_info[1] is not None:
+            record.exc_text = mask_chat_ids_in_text(
+                "".join(traceback.format_exception(record.exc_info[1]))
+            ).rstrip()
+            record.exc_info = None
+        try:
+            message = record.getMessage()
+        except Exception:
+            # Кривой формат — не повод потерять запись целиком; пусть её
+            # отформатирует стандартный путь, как и раньше.
+            return True
+        masked = mask_chat_ids_in_text(message)
+        if masked != message:
+            record.msg = masked
+            record.args = ()
+        return True

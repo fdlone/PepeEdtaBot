@@ -1,6 +1,8 @@
 """Tests for app.log_masking — chat_id masking helper."""
 from __future__ import annotations
 
+import io
+import logging
 import unittest
 
 from app import log_masking
@@ -132,3 +134,59 @@ class TestMaskChatIdsInText(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMaskingFilterClosesTheClass(unittest.TestCase):
+    """Маскирование — свойство логгера, а не обязанность вызывающего.
+
+    Правило §4 трижды держалось перечислением точек и трижды промахивалось:
+    общий обработчик ошибок (2026-08-05), фильтр прав и путь отправки
+    (B-2/E-04), обёртка над отправкой, уводившая исключение мимо ветки
+    маскирования (V-1), и восемь `exc_info` в обработчиках /pivo и обучения
+    (W3-1). Каждый раз правило было записано, и каждый раз новое место о нём
+    не знало. Фильтр видит все записи, включая трассы, которые обёртка вокруг
+    `str(exc)` не покрывает в принципе.
+    """
+
+    def setUp(self) -> None:
+        log_masking.reset_masking()
+        log_masking.init_masking("secret-for-the-masking-filter")
+        self.addCleanup(log_masking.reset_masking)
+        self.logger = logging.getLogger("test_masking_filter")
+        self.logger.handlers.clear()
+        self.logger.filters.clear()
+        self.logger.setLevel(logging.DEBUG)
+        self.logger.propagate = False
+        self.buffer = io.StringIO()
+        self.logger.addHandler(logging.StreamHandler(self.buffer))
+        self.logger.addFilter(log_masking.MaskingFilter())
+
+    def test_exc_info_traceback_is_masked(self) -> None:
+        """Именно тот случай, который точечные обёртки не покрывают."""
+        chat_id = -1001234567890
+        try:
+            raise RuntimeError(f"Flood control exceeded in chat {chat_id}")
+        except RuntimeError:
+            self.logger.exception("pivo command failed")
+
+        logged = self.buffer.getvalue()
+        self.assertNotIn(str(chat_id), logged, "сырой chat_id из трассы попал в лог")
+        self.assertIn(log_masking.mask_chat_id(chat_id), logged)
+        self.assertIn("Traceback", logged, "трасса потеряна")
+        self.assertIn("Flood control", logged, "диагностика потеряна")
+
+    def test_plain_message_argument_is_masked(self) -> None:
+        chat_id = -1009876543210
+        self.logger.warning("something about chat %s", chat_id)
+
+        logged = self.buffer.getvalue()
+        self.assertNotIn(str(chat_id), logged)
+        self.assertIn(log_masking.mask_chat_id(chat_id), logged)
+
+    def test_diagnostic_numbers_survive(self) -> None:
+        """Положительные числа — не идентификаторы чата и обязаны выжить."""
+        self.logger.info("retry after 30, error_code 429, message_id 12345")
+
+        logged = self.buffer.getvalue()
+        for number in ("30", "429", "12345"):
+            self.assertIn(number, logged)

@@ -130,6 +130,16 @@ async def run_bot() -> None:
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
     logger = logging.getLogger("chat_markov")
+    # Маскирование `chat_id` — свойство логгера, а не обязанность каждого
+    # вызывающего. Правило §4 CLAUDE.md трижды держалось перечислением точек
+    # и трижды промахивалось на новом месте; фильтр видит все записи, включая
+    # трассы `exc_info`, которые обёртка вокруг `str(exc)` не покрывает
+    # вовсе. Ставится сразу после `init_masking`: до него ключа ещё нет.
+    #
+    # Вешается и на `aiogram` тоже — сырой идентификатор туда кладёт как раз
+    # он, и его собственные предупреждения идут мимо логгера проекта.
+    for name in ("chat_markov", "aiogram"):
+        logging.getLogger(name).addFilter(log_masking.MaskingFilter())
     logging.getLogger("aiogram").setLevel(logging.WARNING)
     gen_trace_log.configure(settings.gen_trace_log)
 

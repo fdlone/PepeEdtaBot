@@ -361,17 +361,20 @@ class GenerationTelemetry:
         """
         self.mentions_observed += 1
 
-    def note_mention_answered(self, *, at: float | None = None) -> None:
+    def note_mention_answered(self, *, at: float) -> None:
         """Числитель: бот ответил на обращение.
 
         ``at`` — монотонная метка времени; по ней считается пик за скользящий
         час. Список ограничен сверху, чтобы процесс с долгим аптаймом не рос
         без предела: для оценки пика хватает последних наблюдений, а точный
         исторический максимум за недели этой величине не нужен.
+
+        Обязательный, без значения по умолчанию: с `None` потеря аргумента в
+        месте вызова превращала пик в вечный ноль молча, а `/stats` печатает
+        его рядом с пределом 20, по которому решается O15. Теперь это ошибка
+        типов, а не тихая метрика-обманка.
         """
         self.mentions_answered += 1
-        if at is None:
-            return
         self.mention_answer_times.append(at)
         while len(self.mention_answer_times) > MENTION_TIME_WINDOW_MAX:
             self.mention_answer_times.popleft()
