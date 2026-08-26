@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from app.core.candidate_scorer import CandidateScore
 from app.core.generation_telemetry import GenerationTelemetry
+from app.core.markov import tokenize
 from app.core.mood import MoodModifiers
 from app.core.response_generator import (
     CANDIDATE_TARGET,
@@ -130,6 +131,62 @@ def _request() -> GenerationRequest:
 
 def _score(value: float) -> CandidateScore:
     return CandidateScore(value, 0.0, 0.0, 0.0, 0.0)
+
+
+class TestMutatedTokensMatchTheSentText(unittest.IsolatedAsyncioTestCase):
+    """Маршрут MUTATED скорит тот же объект, который уходит в чат.
+
+    `detokenize` обрывает список токенов на символьном пределе, а
+    `_mutated_variant` возвращал исходный, необрезанный. Скорер читал хвост,
+    которого в ответе нет: длина, повторы, тематичность и анти-цитата
+    считались по несуществующему тексту, а `is_short_generated_reply` —
+    по «длинному» варианту. Это был единственный маршрут с таким
+    расхождением: остальные три выводят токены из финального текста.
+    """
+
+    async def test_tokens_are_derived_from_the_truncated_text(self) -> None:
+        state = _runtime_state()
+        state.max_reply_chars = 60
+        state.slot_mutation_probability = 1.0
+        generator = _traced_generator()
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=_learning_service(),
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(1.0)),
+        )
+        long_tokens = ["словечко"] * 30
+
+        # Гейты приёмки к делу не относятся: тест про соответствие токенов
+        # тексту, а не про то, пройдёт ли кандидат анти-повтор.
+        with (
+            patch(
+                "app.core.response_generator.mutate_candidate_tokens",
+                return_value=long_tokens,
+            ),
+            patch.object(
+                ResponseGenerator,
+                "_candidate_reject_reason",
+                AsyncMock(return_value=None),
+            ),
+        ):
+            variant = await response_generator._mutated_variant(
+                _request(),
+                long_tokens,
+                frequencies={},
+                protected_tokens=frozenset(),
+                rng=random.Random(1),
+            )
+
+        assert variant is not None
+        text, tokens = variant
+        self.assertLessEqual(len(text), 60, "текст не обрезан — тест не о том")
+        self.assertEqual(
+            tokens,
+            tokenize(text, normalize_lower=state.normalize_lower),
+            "скорятся токены, которых нет в отправленном тексте",
+        )
+        self.assertLess(len(tokens), len(long_tokens), "обрезки не произошло")
 
 
 class TestRouteDenominatorsOnEmptyPool(unittest.IsolatedAsyncioTestCase):

@@ -7,6 +7,7 @@ surfaced through ``/stats``; reset on restart by construction.
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -45,6 +46,32 @@ class UserQuirkGate(StrEnum):
     DAILY_LIMIT = "daily_limit"
     ROLL = "roll"
     THRESHOLD = "threshold"
+
+
+# Предел списка меток времени ответов на обращения. Для оценки пика за
+# скользящий час хватает последних наблюдений; точный исторический максимум за
+# недели аптайма этой величине не нужен, а расти без предела она не должна.
+MENTION_TIME_WINDOW_MAX = 4096
+
+
+def _peak_in_sliding_hour(times: deque[float]) -> int | None:
+    """Наибольшее число меток, попадающих в любое окно длиной час.
+
+    Скользящее окно, а не фиксированные корзины: границы корзин привязаны к
+    произвольной эпохе, и всплеск, легший на стык, делится пополам. Тем же
+    окном считает `within_hourly_cap` для самостоятельных ответов — величины
+    сравниваются между собой, значит и считаться должны одинаково.
+    """
+    if not times:
+        return None
+    ordered = sorted(times)
+    peak = 0
+    left = 0
+    for right, moment in enumerate(ordered):
+        while moment - ordered[left] >= 3600.0:
+            left += 1
+        peak = max(peak, right - left + 1)
+    return peak
 
 
 @dataclass(slots=True)
@@ -93,6 +120,17 @@ class GenerationTelemetry:
     # putting a candidate in the pool: that pair is what separates "the route is
     # off" from "the route is on and produced nothing" from "it produced and
     # lost". Without it a zero win-rate is unreadable.
+    # W2-2: отложенный контекстный якорь мог не дожить до вклейки — прогулка
+    # упирается в символьный предел раньше, чем в разыгранную позицию. Такой
+    # ответ помечается как `global`, а счётчики совпадений обнуляются, то есть
+    # канал молча маскируется под «якоря не было». При этом всю прогулку
+    # `anchor_pending` был True, и ветка джампа под ним не исполнялась —
+    # вероятность отступления была ровно нулевой без записи об этом.
+    #
+    # Пара со знаменателем по образцу M3R-141: «якорь отложили» и «якорь
+    # вклеили». Расхождение и есть находка.
+    anchor_splice_deferred: int = 0
+    anchor_splice_done: int = 0
     # E2-1/E2-2 (ревью 2026-08-26): темп ответов наблюдаем, а не выводим из
     # формулы. Оба дефекта — недостижимая фаза отхода берста и отсутствие
     # пер-чатового предела на обращения — зависят от реального темпа чата, а
@@ -108,9 +146,15 @@ class GenerationTelemetry:
     # счётчика у него нет нигде больше.
     mentions_observed: int = 0
     mentions_answered: int = 0
-    # Верхняя оценка нагрузки на этот путь: максимум ответов на обращения,
-    # пришедшийся на один час работы процесса.
-    mention_answers_by_hour: dict[int, int] = field(default_factory=dict)
+    # Верхняя оценка нагрузки: максимум ответов на обращения, пришедшийся на
+    # любой СКОЛЬЗЯЩИЙ час — тем же окном, которым считает `within_hourly_cap`
+    # для самостоятельных ответов. Первая редакция раскладывала по
+    # фиксированным корзинам `now // 3600`, границы которых привязаны к эпохе
+    # монотонных часов и потому произвольны: десять ответов на 59-й минуте и
+    # девять на 61-й давали «пик 10» при худшем реальном окне в 19. Занижение
+    # до двух раз и всегда в одну сторону — то есть в сторону «предел не
+    # нужен», а именно этим числом решается O15.
+    mention_answer_times: deque[float] = field(default_factory=deque)
     # Прямой замер E2-1: устойчивый ноль в фазе подавления при ненулевом
     # усилении означает, что фаза недостижима — по факту, а не по расчёту.
     burst_phase_boost: int = 0
@@ -269,6 +313,19 @@ class GenerationTelemetry:
         the attempt budget instead."""
         self.context_dropped += 1
 
+    def note_anchor_splice(self, *, spliced: bool) -> None:
+        """Один отложенный контекстный якорь и дожил ли он до вклейки (W2-2).
+
+        Знаменатель растёт при откладывании, числитель — при вклейке. Ответ,
+        потерявший якорь, неотличим в трассе от обычного глобального: метка
+        переписывается на `global`, а счётчики совпадений обнуляются. Без этой
+        пары доля работы канала занижена на неизвестную величину, причём в
+        сторону «канал не работал» — а её как раз и свипует M3R-110.
+        """
+        self.anchor_splice_deferred += 1
+        if spliced:
+            self.anchor_splice_done += 1
+
     def note_chat_tempo(self, rate_per_min: float, *, lively_at: float) -> None:
         """Один наблюдённый темп чата, разложенный по диапазонам (E2-1).
 
@@ -304,13 +361,20 @@ class GenerationTelemetry:
         """
         self.mentions_observed += 1
 
-    def note_mention_answered(self, *, hour: int | None = None) -> None:
-        """Числитель: бот ответил на обращение."""
+    def note_mention_answered(self, *, at: float | None = None) -> None:
+        """Числитель: бот ответил на обращение.
+
+        ``at`` — монотонная метка времени; по ней считается пик за скользящий
+        час. Список ограничен сверху, чтобы процесс с долгим аптаймом не рос
+        без предела: для оценки пика хватает последних наблюдений, а точный
+        исторический максимум за недели этой величине не нужен.
+        """
         self.mentions_answered += 1
-        if hour is not None:
-            self.mention_answers_by_hour[hour] = (
-                self.mention_answers_by_hour.get(hour, 0) + 1
-            )
+        if at is None:
+            return
+        self.mention_answer_times.append(at)
+        while len(self.mention_answer_times) > MENTION_TIME_WINDOW_MAX:
+            self.mention_answer_times.popleft()
 
     def note_burst_phase(self, *, suppressing: bool) -> None:
         """Один ответ, сыгранный в фазе усиления или подавления берст-ритма.
@@ -485,9 +549,13 @@ class GenerationTelemetry:
             if self.mentions_observed
             else None
         )
-        values["mention_answers_peak_hour"] = (
-            max(self.mention_answers_by_hour.values())
-            if self.mention_answers_by_hour
+        values["mention_answers_peak_hour"] = _peak_in_sliding_hour(
+            self.mention_answer_times
+        )
+        values["anchor_splice_deferred"] = self.anchor_splice_deferred or None
+        values["anchor_splice_share"] = (
+            self.anchor_splice_done / self.anchor_splice_deferred
+            if self.anchor_splice_deferred
             else None
         )
         burst_total = self.burst_phase_boost + self.burst_phase_suppress

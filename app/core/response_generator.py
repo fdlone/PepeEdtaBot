@@ -765,6 +765,23 @@ class ResponseGenerator:
         )
         if not mutated_text:
             return None
+        # Токены выводятся из текста, а не берутся до него. `detokenize`
+        # обрывает список на символьном пределе, а вернуть исходный список
+        # значило бы скорить объект, которого в чате не будет: `natural_length`,
+        # `repetition_penalty`, `idf_context_relevance` и анти-цитата читали бы
+        # хвост, отброшенный при сборке. Механизм срабатывания не
+        # гипотетический — замена может быть длиннее оригинала на 40%
+        # (`MAX_LENGTH_DELTA_SHARE`), а прогулка сама останавливается ровно на
+        # `max_chars`, поэтому кандидаты приходят впритык.
+        #
+        # Это был единственный маршрут с таким расхождением: vanilla и
+        # extension получают токены через `_evaluate_candidate`, seeded — через
+        # `finalize_candidate_tokens`, и оба выводят их из финального текста.
+        mutated_tokens = tokenize(
+            mutated_text, normalize_lower=self.runtime_state.normalize_lower
+        )
+        if not mutated_tokens:
+            return None
         reject_reason = await self._candidate_reject_reason(
             request,
             mutated_text,

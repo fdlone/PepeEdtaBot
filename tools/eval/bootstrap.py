@@ -83,14 +83,22 @@ def _paired_delta(
 
 def delta_ci(
     samples_a: list[float], samples_b: list[float], *, resamples: int = RESAMPLES
-) -> tuple[float, float, float, bool]:
+) -> tuple[float, float, float, bool] | None:
     """Delta (b - a) with a 95% bootstrap CI and its significance verdict.
 
     Doc 05 §4: a delta is significant only when its interval excludes zero;
     the report must always print the interval, not only the point.
+
+    ``None`` — дельту посчитать не из чего: пустая сторона либо ни одной
+    полной пары. Отсутствие данных возвращается значением, а не исключением,
+    потому что потребителей три и каждый обязан уйти в «insufficient», а не
+    уронить отчёт. Первая редакция парной правки бросала `ValueError`, гард
+    получили два потребителя из трёх, и третий — ячейка метрической таблицы —
+    ронял `build_report` целиком вместе со всеми вердиктами гейтов. Ручной
+    гард у каждого вызывающего и есть та форма, из-за которой один забывается.
     """
     if not samples_a or not samples_b:
-        raise ValueError("delta_ci needs samples on both sides")
+        return None
     # Парный ресэмплинг: индексы тянутся один раз, обе половины пары берутся
     # по одному и тому же индексу. Матрица конфигураций — парный дизайн по
     # построению (те же промпты, те же сиды, различие в одной ручке), и
@@ -108,7 +116,7 @@ def delta_ci(
     # 2026-08-26): интервалы стали уже, пересчёту прошлые отчёты не подлежат.
     paired_a, paired_b = complete_pairs(samples_a, samples_b)
     if not paired_a:
-        raise ValueError("delta_ci needs at least one complete pair")
+        return None
     indices = range(len(paired_a))
     rng = random.Random(_CI_SEED + 1)
     deltas = sorted(

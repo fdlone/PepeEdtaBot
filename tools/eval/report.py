@@ -13,7 +13,7 @@ from collections import Counter
 from statistics import mean
 from typing import Any
 
-from .bootstrap import bootstrap_ci, complete_pairs, delta_ci, distinct_delta_ci
+from .bootstrap import bootstrap_ci, delta_ci, distinct_delta_ci
 from .metrics import distinct_n, latency_percentiles, meme_regression, metric_values
 from .prompts import PromptSet
 from .run import ConfigRun
@@ -73,9 +73,10 @@ def _cell(samples: list[float] | None) -> str:
 
 
 def _delta_cell(base: list[float] | None, other: list[float] | None) -> str:
-    if not base or not other:
+    result = delta_ci(base, other)
+    if result is None:
         return "—"
-    point, lo, hi, significant = delta_ci(base, other)
+    point, lo, hi, significant = result
     marker = " *" if significant else ""
     return f"{_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]{marker}"
 
@@ -142,17 +143,15 @@ def _delta_part(
     ``None`` means the delta was not computable — the caller has already been
     told what is missing and must not treat the absence as a pass.
     """
-    if not base or not arm:
-        missing.append(f"{label} samples")
-        return None
     # Полных пар может не оказаться и на непустых списках: армы отвечают на
     # разных промптах, и после выравнивания метками пересечение бывает
-    # пустым. Это отсутствие данных, а не сбой прогона — гейт обязан уйти в
-    # `insufficient`, как и при пустой выборке.
-    if not complete_pairs(base, arm)[0]:
-        missing.append(f"{label} paired samples")
+    # пустым. `delta_ci` возвращает None и на это, и на пустую сторону —
+    # отсутствие данных ведёт в «insufficient», а не роняет прогон.
+    result = delta_ci(base, arm)
+    if result is None:
+        missing.append(f"{label} samples")
         return None
-    point, lo, hi, significant = delta_ci(base, arm)
+    point, lo, hi, significant = result
     parts.append(
         f"{label} Δ {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]"
         f"{' *' if significant else ''}"
@@ -176,17 +175,15 @@ def _delta_ci_low(
     construction, so the question changes to "how much drop can we not rule
     out" — and that is a statement about the bound, not about the point.
     """
-    if not base or not arm:
-        missing.append(f"{label} samples")
-        return None
     # Полных пар может не оказаться и на непустых списках: армы отвечают на
     # разных промптах, и после выравнивания метками пересечение бывает
-    # пустым. Это отсутствие данных, а не сбой прогона — гейт обязан уйти в
-    # `insufficient`, как и при пустой выборке.
-    if not complete_pairs(base, arm)[0]:
-        missing.append(f"{label} paired samples")
+    # пустым. `delta_ci` возвращает None и на это, и на пустую сторону —
+    # отсутствие данных ведёт в «insufficient», а не роняет прогон.
+    result = delta_ci(base, arm)
+    if result is None:
+        missing.append(f"{label} samples")
         return None
-    point, lo, hi, significant = delta_ci(base, arm)
+    point, lo, hi, significant = result
     parts.append(
         f"{label} Δ {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]"
         f"{' *' if significant else ''}"

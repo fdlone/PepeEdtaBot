@@ -463,6 +463,56 @@ class TestTempoCountersWiring(ReplyPipelineTestCase):
 
         self.assertEqual(self.generator.telemetry.mentions_answered, 1)
 
+    async def test_tempo_is_counted_even_for_a_dropped_message(self) -> None:
+        """Темп считается до раннего возврата — на любом сообщении.
+
+        Короткие и необучаемые сообщения тоже задают темп чата, и
+        распределение, собранное только по «хорошим», отвечало бы не на тот
+        вопрос. Проверяется проводка, а не арифметика счётчика: мутация места
+        вызова (удаление `note_chat_tempo`) без этого теста оставляла весь
+        сьют зелёным.
+        """
+        state = _state(mood_enabled=True)
+        pipeline = self._pipeline(state)
+
+        observation = await pipeline.observe(_incoming(text="ок"))
+
+        self.assertIsNone(observation, "сообщение должно отсеяться гейтом")
+        self.assertEqual(
+            sum(self.generator.telemetry.tempo_buckets.values()),
+            1,
+            "темп не посчитан на отсеянном сообщении",
+        )
+
+    async def test_burst_phase_is_counted_for_an_unprompted_reply(self) -> None:
+        """Самостоятельный ответ в окне усиления попадает в счётчик.
+
+        Парный к `test_burst_phase_ignores_mention_answers`: тот проверяет
+        отсутствие (assert == 0) и потому переживает удаление всего блока.
+        Без положительного теста проводка не охраняется ничем, а именно по
+        этим числам будет закрываться O14.
+        """
+        state = _state(
+            reply_director_enabled=True,
+            reply_probability_min=1.0,
+            reply_probability_max=1.0,
+            min_cooldown_sec=0,
+        )
+        state.last_reply_ts[1] = 999.0  # 1 с назад — внутри окна усиления
+        pipeline = self._pipeline(state)
+
+        msg = _incoming()
+        observation = await pipeline.observe(msg)
+        assert observation is not None
+        with self._generated("ответ бота из нескольких слов"):
+            await pipeline.respond(msg, observation, self.outbox)
+
+        telemetry = self.generator.telemetry
+        self.assertEqual(
+            telemetry.burst_phase_boost, 1, "фаза усиления не посчитана"
+        )
+        self.assertEqual(telemetry.burst_phase_suppress, 0)
+
     async def test_burst_phase_ignores_mention_answers(self) -> None:
         """Ответ на обращение берст-фактор не проходил — считать его нельзя."""
         state = _state(reply_director_enabled=True)

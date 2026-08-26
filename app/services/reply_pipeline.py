@@ -398,7 +398,7 @@ class ReplyPipeline:
             # Фолбэк — тоже ответ на обращение и тоже нагрузка на путь без
             # предела: без этой строки числитель терял целую ветку, а доля
             # ответов занижалась ровно на неё (O15).
-            self._generator.telemetry.note_mention_answered(hour=int(now // 3600.0))
+            self._generator.telemetry.note_mention_answered(at=now)
             await self._send_fallback(msg, obs, NOT_ENOUGH_DATA_PHRASES, send)
             await self._count_answered_mention(msg.chat_id, msg.user_id)
             return
@@ -449,7 +449,7 @@ class ReplyPipeline:
         # видна. Знаменатель растёт и у обращения без ответа (см. ранние
         # возвраты выше), числитель — здесь, где ответ решён.
         if obs.address_reply:
-            self._generator.telemetry.note_mention_answered(hour=int(now // 3600.0))
+            self._generator.telemetry.note_mention_answered(at=now)
         # E2-1: в какой фазе берст-ритма сыгран ответ. Устойчивый ноль в
         # подавлении при ненулевом усилении и будет доказательством, что фаза
         # отхода недостижима, — фактом, а не выводом из формулы.
