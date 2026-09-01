@@ -723,6 +723,75 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
             any(f.magic is GROUP_ONLY for f in handler.filters or ())
         )
 
+    def test_db_snapshot_is_private_and_owner_only(self) -> None:
+        # Спека db-snapshot-delivery: у документа с корпусом сообщений не
+        # должно быть пути в группу. Проверено мутацией (2026-09-01): снятие
+        # PRIVATE_ONLY с регистрации роняет этот тест.
+        from app.filters import GROUP_ONLY, PRIVATE_ONLY, OwnerOnly
+        from app.handlers.admin import cmd_db_snapshot, router
+
+        handler = next(
+            h for h in router.message.handlers if h.callback is cmd_db_snapshot
+        )
+        filters = handler.filters or ()
+        self.assertTrue(any(f.magic is PRIVATE_ONLY for f in filters))
+        self.assertIn(OwnerOnly, {type(f.callback) for f in filters})
+        self.assertFalse(any(f.magic is GROUP_ONLY for f in filters))
+
+    async def test_db_snapshot_sends_a_document_with_the_database(self) -> None:
+        import os
+        import sqlite3
+        import tempfile
+
+        from app.handlers.admin import cmd_db_snapshot
+
+        tmp = tempfile.mkdtemp(prefix="test_db_snapshot_")
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, True))
+        db_path = os.path.join(tmp, "markov.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE t (chat_id INTEGER)")
+        conn.execute("INSERT INTO t VALUES (1)")
+        conn.commit()
+        conn.close()
+
+        msg = _fake_message(text="/db_snapshot", chat_type="private")
+        settings = MagicMock(db_path=db_path)
+        bot = AsyncMock()
+
+        await cmd_db_snapshot(msg, settings, bot)
+
+        bot.send_document.assert_awaited_once()
+        msg.reply.assert_not_awaited()
+
+    async def test_db_snapshot_without_db_file_replies_and_sends_nothing(
+        self,
+    ) -> None:
+        from app.handlers.admin import cmd_db_snapshot
+
+        msg = _fake_message(text="/db_snapshot", chat_type="private")
+        settings = MagicMock(db_path="no_such_dir/no_such.db")
+        bot = AsyncMock()
+
+        await cmd_db_snapshot(msg, settings, bot)
+
+        bot.send_document.assert_not_awaited()
+        msg.reply.assert_awaited_once()
+
+    async def test_db_snapshot_failure_answers_the_owner_not_raises(self) -> None:
+        from app.handlers.admin import cmd_db_snapshot
+
+        msg = _fake_message(text="/db_snapshot", chat_type="private")
+        bot = AsyncMock()
+        with patch(
+            "app.handlers.admin.make_snapshot",
+            side_effect=RuntimeError("disk is gone"),
+        ):
+            with self.assertLogs("chat_markov", level="WARNING"):
+                await cmd_db_snapshot(msg, MagicMock(), bot)
+
+        bot.send_document.assert_not_awaited()
+        msg.reply.assert_awaited_once()
+
     async def test_setprob_valid_value(self) -> None:
         from app.handlers.admin import cmd_setprob
         msg = _fake_message(text="/setprob 0.3", chat_id=100)
@@ -3318,9 +3387,10 @@ class TestMaintenanceOwnerAlert(unittest.IsolatedAsyncioTestCase):
 class TestPrivateChatCommandSurface(unittest.TestCase):
     """Пиннит, какие команды отвечают в личном чате.
 
-    Личка — диагностический канал владельца без доступа к логам, ей достаточно
-    /ping и /help; всё остальное живёт под GROUP_ONLY. Новая команда обязана
-    попасть сюда явным решением, а не умолчанием регистрации.
+    Личка — диагностический канал владельца без доступа к логам: /ping и
+    /help для всех, /db_snapshot — owner-only снимок БД; всё остальное живёт
+    под GROUP_ONLY. Новая команда обязана попасть сюда явным решением, а не
+    умолчанием регистрации.
 
     Проверено мутацией (2026-09-01): снятие GROUP_ONLY со /stats роняет тест
     со словом "stats" в сообщении; навешивание GROUP_ONLY на /ping — со словом
@@ -3331,6 +3401,9 @@ class TestPrivateChatCommandSurface(unittest.TestCase):
     PINNED: dict[str, bool] = {
         "ping": True,
         "help": True,
+        # owner-only и private-only: доступность в личке не значит «всем» —
+        # состав фильтров закреплён отдельным тестом в TestAdminHandlers.
+        "db_snapshot": True,
         "stats": False,
         "config": False,
         "set": False,

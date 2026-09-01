@@ -22,6 +22,7 @@ from app.infrastructure.database import Database
 from app.middlewares import ChatSettingsMiddleware, ThrottlingMiddleware
 from app.presentation.bot_messages import TELEGRAM_COMMANDS
 from app.services import LearningService, PivoService
+from app.services.db_snapshot import send_startup_snapshot, startup_snapshot
 from app.services.meme_analyzer import MemeSettings
 
 # Per-user per-chat cooldowns, assigned by class of command rather than one by
@@ -59,7 +60,11 @@ COMMAND_COOLDOWNS_SECONDS = {
 #     drops a call *before* the handler, so a throttled /pivo answered with
 #     silence instead of the "daily quota exhausted" reply. Its daily quota is
 #     the rate limit; re-adding a window here would restore that bug.
-COOLDOWN_EXEMPT_COMMANDS = frozenset({"pivo_check", "quirk_stats", "pivo"})
+#   - db_snapshot is owner-only and private-chat-only for the same reason as
+#     pivo_check / quirk_stats: no participant can amplify traffic with it.
+COOLDOWN_EXEMPT_COMMANDS = frozenset(
+    {"pivo_check", "quirk_stats", "pivo", "db_snapshot"}
+)
 
 # Silence reads as "the bot is broken" only where the user asked for something
 # and expects confirmation; elsewhere a refusal reply is itself the traffic we
@@ -143,6 +148,11 @@ async def run_bot() -> None:
     logging.getLogger("aiogram").setLevel(logging.WARNING)
     gen_trace_log.configure(settings.gen_trace_log)
 
+    # Снимок обязан быть снят ДО init(): до миграций он одновременно точка
+    # отката и «свежая копия прода» для замеров; после init это уже состояние
+    # новой сборки. Отправка — позже, когда появится Bot.
+    startup_snapshot_path = await startup_snapshot(settings)
+
     db = Database(
         settings.db_path,
         messages_retention_per_chat=settings.messages_retention_per_chat,
@@ -212,6 +222,14 @@ async def run_bot() -> None:
         bot_id=me.id,
     )
 
+    # Доставка стартового снимка — фоном: polling не ждёт за отправкой файла,
+    # а отказ доставки гасится внутри задачи предупреждением.
+    snapshot_task: asyncio.Task[None] | None = None
+    if startup_snapshot_path is not None and settings.owner_id is not None:
+        snapshot_task = asyncio.create_task(
+            send_startup_snapshot(bot, settings.owner_id, startup_snapshot_path)
+        )
+
     logger.info("Бот %s запущен (polling).", me.username)
     logger.info("Статус: работает.")
     try:
@@ -233,6 +251,8 @@ async def run_bot() -> None:
         await dp.start_polling(bot)
     finally:
         logger.info("Статус: остановка...")
+        if snapshot_task is not None and not snapshot_task.done():
+            snapshot_task.cancel()
         await db.close()
         await bot.session.close()
         logger.info("Статус: остановлен.")
