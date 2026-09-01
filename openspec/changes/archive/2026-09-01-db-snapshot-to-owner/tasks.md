@@ -55,7 +55,7 @@
 
 - [x] 5.1 README: строка `/db_snapshot` в таблице команд (owner-only, личка);
       абзац о личке упоминает снимки. Проверка: README не противоречит коду
-- [ ] 5.2 Синк спеки `private-chat-diagnostics` (MODIFIED) при архиве;
+- [x] 5.2 Синк спеки `private-chat-diagnostics` (MODIFIED) при архиве;
       `openspec validate --strict` зелёный. Проверка: команда выполнена
 - [x] 5.3 `ruff` + `mypy app/` + `unittest` зелёные, покрытие не ниже
       храповика. Влияние на `generation_hash` заявлено: отсутствует по
