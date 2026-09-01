@@ -51,6 +51,11 @@ FLAVOR_DECAY_INTERVAL_SEC = 86400.0
 # стоил бы до busy_timeout на каждом statement — и всё это под общей
 # блокировкой соединения.
 FLAVOR_DECAY_RETRY_INTERVAL_SEC = 600.0
+# Ключ maintenance_meta: момент последнего полного суточного пасса (UTC, формат
+# _decay_cutoff). Хранится в БД, чтобы каденция переживала рестарт (O11):
+# монотонный таймер по построению не мог, и каждый рестарт откладывал мемо-пасс
+# и фразовый индекс ещё на сутки.
+_LAST_FLAVOR_DECAY_KEY = "last_flavor_decay_at"
 
 _RepoT = TypeVar("_RepoT")
 
@@ -226,8 +231,10 @@ class Database:
         await self.decay_chat_emoji_stats()
         await self.decay_chat_hot_ngrams()
         await self.decay_chat_user_interactions()
+        # Срок ленивого пасса — от сохранённой метки, не «+сутки от старта»:
+        # иначе каждый рестарт откладывал бы мемо-пасс и фразовый индекс (O11).
         self._next_flavor_decay_monotonic = (
-            time.monotonic() + FLAVOR_DECAY_INTERVAL_SEC
+            time.monotonic() + await self._seconds_until_flavor_decay_due()
         )
 
     async def close(self) -> None:
@@ -612,6 +619,45 @@ class Database:
         current = now or datetime.now(UTC)
         return (current - timedelta(days=decay_days)).strftime("%Y-%m-%d %H:%M:%S")
 
+    async def _read_maintenance_meta(self, key: str) -> str | None:
+        async with self._lock:
+            db = await self._get_conn()
+            cursor = await db.execute(
+                "SELECT value FROM maintenance_meta WHERE key = ?", (key,)
+            )
+            row = await cursor.fetchone()
+        return str(row[0]) if row else None
+
+    async def _write_maintenance_meta(self, key: str, value: str) -> None:
+        async with self._write_transaction() as db:
+            await db.execute(
+                "INSERT INTO maintenance_meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+    async def _seconds_until_flavor_decay_due(self) -> float:
+        """Сколько осталось до суточного пасса, считая от метки в БД.
+
+        Нет метки (первый старт после апгрейда) или она нечитаема — пасс
+        просрочен: 0. Часы ушли назад — полный интервал, не отказ. Внутри
+        живого процесса отсчёт остаётся монотонным; wall-clock участвует
+        только на границе рестарта.
+        """
+        stamp = await self._read_maintenance_meta(_LAST_FLAVOR_DECAY_KEY)
+        if stamp is None:
+            return 0.0
+        try:
+            last_run = datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=UTC
+            )
+        except ValueError:
+            return 0.0
+        elapsed = (datetime.now(UTC) - last_run).total_seconds()
+        if elapsed < 0:
+            return FLAVOR_DECAY_INTERVAL_SEC
+        return max(0.0, FLAVOR_DECAY_INTERVAL_SEC - elapsed)
+
     @property
     def last_maintenance_error(self) -> str | None:
         """Текст последней ошибки обслуживания — для сигнала владельцу.
@@ -665,6 +711,18 @@ class Database:
             return MaintenanceOutcome.FAILED
         self._next_flavor_decay_monotonic = now + FLAVOR_DECAY_INTERVAL_SEC
         self._last_maintenance_error = None
+        # Метка — только на успехе (D3): после сбоя рестарт и так увидит пасс
+        # просроченным. Неудавшаяся запись метки не отменяет сделанный пасс —
+        # худшее последствие: следующий рестарт прогонит его на сутки раньше.
+        try:
+            await self._write_maintenance_meta(
+                _LAST_FLAVOR_DECAY_KEY,
+                datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            )
+        except Exception:
+            logger.warning(
+                "Метка суточного пасса не записана", exc_info=True
+            )
         return MaintenanceOutcome.DONE
 
     async def cleanup_pivo_daily_usage(
@@ -763,3 +821,5 @@ class Database:
                     f"DELETE FROM {table} WHERE chat_id = ?",  # nosec B608
                     (chat_id,),
                 )
+
+

@@ -158,6 +158,7 @@ class Settings(RuntimeTunables):
     gen_trace_log: bool
     bot_text_aliases: frozenset[str]
     chat_timezone: ZoneInfo
+    db_snapshot_to_owner: bool
 
 
 def _load_runtime_fields() -> dict[str, object]:
@@ -296,6 +297,16 @@ def load_settings(load_env: bool = True) -> Settings:
     else:
         bot_text_aliases = DEFAULT_BOT_TEXT_ALIASES
 
+    # Auto-send a DB snapshot to the owner's DM on every start (spec
+    # db-snapshot-delivery). Default on: the owner has no docker/log access,
+    # and an env edit is exactly the step that tends to be postponed.
+    try:
+        db_snapshot_to_owner = _parse_bool(
+            os.getenv("DB_SNAPSHOT_TO_OWNER", "true")
+        )
+    except ValueError as exc:
+        raise ValueError(f"DB_SNAPSHOT_TO_OWNER: {exc}") from exc
+
     # CHAT_TIMEZONE moves the human-facing time branches (late-night/friday
     # flavor); service days (caps, quotas, maintenance) deliberately stay on
     # UTC. Fail fast on a typo: the owner has no access to container logs, so
@@ -333,6 +344,7 @@ def load_settings(load_env: bool = True) -> Settings:
         gen_trace_log=gen_trace_log,
         bot_text_aliases=bot_text_aliases,
         chat_timezone=chat_timezone,
+        db_snapshot_to_owner=db_snapshot_to_owner,
         **runtime_values,  # type: ignore[arg-type]
     )
     validate_cross_fields(settings)

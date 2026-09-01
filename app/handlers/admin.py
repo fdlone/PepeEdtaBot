@@ -18,6 +18,7 @@ from app.config.settings import Settings
 from app.core.markov import MarkovGenerator
 from app.filters import (
     GROUP_ONLY,
+    PRIVATE_ONLY,
     AdminOrOwner,
     OwnerOnly,
     is_admin_or_owner,
@@ -35,6 +36,7 @@ from app.presentation.bot_messages import (
     split_for_telegram,
 )
 from app.services import LearningService, PivoService
+from app.services.db_snapshot import make_snapshot, send_packed_snapshot
 
 router = Router(name="admin")
 logger = logging.getLogger("chat_markov")
@@ -386,6 +388,31 @@ async def cmd_quirk_stats_denied(
     )
 
 
+@router.message(Command("db_snapshot"), PRIVATE_ONLY, OwnerOnly())
+async def cmd_db_snapshot(
+    message: Message, settings: Settings, bot: Bot
+) -> None:
+    """Свежий сжатый снимок БД по запросу владельца (spec db-snapshot-delivery).
+
+    Только личка и только OWNER_ID: у документа с корпусом сообщений не должно
+    быть пути в группу, поэтому фильтр — приватность чата, а не GROUP_ONLY.
+    В группах и для не-владельца команда молчит (fallback-хендлера нет
+    намеренно: отвечать отказом — значит подтверждать существование команды).
+    Проверено мутацией (2026-09-01): снятие PRIVATE_ONLY с регистрации роняет
+    test_db_snapshot_is_private_and_owner_only.
+    """
+    try:
+        packed_path = await make_snapshot(settings.db_path)
+    except Exception:
+        logger.warning("on-demand db snapshot failed", exc_info=True)
+        await message.reply("Снимок снять не удалось — детали в логе процесса.")
+        return
+    if packed_path is None:
+        await message.reply("Файла БД ещё нет — снимать нечего.")
+        return
+    await send_packed_snapshot(bot, message.chat.id, packed_path)
+
+
 @router.message(Command("clear"), GROUP_ONLY, AdminOrOwner())
 async def cmd_clear(
     message: Message,
@@ -422,3 +449,5 @@ async def cmd_clear_denied(message: Message, runtime_state: RuntimeState) -> Non
         "Недостаточно прав. Нужен OWNER_ID или права админа чата.",
         runtime_state,
     )
+
+

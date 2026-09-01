@@ -93,8 +93,14 @@ class TestChatEmojiStatsRepo(unittest.IsolatedAsyncioTestCase):
         await self.db.decay_chat_emoji_stats()
         self.assertEqual(await self.db.chat_emoji_stats.get_stats(CHAT), {"😂": 4})
 
-    async def test_lazy_decay_not_due_right_after_init(self) -> None:
-        # init() already ran the decay and stamped the clock.
+    async def test_fresh_database_is_due_immediately(self) -> None:
+        # Спека maintenance-cadence: метки нет (первый старт после апгрейда) —
+        # пасс выполняется при первом же вызове, а не через сутки. Прежний
+        # контракт «после init не due» держал мемо-пасс и фразовый индекс
+        # голодными при частых рестартах (O11).
+        self.assertIs(
+            await self.db.decay_flavor_stats_if_due(), MaintenanceOutcome.DONE
+        )
         self.assertIs(
             await self.db.decay_flavor_stats_if_due(), MaintenanceOutcome.SKIPPED
         )
@@ -180,6 +186,81 @@ class TestChatEmojiStatsRepo(unittest.IsolatedAsyncioTestCase):
 
         self.assertGreater(volume, 0)
         self.assertEqual((await self.db.get_stats(CHAT))["messages"], 1)
+
+    async def test_maintenance_meta_roundtrip(self) -> None:
+        await self.db._write_maintenance_meta("k", "v1")
+        await self.db._write_maintenance_meta("k", "v2")
+        self.assertEqual(await self.db._read_maintenance_meta("k"), "v2")
+        self.assertIsNone(await self.db._read_maintenance_meta("missing"))
+
+    async def test_cadence_survives_a_restart(self) -> None:
+        """Спека maintenance-cadence: рестарт не откладывает пасс на сутки.
+
+        Мутация проверена (2026-09-01): возврат init() к чисто монотонному
+        сроку (`+FLAVOR_DECAY_INTERVAL_SEC` без чтения метки) роняет обе
+        половины — «в пределах интервала» получает DONE вместо SKIPPED на
+        свежей БД без метки, «за пределами» получает SKIPPED вместо DONE.
+        """
+        # Пасс выполнился и оставил метку.
+        self.assertIs(
+            await self.db.decay_flavor_stats_if_due(), MaintenanceOutcome.DONE
+        )
+        await self.db.close()
+
+        # Рестарт в пределах интервала: пасс не должен быть просрочен.
+        db2 = Database(str(self.db_path))
+        await db2.init()
+        try:
+            self.assertIs(
+                await db2.decay_flavor_stats_if_due(), MaintenanceOutcome.SKIPPED
+            )
+            # Метка, сдвинутая за интервал, делает пасс просроченным сразу
+            # после следующего «рестарта» — прежний монотонный срок ждал бы
+            # сутки от старта процесса.
+            stale = (
+                datetime.now(UTC)
+                - timedelta(seconds=FLAVOR_DECAY_INTERVAL_SEC + 3600)
+            ).strftime("%Y-%m-%d %H:%M:%S")
+            await db2._write_maintenance_meta("last_flavor_decay_at", stale)
+        finally:
+            await db2.close()
+
+        db3 = Database(str(self.db_path))
+        await db3.init()
+        try:
+            self.assertIs(
+                await db3.decay_flavor_stats_if_due(), MaintenanceOutcome.DONE
+            )
+        finally:
+            await db3.close()
+
+    async def test_clock_gone_backwards_waits_a_full_interval(self) -> None:
+        # Метка «из будущего» — часы ушли назад: полный интервал, не отказ.
+        future = (datetime.now(UTC) + timedelta(days=2)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        await self.db._write_maintenance_meta("last_flavor_decay_at", future)
+        self.assertEqual(
+            await self.db._seconds_until_flavor_decay_due(),
+            FLAVOR_DECAY_INTERVAL_SEC,
+        )
+
+    async def test_failed_decay_leaves_the_stamp_alone(self) -> None:
+        from unittest.mock import patch
+
+        await self.db._write_maintenance_meta("last_flavor_decay_at", "before")
+        self.db._next_flavor_decay_monotonic = time.monotonic() - 1.0
+        with patch.object(
+            self.db, "decay_chat_hot_ngrams", side_effect=RuntimeError("busy")
+        ):
+            with self.assertLogs("chat_markov", level="ERROR"):
+                self.assertIs(
+                    await self.db.decay_flavor_stats_if_due(),
+                    MaintenanceOutcome.FAILED,
+                )
+        self.assertEqual(
+            await self.db._read_maintenance_meta("last_flavor_decay_at"), "before"
+        )
 
     async def test_successful_decay_postpones_by_the_daily_interval(self) -> None:
         self.db._next_flavor_decay_monotonic = time.monotonic() - 1.0

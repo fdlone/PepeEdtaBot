@@ -16,7 +16,7 @@
 ```
 Telegram message (F.text)
   └─ on_text_message (app/handlers/learning.py) → ReplyPipeline (app/services/reply_pipeline.py)
-       ├─ 1. Входные фильтры (группа, не бот, не команда)
+       ├─ 1. Входные фильтры (группа, не бот, не команда) + освежение /pivo-профиля
        ├─ 2. Детект обращения к боту + mention-cooldown
        ├─ 3. Обновление настроения чата (M1) и ритма (M2)
        ├─ 4. Учёт эмодзи (M3) — до гейтов обучаемости
@@ -30,6 +30,7 @@ Telegram message (F.text)
        ├─ 11. Редкие события (L3): verdict/CAPS/double/false-start
        ├─ 12. Отправка с имитацией набора (reply_humanized_sequence)
        └─ 13. finally: обучение (record_message, hot-ngrams)
+              + суточное обслуживание отдельным шагом (run_due_maintenance)
 ```
 
 ---
@@ -38,7 +39,8 @@ Telegram message (F.text)
 
 Единственный обработчик текста (`@router.message(F.text)`). DI через aiogram:
 `learning_service`, `generator` (MarkovGenerator), `runtime_state`, `bot_username`,
-`bot_id`, `bot_text_aliases`, `pivo_service`.
+`bot_id`, `bot_text_aliases`, `pivo_service`, а также keyword-only `bot` и
+`settings` — только для сигнала владельцу о сбое суточного обслуживания (§8).
 
 Обработчик собирает факты о сообщении (`IncomingMessage`) и отдаёт их конвейеру
 `ReplyPipeline` (`app/services/reply_pipeline.py`), который и делает всё
@@ -49,6 +51,10 @@ Telegram message (F.text)
 ### 1.1 Входные фильтры (ранние выходы)
 - `is_group_message` — только GROUP/SUPERGROUP (`_helpers.py`).
 - `message.from_user is None` или `.is_bot` — выход.
+- `pivo_service.refresh_member` — освежение @username/имени подписчика /pivo
+  по текущему сообщению (не чаще раза в сутки на пользователя в чате, троттлинг
+  в памяти); no-op для неподписанных, сбой гасится с предупреждением
+  (`app/handlers/learning.py::on_text_message`).
 - Текст начинается с `/` — команда, выход.
 
 ### 1.2 Детект обращения: `bot_is_mentioned` (`reply_policy.py`)
@@ -167,7 +173,9 @@ Telegram message (F.text)
 ## 4. Оркестратор: `ResponseGenerator.generate_with_result` (`core/response_generator.py`)
 
 Константы: `GENERATION_ATTEMPT_BUDGET=10`, `GENERATION_ATTEMPTS_WITH_CONTEXT=5`
-(после 5-й попытки контекст отбрасывается), `CANDIDATE_TARGET=5`,
+(после 5-й попытки контекст отбрасывается — наблюдаемо: счётчик
+`context_dropped` в `/stats` и событие CONTEXT DROPPED в трассе, M3R-141),
+`CANDIDATE_TARGET=5`,
 `SELECTION_SCORE_MARGIN=0.3`, `SHORT_MODE_MAX_TOKENS=8`.
 
 Дописка «отсебятины» (§4 п.4a): кандидат-полная-копия обучающего сообщения
@@ -238,27 +246,36 @@ Telegram message (F.text)
    скоринг) и слова горячих n-грамм (мемы должны оставаться дословными);
    замена не может быть эхом кандидата или контекста. Копия проходит те же
    гейты п.4 и полный скоринг п.5 и конкурирует с оригиналом в выборе п.6 —
-   неудачные мутации проигрывают сами.
+   неудачные мутации проигрывают сами. Расхождение тёплого/холодного порядка
+   пула замен закрыто на стороне потребителя — `matches.sort()` перед
+   розыгрышем (`app/core/slot_mutation.py::pick_replacement`), плюс полный
+   `ORDER BY` в `get_word_frequencies`
+   (`app/repositories/markov_repo.py`) и `get_hot`
+   (`app/repositories/chat_hot_ngrams_repo.py`) (M3R-144).
 5b. **Seeded-кандидаты / statistical lexical anchoring** (M2R-410,
    `markov_seeded_candidate_ratio`, дефолт 0 — выключено): доля пула строится
    не прямой прогулкой, а вокруг якорного токена сообщения. Якорь выбирается
    композитным `seed_score = normalized_idf × support_factor ×
    branching_quality` (`core/seed.py`) — не по max-IDF: мусорный уникальный
    токен (`foobar123`) имеет максимальный IDF и нулевую поддержку. Ветвление —
-   полоса, не порог (трапеция §9.4). Кандидат собирается двунаправленно
+   полоса, не порог (трапеция — ТЗ §9.4, [docs/v2/02_MARKOV_2_0R_TZ.md](v2/02_MARKOV_2_0R_TZ.md)). Кандидат собирается двунаправленно
    (`MarkovGenerator.generate_seeded_candidate`): хвост растёт прямой цепью,
    голова — реверсным индексом order-2 (M2R-400), так что якорь стоит в
    середине ответа. IDF читается из инкрементального df-агрегата (полная
    история чата), который копится на живом проде — пустой df ⇒ якоря нет ⇒
-   ветка молча пропускается (прозрачный fallback). Seeded-кандидаты проходят
+   ветка пропускается — фолбэк прозрачный, но измеренный: пара счётчиков
+   `seed_ranking_*` (§5.3, M3R-141). Seeded-кандидаты проходят
    те же гейты п.4 и полный скоринг п.5 и конкурируют без приоритета
-   (ADR-008). Нейтральный дефолт (ratio 0) не считает ранжирование сидов, не
+   (ADR-008) — так стало с M3R-101 (2026-08-14): до него seeded обходил
+   финализацию (map §3.4), и это утверждение было неверным. Нейтральный дефолт (ratio 0) не считает ранжирование сидов, не
    ходит в реверс/df и не тратит лишнего RNG — `generation_hash` бит-в-бит.
-   **§9.7 (IDF-компонент скоринга кандидатов) остаётся оконным**
+   **ТЗ §9.7 (IDF-компонент скоринга кандидатов, docs/v2/02_MARKOV_2_0R_TZ.md)
+   остаётся оконным**
    (`idf_context_relevance` по последним N сообщениям, уже выкачен) — df идёт
    в выбор сида, а не подменяет скоринг молча (решение change'а, design D6).
    Телеметрия — два раздельных знаменателя: присутствовал ли seeded в пуле и
-   выиграл ли при наличии (§9.6). Гейт промоушена (M2R-430) — отдельно, ему
+   выиграл ли при наличии (ТЗ §9.6, docs/v2/02_MARKOV_2_0R_TZ.md). Гейт
+   промоушена (M2R-430) — отдельно, ему
    нужен df, накопленный на проде.
 6. **Выбор**: `select_scored_candidate` — softmax с
    `candidate_selection_temperature` среди кандидатов в пределах 0.3
@@ -281,8 +298,11 @@ Telegram message (F.text)
 
 Модель: пер-чатовая цепь Маркова порядка 3 с бэкоффом до 2, хранение в SQLite
 (переходы `transitions3`/`transitions`, старты `starts3`/`starts`; см. §8). LRU-кэши в памяти
-(`cache_limit=1024`) по (chat_id, state); инвалидация целиком по чату при каждом
-записанном сообщении (`invalidate_chat_cache`).
+(`cache_limit=1024`) по (chat_id, state); при дефолте `markov_cache_incremental=true`
+каждое записанное сообщение вкатывает свои дельты в кэшированные распределения
+(`app/core/markov.py::MarkovGenerator.apply_learning_deltas`, M2R-030);
+инвалидация целиком по чату (`invalidate_chat_cache`) — аварийная ветка при
+выключенной ручке (`app/services/learning_service.py::LearningService.record_message`).
 
 ### 5.1 Параметры сэмплинга из randomness_strength (s∈[0,3])
 `_generate_text_once` (`markov.py`):
@@ -316,6 +336,15 @@ Markov 2.0R Phase 3 (`TemporalBlend`, `app/core/temporal.py`) заменяет �
 Диагностика пула с включённым blend считается по смешанным весам, а не по сырым
 счётчикам: энтропия обязана описывать то распределение, из которого реально
 сэмплируют.
+
+Третий источник веса шага — мягкая интерполяция order-3×order-2 (Markov 2.0R
+Phase 9, `app/core/interpolation.py`, ручка `markov_interp_order2_weight`,
+дефолт 0 = ранний выход, бит-в-бит): `P = (1−β)·P3 + β·P2proj` — проекция
+order-2 добавляет в пул кандидатов, которых у order-3 состояния не было
+(в отличие от blend'а, который лишь перевешивает уже имеющихся). Смешивание —
+по нормированным распределениям, не по сырым счётчикам. Диагностика —
+`interp_step_coverage` / `mean_interp_displacement` (в `/stats`). Фаза закрыта
+β=0 (вердикт 2026-08-14) — механизм остаётся за нейтральной ручкой.
 
 ### 5.2 Выбор стартового состояния (приоритет)
 1. **Seed** (`_pick_seed_start`, `markov.py`): точная 3-грамма из стартов,
@@ -376,7 +405,16 @@ Markov 2.0R Phase 3 (`TemporalBlend`, `app/core/temporal.py`) заменяет �
 (до температуры), нормированная энтропия, ветвление, confidence. Средние по
 шагам победившей попытки попадают в `GenerationTrace`, в opt-in трассу
 (`GEN_TRACE_LOG`) и в процессную телеметрию (`/stats`). На выбор токена
-диагностика не влияет и затравок RNG не тратит. После отбора победителя
+диагностика не влияет и затравок RNG не тратит. Телеметрия M3R-140/141 (всё
+видно в `/stats`): `ctx_generation_share` — доля контекстных генераций (с
+знаменателем `context_mode_generations`); `context_dropped` — контекст снят
+добором попыток после 5-й (плюс событие CONTEXT DROPPED в трассе); пары
+«спросили/пусто» `seed_ranking_asked`/`seed_ranking_no_corpus_rate` и
+`hot_ngram_draws`/`hot_ngram_empty_rate`
+(`app/core/generation_telemetry.py::GenerationTelemetry.note_seed_ranking`,
+`::note_hot_ngram_draw`, `::note_context_dropped`). Знаменатель обязателен:
+`None` читается как «не спрашивали», измеренный ноль — как «спросили и
+ответил». После отбора победителя
 поверх его токенов работает теневой селектор order-4 (M2R-020,
 `app/core/shadow_order.py`): по оконному индексу «4 токена → продолжения»
 оценивается, выбрался бы order-4 при пороге поддержки и confidence из ТЗ §5;
@@ -431,7 +469,13 @@ Markov 2.0R Phase 3 (`TemporalBlend`, `app/core/temporal.py`) заменяет �
 - Ранний стоп: `has_degraded_recent_window` — вырождение последних 8 токенов
   (run ≥4 или ≤2 уникальных с доминированием ≥0.75).
 
-### 5.4 Финализация попытки: `_finalize_attempt` (`markov.py`)
+### 5.4 Финализация попытки: `finalize_candidate_tokens` (`markov.py`)
+Хвостовой конвейер и четыре гейта формы живут в общем входе
+`app/core/markov.py::finalize_candidate_tokens`; `markov.py::MarkovGenerator._finalize_attempt`
+— тонкая обёртка, навешивающая на его результат метаданные трассы
+(`_GenerationAttempt`). Все ветки кандидатов, включая seeded, идут через этот
+общий вход (M3R-101).
+
 Пайплайн хвоста: `trim_repetitive_tail` (срез вырожденного хвоста) →
 `trim_to_sentence_boundary` (до последней `.!?` при ≥4 контент-токенах) →
 `finalize_reply_ending` (срез плохих последних слов из `BAD_ENDING_WORDS`
@@ -449,7 +493,11 @@ Markov 2.0R Phase 3 (`TemporalBlend`, `app/core/temporal.py`) заменяет �
 
 `GenerationTrace` пишется в debug-лог: attempts, order_used, jumps, rejection,
 start_source (**global / seed / context / hidden_context / context_spliced**),
-счётчики exact/casefold матчей и фолбэков. `context` = видимый контекстный
+счётчики exact/casefold матчей и фолбэков, а также `route` — происхождение
+кандидата (`CandidateRoute`: VANILLA/EXTENSION/SEEDED/MUTATED,
+`app/core/generation_telemetry.py::CandidateRoute`); маршрут печатается и у
+выживших, и у отклонённых кандидатов, телеметрия разбивается по маршрутам
+(M3R-103). `context` = видимый контекстный
 старт (токены эмитятся); `hidden_context` = совпадение было, но хвост окна
 пуст (одни стоп-слова) и старт не эмитился; `context_spliced` = отложенный
 якорь, вклеенный в середину/конец ответа (сегментация якоря, §5.2).
@@ -526,7 +574,10 @@ L2.1 (`user_quirk_name_share`, дефолт 0 — выключено): указ�
 ### 7.2 Fallback-фразы (`presentation/fallback_phrases.py`)
 Два пула по 12 фраз: `NOT_ENOUGH_DATA_PHRASES` (мало данных + обращение) и
 `GENERATION_FAILED_PHRASES` (генерация не удалась + обращение). Аддитивные
-расширения: ночью 00–06 (`LATE_NIGHT_FALLBACK_PHRASES`), при heated
+расширения: ночью (`LATE_NIGHT_FALLBACK_PHRASES`; окно 00:00–05:59 по
+настенным часам зоны `CHAT_TIMEZONE` — `runtime_state.chat_timezone`, дефолт
+UTC, — а не по часам контейнера; O12,
+`app/presentation/fallback_phrases.py::is_late_night`), при heated
 (`HEATED_FALLBACK_PHRASES`). Анти-повтор: последние 3 фразы чата исключаются.
 Fallback на обращение не считается в hourly cap.
 
@@ -535,9 +586,18 @@ Fallback на обращение не считается в hourly cap.
 `rand(typing_min_ms typing_max_ms) + typing_per_char_ms × len`,
 потолок 4000 мс. Первая часть — reply, последующие — обычные сообщения.
 
-### 7.4 Учёт после отправки
-- `note_reply_sent` — cooldown-метка всегда; в hourly-историю только
-  непрошеные;
+### 7.4 Бюджет ответа и учёт после отправки
+Бюджет ответа резервируется **до** генерации: в момент решения «отвечаем»
+`RuntimeState.reserve_reply_slot` (вызов —
+`app/services/reply_pipeline.py::ReplyPipeline.respond`) ставит cooldown-метку
+и, для непрошеных, запись в hourly-историю. Если ответ не состоялся (генерация
+вернула пустоту без обращения, отправитель ничего не доставил, исключение до
+доставки) — откат `release_reply_slot`; частичная доставка бюджет не
+возвращает: часть ответа в чате уже есть (O8/atomic-reply-reservation).
+Fallback «мало данных» на обращение метится напрямую `note_reply_sent`
+(unprompted=False — в hourly cap не считается).
+
+После отправки остаётся учёт формы ответа:
 - `note_mention_reply` — метка mention-cooldown;
 - `remember_short_reply` (если ≤3 контент-токенов, окно 5) и
   `remember_recent_reply` (окно 20) — анти-повторы следующих генераций.
@@ -551,17 +611,40 @@ Fallback на обращение не считается в hourly cap.
 - `LearningService.record_message` → `Database.save_message_and_update_model`
   (атомарно): сохранение normalized-текста + инкремент счётчиков переходов
   порядка 2 (`transitions`: тройки) и 3 (`transitions3`: четвёрки) и стартов
-  `starts`/`starts3`; ретенция — последние `MESSAGES_RETENTION_PER_CHAT` сообщений чата. Там же лениво крутится суточный decay
-  эмодзи/n-грамм (половинение устаревших счётчиков).
-- Инвалидация кэшей генератора и текст-кэша verbatim-проверки по чату.
+  `starts`/`starts3`; ретенция — последние `MESSAGES_RETENTION_PER_CHAT` сообщений чата.
+- Кэши генератора: при дефолте `markov_cache_incremental=true` — инкрементальная
+  вкатка дельт сообщения (`app/core/markov.py::MarkovGenerator.apply_learning_deltas`);
+  `invalidate_chat_cache` — только аварийная ветка при выключенной ручке
+  (`app/services/learning_service.py::LearningService.record_message`). Кэши
+  `LearningService` (текст-окно verbatim, индекс 4-грамм, частотный словарь)
+  поглощают сообщение тоже инкрементально
+  (`learning_service.py::LearningService._absorb_message`).
 - L1: `extract_content_ngrams` (`core/hot_ngrams.py`) — би/триграммы с
   ≥1 контент-токеном (длина ≥3, не STOPWORD, wordlike), ≤24 на сообщение →
   `record_hot_ngrams`.
 
+Суточное обслуживание — **не** внутри `record_message`, а отдельный шаг после
+обучения: `app/services/reply_pipeline.py::ReplyPipeline.run_due_maintenance` →
+`app/services/learning_service.py::LearningService.run_due_maintenance`
+(вызывается хендлером из того же `finally`; планировщика в проекте нет,
+learn-путь — единственное место, куда регулярно приходит управление). На одной
+суточной каденции идут: decay эмодзи/n-грамм (половинение устаревших
+счётчиков, `Database.decay_flavor_stats_if_due`), мемо-анализ (M2R-300) и
+полная пересборка фразового индекса
+(`learning_service.py::LearningService._rebuild_phrase_index`, M3R-000).
+Каденция считается от метки в таблице `maintenance_meta` и переживает рестарт
+(миграция 023).
+
 Ключевые таблицы: messages (normalized), переходы/старты Маркова,
 `chat_verbatim_ngrams` (накопительный индекс контент-4-грамм для анти-цитатного
 слоя; ретенция сообщений его не трогает, `/clear` — чистит),
-`chat_emoji_stats`, `chat_hot_ngrams`. Кэши в памяти: LRU переходов/стартов
+`chat_emoji_stats`, `chat_hot_ngrams`;
+`chat_user_interactions` (014) — анонимные HMAC-счётчики отвеченных обращений
+для причуд L2; `markov_collocations` (019) — реестр активных пар мемо-анализа;
+`markov_token_df` (020) — инкрементальный df-агрегат для выбора якоря seeded;
+`chat_phrase_ngrams` (022) — фразовый индекс (пересборка суточным пассом);
+`maintenance_meta` (023) — метка последнего суточного пасса. Подробности —
+в [ARCHITECTURE.md](ARCHITECTURE.md), §Модель данных. Кэши в памяти: LRU переходов/стартов
 (`cache_limit`), индексы `ContextStateMatcher` (по (chat, order)) и окно текстов
 (`TEXT_CACHE_MAX_MESSAGES`).
 
@@ -587,9 +670,14 @@ Fallback на обращение не считается в hourly cap.
 
 ## 10. Инструменты для работы с генерацией
 
-- `tools/eval_generation.py` — синтетический eval конвейера (метрики вроде
-  context_token_overlap; исторически им подбирались margin, penalty, cap).
-- `tools/eval_prod.py` — eval на продовой БД.
+- Нормативный протокол замеров — пакет `tools/eval/` (`python -m tools.eval`,
+  режимы `--context-mode {ctx,noctx}`, свипы матрицей `matrix.yaml`, переписи
+  `phrase_census` / `state_census`, временна́я фикстура `temporal_fixture`);
+  свипы-скрипты — `tools/sweeps/`.
+- `tools/eval_generation.py` — легаси-скрипт точечных синтетических замеров
+  (метрики вроде context_token_overlap; исторически им подбирались margin,
+  penalty, cap).
+- `tools/eval_prod.py` — легаси-скрипт точечных замеров на продовой БД.
 - Характеризационные тесты: `tests/test_markov_generation_characterization.py`,
   `tests/test_response_generator.py`, `tests/test_candidate_scorer.py`,
   `tests/test_eval_generation.py` и остальные `tests/test_*` по модулям выше.

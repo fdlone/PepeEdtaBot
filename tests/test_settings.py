@@ -13,6 +13,7 @@ from app.config.settings import load_settings
 # deployment identity (BOT_TOKEN, OWNER_ID, DB_PATH, secrets, aliases). Their
 # .env.example values must match the code defaults just like registry fields.
 SETTINGS_ONLY_ENV_VARS: tuple[str, ...] = (
+    "DB_SNAPSHOT_TO_OWNER",
     "GEN_TRACE_LOG",
     "LOG_LEVEL",
     "MESSAGES_RETENTION_PER_CHAT",
@@ -182,6 +183,24 @@ class TestSettings(unittest.TestCase):
         env["GEN_TRACE_LOG"] = "enabled"
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaisesRegex(ValueError, "GEN_TRACE_LOG"):
+                load_settings(load_env=False)
+
+    def test_db_snapshot_to_owner_defaults_on(self) -> None:
+        # Дефолт «включено» осознанный: правка прод-env — ровно тот шаг,
+        # который откладывается (см. design db-snapshot-to-owner, D5).
+        with patch.dict(os.environ, minimal_env(), clear=True):
+            settings = load_settings(load_env=False)
+        self.assertTrue(settings.db_snapshot_to_owner)
+
+        env = minimal_env() | {"DB_SNAPSHOT_TO_OWNER": "false"}
+        with patch.dict(os.environ, env, clear=True):
+            settings = load_settings(load_env=False)
+        self.assertFalse(settings.db_snapshot_to_owner)
+
+    def test_load_settings_rejects_invalid_db_snapshot_knob(self) -> None:
+        env = minimal_env() | {"DB_SNAPSHOT_TO_OWNER": "enabled"}
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "DB_SNAPSHOT_TO_OWNER"):
                 load_settings(load_env=False)
 
     def test_chat_timezone_defaults_to_utc(self) -> None:
