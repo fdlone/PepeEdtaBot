@@ -13,6 +13,8 @@ from collections import Counter
 from statistics import mean
 from typing import Any
 
+from app.core.generation_telemetry import CandidateRoute
+
 from .bootstrap import bootstrap_ci, delta_ci, distinct_delta_ci
 from .metrics import distinct_n, latency_percentiles, meme_regression, metric_values
 from .prompts import PromptSet
@@ -79,6 +81,84 @@ def _delta_cell(base: list[float] | None, other: list[float] | None) -> str:
     point, lo, hi, significant = result
     marker = " *" if significant else ""
     return f"{_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]{marker}"
+
+
+ROUTE_NOT_ATTEMPTED = "not attempted"
+
+
+def _route_rows(config_id: str, run: ConfigRun) -> list[str]:
+    """Per-route table rows of one configuration (M3R-103, reporting half).
+
+    Two denominators printed separately: pool share (candidates of the route
+    among all candidates, per generation) and presence (generations where the
+    route placed at least one candidate); the win rate is conditioned on
+    presence and never printed alone. Affinity and copy are over the replies
+    the route won. Latency is the mean of generations with the route in the
+    pool against those without — an upper bound on the route's cost, not a
+    measurement of its step (design D3). Rejections come from the generator's
+    telemetry, summed by failure class (M3R-021).
+
+    A route with zero attempts and no presence reads ``not attempted``: an
+    off route printed as zeros would look like "runs and never wins" (D4).
+    """
+    with_pool = [record for record in run.records if record.pool_routes]
+    rows: list[str] = []
+    for route in CandidateRoute:
+        name = str(route)
+        attempts = sum(
+            int(snapshot.get(f"route_{name}_attempts") or 0)
+            for snapshot in run.telemetry
+        )
+        present = [record for record in with_pool if name in record.pool_routes]
+        if attempts == 0 and not present:
+            rows.append(f"| {config_id} | {name} | 0 | {ROUTE_NOT_ATTEMPTED} |" + " — |" * 7)
+            continue
+        absent = [record for record in with_pool if name not in record.pool_routes]
+        winners = [
+            record
+            for record in run.records
+            if record.success and record.winner_route == name
+        ]
+        pool_share = _cell(
+            [record.pool_routes.count(name) / len(record.pool_routes) for record in with_pool]
+        )
+        presence = _cell([float(name in record.pool_routes) for record in with_pool])
+        win_given_present = _cell(
+            [float(record.winner_route == name) for record in present]
+        )
+        winners_affinity = _cell(
+            [
+                record.affinity
+                for record in winners
+                if not record.is_copy and record.affinity is not None
+            ]
+        )
+        winners_copy = _cell([float(record.is_copy) for record in winners])
+        latency_present = (
+            f"{mean(record.latency_ms for record in present):.1f}"
+            if present
+            else "—"
+        )
+        latency_absent = (
+            f"{mean(record.latency_ms for record in absent):.1f}" if absent else "—"
+        )
+        rejected: Counter[str] = Counter()
+        prefix = f"route_{name}_rejected_"
+        for snapshot in run.telemetry:
+            for key, value in snapshot.items():
+                if key.startswith(prefix) and value:
+                    rejected[key[len(prefix) :]] += int(value)
+        rejected_cell = (
+            ", ".join(f"{cls} {count}" for cls, count in sorted(rejected.items()))
+            if rejected
+            else "0"
+        )
+        rows.append(
+            f"| {config_id} | {name} | {attempts} | {pool_share} | {presence} "
+            f"| {win_given_present} | {winners_affinity} | {winners_copy} "
+            f"| {latency_present} / {latency_absent} | {rejected_cell} |"
+        )
+    return rows
 
 
 def _finite(samples: list[float] | None) -> list[float]:
@@ -1424,6 +1504,38 @@ def build_report(
                 f"| {_cell(values['repetition_rate'])} "
                 f"| {_cell(values['context_affinity'])} |"
             )
+    lines.append("")
+
+    # M3R-103 (reporting half): the third axis — configuration x route — as its
+    # own table rather than extra metric rows. Without it "quality rose by X%"
+    # has no answer to WHICH mechanism moved it (roadmap: not accepted as a
+    # result).
+    lines.append("## Per-route breakdown (M3R-103)")
+    lines.append("")
+    lines.append(
+        "Маршрут — механизм, построивший кандидата (`CandidateRoute`), как его "
+        "атрибутировал генератор при создании. Два знаменателя раздельно: "
+        "**доля пула** — кандидаты маршрута среди всех кандидатов генерации; "
+        "**присутствие** — доля генераций, где маршрут положил хотя бы одного "
+        "кандидата; **win given present** — доля побед среди них. Affinity без "
+        "копий и copy — по ответам, которые выиграл маршрут. Латентность — "
+        "средняя по генерациям с маршрутом в пуле / без него: верхняя оценка "
+        "цены маршрута, не измерение его шага. Отклонения — до пула, по классам "
+        f"M3R-021, из телеметрии генератора. `{ROUTE_NOT_ATTEMPTED}` — механизм "
+        "маршрута в этой конфигурации не запускался (не то же, что «запускался и "
+        "ничего не произвёл»)."
+    )
+    lines.append("")
+    lines.append(
+        "| config | route | attempts | pool share | presence | win given present "
+        "| winners' affinity w/o copy | winners' copy | latency with / without, ms "
+        "| rejected before pool (F-classes) |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    for config_id in ordered:
+        if runs[config_id].shared_with:
+            continue
+        lines.extend(_route_rows(config_id, runs[config_id]))
     lines.append("")
 
     lines.append("## Gates")

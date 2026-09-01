@@ -17,6 +17,7 @@ from typing import Any
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from app.core.generation_telemetry import CandidateRoute
 from tools.eval.bootstrap import bootstrap_ci, delta_ci
 from tools.eval.config import load_matrix, load_thresholds, resolve_overrides
 from tools.eval.metrics import (
@@ -626,6 +627,124 @@ class TestPhase5CorpusPrecondition(unittest.TestCase):
         self.assertIn("singleton share 81% (ceiling 60%)", report)
 
 
+class TestRouteBreakdownSection(unittest.TestCase):
+    """M3R-103, reporting half: the per-route table of the report.
+
+    Two denominators printed separately (design D3), an off route is "not
+    attempted" rather than a zero row (D4), and the bit-for-bit summary does
+    not see route fields at all (D5)."""
+
+    @staticmethod
+    def _report(runs: dict[str, ConfigRun]) -> str:
+        return build_report(
+            runs=runs,
+            skipped=[],
+            prompt_set=_prompt_set_stub(),
+            thresholds=load_thresholds(),
+            snapshot_label="test",
+            seeds=(42,),
+            generations=1,
+            revision="test",
+            date="2026-09-01",
+            notes=[],
+        )
+
+    @staticmethod
+    def _row(report: str, config_id: str, route: str) -> str:
+        return next(
+            line
+            for line in report.splitlines()
+            if line.startswith(f"| {config_id} | {route} |")
+        )
+
+    def test_two_denominators_are_printed_separately(self) -> None:
+        records = [
+            _record(
+                winner_route="seeded",
+                pool_routes=("vanilla", "vanilla", "seeded"),
+                affinity=0.4,
+                latency_ms=30.0,
+            ),
+            _record(
+                winner_route="vanilla",
+                pool_routes=("vanilla", "vanilla", "vanilla"),
+                affinity=0.2,
+                latency_ms=10.0,
+            ),
+        ]
+        arm = ConfigRun(
+            config_id="C4",
+            records=records,
+            telemetry=[
+                {
+                    "route_seeded_attempts": 2,
+                    "route_seeded_rejected_F2_context_copy": 3,
+                    "route_vanilla_attempts": 2,
+                }
+            ],
+        )
+        report = self._report(
+            {"C0": ConfigRun(config_id="C0", records=[_record()]), "C4": arm}
+        )
+        row = self._row(report, "C4", "seeded")
+        cells = [cell.strip() for cell in row.strip("|").split("|")]
+        # config, route, attempts, pool share, presence, win given present,
+        # winners' affinity, winners' copy, latency, rejected
+        self.assertEqual(cells[2], "2")
+        self.assertTrue(cells[3].startswith("0.167"))  # (1/3 + 0) / 2
+        self.assertTrue(cells[4].startswith("0.500"))  # present in 1 of 2
+        self.assertTrue(cells[5].startswith("1.000"))  # won the one it was in
+        self.assertTrue(cells[6].startswith("0.400"))  # its winner's affinity
+        self.assertEqual(cells[8], "30.0 / 10.0")
+        self.assertEqual(cells[9], "F2_context_copy 3")
+
+    def test_route_that_never_ran_is_not_a_zero_row(self) -> None:
+        baseline = ConfigRun(
+            config_id="C0",
+            records=[_record(winner_route="vanilla", pool_routes=("vanilla",))],
+            telemetry=[{"route_vanilla_attempts": 1}],
+        )
+        report = self._report({"C0": baseline})
+        self.assertIn("not attempted", self._row(report, "C0", "seeded"))
+        self.assertNotIn("not attempted", self._row(report, "C0", "vanilla"))
+
+    def test_shared_configuration_has_no_rows_of_its_own(self) -> None:
+        base = ConfigRun(config_id="C0", records=[_record(pool_routes=("vanilla",))])
+        alias = ConfigRun(config_id="CF", records=base.records, shared_with="C0")
+        report = self._report({"C0": base, "CF": alias})
+        self.assertNotIn("| CF | vanilla |", report)
+
+    def test_summary_is_blind_to_route_fields(self) -> None:
+        plain = metrics_summary({"C0": ConfigRun(config_id="C0", records=[_record()])})
+        attributed = metrics_summary(
+            {
+                "C0": ConfigRun(
+                    config_id="C0",
+                    records=[_record(winner_route="seeded", pool_routes=("seeded",))],
+                )
+            }
+        )
+        self.assertEqual(plain, attributed)
+
+    def test_route_telemetry_sums_rejections_by_failure_class(self) -> None:
+        from app.core.generation_telemetry import GenerationTelemetry
+        from tools.eval.run import route_telemetry
+
+        telemetry = GenerationTelemetry()
+        telemetry.note_routes(
+            attempted={"vanilla", "seeded"}, present={"vanilla"}, winner="vanilla"
+        )
+        telemetry.note_route_rejected("seeded", "short_context_copy")
+        telemetry.note_route_rejected("seeded", "context_heavy")
+        telemetry.note_route_rejected("seeded", "no such reason")
+        flat = route_telemetry(telemetry)
+        self.assertEqual(flat["route_seeded_attempts"], 1)
+        self.assertEqual(flat["route_seeded_present"], 0)
+        self.assertEqual(flat["route_vanilla_won"], 1)
+        self.assertEqual(flat["route_seeded_rejected_F2_context_copy"], 2)
+        self.assertEqual(flat["route_seeded_rejected_unmapped"], 1)
+
+
 class TestPhase7Gate(unittest.TestCase):
     """Phase 7 shadow order-4 gate (ADR-002): a single-dimension sample-size
     gate. Below the eligible bar it is insufficient; at or above it, a selected
@@ -956,6 +1075,18 @@ class TestSyntheticProtocol(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(section, report)
             self.assertIn("insufficient data", report)  # temporal/seeded honesty
             self.assertIn("mode=ctx", report)  # M3R-140: the mode is named
+            # M3R-103 (reporting half): every successful record carries the
+            # winner's route and one route per pool candidate, as attributed
+            # by the generator; the report prints the per-route table.
+            self.assertIn("## Per-route breakdown", report)
+            routes = {str(route) for route in CandidateRoute}
+            successful = [r for r in first["C0"].records if r.success]
+            self.assertTrue(successful)
+            for record in successful:
+                self.assertIn(record.winner_route, routes)
+                self.assertEqual(len(record.pool_routes), record.pool_size)
+                self.assertTrue(set(record.pool_routes) <= routes)
+            self.assertIn("route_vanilla_attempts", first["C0"].telemetry[0])
         finally:
             if temp_dir is not None:
                 temp_dir.cleanup()

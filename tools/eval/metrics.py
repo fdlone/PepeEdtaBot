@@ -62,6 +62,15 @@ class GenRecord:
     # opposite.
     pool_ecb: int = 0
     window_escape: int = 0
+    # M3R-103 (reporting half): the mechanism that built the winner and the
+    # route of every candidate in the pool, as the generator attributed them at
+    # creation — never inferred from text afterwards. ``None`` / empty on a
+    # generation that produced no pool. Inputs of the per-route table only:
+    # they stay out of ``metrics_summary`` on purpose, because that object is
+    # compared bit-for-bit across runs and revisions and a new key there would
+    # break every comparison (design D5).
+    winner_route: str | None = None
+    pool_routes: tuple[str, ...] = ()
 
 
 # M3R-011: the similarity threshold lives in eval_thresholds.yaml

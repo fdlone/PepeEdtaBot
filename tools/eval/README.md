@@ -47,3 +47,16 @@ deterministic metric summary used by reproducibility checks.
   hand-edited files.
 - `eval_thresholds.yaml` — pre-registered gate thresholds (doc 05 §4). Editing
   after fixation requires a dedicated commit with written justification.
+
+## Per-route breakdown (M3R-103)
+
+Every report carries a `configuration x route` table after the per-category
+breakdown: for each member of `CandidateRoute` — attempts, pool share,
+presence, win rate **given presence**, the affinity-without-copy and copy rate
+of the replies the route won, mean latency of generations with / without the
+route in the pool (an upper bound on its cost, not a step measurement), and
+pre-pool rejections summed by failure class (M3R-021). Routes are attributed
+by the generator at candidate creation (`GenRecord.winner_route`,
+`GenRecord.pool_routes`), never inferred from text; a route whose mechanism
+did not run reads `not attempted`. The bit-for-bit `metrics_summary` does not
+include route fields.

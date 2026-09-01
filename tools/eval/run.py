@@ -30,6 +30,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from app import log_masking  # noqa: E402
 from app.config.registry import RUNTIME_FIELDS  # noqa: E402
 from app.core import gen_trace_log  # noqa: E402
+from app.core.failure_taxonomy import UNMAPPED, classify_reason  # noqa: E402
+from app.core.generation_telemetry import GenerationTelemetry  # noqa: E402
 from app.core.markov import content_tokens, tokenize  # noqa: E402
 from app.core.response_generator import (  # noqa: E402
     CANDIDATE_TARGET,
@@ -267,6 +269,10 @@ async def run_config_seed(
             # is written, only the winning text survives.
             captured_pool: list[tuple[tuple[str, ...], float]] = []
             captured_margin: list[float] = [0.0]
+            # M3R-103 (reporting half): the route of every pool candidate, as
+            # the generator attributed it. Same hook, same rule — capture only,
+            # nothing is counted inside the timed section.
+            captured_routes: list[str] = []
 
             def _on_selection(_chat_id: int, candidates: Any, **kwargs: Any) -> None:
                 pool = list(candidates or ())
@@ -275,6 +281,7 @@ async def run_config_seed(
                     (_content_cf(candidate.text), float(candidate.score.total))
                     for candidate in pool
                 ]
+                captured_routes[:] = [str(candidate.route) for candidate in pool]
                 # The margin comes from the selection itself (design D3):
                 # hardcoding SELECTION_SCORE_MARGIN would keep measuring an old
                 # window the day that margin becomes a knob.
@@ -330,6 +337,7 @@ async def run_config_seed(
                     generator.reset_generation()
                     pool_sizes[0] = 0
                     captured_pool.clear()
+                    captured_routes.clear()
                     rejected_before = sum(generator.rejections.values()) + rg_rejected[0]
                     prompt_tokens = tokenize(prompt)
                     started = time.perf_counter()
@@ -379,6 +387,7 @@ async def run_config_seed(
                                 rejected_count=rejected,
                                 pool_ecb=pool_ecb,
                                 window_escape=window_escape,
+                                pool_routes=tuple(captured_routes),
                             )
                         )
                         continue
@@ -417,6 +426,8 @@ async def run_config_seed(
                                 if fresh_tokens is None
                                 else fresh_share(reply_content, fresh_tokens)
                             ),
+                            winner_route=result.winner_route,
+                            pool_routes=tuple(captured_routes),
                         )
                     )
         finally:
@@ -425,7 +436,36 @@ async def run_config_seed(
         temp_dir.cleanup()
         gen_trace_log.log_selection = saved_log_selection  # type: ignore[assignment]
         gen_trace_log.log_attempt_rejected = saved_log_rejected  # type: ignore[assignment]
-    return records, generator.telemetry.snapshot()
+    snapshot = generator.telemetry.snapshot()
+    snapshot.update(route_telemetry(generator.telemetry))
+    return records, snapshot
+
+
+def route_telemetry(
+    telemetry: GenerationTelemetry,
+) -> dict[str, float | int | None]:
+    """Per-route counters flattened for the report (M3R-103, reporting half).
+
+    ``route_breakdown`` is nested and stays out of ``snapshot`` because
+    ``/stats`` prints flat numbers; the report wants the same numbers per seed,
+    so they travel as ``route_<route>_<key>``. Rejections are summed by failure
+    class (M3R-021), not by raw reason: the class is the vocabulary features
+    and rating rounds are compared in, and the raw reasons are already in the
+    trace. An unmapped reason lands in ``unmapped`` rather than vanishing.
+    """
+    flat: dict[str, float | int | None] = {}
+    for route, numbers in telemetry.route_breakdown().items():
+        for key, value in numbers.items():
+            flat[f"route_{route}_{key}"] = value
+    for route, reasons in telemetry.route_rejection_reasons().items():
+        for reason, count in reasons.items():
+            failure_class = classify_reason(reason)
+            key = (
+                f"route_{route}_rejected_"
+                f"{UNMAPPED if failure_class is None else failure_class.value}"
+            )
+            flat[key] = int(flat.get(key) or 0) + count
+    return flat
 
 
 async def run_matrix(
