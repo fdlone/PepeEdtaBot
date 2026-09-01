@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 COPY_RUN_TOKENS = 4  # K of §3.2 = scorer's VERBATIM_NGRAM_SIZE
@@ -219,6 +220,30 @@ def proportion_samples(records: list[GenRecord], flag: str) -> list[float]:
     return [1.0 if getattr(record, flag) else 0.0 for record in records]
 
 
+def _aligned(
+    records: list[GenRecord], value_of: Callable[[GenRecord], float | None]
+) -> list[float] | None:
+    """Значение на каждую запись, с ``nan`` там, где записи в метрике нет.
+
+    Раньше такие метрики просто отфильтровывались (``for r in successful``), и
+    список выходил короче исходного на неотвеченные записи. Для одиночного
+    интервала это безразлично, а для дельты — нет: армы не отвечают на *разных*
+    промптах, поэтому после фильтрации позиция перестаёт быть идентификатором
+    наблюдения, и парный ресэмплинг сшивал бы разные промпты.
+
+    ``nan`` вместо пропуска сохраняет выравнивание по исходному списку записей,
+    а потребители его отбрасывают: одиночный интервал — из выборки, парная
+    дельта — вместе со всей парой. ``None`` был бы честнее по типу, но
+    протащил бы `float | None` через все сигнатуры бутстрапа ради того же
+    результата.
+    """
+    values = [
+        math.nan if (value := value_of(record)) is None else value
+        for record in records
+    ]
+    return values if any(not math.isnan(value) for value in values) else None
+
+
 def metric_values(records: list[GenRecord]) -> dict[str, list[float] | None]:
     """Per-generation sample arrays for every §3 metric.
 
@@ -226,58 +251,81 @@ def metric_values(records: list[GenRecord]) -> dict[str, list[float] | None]:
     data in the current phase. Config-level ratios (distinct-N) are computed
     by :func:`distinct_n` on resampled reply sets instead.
     """
-    successful = [record for record in records if record.success]
-    accept_rates = [
-        record.pool_size / (record.pool_size + record.rejected_count)
-        for record in records
-        if record.pool_size + record.rejected_count > 0
-    ]
-    non_copy = [record for record in successful if not record.is_copy]
     return {
         # §3.1
         "generation_success_rate": proportion_samples(records, "success"),
-        "candidate_accept_rate": accept_rates or None,
-        "mean_response_length": [float(len(r.reply_content)) for r in successful] or None,
-        "unique_token_ratio": [
-            len(set(r.reply_content)) / len(r.reply_content)
-            for r in successful
-            if r.reply_content
-        ]
-        or None,
+        # Через `_aligned`, как остальные фильтрованные: фильтр здесь
+        # арм-зависимый (`pool_size` и `rejected_count` — результат
+        # генерации), поэтому без выравнивания парная дельта сшивала бы
+        # разные промпты. Единственная метрика `METRIC_ORDER`, которую первая
+        # редакция A2-4 пропустила.
+        "candidate_accept_rate": _aligned(
+            records,
+            lambda r: r.pool_size / (r.pool_size + r.rejected_count)
+            if r.pool_size + r.rejected_count > 0
+            else None,
+        ),
+        "mean_response_length": _aligned(
+            records, lambda r: float(len(r.reply_content)) if r.success else None
+        ),
+        "unique_token_ratio": _aligned(
+            records,
+            lambda r: len(set(r.reply_content)) / len(r.reply_content)
+            if r.success and r.reply_content
+            else None,
+        ),
         # §3.2
-        "exact_context_copy_rate": proportion_samples(successful, "is_copy") or None,
-        "repetition_rate": proportion_samples(successful, "has_repetition") or None,
-        "cycle_detection_rate": proportion_samples(successful, "has_cycle") or None,
-        "cycle_harm_rate": [
-            1.0 if (r.has_cycle and r.has_repetition) else 0.0 for r in successful
-        ]
-        or None,
+        "exact_context_copy_rate": _aligned(
+            records, lambda r: float(r.is_copy) if r.success else None
+        ),
+        "repetition_rate": _aligned(
+            records, lambda r: float(r.has_repetition) if r.success else None
+        ),
+        "cycle_detection_rate": _aligned(
+            records, lambda r: float(r.has_cycle) if r.success else None
+        ),
+        "cycle_harm_rate": _aligned(
+            records,
+            lambda r: float(r.has_cycle and r.has_repetition) if r.success else None,
+        ),
         # §3.3
-        "context_affinity": [r.affinity for r in successful if r.affinity is not None] or None,
-        "context_affinity_without_copy": [
-            r.affinity for r in non_copy if r.affinity is not None
-        ]
-        or None,
+        "context_affinity": _aligned(
+            records, lambda r: r.affinity if r.success else None
+        ),
+        "context_affinity_without_copy": _aligned(
+            records, lambda r: r.affinity if r.success and not r.is_copy else None
+        ),
         # §3.4 — seeded generation does not exist before Phase 5.
         "seeded_present_rate": None,
         "seeded_win_rate_given_present": None,
         # §3.5 — both require a temporal snapshot; ``None`` on any snapshot
         # without observation times (audit §10.1).
-        "freshness_reflection": [
-            r.fresh_share for r in successful if r.fresh_share is not None
-        ]
-        or None,
-        "historical_meme_rate": [
-            1.0 if r.meme_hits else 0.0
-            for r in successful
-            if r.category == "meme-bait"
-        ]
-        or None,
+        "freshness_reflection": _aligned(
+            records, lambda r: r.fresh_share if r.success else None
+        ),
+        "historical_meme_rate": _aligned(
+            records,
+            lambda r: float(bool(r.meme_hits))
+            if r.success and r.category == "meme-bait"
+            else None,
+        ),
         # M3R-011 — the pair, over ALL records rather than the successful ones:
         # a generation that collected nothing produced zero trajectories, and
         # dropping it would measure diversity only where diversity happened.
         "structural_pool_ecb": [float(r.pool_ecb) for r in records] or None,
         "structural_window_escape": [float(r.window_escape) for r in records] or None,
+        # Доля, а не счёт. Порог `pool_ecb_min` пре-регистрирован как ЧИСЛО
+        # различных траекторий, а знаменатель 5 держит только проза CLAUDE.md
+        # («ECB ≥ 4/5 по пулу»). Пул уже не равен пяти: seeded добавляет
+        # кандидатов сверх `effective_target`, а каждый маршрут Track B
+        # добавит ещё, и на пуле 11 порог 4 берётся тривиально. Порог не
+        # двигается — пре-регистрация, — но рядом с ним печатается величина,
+        # которую он должен был мерить. Тем же приёмом M3R-011 завёл «долю
+        # входов ниже 2» рядом со средним по окну.
+        "structural_pool_ecb_share": [
+            float(r.pool_ecb) / r.pool_size for r in records if r.pool_size > 0
+        ]
+        or None,
     }
 
 

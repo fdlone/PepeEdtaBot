@@ -326,5 +326,78 @@ class TestRuntimeState(unittest.TestCase):
         self.assertEqual(list(state.recent_reply_times[100]), [1000.0, 1100.0])
 
 
+class TestReplySlotReservation(unittest.TestCase):
+    """Бюджет ответа занимается в момент решения и возвращается, если ответа
+    не было (O8)."""
+
+    def test_reservation_occupies_the_budget_immediately(self) -> None:
+        state = make_runtime_state()
+
+        state.reserve_reply_slot(100, 1000.0)
+
+        self.assertEqual(state.last_reply_ts[100], 1000.0)
+        self.assertEqual(list(state.recent_reply_times[100]), [1000.0])
+
+    def test_release_returns_the_budget(self) -> None:
+        state = make_runtime_state()
+
+        slot = state.reserve_reply_slot(100, 1000.0)
+        state.release_reply_slot(slot)
+
+        self.assertNotIn(100, state.last_reply_ts)
+        self.assertNotIn(100, state.recent_reply_times)
+
+    def test_release_restores_the_previous_cooldown(self) -> None:
+        state = make_runtime_state()
+        state.note_reply_sent(100, 900.0)
+
+        slot = state.reserve_reply_slot(100, 1000.0)
+        state.release_reply_slot(slot)
+
+        self.assertEqual(state.last_reply_ts[100], 900.0)
+        self.assertEqual(list(state.recent_reply_times[100]), [900.0])
+
+    def test_release_removes_its_own_mark_not_the_last_one(self) -> None:
+        """Между резервацией и откатом другой апдейт мог занять слот законно.
+
+        Его резервация отменяться не должна: она сделана по собственной
+        проверке и в силе. Поэтому откат снимает свою метку, а не последнюю,
+        и не трогает кулдаун, если тот уже принадлежит не ему.
+        """
+        state = make_runtime_state()
+
+        first = state.reserve_reply_slot(100, 1000.0)
+        state.reserve_reply_slot(100, 1001.0)
+        state.release_reply_slot(first)
+
+        self.assertEqual(
+            list(state.recent_reply_times[100]),
+            [1001.0],
+            "откат снял чужую метку",
+        )
+        self.assertEqual(
+            state.last_reply_ts[100], 1001.0, "откат сбросил чужой кулдаун"
+        )
+
+    def test_mention_reservation_stays_out_of_the_hourly_cap(self) -> None:
+        state = make_runtime_state()
+
+        state.reserve_reply_slot(100, 1000.0, unprompted=False)
+
+        self.assertEqual(state.last_reply_ts[100], 1000.0)
+        self.assertNotIn(100, state.recent_reply_times)
+
+    def test_release_is_safe_when_the_mark_already_aged_out(self) -> None:
+        """Часовой срез мог вытеснить метку до отката — возвращать нечего."""
+        state = make_runtime_state()
+
+        slot = state.reserve_reply_slot(100, 1000.0)
+        state.note_reply_sent(100, 1000.0 + 3601.0)
+
+        state.release_reply_slot(slot)  # не должно бросать
+
+        self.assertEqual(list(state.recent_reply_times[100]), [4601.0])
+
+
 if __name__ == "__main__":
     unittest.main()

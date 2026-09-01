@@ -15,8 +15,13 @@ from unittest.mock import AsyncMock, patch
 
 from app.config.registry import RUNTIME_FIELDS
 from app.config.runtime_state import RuntimeState
+from app.core.generation_telemetry import GenerationTelemetry
 from app.services.meme_analyzer import MemeSettings
-from app.services.reply_pipeline import IncomingMessage, ReplyPipeline
+from app.services.reply_pipeline import (
+    IncomingMessage,
+    PartialDeliveryError,
+    ReplyPipeline,
+)
 
 
 def _state(**overrides: object) -> RuntimeState:
@@ -57,13 +62,20 @@ def _incoming(**overrides: object) -> IncomingMessage:
 
 
 class _Outbox:
-    """Приёмник отправки: конвейеру достаточно «отправить части»."""
+    """Приёмник отправки: конвейеру достаточно «отправить части».
+
+    Возвращает число доставленных частей — контракт ``Sender``. Конвейер
+    отличает по нему «ответа в чате нет» от «ответ ушёл частично»: от этого
+    зависит, вернуть ли бюджет ответа и запоминать ли форму в анти-повторе.
+    """
 
     def __init__(self) -> None:
         self.sent: list[list[str]] = []
 
-    async def __call__(self, parts: Sequence[str]) -> None:
+    async def __call__(self, parts: Sequence[str]) -> int:
+        delivered = [part for part in parts if part]
         self.sent.append(list(parts))
+        return len(delivered)
 
 
 class ReplyPipelineTestCase(unittest.IsolatedAsyncioTestCase):
@@ -73,6 +85,12 @@ class ReplyPipelineTestCase(unittest.IsolatedAsyncioTestCase):
         self.learning_service.get_hot_ngrams.return_value = []
         self.learning_service.get_user_interaction_count.return_value = 0
         self.generator = AsyncMock()
+        # Настоящая телеметрия, а не мок: у AsyncMock каждый note_* возвращает
+        # корутину, которую никто не ждёт, и счётчики не накапливаются — тест
+        # проверял бы, что метод позвали, а не что число сошлось. Ровно из-за
+        # этого первая редакция тестов счётчиков (O14/O15) не увидела двух
+        # дефектов проводки.
+        self.generator.telemetry = GenerationTelemetry()
         self.outbox = _Outbox()
         self.masking = patch(
             "app.services.reply_pipeline.mask_chat_id", return_value="chat"
@@ -393,6 +411,291 @@ class TestLearn(ReplyPipelineTestCase):
         await pipeline.learn(msg, observation)
 
         self.learning_service.record_message.assert_not_awaited()
+
+
+class TestTempoCountersWiring(ReplyPipelineTestCase):
+    """Счётчики проверяются через конвейер, а не на объекте телеметрии.
+
+    Первая редакция тестов дёргала `note_mention` напрямую и потому пропустила
+    два дефекта проводки сразу: знаменатель считался по уже отфильтрованному
+    `address_reply` (ветка «обращение без ответа» недостижима —
+    `should_reply_to_message` возвращает True на любом упоминании), а фолбэк
+    «мало данных» не попадал в числитель вовсе. Счётчик, заведённый ради
+    решения по O15, не мог показать ничего, кроме 100%.
+    """
+
+    async def test_mention_denominator_counts_the_raw_mention(self) -> None:
+        """Упоминание, погашенное кулдауном обращений, — тоже нагрузка."""
+        state = _state(mention_cooldown_sec=60)
+        state.last_mention_reply_ts[(1, 5)] = 990.0
+        pipeline = self._pipeline(state)
+
+        observation = await pipeline.observe(_incoming(mentioned=True))
+
+        assert observation is not None
+        self.assertFalse(observation.address_reply, "тест не проверяет гейт")
+        self.assertEqual(
+            self.generator.telemetry.mentions_observed,
+            1,
+            "погашенное кулдауном упоминание выпало из знаменателя",
+        )
+
+    async def test_answer_share_can_be_below_one(self) -> None:
+        """Доля ответов обязана уметь отличаться от 100%."""
+        state = _state(mention_cooldown_sec=60)
+        state.last_mention_reply_ts[(1, 5)] = 990.0
+        pipeline = self._pipeline(state)
+
+        msg = _incoming(mentioned=True)
+        observation = await pipeline.observe(msg)
+        assert observation is not None
+        with self._generated("ответ бота из нескольких слов"):
+            await pipeline.respond(msg, observation, self.outbox)
+
+        share = self.generator.telemetry.snapshot()["mention_answer_share"]
+        self.assertIsNotNone(share)
+        self.assertLess(share, 1.0, "доля ответов тождественно равна единице")
+
+    async def test_not_enough_data_fallback_counts_as_an_answer(self) -> None:
+        self.learning_service.get_token_volume.return_value = 0
+        state = _state()
+        await self._run(state, _incoming(mentioned=True))
+
+        self.assertEqual(self.generator.telemetry.mentions_answered, 1)
+
+    async def test_tempo_is_counted_even_for_a_dropped_message(self) -> None:
+        """Темп считается до раннего возврата — на любом сообщении.
+
+        Короткие и необучаемые сообщения тоже задают темп чата, и
+        распределение, собранное только по «хорошим», отвечало бы не на тот
+        вопрос. Проверяется проводка, а не арифметика счётчика: мутация места
+        вызова (удаление `note_chat_tempo`) без этого теста оставляла весь
+        сьют зелёным.
+        """
+        state = _state(mood_enabled=True)
+        pipeline = self._pipeline(state)
+
+        observation = await pipeline.observe(_incoming(text="ок"))
+
+        self.assertIsNone(observation, "сообщение должно отсеяться гейтом")
+        self.assertEqual(
+            sum(self.generator.telemetry.tempo_buckets.values()),
+            1,
+            "темп не посчитан на отсеянном сообщении",
+        )
+
+    async def test_burst_phase_is_counted_for_an_unprompted_reply(self) -> None:
+        """Самостоятельный ответ в окне усиления попадает в счётчик.
+
+        Парный к `test_burst_phase_ignores_mention_answers`: тот проверяет
+        отсутствие (assert == 0) и потому переживает удаление всего блока.
+        Без положительного теста проводка не охраняется ничем, а именно по
+        этим числам будет закрываться O14.
+        """
+        state = _state(
+            reply_director_enabled=True,
+            reply_probability_min=1.0,
+            reply_probability_max=1.0,
+            min_cooldown_sec=0,
+        )
+        state.last_reply_ts[1] = 999.0  # 1 с назад — внутри окна усиления
+        pipeline = self._pipeline(state)
+
+        msg = _incoming()
+        observation = await pipeline.observe(msg)
+        assert observation is not None
+        with self._generated("ответ бота из нескольких слов"):
+            await pipeline.respond(msg, observation, self.outbox)
+
+        telemetry = self.generator.telemetry
+        self.assertEqual(
+            telemetry.burst_phase_boost, 1, "фаза усиления не посчитана"
+        )
+        self.assertEqual(telemetry.burst_phase_suppress, 0)
+
+    async def test_burst_phase_ignores_mention_answers(self) -> None:
+        """Ответ на обращение берст-фактор не проходил — считать его нельзя."""
+        state = _state(reply_director_enabled=True)
+        state.last_reply_ts[1] = 999.0  # внутри окна усиления
+        pipeline = self._pipeline(state)
+
+        msg = _incoming(mentioned=True)
+        observation = await pipeline.observe(msg)
+        assert observation is not None
+        with self._generated("ответ бота из нескольких слов"):
+            await pipeline.respond(msg, observation, self.outbox)
+
+        telemetry = self.generator.telemetry
+        self.assertEqual(
+            telemetry.burst_phase_boost + telemetry.burst_phase_suppress,
+            0,
+            "ответ на обращение попал в счётчик фазы берста",
+        )
+
+
+class TestReplyBudgetUnderConcurrency(ReplyPipelineTestCase):
+    """Пределы темпа держатся и при одновременной доставке (O8).
+
+    aiogram заводит задачу на каждый апдейт, а `getUpdates` отдаёт их пачками
+    до 100 штук. Пока бюджет занимался после отправки, вся пачка успевала
+    пройти проверку кулдауна до первой записи — и кулдаун не давал того, что
+    обещает, ровно в burst-режиме, ради которого заведён.
+    """
+
+    def _slow_generated(self, text: str) -> object:
+        """Генерация, которая реально уступает циклу.
+
+        Без уступки тест зелён по неправильной причине: `AsyncMock` возвращает
+        значение, ни разу не приостановив корутину, поэтому `asyncio.gather`
+        доводит каждую до конца по очереди и чередования — то есть самой
+        гонки — не возникает. Проверено мутацией: с мгновенным моком возврат
+        резервации на прежнее место тесты не ронял.
+        """
+        import asyncio
+
+        response_generator = AsyncMock()
+
+        async def _generate(*args: object, **kwargs: object) -> str:
+            await asyncio.sleep(0)
+            return text
+
+        response_generator.generate = AsyncMock(side_effect=_generate)
+        return patch(
+            "app.services.reply_pipeline.ResponseGenerator",
+            return_value=response_generator,
+        )
+
+    async def _respond_many(
+        self, state: RuntimeState, count: int, **msg_overrides: object
+    ) -> None:
+        import asyncio
+
+        pipeline = self._pipeline(state)
+        messages = [
+            _incoming(text=f"сегодня хорошая погода в городе {i}", **msg_overrides)
+            for i in range(count)
+        ]
+        observations = [await pipeline.observe(m) for m in messages]
+        await asyncio.gather(
+            *(
+                pipeline.respond(m, o, self.outbox)
+                for m, o in zip(messages, observations, strict=True)
+                if o is not None
+            )
+        )
+
+    async def test_burst_inside_the_cooldown_yields_one_reply(self) -> None:
+        state = _state(reply_director_enabled=False, reply_probability=1.0)
+        with self._slow_generated("ответ бота из нескольких слов"):
+            await self._respond_many(state, 5)
+
+        self.assertEqual(
+            len(self.outbox.sent),
+            1,
+            f"кулдаун обойдён пачкой: {len(self.outbox.sent)} ответов вместо одного",
+        )
+
+    async def test_burst_does_not_exceed_the_hourly_cap(self) -> None:
+        state = _state(
+            reply_director_enabled=False,
+            reply_probability=1.0,
+            min_cooldown_sec=0,
+            reply_max_per_hour=2,
+        )
+        with self._slow_generated("ответ бота из нескольких слов"):
+            await self._respond_many(state, 6)
+
+        self.assertLessEqual(
+            len(self.outbox.sent),
+            2,
+            f"часовой кап превышен: {len(self.outbox.sent)} ответов при пределе 2",
+        )
+
+    async def test_failed_generation_returns_the_budget(self) -> None:
+        """Ответ не состоялся — бюджет возвращается следующему сообщению."""
+        state = _state(reply_director_enabled=False, reply_probability=1.0)
+        pipeline = self._pipeline(state)
+        msg = _incoming()
+        observation = await pipeline.observe(msg)
+        assert observation is not None
+
+        with self._generated(""):
+            await pipeline.respond(msg, observation, self.outbox)
+
+        self.assertEqual(self.outbox.sent, [])
+        self.assertNotIn(
+            1, state.recent_reply_times, "несостоявшийся ответ съел часовой бюджет"
+        )
+        self.assertNotIn(1, state.last_reply_ts, "несостоявшийся ответ занял кулдаун")
+
+    async def test_send_failure_before_delivery_returns_the_budget(self) -> None:
+        """Ничего не доставлено — ответа в чате нет, бюджет возвращается."""
+        state = _state(reply_director_enabled=False, reply_probability=1.0)
+        pipeline = self._pipeline(state)
+        msg = _incoming()
+        observation = await pipeline.observe(msg)
+        assert observation is not None
+
+        async def failing_send(parts: Sequence[str]) -> int:
+            # Ничего не доставлено — отправитель бросает исходное исключение,
+            # а не PartialDeliveryError: обёртка заведена только для частичной
+            # доставки, чтобы не подменять тип у команд и обработчика ошибок.
+            raise RuntimeError("Telegram недоступен")
+
+        with self._generated("ответ бота из нескольких слов"):
+            with self.assertRaises(RuntimeError):
+                await pipeline.respond(msg, observation, failing_send)
+
+        self.assertNotIn(
+            1, state.recent_reply_times, "упавшая отправка съела часовой бюджет"
+        )
+
+    async def test_partial_delivery_keeps_the_budget_spent(self) -> None:
+        """Часть ответа в чате — бюджет остаётся потраченным.
+
+        Ответ бота бывает многочастным (фальстарт, двойное сообщение, причуда
+        завсегдатая). Сбой на второй части оставляет первую в чате, и возврат
+        бюджета снял бы кулдаун за ответ, который люди уже видят: следующее
+        сообщение получило бы второй ответ поверх оборванного первого.
+        """
+        state = _state(reply_director_enabled=False, reply_probability=1.0)
+        pipeline = self._pipeline(state)
+        msg = _incoming()
+        observation = await pipeline.observe(msg)
+        assert observation is not None
+
+        async def half_delivered_send(parts: Sequence[str]) -> int:
+            raise PartialDeliveryError(1)
+
+        with self._generated("ответ бота из нескольких слов"):
+            with self.assertRaises(PartialDeliveryError):
+                await pipeline.respond(msg, observation, half_delivered_send)
+
+        self.assertIn(
+            1,
+            state.recent_reply_times,
+            "частично доставленный ответ вернул бюджет",
+        )
+        self.assertIn(1, state.last_reply_ts, "частичная доставка сняла кулдаун")
+
+    async def test_silent_zero_delivery_returns_the_budget(self) -> None:
+        """Отправитель вернул 0 без исключения — ответа тоже нет."""
+        state = _state(reply_director_enabled=False, reply_probability=1.0)
+        pipeline = self._pipeline(state)
+        msg = _incoming()
+        observation = await pipeline.observe(msg)
+        assert observation is not None
+
+        async def silent_send(parts: Sequence[str]) -> int:
+            return 0
+
+        with self._generated("ответ бота из нескольких слов"):
+            await pipeline.respond(msg, observation, silent_send)
+
+        self.assertNotIn(1, state.recent_reply_times)
+        self.assertNotIn(
+            1, state.recent_replies, "анти-повтор запомнил неотправленное"
+        )
 
 
 if __name__ == "__main__":

@@ -2631,6 +2631,14 @@ class MarkovGenerator:
         if deferred_anchor is not None:
             # An unspliced anchor (walk hit a limit first) leaves a plain
             # global reply — the trace must not claim context anchoring.
+            #
+            # Переименование честное, но оно же и стирает след: такой ответ в
+            # трассе неотличим от обычного глобального, хотя канал отработал,
+            # израсходовал розыгрыш позиции и всю прогулку держал джампы
+            # выключенными (ветка джампа стоит под `not anchor_pending`).
+            # Пара счётчиков возвращает различимость, не трогая поведение:
+            # знаменатель — «якорь отложили», числитель — «вклеили».
+            self.telemetry.note_anchor_splice(spliced=anchor_spliced)
             start_source = "context_spliced" if anchor_spliced else "global"
             if not anchor_spliced:
                 context_exact_matches = 0

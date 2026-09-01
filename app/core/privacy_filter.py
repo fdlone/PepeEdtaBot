@@ -36,8 +36,18 @@ _PREFIXED_SECRET_RE = re.compile(
 # whitespace ones: a secret glued to punctuation («token: abc.», parens,
 # quotes, a trailing comma) must still match. The hex detector rides this
 # regex too, so it benefits from the same boundary fix.
+# Верхней границы нет намеренно. Пока стояло `{24,128}`, отсечка была не
+# «частичное совпадение», а полная слепота: для токена длиннее 128 символов
+# движок не может закрыть lookahead ни при какой длине из диапазона, а
+# lookbehind не даёт сдвинуться внутрь токена — совпадений нет вообще, и
+# секрет уходил в корпус целиком. Проверено ревью 2026-08-26: 128 символов
+# редактируется, 129 проходит насквозь.
+#
+# Длина здесь ничего и не фильтровала по существу: решение принимает
+# `_is_generic_secret` по классам символов и энтропии. ReDoS невозможен —
+# символьный класс без вложенных квантификаторов сканируется линейно.
 _GENERIC_SECRET_RE = re.compile(
-    r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{24,128}(?![A-Za-z0-9_-])"
+    r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{24,}(?![A-Za-z0-9_-])"
 )
 _UUID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"

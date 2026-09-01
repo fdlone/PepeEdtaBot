@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from app.core.candidate_scorer import CandidateScore
 from app.core.generation_telemetry import GenerationTelemetry
+from app.core.markov import tokenize
 from app.core.mood import MoodModifiers
 from app.core.response_generator import (
     CANDIDATE_TARGET,
@@ -130,6 +131,135 @@ def _request() -> GenerationRequest:
 
 def _score(value: float) -> CandidateScore:
     return CandidateScore(value, 0.0, 0.0, 0.0, 0.0)
+
+
+class TestMutatedTokensMatchTheSentText(unittest.IsolatedAsyncioTestCase):
+    """Маршрут MUTATED скорит тот же объект, который уходит в чат.
+
+    `detokenize` обрывает список токенов на символьном пределе, а
+    `_mutated_variant` возвращал исходный, необрезанный. Скорер читал хвост,
+    которого в ответе нет: длина, повторы, тематичность и анти-цитата
+    считались по несуществующему тексту, а `is_short_generated_reply` —
+    по «длинному» варианту. Это был единственный маршрут с таким
+    расхождением: остальные три выводят токены из финального текста.
+    """
+
+    async def test_tokens_are_derived_from_the_truncated_text(self) -> None:
+        state = _runtime_state()
+        state.max_reply_chars = 60
+        state.slot_mutation_probability = 1.0
+        generator = _traced_generator()
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=_learning_service(),
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(1.0)),
+        )
+        long_tokens = ["словечко"] * 30
+
+        # Гейты приёмки к делу не относятся: тест про соответствие токенов
+        # тексту, а не про то, пройдёт ли кандидат анти-повтор.
+        with (
+            patch(
+                "app.core.response_generator.mutate_candidate_tokens",
+                return_value=long_tokens,
+            ),
+            patch.object(
+                ResponseGenerator,
+                "_candidate_reject_reason",
+                AsyncMock(return_value=None),
+            ),
+        ):
+            variant = await response_generator._mutated_variant(
+                _request(),
+                long_tokens,
+                frequencies={},
+                protected_tokens=frozenset(),
+                rng=random.Random(1),
+            )
+
+        assert variant is not None
+        text, tokens = variant
+        self.assertLessEqual(len(text), 60, "текст не обрезан — тест не о том")
+        self.assertEqual(
+            tokens,
+            tokenize(text, normalize_lower=state.normalize_lower),
+            "скорятся токены, которых нет в отправленном тексте",
+        )
+        self.assertLess(len(tokens), len(long_tokens), "обрезки не произошло")
+
+
+class TestRouteDenominatorsOnEmptyPool(unittest.IsolatedAsyncioTestCase):
+    """Генерация, не давшая ни одного кандидата, обязана попасть в знаменатель.
+
+    Пара «маршрут отработал / маршрут положил кандидата в пул» (M3R-103)
+    существует ровно затем, чтобы отличать выключенный маршрут от включённого
+    и бесплодного. Пока `note_routes` стоял ниже раннего возврата по пустому
+    пулу, самый сильный случай «отработал и ничего не дал» не считался вовсе —
+    и обе доли, present/attempts и won/present, были смещены вверх, то есть в
+    сторону «маршрут полезен». Для гейта промоушена (M3R-220) это худшее из
+    направлений ошибки.
+    """
+
+    async def test_empty_pool_still_counts_the_attempt(self) -> None:
+        state = _runtime_state()
+        state.markov_seeded_candidate_ratio = 0.0
+        state.slot_mutation_probability = 0.0
+        generator = _traced_generator()
+        # Пустой текст не проходит приёмку: пул остаётся пустым.
+        generator.generate_text = AsyncMock(return_value="")
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=_learning_service(),
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(1.0)),
+        )
+
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            result = await response_generator.generate_with_result(
+                _request(), rng=random.Random(3), candidate_target=2
+            )
+
+        self.assertIsNone(result.text)
+        vanilla = generator.telemetry.route_breakdown()["vanilla"]
+        self.assertEqual(
+            vanilla["attempts"], 1, "провальная генерация выпала из знаменателя"
+        )
+        self.assertEqual(vanilla["present"], 0)
+
+    async def test_present_rate_is_not_inflated_by_skipped_failures(self) -> None:
+        """Одна удачная и одна провальная генерация дают present_rate 1/2."""
+        state = _runtime_state()
+        state.markov_seeded_candidate_ratio = 0.0
+        state.slot_mutation_probability = 0.0
+        generator = _traced_generator()
+        generator.generate_text = AsyncMock(return_value="")
+        learning_service = _learning_service()
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(1.0)),
+        )
+
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            # Первая генерация проваливается: пул пуст.
+            await response_generator.generate_with_result(
+                _request(), rng=random.Random(3), candidate_target=1
+            )
+            # Вторая отдаёт годного кандидата.
+            generator.generate_text = AsyncMock(
+                return_value="нормальный кандидат из четырёх слов"
+            )
+            await response_generator.generate_with_result(
+                _request(), rng=random.Random(4), candidate_target=1
+            )
+
+        vanilla = generator.telemetry.route_breakdown()["vanilla"]
+        self.assertEqual(vanilla["attempts"], 2)
+        self.assertEqual(vanilla["present"], 1)
+        self.assertAlmostEqual(vanilla["present_rate"], 0.5)
 
 
 class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):

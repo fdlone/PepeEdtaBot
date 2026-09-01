@@ -163,3 +163,35 @@ class TestSensitiveDataRedaction(unittest.TestCase):
         )
 
         self.assertEqual(redact_sensitive_data(text), redact_sensitive_data(text))
+
+
+class TestLongSecretsHaveNoUpperBound(unittest.TestCase):
+    """У редакции секретов нет верхней границы длины.
+
+    Пока в общем детекторе стояло `{24,128}`, отсечка означала не «частичное
+    совпадение», а полную слепоту: для токена длиннее 128 символов движок не
+    мог закрыть lookahead ни при какой длине из диапазона, а lookbehind не
+    давал сдвинуться внутрь токена. Совпадений не было вообще, и секрет уходил
+    в `messages.normalized_text` целиком — вопреки контракту `sanitize_text`
+    («корпус, контекст ответа и проверки дословных копий не видят
+    чувствительных данных»). Найдено ревью 2026-08-26; в тестах до него не
+    было ни одного кейса длиннее ~40 символов.
+    """
+
+    @staticmethod
+    def _token(length: int) -> str:
+        # Высокая энтропия и три класса символов: детектор решает по ним, а не
+        # по длине. Детерминированно, чтобы падение было воспроизводимым.
+        alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        return "".join(alphabet[(index * 37 + 11) % len(alphabet)] for index in range(length))
+
+    def test_secret_longer_than_the_old_ceiling_is_redacted(self) -> None:
+        for length in (128, 129, 240, 1000):
+            with self.subTest(length=length):
+                token = self._token(length)
+                redacted = redact_sensitive_data(f"ключ {token} конец")
+                self.assertNotIn(token, redacted, f"секрет длиной {length} прошёл насквозь")
+
+    def test_ordinary_words_survive(self) -> None:
+        text = "привет как дела сегодня вечером"
+        self.assertEqual(redact_sensitive_data(text), text)

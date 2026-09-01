@@ -1,6 +1,7 @@
 """Tests for GROUP_ONLY, AdminOrOwner filters and ThrottlingMiddleware."""
 from __future__ import annotations
 
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -91,6 +92,31 @@ class TestAdminOrOwner(unittest.IsolatedAsyncioTestCase):
         bot.get_chat_administrators = AsyncMock(side_effect=Exception("network error"))
         settings = _make_settings(owner_id=None)
         self.assertFalse(await self.f(msg, bot, settings))
+
+    async def test_api_error_text_is_masked_before_logging(self) -> None:
+        """Сырой chat_id из чужого исключения не доходит до лога.
+
+        aiogram зашивает chat_id прямо в текст части исключений
+        (TelegramRetryAfter, TelegramMigrateToChat), а `get_chat_administrators`
+        как раз принимает chat_id. Общий обработчик ошибок, где маскирование
+        есть, до этого исключения не достаёт: `is_admin_or_owner` глушит его
+        сам. Инвариант §4 CLAUDE.md распространяется и на чужой текст, поэтому
+        маскировать аргументы здесь недостаточно.
+        """
+        chat_id = -1009876543210
+        msg = _make_message(ChatType.GROUP, user_id=5, chat_id=chat_id)
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(
+            side_effect=Exception(f"Bad Request: chat not found in chat {chat_id}")
+        )
+        settings = _make_settings(owner_id=None)
+
+        with self.assertLogs("chat_markov", level="WARNING") as captured:
+            self.assertFalse(await self.f(msg, bot, settings))
+
+        logged = "\n".join(captured.output)
+        self.assertNotIn(str(chat_id), logged, "сырой chat_id попал в лог")
+        self.assertIn("chat not found", logged, "сообщение об ошибке потерялось")
 
     async def test_owner_bypasses_admin_check_even_when_api_would_fail(self) -> None:
         msg = _make_message(ChatType.GROUP, user_id=1)
@@ -253,12 +279,104 @@ class TestThrottlingMiddleware(unittest.IsolatedAsyncioTestCase):
             notify_on_throttle=notify_on_throttle,
         )
 
+    def _make_caption_message(
+        self, caption: str, user_id: int = 1, chat_id: int = 100
+    ) -> MagicMock:
+        """Медиа с подписью-командой: text=None, команда живёт в caption."""
+        msg = self._make_cmd_message(caption, user_id=user_id, chat_id=chat_id)
+        msg.text = None
+        msg.caption = caption
+        return msg
+
     async def test_first_call_passes(self) -> None:
         mw = self._make_middleware()
         handler = AsyncMock(return_value="ok")
         msg = self._make_cmd_message("/pivo")
         result = await mw(handler, msg, {})
         self.assertEqual(result, "ok")
+        handler.assert_awaited_once()
+
+    async def test_command_in_caption_is_throttled_like_text(self) -> None:
+        """Подпись к медиа — не обход окна.
+
+        Фильтр `Command` в aiogram читает `message.text or message.caption`,
+        поэтому «/pivo» подписью к фото доходит до хендлера. Пока мидлварь
+        читала только `event.text`, такое сообщение проходило мимо кулдауна —
+        то есть окно обходилось для всех команд сразу, а спека
+        command-rate-limits требует, чтобы команда без ограничения была явным
+        исключением, а не следствием расхождения двух разборов.
+        """
+        mw = self._make_middleware()
+        handler = AsyncMock(return_value="ok")
+
+        first = await mw(handler, self._make_caption_message("/pivo"), {})
+        second = await mw(handler, self._make_caption_message("/pivo"), {})
+
+        self.assertEqual(first, "ok")
+        self.assertIsNone(second, "вторая команда подписью обошла кулдаун")
+        handler.assert_awaited_once()
+
+    async def test_concurrent_calls_share_one_window(self) -> None:
+        """Пачка одинаковых команд не размножает выполнение.
+
+        aiogram заводит задачу на каждый апдейт, а `getUpdates` отдаёт их
+        пачками до 100 штук. Пока окно занималось после `await handler`,
+        момент фиксации был наблюдаем: все вызовы пачки успевали пройти
+        проверку до первой записи. Спека command-rate-limits требует, чтобы
+        окно соблюдалось независимо от того, доставлены вызовы по одному или
+        одновременно.
+        """
+        mw = self._make_middleware()
+        calls = 0
+
+        async def slow_handler(event: object, data: dict[str, object]) -> str:
+            nonlocal calls
+            calls += 1
+            # Уступка циклу: без неё задачи не чередуются и гонки не видно.
+            await asyncio.sleep(0)
+            return "ok"
+
+        results = await asyncio.gather(
+            *(mw(slow_handler, self._make_cmd_message("/pivo"), {}) for _ in range(5))
+        )
+
+        self.assertEqual(calls, 1, "команда выполнилась несколько раз в одном окне")
+        self.assertEqual(results.count("ok"), 1)
+        self.assertEqual(results.count(None), 4)
+
+    async def test_handler_error_leaves_the_window_free(self) -> None:
+        """Ошибка хендлера не занимает окно.
+
+        Свойство существовало и раньше — как побочный эффект того, что стамп
+        стоял после `await`. Перенос стампа выше сделал бы его ложным, поэтому
+        оно стало явным: `except` возвращает ключ в прежнее состояние.
+
+        Проверяется именно наблюдаемое свойство. Разницы между
+        «восстановить прежнее значение» и «удалить ключ» здесь нет и быть не
+        может: вызов, дошедший до хендлера, уже прошёл проверку окна, значит
+        прежнее значение либо отсутствует, либо лежит вне окна.
+        """
+        mw = self._make_middleware()
+        boom = AsyncMock(side_effect=RuntimeError("SQLITE_BUSY"))
+        ok_handler = AsyncMock(return_value="ok")
+
+        with self.assertRaises(RuntimeError):
+            await mw(boom, self._make_cmd_message("/pivo"), {})
+
+        # Сразу следом, внутри окна: раз окно не занято, вызов проходит.
+        result = await mw(ok_handler, self._make_cmd_message("/pivo"), {})
+        self.assertEqual(result, "ok", "ошибка заперла участника на всё окно")
+        ok_handler.assert_awaited_once()
+
+    async def test_caption_shares_the_window_with_text(self) -> None:
+        """Один и тот же кулдаун, а не два независимых окна на канал."""
+        mw = self._make_middleware()
+        handler = AsyncMock(return_value="ok")
+
+        await mw(handler, self._make_cmd_message("/pivo"), {})
+        via_caption = await mw(handler, self._make_caption_message("/pivo"), {})
+
+        self.assertIsNone(via_caption, "подпись завела собственное окно")
         handler.assert_awaited_once()
 
     async def test_first_call_passes_even_if_process_started_recently(self) -> None:

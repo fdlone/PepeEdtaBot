@@ -110,10 +110,29 @@ async def _smoke() -> int:
         if not success or sum(success) == 0:
             failures.append(f"{config_id}: empty-output collapse (no successful generations)")
         for name, samples in values.items():
-            for sample in samples or ():
-                if not (sample == sample) or sample in (float("inf"), float("-inf")):
-                    failures.append(f"{config_id}: {name} produced NaN/inf")
-                    break
+            # `nan` здесь — метка «этой записи в метрике нет», а не сбой:
+            # метрики с фильтром выровнены по списку записей, чтобы парная
+            # дельта могла сшивать наблюдения одного промпта (A2-4). Проверка
+            # `not (sample == sample)` — это проверка на NaN, и до перехода на
+            # парный бутстрап она была верна; после него `historical_meme_rate`
+            # даёт метки всегда (категория `meme-bait` — четверть промптов), и
+            # smoke падал на каждом прогоне.
+            #
+            # Инвариант при этом не ослаблен, а уточнён: `inf` по-прежнему
+            # сбой при любых обстоятельствах, а метрика, состоящая из одних
+            # меток, — тоже сбой: значит её не удалось посчитать ни разу, и
+            # это ровно то «схлопывание», которое smoke обязан ловить.
+            finite = [
+                sample
+                for sample in samples or ()
+                if sample == sample and sample not in (float("inf"), float("-inf"))
+            ]
+            if any(
+                sample in (float("inf"), float("-inf")) for sample in samples or ()
+            ):
+                failures.append(f"{config_id}: {name} produced inf")
+            elif samples and not finite:
+                failures.append(f"{config_id}: {name} has no computable value")
     if failures:
         print("SMOKE FAILED:")
         for failure in failures:

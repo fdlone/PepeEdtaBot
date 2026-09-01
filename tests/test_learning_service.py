@@ -175,11 +175,23 @@ class TestLearningServiceDedup(unittest.IsolatedAsyncioTestCase):
         await self.svc.is_verbatim_copy(self.chat, "кофе утром бодрит")
         await self.svc.get_word_frequencies(self.chat)
 
+        await self.svc.get_context_idf(self.chat)
+        await self.svc.get_intonation_profile(self.chat)
+
         self.svc.forget_chat(self.chat)
 
-        self.assertNotIn(self.chat, self.svc._text_counts)
-        self.assertNotIn(self.chat, self.svc._word_frequencies)
-        self.assertNotIn(self.chat, self.svc._ngram_index)
+        # Интроспекцией, а не списком имён. Прежняя форма перечисляла три
+        # словаря из одиннадцати и потому не охраняла ловушку §5 CLAUDE.md
+        # («новый пер-чатовый кэш обязан добавиться в forget_chat, иначе
+        # /clear его переживёт»): новый забытый кэш проходил зелёным, а имя
+        # теста при этом гасило подозрение. Здесь падение наступает от самого
+        # факта появления кэша, не внесённого в forget_chat.
+        leaked = [
+            name
+            for name, value in vars(self.svc).items()
+            if isinstance(value, dict) and self.chat in value
+        ]
+        self.assertEqual(leaked, [], f"кэши пережили forget_chat: {leaked}")
 
     # --- intonation profile (P4) ---
 

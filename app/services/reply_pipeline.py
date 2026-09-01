@@ -27,7 +27,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from app.config.runtime_state import RuntimeState
+from app.config.runtime_state import ReplySlot, RuntimeState
 from app.core.emoji import count_emojis
 from app.core.generation_telemetry import UserQuirkGate
 from app.core.hot_ngrams import extract_content_ngrams
@@ -91,7 +91,29 @@ _LEADING_VOCATIVE_RE = re.compile(r"^\s*([^\s,:;—–-]+)(?:\s*[,:;—–-]+\s*
 
 # Отправка готовых частей ответа. Первая часть уходит ответом на сообщение,
 # остальные — обычными сообщениями; конвейеру важно только «отправить».
-Sender = Callable[[Sequence[str]], Awaitable[None]]
+# Возвращает число доставленных частей. Ответ бота бывает многочастным
+# (фальстарт, двойное сообщение, причуда завсегдатая), и сбой на второй части
+# оставляет первую в чате. Без этого числа откат бюджета трактовал бы
+# частичную доставку как полное отсутствие ответа — и снимал кулдаун за
+# ответ, который люди уже видят.
+Sender = Callable[[Sequence[str]], Awaitable[int]]
+
+
+class PartialDeliveryError(Exception):
+    """Отправка оборвалась, часть сообщений уже в чате.
+
+    Живёт здесь, а не в обработчике, потому что это часть контракта
+    ``Sender``: контракт объявляет сервис, реализует обработчик, и зависимость
+    идёт снизу вверх, как и весь остальной слой (см. ARCHITECTURE.md).
+
+    Несёт число доставленных частей: оно решает судьбу бюджета ответа. Ответ,
+    от которого в чате осталась хотя бы одна часть, несостоявшимся не
+    считается, и возвращать за него кулдаун нельзя.
+    """
+
+    def __init__(self, delivered: int) -> None:
+        super().__init__(f"delivered {delivered} part(s) before failing")
+        self.delivered = delivered
 
 
 def strip_leading_bot_vocative(text: str, aliases: frozenset[str]) -> str:
@@ -254,6 +276,13 @@ class ReplyPipeline:
         # gated mention is demoted to the unprompted-reply path
         # (``address_reply=False``); the raw ``mentioned`` flag still feeds
         # mood/rhythm tracking below.
+        # Знаменатель обращений — по сырому `msg.mentioned`, ДО гейта
+        # `mention_cooldown_sec` ниже: упоминание, погашенное кулдауном, тоже
+        # нагружает путь, у которого нет ни кулдауна между ответами, ни
+        # часового предела (O15). Первая редакция считала уже отфильтрованный
+        # `address_reply`, и доля ответов выходила тождественно равной 100%.
+        if msg.mentioned:
+            self._generator.telemetry.note_mention_seen()
         address_reply = msg.mentioned
         if msg.mentioned and state.mention_cooldown_sec > 0:
             last_mention_ts = state.last_mention_reply_ts.get(
@@ -282,6 +311,14 @@ class ReplyPipeline:
                 config=state.mood_config(),
             )
             state.chat_mood[msg.chat_id] = chat_rhythm
+            # Темп наблюдается здесь — до любого раннего возврата: короткие и
+            # необучаемые сообщения тоже задают темп чата, и распределение,
+            # собранное только по «хорошим» сообщениям, отвечало бы не на тот
+            # вопрос (E2-1).
+            self._generator.telemetry.note_chat_tempo(
+                chat_rhythm.rate_ewma,
+                lively_at=state.mood_lively_rate_per_min,
+            )
             if state.mood_enabled:
                 mood = chat_rhythm.mood
                 if previous_mood is None or previous_mood.mood != chat_rhythm.mood:
@@ -352,11 +389,17 @@ class ReplyPipeline:
         now = msg.monotonic_now
 
         if obs.address_reply and not obs.enough_data:
-            await self._send_fallback(msg, obs, NOT_ENOUGH_DATA_PHRASES, send)
-            # Как и фолбэк при сбое генерации ниже: ответ отправлен, поэтому
-            # кулдаун/берст его видят (unprompted=False — часовой кап нет).
+            # Оба окна занимаются ДО отправки, а не после: между ними лежит
+            # `await`, и пачка обращений успевала пройти обе проверки, пока
+            # запись стояла ниже (O8). Ответ отправлен, поэтому кулдаун и
+            # берст его видят; unprompted=False — часовой кап нет.
             state.note_reply_sent(msg.chat_id, now, unprompted=False)
             state.note_mention_reply(msg.chat_id, msg.user_id, now)
+            # Фолбэк — тоже ответ на обращение и тоже нагрузка на путь без
+            # предела: без этой строки числитель терял целую ветку, а доля
+            # ответов занижалась ровно на неё (O15).
+            self._generator.telemetry.note_mention_answered(at=now)
+            await self._send_fallback(msg, obs, NOT_ENOUGH_DATA_PHRASES, send)
             await self._count_answered_mention(msg.chat_id, msg.user_id)
             return
 
@@ -389,6 +432,81 @@ class ReplyPipeline:
                 reply_prob,
             )
             return
+
+        # Бюджет занимается здесь — в момент, когда решение принято, а не
+        # после отправки. Апдейты обрабатываются конкурентно, и пока запись
+        # стояла ниже генерации, пачка сообщений успевала пройти все проверки
+        # до первой записи: кулдаун и часовой кап не держали ровно в
+        # burst-режиме, ради которого написаны (O8). Резервация откатывается
+        # ниже, если ответ не состоялся.
+        #
+        # Упоминания не считаются в часовой кап и здесь: тот же признак
+        # `unprompted`, что и прежде. Упоминание, пониженное кулдауном
+        # обращений (address_reply=False), идёт по самостоятельному пути и
+        # потому считается.
+        # E2-2: у пути обращений нет ни кулдауна, ни часового предела, поэтому
+        # собственный счётчик — единственное место, где его нагрузка вообще
+        # видна. Знаменатель растёт и у обращения без ответа (см. ранние
+        # возвраты выше), числитель — здесь, где ответ решён.
+        if obs.address_reply:
+            self._generator.telemetry.note_mention_answered(at=now)
+        # E2-1: в какой фазе берст-ритма сыгран ответ. Устойчивый ноль в
+        # подавлении при ненулевом усилении и будет доказательством, что фаза
+        # отхода недостижима, — фактом, а не выводом из формулы.
+        #
+        # Ответы на обращения исключены: они отправляются в обход вероятности
+        # (`should_reply_to_message`: `if mentioned: return True`), то есть
+        # берст-фактор на них не действовал вообще. Считать их значило бы
+        # набрать ненулевое подавление из данных, к фазе отношения не имеющих,
+        # и закрыть O14 в неверную сторону.
+        #
+        # Фаза определяется самим `burst_factor`, а не переписанными рядом
+        # границами: рукописная копия логики возле оригинала — тот приём,
+        # который уже стоил вердикта в C2-1.
+        if state.reply_director_enabled and not obs.address_reply:
+            multiplier = burst_factor(
+                seconds_since_reply=now
+                - state.last_reply_ts.get(msg.chat_id, float("-inf")),
+                boost_window_sec=state.reply_burst_boost_sec,
+                boost_mult=state.reply_burst_boost_mult,
+                suppress_window_sec=state.reply_burst_suppress_sec,
+                suppress_mult=state.reply_burst_suppress_mult,
+            )
+            if multiplier > 1.0:
+                self._generator.telemetry.note_burst_phase(suppressing=False)
+            elif multiplier < 1.0:
+                self._generator.telemetry.note_burst_phase(suppressing=True)
+        slot = state.reserve_reply_slot(
+            msg.chat_id, now, unprompted=not obs.address_reply
+        )
+        try:
+            await self._respond_reserved(msg, obs, send, slot)
+        except PartialDeliveryError:
+            # Часть ответа в чате есть — бюджет остаётся потраченным. Возврат
+            # снял бы кулдаун за ответ, который люди уже видят, и следующее
+            # сообщение получило бы второй. Исключение поднимается только при
+            # ненулевой доставке; «не ушло ничего» приходит сюда обычным
+            # исключением и обрабатывается веткой ниже.
+            raise
+        except Exception:
+            state.release_reply_slot(slot)
+            raise
+
+    async def _respond_reserved(
+        self,
+        msg: IncomingMessage,
+        obs: MessageObservation,
+        send: Sender,
+        slot: ReplySlot,
+    ) -> None:
+        """Подготовка и отправка ответа под уже занятый бюджет.
+
+        Выделено из ``respond`` не ради длины, а ради границы: всё, что здесь
+        падает или возвращается без ответа, обязано вернуть бюджет, и одна
+        точка входа делает это проверяемым.
+        """
+        state = self._runtime_state
+        now = msg.monotonic_now
 
         context_tokens = self._context_tokens(msg, obs)
         # Phase 4.1d: context influences generation only through the hidden
@@ -426,11 +544,17 @@ class ReplyPipeline:
                 await self._send_fallback(
                     msg, obs, GENERATION_FAILED_PHRASES, send
                 )
-                # A mention fallback is always sent; never count it against
-                # the cap.
-                state.note_reply_sent(msg.chat_id, now, unprompted=False)
+                # Фолбэк на упоминание отправлен — бюджет остаётся занятым:
+                # ответ в чате был. Резервация уже сделана с
+                # unprompted=False, то есть в часовой кап не попала, как и
+                # прежде.
                 state.note_mention_reply(msg.chat_id, msg.user_id, now)
                 await self._count_answered_mention(msg.chat_id, msg.user_id)
+            else:
+                # Самостоятельный ответ не состоялся: в чат ничего не ушло,
+                # поэтому бюджет возвращается. Возврат разрешает ответ на
+                # следующее сообщение и не переигрывает текущее.
+                state.release_reply_slot(slot)
             logger.debug(
                 "Generation failed: chat=%s mentioned=%s",
                 mask_chat_id(msg.chat_id),
@@ -438,11 +562,8 @@ class ReplyPipeline:
             )
             return
 
-        # Mention answers are always sent and never counted against the
-        # per-hour cap; only self-initiated (unprompted) replies feed the gate.
-        # A mention demoted by the mention-cooldown (address_reply=False) goes
-        # through the unprompted path and so does count.
-        state.note_reply_sent(msg.chat_id, now, unprompted=not obs.address_reply)
+        # Бюджет уже занят резервацией в `respond` — с тем же признаком
+        # `unprompted`, что стоял здесь раньше.
         if obs.address_reply:
             state.note_mention_reply(msg.chat_id, msg.user_id, now)
             await self._count_answered_mention(msg.chat_id, msg.user_id)
@@ -456,7 +577,13 @@ class ReplyPipeline:
         if reply_parts is None:
             reply_parts = self._apply_rare_event(msg, reply_text, today_iso)
 
-        await send(reply_parts)
+        delivered = await send(reply_parts)
+        if not delivered:
+            # Отправитель ничего не доставил и не бросил исключение: ответа в
+            # чате нет, бюджет возвращается, анти-повтор не запоминает то,
+            # чего никто не видел.
+            state.release_reply_slot(slot)
+            return
         if is_short_generated_reply(
             tokenize(reply_text, normalize_lower=state.normalize_lower)
         ):

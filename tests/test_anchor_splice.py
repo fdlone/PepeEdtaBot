@@ -84,6 +84,31 @@ class TestAnchorSplice(_AnchorSpliceBase):
         self.assertEqual(attempt.start_source, "context")
         self.assertTrue(attempt.text.startswith("сообщение чата"))
 
+    async def test_deferred_anchor_is_counted_whether_or_not_it_splices(
+        self,
+    ) -> None:
+        """Счётчик зовётся из прогулки, а не только существует.
+
+        Тесты самого счётчика дёргают `GenerationTelemetry` напрямую и потому
+        держат его арифметику, а не факт вызова: мутация места вызова
+        (`note_anchor_splice` → no-op) оставляла весь сьют зелёным. Проверено
+        мутацией — это тот же класс дефекта, который волна O14/O15 объявляет
+        исправленным, и он повторился на новом счётчике.
+
+        Знаменатель важен именно потому, что потерянный якорь помечается как
+        обычный `global`: без пары «отложили / вклеили» доля работы канала
+        занижена в сторону «канал не работал», а её свипует M3R-110.
+        """
+        telemetry = self.generator.telemetry
+
+        await self._attempt(splice_probability=1.0)
+        self.assertEqual(telemetry.anchor_splice_deferred, 1, "откладывание не посчитано")
+        self.assertEqual(telemetry.anchor_splice_done, 1, "вклейка не посчитана")
+
+        # Ручка выключена — якорь не откладывается, знаменатель не растёт.
+        await self._attempt(splice_probability=0.0)
+        self.assertEqual(telemetry.anchor_splice_deferred, 1)
+
     async def test_deferred_anchor_is_spliced_later(self) -> None:
         attempt = await self._attempt(splice_probability=1.0)
         self.assertEqual(attempt.start_source, "context_spliced")

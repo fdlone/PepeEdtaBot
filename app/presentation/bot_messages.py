@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from app.config.registry import field_hint
+from app.config.registry import field_hint, runtime_field_names
 from app.core.generation_telemetry import UserQuirkGate
 
 if TYPE_CHECKING:
@@ -139,6 +139,35 @@ def format_stats_message(
                 for status, count in sorted(collocations.items())
             )
         )
+    # Темп чата печатается ВНЕ гейта по числу генераций: он наблюдается на
+    # каждом сообщении, а чат, где бот с рестарта ни разу не ответил, — как
+    # раз тот случай, ради которого счётчик и заведён (E2-1). Прятать его за
+    # «были ли генерации» значило бы гасить измерение ровно там, где оно
+    # информативнее всего.
+    if telemetry and telemetry.get("tempo_observations") is not None:
+        tempo_total = telemetry["tempo_observations"]
+        shares = [
+            f"{name} {telemetry[f'tempo_share_{name}']:.0%}"
+            for name in ("штиль", "медленно", "оживлённо", "кипит")
+            if telemetry.get(f"tempo_share_{name}")
+        ]
+        lines.append(f"темп чата ({tempo_total} набл.): " + ", ".join(shares))
+    # Обращения и фаза берста — там же, вне гейта по генерациям, и по той же
+    # причине: обращение считается в знаменатель, даже когда ответа не было,
+    # а «бот молчит на обращения» — это ровно то, что должно быть видно.
+    if telemetry and telemetry.get("mentions_observed") is not None:
+        answered = telemetry.get("mention_answer_share") or 0.0
+        lines.append(
+            f"обращений: {telemetry['mentions_observed']}, "
+            f"отвечено {answered:.0%}, "
+            f"пик за час {telemetry.get('mention_answers_peak_hour') or 0}"
+        )
+    if telemetry and telemetry.get("burst_phase_replies") is not None:
+        suppress = telemetry.get("burst_suppress_share") or 0.0
+        lines.append(
+            f"берст-ритм: {telemetry['burst_phase_replies']} ответов, "
+            f"из них в фазе отхода {suppress:.0%}"
+        )
     if telemetry and telemetry.get("generations"):
         lines.append(f"генераций с рестарта: {telemetry['generations']}")
         # M3R-140/141: доля режима — вес, с которым вердикт гейта переносится на
@@ -153,6 +182,18 @@ def format_stats_message(
                 else ""
             )
             lines.append(f"с контекстом: {ctx_share:.0%} ответов{dropped_text}")
+        # E2-1/E2-2: темп чата и нагрузка на путь обращений. Обе величины
+        # решают судьбу двух найденных дефектов, и обе до сих пор были
+        # ненаблюдаемы — правки откладывались именно поэтому.
+        # W2-2: отложенный якорь, не доживший до вклейки, помечается как
+        # обычный глобальный ответ. Доля вклейки — единственное место, где
+        # видно, что канал вообще отработал.
+        deferred = telemetry.get("anchor_splice_deferred")
+        if deferred is not None:
+            spliced = telemetry.get("anchor_splice_share") or 0.0
+            lines.append(
+                f"контекстный якорь: отложен {deferred} раз, вклеен {spliced:.0%}"
+            )
         # Каналы, выключенные данными: ноль в числителе при живом знаменателе
         # значит «спросили и ответил», а не «никто не спрашивал».
         no_corpus = telemetry.get("seed_ranking_no_corpus_rate")
@@ -249,15 +290,63 @@ def format_stats_message(
     return "\n".join(lines)
 
 
+# Лимит текста одного сообщения Telegram — 4096 символов. Режем с запасом:
+# вывод растёт на ~30 символов с каждой новой ручкой реестра, и упереться в
+# потолок он должен на нашей проверке, а не на отказе sendMessage.
+TELEGRAM_TEXT_LIMIT = 4096
+_CHUNK_LIMIT = 3500
+
+
+def split_for_telegram(text: str, limit: int = _CHUNK_LIMIT) -> list[str]:
+    """Разбить длинный вывод по границам строк, не теряя ни одной.
+
+    Усечение здесь недопустимо: `/config full` обещает полный набор значений,
+    и вывод, оборванный по длине, противоречит этому обещанию так же, как
+    пропущенная настройка. Поэтому режем по строкам и отдаём все части.
+
+    Строка длиннее лимита целиком остаётся своей частью: резать её посередине
+    значило бы испортить пару «ключ=значение», а таких строк в выводе реестра
+    не бывает — самое длинное имя ручки вдвое короче лимита.
+    """
+    if len(text) <= limit:
+        return [text]
+    parts: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for line in text.split("\n"):
+        addition = len(line) + (1 if current else 0)
+        if current and current_len + addition > limit:
+            parts.append("\n".join(current))
+            current, current_len = [line], len(line)
+            continue
+        current.append(line)
+        current_len += addition
+    if current:
+        parts.append("\n".join(current))
+    return parts
+
+
 def format_config_message(
     state: RuntimeState,
     full: bool = False,
     *,
     overridden: Iterable[str] = (),
 ) -> str:
+    # При включённом директоре плоская reply_probability не читается вовсе:
+    # _reply_odds уходит в ветку полосы [min..max] по моментуму беседы
+    # (reply_pipeline.py, ветка `state.reply_director_enabled`). Печатать здесь
+    # одно число значило показывать ручку, которая на действующих дефолтах ни
+    # на что не влияет, — и именно на неё человек смотрит первой строкой.
+    if state.reply_director_enabled:
+        odds_line = (
+            f"шанс ответа: {state.reply_probability_min}..{state.reply_probability_max}"
+            " (директор ведёт по моментуму)"
+        )
+    else:
+        odds_line = f"шанс ответа: {state.reply_probability}"
     lines = [
         "Настройки:",
-        f"шанс ответа: {state.reply_probability}",
+        odds_line,
         f"пауза: {state.min_cooldown_sec} сек",
         f"минимум модели: {state.min_tokens_for_model}",
         f"длина ответа: {state.max_reply_tokens} токенов",
@@ -271,57 +360,18 @@ def format_config_message(
         f"reply-контекст: {state.use_reply_context}",
     ]
     if full:
+        # Порождается из реестра, а не перечисляется руками. Рукописный список
+        # показывал 52 ключа из 97: невидимыми оказались весь директор ответа,
+        # настроение, причуды, слот-мутации и `pivo_mention_by_id` — ручка
+        # отката механизма упоминаний O2, то есть ровно то, чем чат отличается
+        # от дефолта. Дрейф был заложен конструкцией: инструкция «как добавить
+        # runtime-mutable параметр» реестр называет, а этот вывод — нет.
+        # Спека chat-scoped-settings требовала «полный набор действующих
+        # значений» с самого начала; теперь это утверждение проверяемо.
+        lines.append("")
+        lines.append("Дополнительно:")
         lines.extend(
-            [
-                "",
-                "Дополнительно:",
-                f"max_reply_chars={state.max_reply_chars}",
-                f"normalize_lower={state.normalize_lower}",
-                f"typing_min_ms={state.typing_min_ms}",
-                f"typing_max_ms={state.typing_max_ms}",
-                f"typing_per_char_ms={state.typing_per_char_ms}",
-                f"markov_order={state.markov_order}",
-                f"enable_backoff={state.enable_backoff}",
-                # Phase 2 knobs that change what the chat hears. The clamps are
-                # a safety net and stay out of the listing; gain and pivot are
-                # what explain a changed voice, so they are readable here.
-                f"markov_entropy_temp_gain={state.markov_entropy_temp_gain}",
-                f"markov_entropy_pivot={state.markov_entropy_pivot}",
-                f"markov_branching_degenerate_max={state.markov_branching_degenerate_max}",
-                # Phase 3 temporal blend: the alphas decide how much of the
-                # chat's fresh language is mixed in, and the half-life and
-                # compression shape decide what "fresh" and "historical" even
-                # weigh — all four explain a changed voice, so all four are
-                # readable here.
-                f"markov_alpha_sleepy={state.markov_alpha_sleepy}",
-                f"markov_alpha_calm={state.markov_alpha_calm}",
-                f"markov_alpha_lively={state.markov_alpha_lively}",
-                f"markov_alpha_heated={state.markov_alpha_heated}",
-                f"markov_short_half_life_days={state.markov_short_half_life_days}",
-                f"markov_long_compression={state.markov_long_compression}",
-                f"markov_long_compression_beta={state.markov_long_compression_beta}",
-                # Phase 4 collocation scoring (M2R-320): the weights that let
-                # the chat's memes nudge candidate selection, plus the
-                # hot-ngram ordering switch (M2R-310). All neutral until the
-                # phase gate says otherwise.
-                f"markov_collocation_bonus={state.markov_collocation_bonus}",
-                f"markov_collocation_break_penalty={state.markov_collocation_break_penalty}",
-                f"markov_hot_ngram_meme_ordering={state.markov_hot_ngram_meme_ordering}",
-                # Phase 5 lexical anchoring (M2R-410): the seeded-candidate
-                # share plus the seed-choice band. Neutral (ratio 0) until the
-                # promotion gate says otherwise.
-                f"markov_seeded_candidate_ratio={state.markov_seeded_candidate_ratio}",
-                f"markov_seed_branch_min={state.markov_seed_branch_min}",
-                f"markov_seed_branch_ideal={state.markov_seed_branch_ideal}",
-                f"markov_seed_branch_max={state.markov_seed_branch_max}",
-                f"markov_seed_min_score={state.markov_seed_min_score}",
-                f"markov_seed_head_share={state.markov_seed_head_share}",
-                f"reply_context_max_tokens={state.reply_context_max_tokens}",
-                f"reply_context_bias={state.reply_context_bias}",
-                f"reply_context_start_bias={state.reply_context_start_bias}",
-                f"reply_context_only_for_replies={state.reply_context_only_for_replies}",
-                f"reply_context_include_current_message={state.reply_context_include_current_message}",
-            ]
+            f"{name}={getattr(state, name)}" for name in runtime_field_names()
         )
     lines.append("")
     if overridden:

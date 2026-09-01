@@ -85,7 +85,15 @@ class ThrottlingMiddleware(BaseMiddleware):
         if not isinstance(event, Message):
             return await handler(event, data)
 
-        text = event.text or ""
+        # `text or caption` — ровно то, что читает фильтр `Command` в aiogram
+        # (filters/command.py). Команда, отправленная подписью к медиа, имеет
+        # text=None и caption="/stats": фильтр её принимает и хендлер
+        # отрабатывает целиком. Пока здесь стоял один `event.text`, такая
+        # команда проходила мимо окна — то есть кулдаун обходился для всех
+        # команд сразу, а спека command-rate-limits требует, чтобы команда без
+        # ограничения была явным исключением, а не следствием расхождения двух
+        # разборов одного и того же сообщения.
+        text = event.text or event.caption or ""
         if not text.startswith("/") or event.from_user is None:
             return await handler(event, data)
 
@@ -127,12 +135,42 @@ class ThrottlingMiddleware(BaseMiddleware):
                     )
             return None  # throttled
 
-        # The cooldown is stamped only after the handler succeeds: a handler
-        # exception (e.g. SQLITE_BUSY during /clear) must not lock the user
-        # out for the whole window. On exception nothing is stamped and the
-        # error propagates to the error handler as before.
-        result = await handler(event, data)
+        # Окно занимается ДО вызова хендлера. Пока стамп стоял после `await`,
+        # момент фиксации был наблюдаем через конкурентность: aiogram заводит
+        # задачу на каждый апдейт, `getUpdates` отдаёт их пачками, и пять
+        # одинаковых команд успевали пройти проверку до первой записи —
+        # хендлер отрабатывал пять раз при окне в одно.
+        #
+        # Отдельного примитива синхронизации здесь нет и не нужно: участок от
+        # чтения `last_used` до этой строки не содержит `await`, а внутри
+        # одного event loop такой участок не прерывается. Примитив
+        # понадобится вместе со вторым инстансом — то есть вместе со всем
+        # остальным из «осознанно отложено» (docs/OPEN.md).
+        previous_used = last_used
         self._last_used[key] = now
         if len(self._last_used) > self._state_max_keys:
             self._prune_state(now)
-        return result
+        try:
+            return await handler(event, data)
+        except Exception:
+            # Прежнее свойство сохраняется: падение хендлера (например,
+            # SQLITE_BUSY на /clear) не запирает участника на всё окно.
+            # Восстанавливается прежнее значение, а не удаляется ключ —
+            # потому что это буквально «вернуть как было», а не ради иного
+            # поведения: разницы между двумя формами здесь нет и быть не
+            # может. Вызов, дошедший до хендлера, уже прошёл проверку окна,
+            # значит прежнее значение либо отсутствует, либо лежит вне окна.
+            # (Прежняя редакция этого комментария утверждала, что удаление
+            # обнулило бы «накопленное окно» — такого окна в этой точке
+            # существовать не может.)
+            # Только если стамп всё ещё наш. Медленный хендлер мог упасть уже
+            # после того, как окно истекло и следующий вызов занял его
+            # законно, — его занятие отменять нельзя. Та же логика, что у
+            # отката резервации ответа в RuntimeState.release_reply_slot.
+            if self._last_used.get(key) != now:
+                raise
+            if previous_used is None:
+                self._last_used.pop(key, None)
+            else:
+                self._last_used[key] = previous_used
+            raise

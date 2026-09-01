@@ -7,8 +7,11 @@ extend.
 """
 from __future__ import annotations
 
+import math
+import random
 import unittest
 from pathlib import Path
+from statistics import mean
 from typing import Any
 
 from hypothesis import given, settings
@@ -133,6 +136,76 @@ class TestBootstrap(unittest.TestCase):
         self.assertTrue(significant)
         _, _, _, not_significant = delta_ci(zeros, zeros)
         self.assertFalse(not_significant)
+
+    def test_paired_interval_is_narrower_than_independent_resampling(self) -> None:
+        """Дельта считается по парам, а не по двум независимым выборкам.
+
+        Матрица конфигураций — парный дизайн: армы идут по одним и тем же
+        промптам и сидам, различаясь одной ручкой. Независимый ресэмплинг
+        оценивал `Var_A + Var_B` вместо дисперсии парной разности и раздувал
+        интервал тем сильнее, чем выше корреляция армов. Ошибка направленная:
+        она рождала ложные вердикты «эффекта нет» — а такой вердикт в этом
+        проекте закрывает направление окончательно.
+        """
+        rng = random.Random(7)
+        shared = [rng.random() for _ in range(200)]
+        arm_a = [value + rng.gauss(0, 0.02) for value in shared]
+        arm_b = [value + 0.03 + rng.gauss(0, 0.02) for value in shared]
+
+        point, lo, hi, significant = delta_ci(arm_a, arm_b)
+
+        independent = sorted(
+            mean(random.Random(index).choices(arm_b, k=len(arm_b)))
+            - mean(random.Random(index + 5000).choices(arm_a, k=len(arm_a)))
+            for index in range(400)
+        )
+        independent_width = independent[389] - independent[10]
+
+        self.assertAlmostEqual(point, mean(arm_b) - mean(arm_a), places=9)
+        self.assertLess(
+            hi - lo,
+            independent_width,
+            "парный интервал должен быть уже независимого на коррелированных армах",
+        )
+        self.assertTrue(significant, "реальный сдвиг 0.03 обязан быть значимым")
+
+    def test_incomplete_pairs_are_dropped_whole(self) -> None:
+        """Полупара — не наблюдение разности.
+
+        Часть метрик фильтруется по `record.success`, поэтому списки армов
+        бывают разной длины. Наблюдение, где один арм не ответил, выбывает
+        целиком: иначе разность считалась бы между несвязанными записями.
+        """
+        arm_a = [0.0] * 40
+        arm_b = [1.0] * 40 + [99.0] * 5
+
+        point, _, _, _ = delta_ci(arm_a, arm_b)
+
+        self.assertEqual(point, 1.0, "хвост без пары попал в оценку")
+
+    def test_arms_losing_different_prompts_stay_aligned(self) -> None:
+        """Главный случай: армы не отвечают на РАЗНЫХ промптах.
+
+        Метрики с фильтром по `success` раньше просто выбрасывали такие
+        записи, и списки армов становились короче на разные позиции. Тогда
+        пара по позиции сшивала разные промпты — то есть парная оценка была бы
+        не честнее непарной, а хуже неё. Выравнивание метками `nan` (см.
+        `metrics._aligned`) существует ровно ради этого случая.
+        """
+        # Промпты 0..4; арм A не ответил на 1, арм B — на 3.
+        arm_a = [10.0, math.nan, 30.0, 40.0, 50.0]
+        arm_b = [11.0, 21.0, 31.0, math.nan, 51.0]
+
+        point, _, _, _ = delta_ci(arm_a, arm_b)
+
+        # Остаются пары 0, 2, 4 — на каждой разность ровно 1.0.
+        self.assertEqual(point, 1.0, "пары сшиты не по своим промптам")
+
+    def test_single_arm_ci_ignores_the_alignment_markers(self) -> None:
+        """Одиночному интервалу выравнивание не нужно — метки отбрасываются."""
+        point, lo, hi = bootstrap_ci([1.0, math.nan, 1.0, math.nan])
+
+        self.assertEqual((point, lo, hi), (1.0, 1.0, 1.0))
 
 
 class TestBootstrapProperties(unittest.TestCase):

@@ -9,6 +9,7 @@ from aiogram.filters import Filter
 from aiogram.types import Message
 
 from app.config.settings import Settings
+from app.log_masking import mask_chat_ids_in_text
 
 logger = logging.getLogger("chat_markov")
 
@@ -92,7 +93,12 @@ async def is_admin_or_owner(message: Message, bot: Bot, settings: Settings) -> b
     try:
         return user_id in await _get_admin_ids(bot, message.chat.id)
     except Exception as exc:
-        logger.warning("Cannot verify chat admins: %s", exc)
+        # `get_chat_administrators` принимает chat_id, а aiogram зашивает сырой
+        # chat_id в текст части исключений (TelegramRetryAfter,
+        # TelegramMigrateToChat). Сюда общий обработчик ошибок не достаёт: этот
+        # except глушит исключение раньше, — поэтому маскирование применяется
+        # здесь, как в errors.py.
+        logger.warning("Cannot verify chat admins: %s", mask_chat_ids_in_text(str(exc)))
         return False
 
 

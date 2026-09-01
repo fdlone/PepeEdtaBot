@@ -7,6 +7,7 @@ surfaced through ``/stats``; reset on restart by construction.
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -45,6 +46,32 @@ class UserQuirkGate(StrEnum):
     DAILY_LIMIT = "daily_limit"
     ROLL = "roll"
     THRESHOLD = "threshold"
+
+
+# Предел списка меток времени ответов на обращения. Для оценки пика за
+# скользящий час хватает последних наблюдений; точный исторический максимум за
+# недели аптайма этой величине не нужен, а расти без предела она не должна.
+MENTION_TIME_WINDOW_MAX = 4096
+
+
+def _peak_in_sliding_hour(times: deque[float]) -> int | None:
+    """Наибольшее число меток, попадающих в любое окно длиной час.
+
+    Скользящее окно, а не фиксированные корзины: границы корзин привязаны к
+    произвольной эпохе, и всплеск, легший на стык, делится пополам. Тем же
+    окном считает `within_hourly_cap` для самостоятельных ответов — величины
+    сравниваются между собой, значит и считаться должны одинаково.
+    """
+    if not times:
+        return None
+    ordered = sorted(times)
+    peak = 0
+    left = 0
+    for right, moment in enumerate(ordered):
+        while moment - ordered[left] >= 3600.0:
+            left += 1
+        peak = max(peak, right - left + 1)
+    return peak
 
 
 @dataclass(slots=True)
@@ -93,6 +120,45 @@ class GenerationTelemetry:
     # putting a candidate in the pool: that pair is what separates "the route is
     # off" from "the route is on and produced nothing" from "it produced and
     # lost". Without it a zero win-rate is unreadable.
+    # W2-2: отложенный контекстный якорь мог не дожить до вклейки — прогулка
+    # упирается в символьный предел раньше, чем в разыгранную позицию. Такой
+    # ответ помечается как `global`, а счётчики совпадений обнуляются, то есть
+    # канал молча маскируется под «якоря не было». При этом всю прогулку
+    # `anchor_pending` был True, и ветка джампа под ним не исполнялась —
+    # вероятность отступления была ровно нулевой без записи об этом.
+    #
+    # Пара со знаменателем по образцу M3R-141: «якорь отложили» и «якорь
+    # вклеили». Расхождение и есть находка.
+    anchor_splice_deferred: int = 0
+    anchor_splice_done: int = 0
+    # E2-1/E2-2 (ревью 2026-08-26): темп ответов наблюдаем, а не выводим из
+    # формулы. Оба дефекта — недостижимая фаза отхода берста и отсутствие
+    # пер-чатового предела на обращения — зависят от реального темпа чата, а
+    # он не измерялся ни разу. Правило §5: пока нет счётчика со знаменателем,
+    # «канал не нагружен» неотличимо от «канал не измеряется».
+    #
+    # Темп — распределением, не средним: поведение переключается скачком на
+    # границах, а чат, который то спит, то кипит, даёт среднее, не
+    # соответствующее ни одному своему режиму.
+    tempo_buckets: dict[str, int] = field(default_factory=dict)
+    # Пара со знаменателем: обращений было / на скольких бот ответил. Путь
+    # обращений не подчиняется ни кулдауну, ни часовому капу, поэтому своего
+    # счётчика у него нет нигде больше.
+    mentions_observed: int = 0
+    mentions_answered: int = 0
+    # Верхняя оценка нагрузки: максимум ответов на обращения, пришедшийся на
+    # любой СКОЛЬЗЯЩИЙ час — тем же окном, которым считает `within_hourly_cap`
+    # для самостоятельных ответов. Первая редакция раскладывала по
+    # фиксированным корзинам `now // 3600`, границы которых привязаны к эпохе
+    # монотонных часов и потому произвольны: десять ответов на 59-й минуте и
+    # девять на 61-й давали «пик 10» при худшем реальном окне в 19. Занижение
+    # до двух раз и всегда в одну сторону — то есть в сторону «предел не
+    # нужен», а именно этим числом решается O15.
+    mention_answer_times: deque[float] = field(default_factory=deque)
+    # Прямой замер E2-1: устойчивый ноль в фазе подавления при ненулевом
+    # усилении означает, что фаза недостижима — по факту, а не по расчёту.
+    burst_phase_boost: int = 0
+    burst_phase_suppress: int = 0
     route_attempts: dict[str, int] = field(default_factory=dict)
     route_present: dict[str, int] = field(default_factory=dict)
     route_won: dict[str, int] = field(default_factory=dict)
@@ -247,6 +313,84 @@ class GenerationTelemetry:
         the attempt budget instead."""
         self.context_dropped += 1
 
+    def note_anchor_splice(self, *, spliced: bool) -> None:
+        """Один отложенный контекстный якорь и дожил ли он до вклейки (W2-2).
+
+        Знаменатель растёт при откладывании, числитель — при вклейке. Ответ,
+        потерявший якорь, неотличим в трассе от обычного глобального: метка
+        переписывается на `global`, а счётчики совпадений обнуляются. Без этой
+        пары доля работы канала занижена на неизвестную величину, причём в
+        сторону «канал не работал» — а её как раз и свипует M3R-110.
+        """
+        self.anchor_splice_deferred += 1
+        if spliced:
+            self.anchor_splice_done += 1
+
+    def note_chat_tempo(self, rate_per_min: float, *, lively_at: float) -> None:
+        """Один наблюдённый темп чата, разложенный по диапазонам (E2-1).
+
+        Границы привязаны к ``lively_at`` — тому самому порогу, которым темп
+        переключает настроение и насыщает моментум, — а не к круглым числам:
+        распределение должно отвечать на вопрос «в каком режиме живёт чат», а
+        не на «какие числа красивее печатать».
+        """
+        if rate_per_min < lively_at / 6.0:
+            bucket = "штиль"
+        elif rate_per_min < lively_at / 2.0:
+            bucket = "медленно"
+        elif rate_per_min < lively_at:
+            bucket = "оживлённо"
+        else:
+            bucket = "кипит"
+        self.tempo_buckets[bucket] = self.tempo_buckets.get(bucket, 0) + 1
+
+    def note_mention_seen(self) -> None:
+        """Знаменатель: бота упомянули (E2-2).
+
+        Считается **сырое** упоминание, до гейта `mention_cooldown_sec`.
+        Первая редакция считала уже отфильтрованный признак `address_reply`,
+        и доля ответов получалась тождественно равной 100%: решение отвечать
+        на обращение принимается безусловно (`should_reply_to_message`:
+        `if mentioned: return True`), поэтому ветка «обращение без ответа»
+        была недостижима. Счётчик, заведённый ради решения по O15, не мог
+        показать ничего, кроме единицы.
+
+        Упоминание, погашенное кулдауном обращений, — это тоже нагрузка на
+        путь, у которого нет ни кулдауна между ответами, ни часового предела.
+        Именно она и должна быть видна.
+        """
+        self.mentions_observed += 1
+
+    def note_mention_answered(self, *, at: float) -> None:
+        """Числитель: бот ответил на обращение.
+
+        ``at`` — монотонная метка времени; по ней считается пик за скользящий
+        час. Список ограничен сверху, чтобы процесс с долгим аптаймом не рос
+        без предела: для оценки пика хватает последних наблюдений, а точный
+        исторический максимум за недели этой величине не нужен.
+
+        Обязательный, без значения по умолчанию: с `None` потеря аргумента в
+        месте вызова превращала пик в вечный ноль молча, а `/stats` печатает
+        его рядом с пределом 20, по которому решается O15. Теперь это ошибка
+        типов, а не тихая метрика-обманка.
+        """
+        self.mentions_answered += 1
+        self.mention_answer_times.append(at)
+        while len(self.mention_answer_times) > MENTION_TIME_WINDOW_MAX:
+            self.mention_answer_times.popleft()
+
+    def note_burst_phase(self, *, suppressing: bool) -> None:
+        """Один ответ, сыгранный в фазе усиления или подавления берст-ритма.
+
+        Нейтральная фаза не считается: вопрос ровно в том, попадает ли хоть
+        один ответ в окно отхода, — а ответы вне обоих окон на него не
+        отвечают.
+        """
+        if suppressing:
+            self.burst_phase_suppress += 1
+        else:
+            self.burst_phase_boost += 1
+
     def note_user_quirk_outcome(self, rejected_by: UserQuirkGate | None) -> None:
         """One pass of the L2 quirk channel: which gate stopped it, or none.
 
@@ -391,4 +535,35 @@ class GenerationTelemetry:
         # rejections against what reached it, and a pre-divided share would
         # throw away exactly the denominator that makes it readable.
         values.update(self.user_quirk_funnel())
+        # E2-1/E2-2: доли рядом со своими знаменателями, как у соседей выше.
+        # Пустой знаменатель даёт None, а не ноль: «не наблюдали» и «наблюдали
+        # и вышел ноль» — разные утверждения.
+        tempo_total = sum(self.tempo_buckets.values())
+        values["tempo_observations"] = tempo_total or None
+        for bucket in ("штиль", "медленно", "оживлённо", "кипит"):
+            values[f"tempo_share_{bucket}"] = (
+                self.tempo_buckets.get(bucket, 0) / tempo_total
+                if tempo_total
+                else None
+            )
+        values["mentions_observed"] = self.mentions_observed or None
+        values["mention_answer_share"] = (
+            self.mentions_answered / self.mentions_observed
+            if self.mentions_observed
+            else None
+        )
+        values["mention_answers_peak_hour"] = _peak_in_sliding_hour(
+            self.mention_answer_times
+        )
+        values["anchor_splice_deferred"] = self.anchor_splice_deferred or None
+        values["anchor_splice_share"] = (
+            self.anchor_splice_done / self.anchor_splice_deferred
+            if self.anchor_splice_deferred
+            else None
+        )
+        burst_total = self.burst_phase_boost + self.burst_phase_suppress
+        values["burst_phase_replies"] = burst_total or None
+        values["burst_suppress_share"] = (
+            self.burst_phase_suppress / burst_total if burst_total else None
+        )
         return values
