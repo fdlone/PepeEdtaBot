@@ -75,3 +75,14 @@ of successful noctx generations that started from the seed. The grid lives in
 `matrix_l1_grid.yaml` (arms `C7*`); the machinery line prints the draw
 counters (`hot-ngram seeds: N draws, empty X%`).
 
+## Pool composition grid (M3R-110)
+
+`matrix_pool_grid_1.yaml` / `matrix_pool_grid_2.yaml` (arms `C8*`) sweep the
+ctx-only knobs `reply_context_start_bias`, `context_anchor_splice_probability`
+and `generation_attempts_with_context`. The `pool_composition` gate's coverage
+is the SHIFT of the context-start share of winners against C0 (start sources
+context / hidden_context / context_spliced); the winner's start source is
+resolved through extension and mutation (`resolve_start_source`), so a
+rewritten reply keeps its attempt's source. Run both files in both modes; C0
+is deterministic and its summaries must match between the files.
+

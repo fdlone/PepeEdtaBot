@@ -701,6 +701,154 @@ def _l1_arm_verdict(
     return _verdict(parts, failures, missing)
 
 
+# M3R-110 arms (pool composition in the ctx mode), same prefix convention.
+POOL_ARM_PREFIX = "C8"
+# Start sources that mean "the walk was anchored by the context" — the share
+# the M3R-110 knobs claim to move (map §1.4).
+CONTEXT_START_SOURCES = frozenset({"context", "hidden_context", "context_spliced"})
+
+
+def context_start_share(records: list[Any]) -> float | None:
+    """Share of successful records whose winner started from context."""
+    successful = [record for record in records if record.success]
+    if not successful:
+        return None
+    return sum(
+        1 for record in successful if record.start_source in CONTEXT_START_SOURCES
+    ) / len(successful)
+
+
+def _pool_arm_verdict(
+    baseline: ConfigRun,
+    arm: ConfigRun,
+    thresholds: dict[str, Any],
+    solo_rating: dict[str, Any] | None,
+    context_mode: str,
+) -> tuple[str, str]:
+    """Pool-composition gate for one arm (verdict, detail) — M3R-110.
+
+    ctx: coverage is the SHIFT of the context-start share against C0 (below
+    the floor the arm changed nothing it claims to — `insufficient data`,
+    whatever affinity says), then the must-improve on affinity without copies,
+    the window-escape floor, the ECB invariant and connectedness. noctx: the
+    knobs are inert without context, so only the must-not-worsen parts are
+    checked — that half exists to keep the two-mode weighting honest. Copy,
+    repetition and latency are checked in both.
+    """
+    if arm.shared_with is not None:
+        return INSUFFICIENT, f"arm resolves to the same overrides as {arm.shared_with}"
+
+    config = thresholds.get("pool_composition", {})
+    base_values = metric_values(baseline.records)
+    arm_values = metric_values(arm.records)
+    parts: list[str] = []
+    failures: list[str] = []
+    missing: list[str] = []
+
+    if context_mode == "ctx":
+        base_share = context_start_share(baseline.records)
+        arm_share = context_start_share(arm.records)
+        if base_share is None or arm_share is None:
+            return INSUFFICIENT, "no successful generations to measure the start budget"
+        shift = arm_share - base_share
+        floor = float(config.get("context_start_share_delta_min", 0.05))
+        parts.append(
+            f"coverage: context starts {arm_share:.1%} vs {base_share:.1%} "
+            f"(shift {shift:+.3f}; floor ±{floor:.0%})"
+        )
+        if abs(shift) < floor:
+            return (
+                INSUFFICIENT,
+                "; ".join(parts)
+                + " — start budget did not move: the arm changed nothing it "
+                "claims to change",
+            )
+        affinity_min = float(config.get("affinity_without_copy_delta_min", 0.0))
+        affinity = _delta_part(
+            "affinity_without_copy",
+            base_values.get("context_affinity_without_copy"),
+            arm_values.get("context_affinity_without_copy"),
+            parts=parts,
+            missing=missing,
+        )
+        if affinity is not None:
+            point, significant = affinity
+            if not (significant and point > affinity_min):
+                failures.append("affinity without copies did not rise significantly")
+        escape_floor = float(config.get("window_escape_delta_floor", 0.0))
+        escape = _delta_part(
+            "window_escape",
+            base_values.get("structural_window_escape"),
+            arm_values.get("structural_window_escape"),
+            parts=parts,
+            missing=missing,
+        )
+        if escape is not None:
+            point, significant = escape
+            if significant and point < escape_floor:
+                failures.append("window escape dropped significantly")
+        ecb_min = float(config.get("pool_ecb_min", 4.0))
+        ecb = arm_values.get("structural_pool_ecb")
+        if not ecb:
+            missing.append("pool ECB samples")
+        else:
+            point, lo, hi = bootstrap_ci(ecb)
+            parts.append(f"pool ECB {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}] (floor {ecb_min:.1f})")
+            if point < ecb_min:
+                failures.append("pool ECB below the invariant floor")
+    else:
+        parts.append(
+            "noctx: the context knobs are inert without context; this mode "
+            "checks that nothing moved"
+        )
+
+    copy_max = float(config.get("exact_copy_delta_max", 0.0))
+    copy_delta = _delta_part(
+        "copy",
+        base_values.get("exact_context_copy_rate"),
+        arm_values.get("exact_context_copy_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if copy_delta is not None:
+        point, significant = copy_delta
+        if significant and point > copy_max:
+            failures.append("copy rose significantly")
+
+    repetition_max = float(config.get("repetition_delta_max", 0.0))
+    repetition_delta = _delta_part(
+        "repetition",
+        base_values.get("repetition_rate"),
+        arm_values.get("repetition_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if repetition_delta is not None:
+        point, significant = repetition_delta
+        if significant and point > repetition_max:
+            failures.append("repetition rose significantly")
+
+    _latency_part(
+        arm,
+        float(config.get("latency_p95_ms_max", 150)),
+        parts=parts,
+        missing=missing,
+        failures=failures,
+    )
+
+    if context_mode == "ctx":
+        _connectedness_part(
+            baseline.config_id,
+            arm.config_id,
+            solo_rating,
+            float(config.get("manual_connected_delta_floor", -0.10)),
+            parts=parts,
+            missing=missing,
+            failures=failures,
+        )
+    return _verdict(parts, failures, missing)
+
+
 def _connectedness_part(
     baseline_id: str,
     arm_id: str,
@@ -1316,6 +1464,24 @@ def evaluate_gates(
                 baseline, runs[arm_id], thresholds, solo_rating, context_mode
             )
             rows.append((f"l1_hot_channel[{arm_id}]", verdict, detail))
+
+    pool_arms = sorted(arm for arm in runs if arm.startswith(POOL_ARM_PREFIX))
+    if baseline is None or not pool_arms:
+        rows.append(
+            (
+                "pool_composition",
+                INSUFFICIENT,
+                "no pool-composition arm in this run (context knobs at their defaults)"
+                if baseline
+                else "no baseline run",
+            )
+        )
+    else:
+        for arm_id in pool_arms:
+            verdict, detail = _pool_arm_verdict(
+                baseline, runs[arm_id], thresholds, solo_rating, context_mode
+            )
+            rows.append((f"pool_composition[{arm_id}]", verdict, detail))
 
     rows.extend(_structural_escape_rows(runs, thresholds))
 

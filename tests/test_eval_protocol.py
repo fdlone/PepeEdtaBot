@@ -275,6 +275,7 @@ class TestConfigFiles(unittest.TestCase):
             # бывало. Этот кортеж — единственная защита.
             "phase9_interp",
             "l1_hot_channel",
+            "pool_composition",
             "performance",
         ):
             self.assertIn(gate, thresholds)
@@ -891,6 +892,134 @@ class TestL1Gate(unittest.TestCase):
         self.assertIn("hot-ngram seeds: 12 draws, empty 100%", report)
 
 
+class TestStartSourceResolution(unittest.TestCase):
+    """M3R-110 (D2): the winner's start source follows extension and
+    mutation back to the traced attempt."""
+
+    def test_follows_extension_then_mutation(self) -> None:
+        from tools.eval.run import resolve_start_source
+
+        attempts = {"а б": "context"}
+        derived = {"а б в": "а б", "а г в": "а б в"}
+        self.assertEqual(resolve_start_source("а г в", attempts, derived), "context")
+        self.assertEqual(resolve_start_source("а б", attempts, derived), "context")
+
+    def test_unknown_text_is_none_not_a_guess(self) -> None:
+        from tools.eval.run import resolve_start_source
+
+        self.assertIsNone(resolve_start_source("x", {"а": "global"}, {}))
+        # A self-loop in the derivation must not spin.
+        self.assertIsNone(resolve_start_source("x", {}, {"x": "x"}))
+
+
+class TestPoolCompositionGate(unittest.TestCase):
+    """M3R-110 gate: coverage is the shift of the context-start share, affinity
+    is must-improve in ctx, the window may not narrow, and no round means no
+    pass; noctx only checks that nothing moved."""
+
+    @staticmethod
+    def _records(
+        *,
+        n: int = 20,
+        context_starts: int = 0,
+        affinity: float = 0.3,
+        copy: bool = False,
+        window_escape: int = 2,
+        pool_ecb: int = 5,
+    ) -> list[GenRecord]:
+        return [
+            _record(
+                start_source="context" if index < context_starts else "global",
+                affinity=affinity,
+                is_copy=copy,
+                window_escape=window_escape,
+                pool_ecb=pool_ecb,
+            )
+            for index in range(n)
+        ]
+
+    @staticmethod
+    def _arm_verdict(runs: dict[str, ConfigRun], mode: str) -> tuple[str, str]:
+        from tools.eval.report import _pool_arm_verdict
+
+        return _pool_arm_verdict(runs["C0"], runs["C8b30"], load_thresholds(), None, mode)
+
+    def test_unmoved_start_budget_is_insufficient_not_a_verdict(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(context_starts=4)),
+            "C8b30": ConfigRun(
+                config_id="C8b30", records=self._records(context_starts=4, affinity=0.9)
+            ),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("start budget did not move", detail)
+
+    def test_affinity_rise_without_round_is_insufficient(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(context_starts=4)),
+            "C8b30": ConfigRun(
+                config_id="C8b30", records=self._records(context_starts=10, affinity=0.9)
+            ),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("context starts 50.0% vs 20.0%", detail)
+        self.assertIn("connectedness round", detail)
+
+    def test_narrowed_window_fails_despite_affinity(self) -> None:
+        runs = {
+            "C0": ConfigRun(
+                config_id="C0", records=self._records(context_starts=4, window_escape=3)
+            ),
+            "C8b30": ConfigRun(
+                config_id="C8b30",
+                records=self._records(context_starts=10, affinity=0.9, window_escape=1),
+            ),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("window escape dropped", detail)
+
+    def test_flat_affinity_is_a_fail(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(context_starts=4)),
+            "C8b30": ConfigRun(config_id="C8b30", records=self._records(context_starts=10)),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("did not rise significantly", detail)
+
+    def test_noctx_with_nothing_moved_passes_at_arm_level(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C8b30": ConfigRun(config_id="C8b30", records=self._records()),
+        }
+        verdict, detail = self._arm_verdict(runs, "noctx")
+        self.assertEqual(verdict, "pass")
+        self.assertIn("inert without context", detail)
+
+    def test_noctx_copy_rise_still_fails(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C8b30": ConfigRun(config_id="C8b30", records=self._records(copy=True)),
+        }
+        verdict, _ = self._arm_verdict(runs, "noctx")
+        self.assertEqual(verdict, "fail")
+
+    def test_rows_are_downgraded_to_two_modes(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C8b30": ConfigRun(config_id="C8b30", records=self._records()),
+        }
+        rows = {
+            row[0]: row
+            for row in evaluate_gates(runs, load_thresholds(), None, "noctx", None, None)
+        }
+        self.assertEqual(rows["pool_composition[C8b30]"][1], "insufficient data")
+        self.assertIn("requires both context modes", rows["pool_composition[C8b30]"][2])
+
+
 class TestPhase7Gate(unittest.TestCase):
     """Phase 7 shadow order-4 gate (ADR-002): a single-dimension sample-size
     gate. Below the eligible bar it is insufficient; at or above it, a selected
@@ -1240,6 +1369,9 @@ class TestSyntheticProtocol(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(record.pool_routes), record.pool_size)
                 self.assertTrue(set(record.pool_routes) <= routes)
             self.assertIn("route_vanilla_attempts", first["C0"].telemetry[0])
+            # M3R-110 (D2): extension and mutation no longer lose the walk's
+            # start source — every successful winner resolves to an attempt.
+            self.assertTrue(all(r.start_source is not None for r in successful))
         finally:
             if temp_dir is not None:
                 temp_dir.cleanup()

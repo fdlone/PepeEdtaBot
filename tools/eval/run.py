@@ -18,6 +18,7 @@ import random
 import sqlite3
 import sys
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -237,6 +238,8 @@ async def run_config_seed(
     db_copy, temp_dir = copy_database(db_source)
     saved_log_selection = gen_trace_log.log_selection
     saved_log_rejected = gen_trace_log.log_attempt_rejected
+    saved_log_extended = gen_trace_log.log_attempt_extended
+    saved_log_mutated = gen_trace_log.log_attempt_mutated
     records: list[GenRecord] = []
     try:
         resolved_chat = pick_chat_id(db_copy, chat_id)
@@ -333,8 +336,23 @@ async def run_config_seed(
             def _on_rejected(*_args: Any, **_kw: Any) -> None:
                 rg_rejected[0] += 1
 
+            # M3R-110 (design D2): extension and mutation rewrite a candidate's
+            # text after the walk, so the winner's text no longer keys
+            # ``attempt_sources``. Keep the derivation so the start source is
+            # resolved through it instead of lost. Capture only — nothing is
+            # computed inside the timed section.
+            derived_from: dict[str, str] = {}
+
+            def _on_extended(*_args: Any, **kwargs: Any) -> None:
+                derived_from[str(kwargs["extended"])] = str(kwargs["original"])
+
+            def _on_mutated(*_args: Any, **kwargs: Any) -> None:
+                derived_from[str(kwargs["mutated"])] = str(kwargs["original"])
+
             gen_trace_log.log_selection = _on_selection  # type: ignore[assignment]
             gen_trace_log.log_attempt_rejected = _on_rejected  # type: ignore[assignment]
+            gen_trace_log.log_attempt_extended = _on_extended  # type: ignore[assignment]
+            gen_trace_log.log_attempt_mutated = _on_mutated  # type: ignore[assignment]
 
             runtime_state = SimpleNamespace(
                 **{spec.name: spec.parse(spec.default) for spec in RUNTIME_FIELDS}
@@ -386,6 +404,7 @@ async def run_config_seed(
                     pool_sizes[0] = 0
                     captured_pool.clear()
                     captured_routes.clear()
+                    derived_from.clear()
                     rejected_before = sum(generator.rejections.values()) + rg_rejected[0]
                     prompt_tokens = tokenize(prompt)
                     started = time.perf_counter()
@@ -478,12 +497,14 @@ async def run_config_seed(
                             winner_route=result.winner_route,
                             pool_routes=tuple(captured_routes),
                             seed_drawn=seed_tokens is not None,
-                            # The winner's walk as the generator traced it,
-                            # looked up by text (the eval_prod convention).
-                            # A post-processed reply that no longer matches
-                            # its attempt reads as None — coverage is then
-                            # undercounted, never inflated.
-                            start_source=generator.attempt_sources.get(result.text),
+                            # The winner's walk as the generator traced it:
+                            # looked up by text, following extension and
+                            # mutation back to the attempt (M3R-110, D2). A
+                            # reply that still matches nothing reads as None
+                            # — undercounted, never inflated.
+                            start_source=resolve_start_source(
+                                result.text, generator.attempt_sources, derived_from
+                            ),
                         )
                     )
         finally:
@@ -492,9 +513,37 @@ async def run_config_seed(
         temp_dir.cleanup()
         gen_trace_log.log_selection = saved_log_selection  # type: ignore[assignment]
         gen_trace_log.log_attempt_rejected = saved_log_rejected  # type: ignore[assignment]
+        gen_trace_log.log_attempt_extended = saved_log_extended  # type: ignore[assignment]
+        gen_trace_log.log_attempt_mutated = saved_log_mutated  # type: ignore[assignment]
     snapshot = generator.telemetry.snapshot()
     snapshot.update(route_telemetry(generator.telemetry))
     return records, snapshot
+
+
+def resolve_start_source(
+    text: str,
+    attempt_sources: Mapping[str, str],
+    derived_from: Mapping[str, str],
+    *,
+    max_hops: int = 4,
+) -> str | None:
+    """The walk's start source behind a (possibly rewritten) reply text.
+
+    Extension and mutation each rewrite a candidate once, and a mutation can
+    sit on top of an extension, so the lookup follows ``derived_from`` for a
+    few hops until it lands on a traced attempt. ``None`` when nothing on the
+    chain was traced.
+    """
+    current = text
+    for _ in range(max_hops + 1):
+        source = attempt_sources.get(current)
+        if source is not None:
+            return source
+        parent = derived_from.get(current)
+        if parent is None or parent == current:
+            return None
+        current = parent
+    return None
 
 
 def route_telemetry(
