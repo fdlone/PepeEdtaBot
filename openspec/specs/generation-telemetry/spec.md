@@ -2,7 +2,9 @@
 
 ## Purpose
 Defines what the Markov generator must be able to report about its own distributions and machinery — uncertainty diagnostics, shadow order-selection statistics, cache effectiveness — where those numbers surface, and what must never leak into them. Normative sources: TZ §6 (formulas), §20 (observability), doc 03 M2R-010/020.
+
 ## Requirements
+
 ### Requirement: Distribution diagnostics are computed for every sampled pool
 
 For every transition pool the generation walk samples from, the system SHALL compute entropy in bits (`H = -Σ p_i·log2(p_i)` over the pool's normalized weights), branching factor (pool size), normalized entropy (`H / log2(B)`, defined as 0 when branching ≤ 1), and confidence (`1 − H_norm`). Computing diagnostics SHALL NOT change generation behavior and SHALL NOT consume random draws.
@@ -125,7 +127,6 @@ is not configured.
 - **WHEN** the seeded share is non-zero but no chat has a token clearing the minimum seed score
 - **THEN** the seeded-present count is zero and is distinguishable from the seeded share being zero
 
-
 ### Requirement: The collocation registry and its effect are observable
 
 The system SHALL expose how many collocations a chat has in each status, and how
@@ -171,6 +172,9 @@ as a stall.
 механизма, которым он собран. Набор маршрутов SHALL быть замкнутым перечислением
 с местом под будущие маршруты, а не свободной строкой: маршрут — ось разбора
 телеметрии, и опечатка в нём обязана быть ошибкой, а не новой категорией.
+С 2026-09-02 перечисление SHALL включать `hot` — кандидата, чья прогулка
+сидирована горячей n-граммой через L1-маршрут с бюджетом слотов (M3R-230);
+дописка такого кандидата SHALL сохранять маршрут `hot`.
 
 Признак SHALL быть виден в трассе генерации для каждого кандидата, а не только
 для победителя, и SHALL проставляться в точке создания кандидата, а не
@@ -185,6 +189,11 @@ as a stall.
 
 - **WHEN** кандидат отклонён гейтом и не попал в пул
 - **THEN** его маршрут виден в трассе вместе с причиной отклонения
+
+#### Scenario: Hot route counted with its denominators
+
+- **WHEN** hot-маршрут запускался в генерации
+- **THEN** `hot` засчитан как attempted, как present при наличии кандидата в пуле и как won при его победе
 
 ### Requirement: Telemetry is broken down by route
 
@@ -424,7 +433,6 @@ Counting SHALL NOT consume random draws and SHALL NOT change generation output.
 - **THEN** ответы на тех же входных данных и том же зерне побайтно совпадают с
   прежними
 
-
 ### Requirement: Blend displacement is measured against raw counts
 
 For every walk step where the temporal blend is enabled, the system SHALL
@@ -450,7 +458,6 @@ NOT change generation behavior and SHALL NOT consume random draws.
 
 - **WHEN** generations run with the blend enabled
 - **THEN** the mean raw-count displacement is visible in the generation trace and in process telemetry alongside the existing coverage/displacement pair
-
 
 ### Requirement: The winner's route is reported per reply
 
@@ -489,4 +496,3 @@ breaks comparability with pre-amendment sweeps.
 
 - **WHEN** the harness reports the amended metric
 - **THEN** the output names the break with pre-amendment sweeps rather than presenting the numbers as directly comparable
-
