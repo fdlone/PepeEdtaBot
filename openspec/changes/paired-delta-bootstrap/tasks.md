@@ -31,7 +31,7 @@
 
 ## 4. Приёмка
 
-- [ ] 4.1 `ruff` + `mypy app/` + полный `unittest` зелёные, покрытие ≥ 87.
-- [ ] 4.2 `python -m tools.eval --smoke` проходит.
-- [ ] 4.3 `python -m tools.generation_hash --synthetic --check` — хеш не
+- [x] 4.1 `ruff` + `mypy app/` + полный `unittest` зелёные, покрытие ≥ 87.
+- [x] 4.2 `python -m tools.eval --smoke` проходит.
+- [x] 4.3 `python -m tools.generation_hash --synthetic --check` — хеш не
       сдвинут (генерация не затрагивается).
