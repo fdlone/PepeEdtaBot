@@ -60,7 +60,7 @@
 |---|---|---|---|
 | 1 | входные фильтры | `handlers/learning.py:116` | не группа / бот / `/`-команда → выход |
 | 2 | обновление профиля `/pivo` | `handlers/learning.py:128` | сбой гасится в лог |
-| 3 | `observe`: активность чата | `reply_pipeline.py:249` | — |
+| 3 | `observe`: активность чата | `reply_pipeline.py:263` | — |
 | 4 | mention-cooldown | `reply_pipeline.py:257` | обращение в кулдауне → `address_reply=False`, путь непрошеного |
 | 5 | mood/ритм (EWMA) | `reply_pipeline.py:274` | считается, если включён mood **или** директор |
 | 6 | эмодзи-канал (учёт) | `reply_pipeline.py:302` | только при `emoji_append_chance>0` |
@@ -70,9 +70,9 @@
 | 10 | **политика ответа ★** | `reply_pipeline.py:371` | кулдаун / часовой кап / ролл вероятности |
 | 11 | **сбор контекста ★** | `reply_pipeline.py:392` | `only_for_replies` + переопределение при обращении |
 | 12 | L1-затравка | `reply_pipeline.py:411` | только непрошеные, шанс `hot_ngram_seed_chance` |
-| 13 | `ResponseGenerator.generate_with_result` | `response_generator.py:709` | см. §1.3–§1.5 |
+| 13 | `ResponseGenerator.generate_with_result` | `response_generator.py:795` | см. §1.3–§1.5 |
 | 14 | нет текста | `reply_pipeline.py:423` | обращение → fallback; иначе молчание |
-| 15 | учёт отправки (кулдаун, часовой кап, mention-метка) | `reply_pipeline.py:444` | — |
+| 15 | учёт бюджета ответа: слот резервируется **до** генерации в момент решения (`reserve_reply_slot`), при несостоявшемся ответе откатывается | `reply_pipeline.py:479` | O8: атомарность «проверил → записал» без `await` |
 | 16 | причуда завсегдатая (L2) | `reply_pipeline.py:454` | сработала → **редкое событие не роллится** |
 | 17 | редкое событие (L3) | `reply_pipeline.py:527` | verdict / caps / double / false_start |
 | 18 | отправка с имитацией набора | `handlers/_helpers.py` | — |
