@@ -111,6 +111,108 @@ class TestCandidateScorer(unittest.TestCase):
         self.assertAlmostEqual(verbatim_quote_severity(0.8), 0.5)
         self.assertAlmostEqual(verbatim_quote_severity(1.0), 1.0)  # pure quote
 
+    def test_recognized_unit_window_count(self) -> None:
+        """Единица — самая длинная серия корпусных окон в пределах длины.
+
+        Серия из k окон покрывает k + 3 контентных токена (окно = 4), предел
+        единицы — 6 токенов, поэтому единицей признаются серии до трёх окон.
+        """
+        from app.core.candidate_scorer import recognized_unit_windows
+
+        self.assertEqual(recognized_unit_windows([], 4), 0)
+        self.assertEqual(recognized_unit_windows([False, False], 4), 0)
+        self.assertEqual(recognized_unit_windows([True], 4), 1)  # 4 токена
+        self.assertEqual(recognized_unit_windows([True, True, True], 4), 3)  # 6
+        # Четыре подряд — 7 токенов: это уже цитата, а не единица.
+        self.assertEqual(recognized_unit_windows([True] * 4, 4), 0)
+        # Берётся самая длинная серия, а не сумма разрозненных.
+        self.assertEqual(
+            recognized_unit_windows([True, False, True, True], 4), 2
+        )
+
+    def test_one_borrowed_unit_leaves_the_quote_share(self) -> None:
+        # Кандидат: один корпусный фрагмент плюс своё продолжение. Без гарда
+        # доля 2/5, с гардом — 0/3: заимствование выведено из вопроса целиком.
+        from app.core.candidate_scorer import verbatim_ngram_overlap
+
+        tokens = tokenize("наш кот опять уронил ёлку а потом ушёл спать")
+        content = [t.casefold() for t in tokenize("наш кот опять уронил ёлку")]
+        corpus = {tuple(content[0:4]), tuple(content[1:5])}
+
+        raw = verbatim_ngram_overlap(tokens, corpus)
+        guarded = verbatim_ngram_overlap(
+            tokens, corpus, exempt_recognized_unit=True
+        )
+
+        self.assertGreater(raw, 0.0)
+        self.assertEqual(guarded, 0.0)
+
+    def test_second_borrowing_still_counts(self) -> None:
+        # Две отдельные единицы: исключается одна, вторая платит.
+        from app.core.candidate_scorer import verbatim_ngram_overlap
+
+        tokens = tokenize(
+            "наш кот опять уронил ёлку и собака съела весь новогодний оливье"
+        )
+        content = [t.casefold() for t in tokens]
+        first = tuple(content[0:4])
+        second = tuple(content[6:10])
+        both = verbatim_ngram_overlap(
+            tokens, {first, second}, exempt_recognized_unit=True
+        )
+        one_only = verbatim_ngram_overlap(
+            tokens, {first}, exempt_recognized_unit=True
+        )
+
+        self.assertGreater(both, one_only)
+        self.assertEqual(one_only, 0.0)
+
+    def test_long_corpus_stretch_is_a_quote_not_a_unit(self) -> None:
+        # Серия длиннее предела единицы не исключается вовсе: доля с гардом
+        # совпадает с сырой.
+        from app.core.candidate_scorer import verbatim_ngram_overlap
+
+        tokens = tokenize("наш кот опять уронил ёлку на пол и убежал")
+        content = [t.casefold() for t in tokens]
+        corpus = {tuple(content[i : i + 4]) for i in range(5)}  # 5 окон подряд
+
+        raw = verbatim_ngram_overlap(tokens, corpus)
+        guarded = verbatim_ngram_overlap(
+            tokens, corpus, exempt_recognized_unit=True
+        )
+
+        self.assertEqual(guarded, raw)
+        self.assertGreater(raw, 0.0)
+
+    def test_reply_that_is_nothing_but_the_unit_still_pays(self) -> None:
+        # Роадмап: «штраф остаётся за ответ, целиком корпусный». Кроме единицы
+        # в кандидате нет окон — исключение отменяется.
+        from app.core.candidate_scorer import verbatim_ngram_overlap
+
+        tokens = tokenize("наш кот уронил ёлку")
+        content = [t.casefold() for t in tokens]
+        corpus = {tuple(content[0:4])}
+
+        self.assertEqual(verbatim_ngram_overlap(tokens, corpus), 1.0)
+        self.assertEqual(
+            verbatim_ngram_overlap(
+                tokens, corpus, exempt_recognized_unit=True
+            ),
+            1.0,
+        )
+
+    def test_guard_off_matches_the_previous_number(self) -> None:
+        from app.core.candidate_scorer import verbatim_ngram_overlap
+
+        tokens = tokenize("наш кот опять уронил ёлку а потом ушёл спать")
+        content = [t.casefold() for t in tokens]
+        corpus = {tuple(content[0:4]), tuple(content[1:5])}
+
+        self.assertEqual(
+            verbatim_ngram_overlap(tokens, corpus, exempt_recognized_unit=False),
+            verbatim_ngram_overlap(tokens, corpus),
+        )
+
     def test_pure_echo_scores_zero_relevance(self) -> None:
         # A candidate whose informative tokens all come from the context is a
         # parrot: it must not collect the context bonus, on either formula.

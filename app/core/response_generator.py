@@ -755,9 +755,20 @@ class ResponseGenerator:
             ),
             recent_penalty=recent_penalty_strength
             * recent_reply_overlap(tokens, recent_trigrams),
+            # M3R-120: гард «одной признанной единицы» применяется здесь и
+            # только здесь. Триггер verbatim-дописки ниже намеренно остаётся
+            # на сырой доле: дописка существует, чтобы добавить отсебятину к
+            # почти-цитате, и наличие признанной единицы этого не отменяет
+            # (design D4).
             verbatim_penalty=verbatim_penalty_strength
             * verbatim_quote_severity(
-                verbatim_ngram_overlap(tokens, corpus_ngrams)
+                verbatim_ngram_overlap(
+                    tokens,
+                    corpus_ngrams,
+                    exempt_recognized_unit=(
+                        self.runtime_state.verbatim_recognized_unit
+                    ),
+                )
             ),
             collocation_delta=self._collocation_delta(
                 chat_id, tokens, active_collocations

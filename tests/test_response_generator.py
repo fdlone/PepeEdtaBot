@@ -347,6 +347,75 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(verbatim_calls[1], call(123, result))
 
+    async def test_recognized_unit_guard_moves_the_penalty_not_the_extension(
+        self,
+    ) -> None:
+        """M3R-120 / design D4: гард живёт в скорере и только в нём.
+
+        Триггер verbatim-дописки сравнивается с СЫРОЙ долей — дописка
+        существует, чтобы добавить отсебятину к почти-цитате, и признанная
+        единица этого не отменяет. Проверяется по вызовам: при включённом
+        гарде решение о дописке принято по тому же числу, что и при
+        выключенном, а штраф изменился.
+        """
+        from app.core.candidate_scorer import verbatim_ngram_overlap
+
+        tokens = tokenize("наш кот опять уронил ёлку а потом ушёл спать")
+        content = [t.casefold() for t in tokens]
+        corpus = {tuple(content[0:4]), tuple(content[1:5])}
+
+        raw = verbatim_ngram_overlap(tokens, corpus)
+        guarded = verbatim_ngram_overlap(
+            tokens, corpus, exempt_recognized_unit=True
+        )
+        self.assertNotEqual(raw, guarded)
+
+        state = _runtime_state()
+        state.verbatim_recognized_unit = True
+        state.verbatim_penalty_strength = 1.5
+        generator = _traced_generator()
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=_learning_service(),
+            runtime_state=state,
+        )
+
+        score = response_generator._build_score(
+            "наш кот опять уронил ёлку а потом ушёл спать",
+            tokens,
+            [],
+            "medium",
+            context_idf={},
+            recent_trigrams=set(),
+            recent_penalty_strength=0.0,
+            corpus_ngrams=corpus,
+            verbatim_penalty_strength=1.5,
+            chat_id=123,
+        )
+        state.verbatim_recognized_unit = False
+        unguarded = response_generator._build_score(
+            "наш кот опять уронил ёлку а потом ушёл спать",
+            tokens,
+            [],
+            "medium",
+            context_idf={},
+            recent_trigrams=set(),
+            recent_penalty_strength=0.0,
+            corpus_ngrams=corpus,
+            verbatim_penalty_strength=1.5,
+            chat_id=123,
+        )
+        # Штраф считается по доле с исключением единицы...
+        from app.core.candidate_scorer import verbatim_quote_severity
+
+        self.assertAlmostEqual(
+            score.verbatim_penalty, 1.5 * verbatim_quote_severity(guarded)
+        )
+        # ...а без гарда — по сырой.
+        self.assertAlmostEqual(
+            unguarded.verbatim_penalty, 1.5 * verbatim_quote_severity(raw)
+        )
+
     async def test_winner_route_names_the_extension_per_reply(self) -> None:
         # M3R-143: пер-ответный сигнал шва — молчаливую связку текст-скан не
         # видит по построению, маршрут победителя видит всегда.

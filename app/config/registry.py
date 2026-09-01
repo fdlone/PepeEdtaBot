@@ -225,6 +225,20 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # starts hitting the on-topic candidates themselves.
     FieldSpec("verbatim_penalty_strength", "VERBATIM_PENALTY_STRENGTH",
               "1.5", _float_in_range(0.0, 3.0)),
+    # M3R-120: guard, not a strength dial. With it on, ONE recognized borrowed
+    # unit (the longest contiguous corpus stretch, while it stays within
+    # VERBATIM_UNIT_MAX_TOKENS) leaves the quote-share count entirely —
+    # numerator and denominator both, the way affinity_without_copy drops
+    # copies. A reply that is nothing but that unit still pays: borrowing one
+    # phrase is the bot's voice, borrowing everything is quoting.
+    #
+    # Default off, and it has its own knob rather than riding
+    # verbatim_penalty_strength, because the phase 5 verdict has to attribute
+    # its effect separately (roadmap M2R-430). The phrase route M3R-210
+    # inherits it: inserting a corpus phrase as a unit is exactly what the
+    # anti-quote penalty would otherwise punish.
+    FieldSpec("verbatim_recognized_unit", "VERBATIM_RECOGNIZED_UNIT",
+              "false", _bool()),
     FieldSpec("length_mode_weights", "LENGTH_MODE_WEIGHTS", "0.25,0.55,0.2",
               _length_weights()),
     # Length mirroring: tilt of the short/long weights above toward the length

@@ -362,6 +362,8 @@ def verbatim_ngram_overlap(
     tokens: list[str],
     corpus_ngrams: AbstractSet[tuple[str, ...]],
     size: int = VERBATIM_NGRAM_SIZE,
+    *,
+    exempt_recognized_unit: bool = False,
 ) -> float:
     """Share of the candidate's content ``size``-grams found in the corpus index.
 
@@ -369,14 +371,62 @@ def verbatim_ngram_overlap(
     message (a quote); recombination across messages produces novel windows and
     lowers the share. Candidates shorter than ``size`` content tokens score 0 —
     they are governed by the short-reply anti-repeat instead.
+
+    ``exempt_recognized_unit`` (M3R-120) drops ONE recognized borrowed unit
+    from the count — see ``recognized_unit_windows`` for what counts as one.
+    Off by default: the guard has its own knob so its effect stays attributable
+    in the phase 5 verdict, and the neutral path is byte-identical.
     """
     if not corpus_ngrams:
         return 0.0
     windows = build_windows(_normalized_content(tokens), size)
     if not windows:
         return 0.0
-    hits = sum(1 for window in windows if window in corpus_ngrams)
-    return hits / len(windows)
+    hit_flags = [window in corpus_ngrams for window in windows]
+    hits = sum(hit_flags)
+    if not exempt_recognized_unit:
+        return hits / len(windows)
+    unit = recognized_unit_windows(hit_flags, size)
+    remaining = len(windows) - unit
+    if unit == 0 or remaining == 0:
+        # remaining == 0: кроме единицы в кандидате ничего нет, то есть это
+        # цитата, а не заимствование внутри своей речи — исключение
+        # отменяется (design D2, роадмап: «штраф остаётся за ответ, целиком
+        # корпусный»).
+        return hits / len(windows)
+    return (hits - unit) / remaining
+
+
+# M3R-120: предел одной признанной единицы заимствования, в контентных
+# токенах. Роадмап называет единицу («одна признанная фраза/якорная цитата»),
+# но не определяет её операционально, а прямые прочтения не работают: окно
+# цитирования — 4 контентных токена, фраза индекса M3R-000 — 2–3, поэтому
+# «исключить окна внутри фразы» было бы пустой операцией, а «исключить все
+# задетые окна» — слишком щедрым.
+#
+# Операциональное определение: единица — самый длинный непрерывный корпусный
+# отрезок кандидата, если он не длиннее предела. Предел 6 = 3 токена фразы
+# плюс охват окна (4−1): столько нужно, чтобы заимствованная фраза попала в
+# единицу вместе с накрывающими её окнами. Длиннее — это уже предложение
+# целиком, то есть цитата, и она платит.
+VERBATIM_UNIT_MAX_TOKENS = 6
+
+
+def recognized_unit_windows(hit_flags: list[bool], size: int) -> int:
+    """Сколько окон занимает **одна** признанная единица (0, если её нет).
+
+    Единица — самая длинная непрерывная серия корпусных окон: серия из ``k``
+    окон покрывает ``k + size - 1`` контентных токенов, и единицей она
+    считается, только пока это число не превышает ``VERBATIM_UNIT_MAX_TOKENS``.
+    Более длинная серия — цитата, а не единица, и не исключается вовсе.
+    """
+    longest = current = 0
+    for flag in hit_flags:
+        current = current + 1 if flag else 0
+        longest = max(longest, current)
+    if longest == 0 or longest + size - 1 > VERBATIM_UNIT_MAX_TOKENS:
+        return 0
+    return longest
 
 
 # Corpus-based replies are the bot's voice — a training message plus its own

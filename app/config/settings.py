@@ -54,6 +54,7 @@ class RuntimeTunables:
     repetition_penalty_strength: float
     recent_reply_penalty_strength: float
     verbatim_penalty_strength: float
+    verbatim_recognized_unit: bool
     length_mode_weights: tuple[float, float, float]
     intonation_profile_strength: float
     length_context_adaptation: float
