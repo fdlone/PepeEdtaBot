@@ -109,6 +109,23 @@ def compress_long(count: int, shape: str, beta: float) -> float:
     return float(math.log1p(value))
 
 
+def _raw_displacement(
+    final: Sequence[float], rows: Sequence[TransitionRow]
+) -> float:
+    """TV-distance of the final weights from the normalized raw counts.
+
+    0.0 when the raw counts carry no mass — there is nothing to compare
+    against, not a division by zero.
+    """
+    raw_total = math.fsum(max(row[1], 0) for row in rows)
+    if raw_total <= 0.0:
+        return 0.0
+    return 0.5 * math.fsum(
+        abs(mixed - max(row[1], 0) / raw_total)
+        for mixed, row in zip(final, rows)
+    )
+
+
 class BlendedPool(NamedTuple):
     """Blended sampling weights plus how far they moved the distribution.
 
@@ -117,10 +134,19 @@ class BlendedPool(NamedTuple):
     this step, 1 means it replaced the distribution outright. It exists because
     "the knob is set" and "the knob is doing something" are different claims,
     and Phase 2 was the lesson in not confusing them.
+
+    ``raw_displacement`` (M3R-142) is the same distance measured against the
+    normalized RAW counts. The pair diverges exactly where the old metric
+    lied: with an empty short layer the blend degenerates to log-compressed
+    long weights — displacement-vs-long is 0 while sampling has already moved
+    away from the counts (map §3.3: 12.5% of replies changed at "coverage
+    0.000, shift 0.000"). Defaulted so the interpolation path, which reuses
+    this tuple and has no blend-raw notion, stays untouched.
     """
 
     weights: list[float]
     displacement: float
+    raw_displacement: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,7 +194,8 @@ class TemporalBlend:
         if long_total <= 0.0 and short_total <= 0.0:
             # Nothing to weight by — every candidate is equally (un)supported.
             uniform = 1.0 / len(rows)
-            return BlendedPool([uniform] * len(rows), 0.0)
+            final = [uniform] * len(rows)
+            return BlendedPool(final, 0.0, _raw_displacement(final, rows))
 
         long_p = (
             [w / long_total for w in long_weights]
@@ -177,10 +204,13 @@ class TemporalBlend:
         )
         if short_total <= 0.0:
             # Configured but inert at this step: no fresh observations here.
-            return BlendedPool(long_p, 0.0)
+            # Inert versus the long layer — NOT versus the raw counts: the
+            # sampled weights are already log-compressed, which is exactly the
+            # displacement the second metric exists to show (M3R-142).
+            return BlendedPool(long_p, 0.0, _raw_displacement(long_p, rows))
         short_p = [w / short_total for w in short_weights]
         if long_total <= 0.0:
-            return BlendedPool(short_p, 1.0)
+            return BlendedPool(short_p, 1.0, _raw_displacement(short_p, rows))
 
         alpha = min(1.0, self.alpha)
         blended = [
@@ -190,4 +220,6 @@ class TemporalBlend:
         displacement = 0.5 * math.fsum(
             abs(mixed - long_) for mixed, long_ in zip(blended, long_p)
         )
-        return BlendedPool(blended, displacement)
+        return BlendedPool(blended, displacement, _raw_displacement(blended, rows))
+
+

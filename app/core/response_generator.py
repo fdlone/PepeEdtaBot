@@ -167,6 +167,11 @@ class GenerationRequest:
 class ResponseGenerationResult:
     text: str | None
     candidates_scored: int
+    # M3R-143: маршрут победителя (значение CandidateRoute) — пер-ответный
+    # сигнал шва дописки, который агрегаты M3R-103 дать не могут: молчаливая
+    # связка «.» невидима текст-скану по построению (map §3.5). None, когда
+    # ответа нет.
+    winner_route: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1315,4 +1320,5 @@ class ResponseGenerator:
         return ResponseGenerationResult(
             text=text,
             candidates_scored=len(candidates),
+            winner_route=selected.route,
         )

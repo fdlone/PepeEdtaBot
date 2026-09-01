@@ -9,7 +9,30 @@ from tools.eval_prod import (
     build_verbatim_index,
     longest_verbatim_run,
     novel_ngram_share,
+    reply_has_seam,
 )
+
+
+class TestReplyHasSeam(unittest.TestCase):
+    """M3R-143: честный числитель connective_reply_rate."""
+
+    def test_silent_extension_seam_counts(self) -> None:
+        # Молчаливая связка «.» невидима текст-скану — решает маршрут.
+        self.assertTrue(
+            reply_has_seam(["цитата", ".", "хвост"], "extension", 0)
+        )
+
+    def test_walk_jump_counts(self) -> None:
+        self.assertTrue(reply_has_seam(["обычный", "ответ"], "vanilla", 1))
+
+    def test_wordy_connective_counts_via_text_scan(self) -> None:
+        self.assertTrue(
+            reply_has_seam(["пиво", ",", "кстати", "холодное"], "vanilla", 0)
+        )
+
+    def test_plain_reply_without_seams_does_not_count(self) -> None:
+        self.assertFalse(reply_has_seam(["обычный", "ответ"], "vanilla", 0))
+        self.assertFalse(reply_has_seam(["обычный", "ответ"], None, 0))
 
 
 class TestNovelNgramShare(unittest.TestCase):

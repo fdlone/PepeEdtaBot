@@ -119,7 +119,10 @@ def _route(trace: GenerationTrace) -> str:
         # "set but inert" (alpha>0, shift=0) is readable straight off the line.
         f"alpha={trace.applied_alpha:.2f} "
         f"short_cover={trace.blend_step_coverage:.2f} "
-        f"blend_shift={trace.mean_blend_displacement:.3f}"
+        f"blend_shift={trace.mean_blend_displacement:.3f} "
+        # M3R-142: shift from the RAW counts — non-zero even when the short
+        # layer is empty and blend_shift above reads 0 (map §3.3).
+        f"raw_shift={trace.mean_blend_raw_displacement:.3f}"
     )
 
 

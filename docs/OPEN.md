@@ -102,7 +102,7 @@ win 0.141 + латентность) — но маршруты дают тот ж
 Как это установлено, чтобы вывод можно было перепроверить, а не принимать на
 слово: в `/stats` при ненулевом `generations` отсутствовала строка «с
 контекстом». `note_context_mode` вызывается **первой же строкой**
-`generate_with_result` (`app/core/response_generator.py:795`), до всего, что
+`generate_with_result` (`app/core/response_generator.py:811`), до всего, что
 может упасть, — то есть у выкаченного кода эта строка не могла бы не
 напечататься после первого же ответа. Сама строка живёт внутри блока
 `if telemetry.get("generations")` (`app/presentation/bot_messages.py:99`),

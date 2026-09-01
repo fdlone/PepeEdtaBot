@@ -148,6 +148,38 @@ class TestBlend(unittest.TestCase):
         self.assertAlmostEqual(blended.weights[0], expected_a / total)
         self.assertEqual(blended.displacement, 0.0)
 
+    def test_empty_short_layer_is_not_raw_inert(self) -> None:
+        """M3R-142, репродукция map §3.3: при пустом коротком слое пара
+        M2R-210 молчит, а сэмплинг уже ушёл от сырых счётчиков — log-сжатие
+        сближает 8:2 к ~2.2:1.1. Мутация «мерить от long_p» (то есть
+        raw_displacement = displacement) роняет второй assert."""
+        rows = [("a", 8, 0.0, None), ("b", 2, 0.0, None)]
+        blended = TemporalBlend(alpha=0.7).blend(rows, now=DAY)
+        assert blended is not None
+        self.assertEqual(blended.displacement, 0.0)
+        self.assertGreater(blended.raw_displacement, 0.0)
+        # Точное значение: TV(нормированное сжатие, сырые 0.8/0.2).
+        ca = compress_long(8, COMPRESSION_LOG, 0.0)
+        cb = compress_long(2, COMPRESSION_LOG, 0.0)
+        expected = 0.5 * (
+            abs(ca / (ca + cb) - 0.8) + abs(cb / (ca + cb) - 0.2)
+        )
+        self.assertAlmostEqual(blended.raw_displacement, expected)
+
+    def test_raw_displacement_on_the_main_path(self) -> None:
+        rows = [("a", 100, 1.0, DAY), ("b", 1, 3.0, DAY)]
+        blended = TemporalBlend(alpha=1.0).blend(rows, now=DAY)
+        assert blended is not None
+        # final = 0.25/0.75 против сырых 100/101 и 1/101.
+        expected = 0.5 * (abs(0.25 - 100 / 101) + abs(0.75 - 1 / 101))
+        self.assertAlmostEqual(blended.raw_displacement, expected)
+
+    def test_zero_raw_mass_reads_as_zero_not_a_division(self) -> None:
+        rows = [("a", 0, 2.0, DAY), ("b", 0, 2.0, DAY)]
+        blended = TemporalBlend(alpha=0.5).blend(rows, now=DAY)
+        assert blended is not None
+        self.assertEqual(blended.raw_displacement, 0.0)
+
     def test_alpha_one_is_the_short_layer_alone(self) -> None:
         rows = [("a", 100, 1.0, DAY), ("b", 1, 3.0, DAY)]
         blended = TemporalBlend(alpha=1.0).blend(rows, now=DAY)
@@ -167,6 +199,22 @@ class TestBlend(unittest.TestCase):
         strong = TemporalBlend(alpha=0.8).blend(rows, now=DAY)
         assert mild is not None and strong is not None
         self.assertGreater(strong.displacement, mild.displacement)
+
+
+class TestRawDisplacementTelemetry(unittest.TestCase):
+    def test_snapshot_averages_raw_displacement_per_step(self) -> None:
+        from app.core.generation_telemetry import GenerationTelemetry
+
+        telemetry = GenerationTelemetry()
+        telemetry.note_generation(
+            entropy_bits_sum=0.0,
+            normalized_entropy_sum=0.0,
+            branching_sum=0.0,
+            steps=4,
+            blend_raw_displacement_sum=1.0,
+        )
+        snapshot = telemetry.snapshot()
+        self.assertAlmostEqual(snapshot["mean_blend_raw_displacement"], 0.25)
 
 
 class TestBlendProperties(unittest.TestCase):
