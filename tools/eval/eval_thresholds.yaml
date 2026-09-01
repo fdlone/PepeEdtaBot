@@ -274,6 +274,23 @@ phase9_interp:
   # how "the round was junk" gets remembered as "interpolation does not work".
   manual_repeat_share_min: 0.20
   manual_self_consistency_min: 0.80
+  # ADDED 2026-09-01 (M3R-020), before the first solo round was prepared and
+  # before a single rating existed. The two bars above check that the rater
+  # agrees with THEMSELVES; neither checks that the rubric separates a connected
+  # reply from an unconnected one — a rater who says "3" to everything is
+  # perfectly self-consistent. So part of the sample is a real reply of the same
+  # run with its tokens shuffled, and this is the share of those that must be
+  # rated unconnected. Like the two bars above it gates the VALIDITY of the
+  # round, not the phase: below it the verdict is `insufficient data`, never
+  # `fail`, and the diagnosis differs — "the rubric does not discriminate", not
+  # "the rater is unstable".
+  #
+  # 0.80 mirrors manual_self_consistency_min rather than phase 4's decoy bar:
+  # phase 4 asks how often a decoy is mistaken for a meme (a judgement about
+  # borderline material), while a token-shuffled reply is not borderline — it is
+  # the unambiguous case, and a rubric that misses one in five of them cannot be
+  # trusted on the ambiguous ones.
+  manual_decoy_detected_min: 0.80
   # Minimum replies rated per arm (spec §8). Rating fewer and reporting the
   # share would inflate it by letting the rater stop early.
   manual_rated_min: 30

@@ -164,6 +164,12 @@ async def _protocol(args: argparse.Namespace) -> int:
         manual_rating = json.loads(
             Path(args.manual_rating).read_text(encoding="utf-8")
         )
+    # Phase 9 condition 6 (M3R-020): same rule as the manual rating above —
+    # only the aggregate reaches the report, and without it the gate reports
+    # insufficient data rather than passing on the automatic half alone.
+    solo_rating: dict[str, Any] | None = None
+    if args.solo_rating:
+        solo_rating = json.loads(Path(args.solo_rating).read_text(encoding="utf-8"))
     fresh_tokens: frozenset[str] | None = None
     evaluation_moment: int | None = None
     notes = [
@@ -235,6 +241,7 @@ async def _protocol(args: argparse.Namespace) -> int:
         notes=notes,
         context_mode=args.context_mode,
         df_facts=df_facts,
+        solo_rating=solo_rating,
     )
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     # The mode is part of the file name, not only of the header: two runs of the
@@ -281,6 +288,16 @@ def main() -> None:
         help=(
             "path to the local manual top-meme rating (doc 05 §5). Keep it "
             "out of the repository: it contains verbatim chat phrases"
+        ),
+    )
+    parser.add_argument(
+        "--solo-rating",
+        type=str,
+        default=None,
+        help=(
+            "path to the aggregate of a solo connectedness round "
+            "(python -m tools.solo_rating_round score). Numbers only — the "
+            "rated replies stay out of the repository"
         ),
     )
     parser.add_argument(

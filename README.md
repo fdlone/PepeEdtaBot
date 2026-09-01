@@ -261,6 +261,9 @@ python -m unittest discover tests -v
   восстановление, секреты, retention.
 - [`docs/PRE_ROADMAP.md`](docs/PRE_ROADMAP.md) — план эволюции генерации
   (треки, зависимости, success criteria).
+- [`docs/SOLO_RATING_ROUND.md`](docs/SOLO_RATING_ROUND.md),
+  [`docs/MEME_RATING_ROUND.md`](docs/MEME_RATING_ROUND.md) — процедуры ручных
+  раундов, которыми закрываются гейты фаз 9 и 4.
 - [`docs/v2/`](docs/v2/) — нормативный пакет Markov 2.0R: ТЗ, ADR,
   eval-протокол, трекер фаз.
 - [`docs/OPEN.md`](docs/OPEN.md) — открытые вопросы и бэклог.
