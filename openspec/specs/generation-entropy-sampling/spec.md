@@ -2,7 +2,9 @@
 
 ## Purpose
 Defines how the transition distribution's own uncertainty is allowed to modulate generation — the entropy-to-temperature mapping and its bounds, the branching-aware candidate target, the neutrality contract that keeps the frozen 1.x behavior reachable, and the boundary between a soft reweighting and the hard acceptance gates. Normative sources: TZ §6, ADR-003, roadmap doc 03 M2R-100/110.
+
 ## Requirements
+
 ### Requirement: Sampling temperature follows pool entropy
 
 For each transition pool the walk samples from, the system SHALL derive the sampling temperature from the pool's normalized entropy as `T = T_base · (1 + GAIN · (H_norm − H_pivot))`, clamped to a configured `[T_min, T_max]`. `T_base` SHALL remain governed by the existing randomness setting, so that setting keeps its established meaning as the overall scale. Deriving and applying the temperature SHALL NOT consume random draws beyond those the 1.x sampler already consumes.
@@ -59,6 +61,21 @@ Entropy modulation SHALL affect only the weighting of candidates inside a pool t
 
 The number of candidates the generator aims to produce before scoring SHALL be derivable from the branching the generator actually observed, within a configured floor and the existing attempt budget: a chain whose pools are near-degenerate SHALL be allowed to stop early, since further attempts on such a chain differ only marginally, while a wide-branching chain SHALL be allowed the full target. With the feature disabled the target SHALL equal the previously fixed constant.
 
+Этот целевой размер SHALL быть бюджетом **всего** пула, а не только основного
+обхода. Всякий дополнительный производитель кандидатов (маршрут) SHALL брать
+слоты изнутри него и SHALL NOT расширять пул сверх целевого размера.
+
+Основание — измеримое: страховочный инвариант разнообразия пре-регистрирован
+как **абсолютное** число существенно различных траекторий, поэтому пул,
+растущий с числом маршрутов, обесценивает порог именно на тех правках, ради
+которых порог заведён. Наращивание пула вычеркнуто отдельно и с цифрами
+(глобальные обходы с низкой результативностью плюс расход бюджета латентности),
+и маршрут, добавляющий кандидатов сверх, возвращает вычеркнутое.
+
+Бюджет маршрутов SHALL быть ограничен так, чтобы основной обход сохранял
+большинство слотов пула: пул без единого кандидата основного обхода — это
+подмена механизма, а не конкуренция за места.
+
 #### Scenario: Degenerate chain stops early
 
 - **WHEN** the observed branching of the produced candidates is at or below the configured degenerate bound
@@ -73,6 +90,21 @@ The number of candidates the generator aims to produce before scoring SHALL be d
 
 - **WHEN** the reduced target would be reached with zero accepted candidates
 - **THEN** the generator keeps attempting up to the existing budget rather than returning no reply
+
+#### Scenario: Маршрут включён — пул не растёт
+
+- **WHEN** маршрут включён своей ручкой и произвёл кандидатов
+- **THEN** размер пула не превышает целевого размера, а слоты маршрута заняты за счёт слотов основного обхода
+
+#### Scenario: Маршрут не может вытеснить основной обход
+
+- **WHEN** ручка маршрута выставлена в максимум своего диапазона
+- **THEN** маршрут получает не больше половины слотов пула, и в пуле остаётся хотя бы один кандидат основного обхода, если обход вообще способен его произвести
+
+#### Scenario: Маршрут ничего не произвёл
+
+- **WHEN** маршрут включён, но не отдал ни одного кандидата
+- **THEN** его слоты достаются основному обходу, и пул собирается до целевого размера как обычно
 
 ### Requirement: The shipped default is decided by a pre-registered gate
 
@@ -101,4 +133,3 @@ Generation telemetry SHALL report the temperature actually applied, aggregated p
 
 - **WHEN** the feature is disabled or the gain is zero
 - **THEN** telemetry reports the unmodulated temperature, so "the knob is doing nothing" is readable from the numbers
-

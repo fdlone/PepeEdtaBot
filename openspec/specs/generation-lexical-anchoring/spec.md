@@ -7,7 +7,9 @@ the anchor — and lets those seeded candidates compete without privilege
 (normative sources: `docs/v2/02_MARKOV_2_0R_TZ.md` §9, ADR-008, ADR-012
 Provisional). This is an experiment: it ships disabled, and raising its weight
 requires the phase's gate to pass.
+
 ## Requirements
+
 ### Requirement: Seeds are chosen by a composite score, not by IDF alone
 
 The system SHALL rank candidate seed tokens by a score that combines how
@@ -65,6 +67,13 @@ Seeded candidates SHALL join the best-of-N pool and be judged by the same
 scorer as every other candidate, with no bonus for being seeded (ADR-008). The
 share of the pool that is seeded SHALL be configurable.
 
+«Доля пула» SHALL означать долю **внутри** целевого размера пула, а не добавку
+к нему: seeded-кандидаты занимают слоты, которые иначе достались бы основному
+обходу. Ветка, которая кладёт кандидатов сверх заполненного пула, SHALL
+считаться дефектом, а не вариантом реализации: она расширяет поле выбора вместо
+того, чтобы конкурировать в нём, и обесценивает абсолютный порог разнообразия,
+которым состав пула застрахован.
+
 «Без приоритета» SHALL означать и отсутствие гандикапа: seeded-кандидат
 проходит **тот же** конвейер доводки и **те же** гейты формы, что кандидат
 основного обхода, прежде чем попасть в пул. Ветка, которая собирает кандидата
@@ -86,6 +95,16 @@ share of the pool that is seeded SHALL be configurable.
 
 - **WHEN** seeded-кандидат после доводки не проходит гейт формы, применяемый к кандидатам основного обхода
 - **THEN** он отклоняется на том же основании, а не попадает в пул с заниженной оценкой
+
+#### Scenario: Доля пула не увеличивает пул
+
+- **WHEN** доля seeded выставлена ненулевой и ветка произвела кандидатов
+- **THEN** число кандидатов в пуле не превышает целевого размера, а seeded занимают в нём свою долю слотов
+
+#### Scenario: Нейтральная доля ничего не меняет
+
+- **WHEN** доля seeded равна нулю
+- **THEN** ветка не исполняется, пул собирается основным обходом в прежнем порядке, и вывод генерации побайтно совпадает с замороженным базлайном
 
 ### Requirement: The seeded branch fails transparently
 
@@ -123,4 +142,3 @@ SHALL require no restart.
 
 - **WHEN** the seeded share is set to zero
 - **THEN** seeded generation stops immediately, the reverse and df structures are untouched, and unseeded replies are unaffected
-
