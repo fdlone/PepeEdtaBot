@@ -176,7 +176,7 @@ class TestSeededBranchUsesIt(unittest.IsolatedAsyncioTestCase):
                 entropy_sampling=EntropySampling(),
                 temporal_blend=TemporalBlend(),
                 now=0,
-                target=5,
+                slots=2,
                 rng=random.Random(3),
             )
 

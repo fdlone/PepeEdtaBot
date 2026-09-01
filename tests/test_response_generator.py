@@ -289,8 +289,12 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         with patch(
             "app.core.response_generator.mask_chat_id", return_value="chat"
         ):
+            # candidate_target=4, а не 1: с O10 маршрут берёт слоты изнутри
+            # бюджета пула, и при пуле в одно место бюджет равен нулю —
+            # конкурировать не за что, ветка не запускается (route_slot_budget).
+            # Здесь проверяется отображение next_explore, а не бюджет.
             await response_generator.generate(
-                _request(), rng=random.Random(1), candidate_target=1
+                _request(), rng=random.Random(1), candidate_target=4
             )
         kwargs = generator.generate_seeded_candidate.await_args.kwargs
         self.assertAlmostEqual(
