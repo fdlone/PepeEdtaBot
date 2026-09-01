@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.config.registry import field_hint, runtime_field_names
+from app.core.failure_taxonomy import UNMAPPED
 from app.core.generation_telemetry import UserQuirkGate
 
 if TYPE_CHECKING:
@@ -113,13 +114,16 @@ def format_stats_message(
     stats: dict[str, int],
     telemetry: dict[str, float | int | None] | None = None,
     collocations: dict[str, int] | None = None,
+    rejection_classes: Mapping[str, int] | None = None,
 ) -> str:
     """Объём модели плюс телеметрия генерации (Markov 2.0R Phase 1).
 
     Телеметрия — счётчики за время жизни процесса; до первой генерации после
     рестарта показывать нечего, и блок опускается целиком. ``collocations`` —
     размер реестра коллокаций чата по статусам (M2R-300); пустой реестр
-    строку не печатает.
+    строку не печатает. ``rejection_classes`` — отклонения кандидатов в разрезе
+    таксономии (M3R-021); приходит отдельным аргументом, а не через
+    ``telemetry``, потому что снимок плоский, а разрез — отображение.
     """
     # Идентичность сборки — первой строкой и **всегда**, включая `unknown`.
     # Всё ниже читается через неё: отсутствие любой строки счётчиков значит
@@ -270,6 +274,20 @@ def format_stats_message(
                 f"штрафов {telemetry.get('collocation_penalty_hits')}, "
                 f"удержано {telemetry.get('collocation_withheld')}"
             )
+    # Отклонения кандидатов в разрезе таксономии (M3R-021). «Не размечено»
+    # печатается всегда, когда отклонения были, включая ноль: это счётчик
+    # невыполненной разметки, и пустое место на его месте читалось бы как
+    # «все причины разобраны».
+    if rejection_classes:
+        unmapped = rejection_classes.get(UNMAPPED, 0)
+        classes = ", ".join(
+            f"{name} {count}"
+            for name, count in sorted(rejection_classes.items())
+            if name != UNMAPPED
+        )
+        lines.append(
+            f"отклонения по классам: {classes or 'нет'}; не размечено {unmapped}"
+        )
     # Воронка причуд L2 — вне блока генераций и без гейта на ненулевые числа:
     # канал молчит с 2026-07-16, и «строки нет» здесь неотличимо от «канал
     # выключен ручкой». Обе стороны пары печатаются всегда, включая нули.

@@ -12,6 +12,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from app.core.failure_taxonomy import UNMAPPED, classify_reason
+
 
 class CandidateRoute(StrEnum):
     """The mechanism that produced a candidate (M3R-103).
@@ -457,6 +459,24 @@ class GenerationTelemetry:
     def route_rejection_reasons(self) -> Mapping[str, Mapping[str, int]]:
         """Rejection reason counts per route, as recorded."""
         return {route: dict(reasons) for route, reasons in self.route_rejected.items()}
+
+    def rejections_by_class(self) -> Mapping[str, int]:
+        """Отклонения в разрезе классов таксономии (M3R-021).
+
+        Второй разрез поверх причин, а не замена им: причина точнее и нужна при
+        разборе, класс крупнее и сравним между фичами и раундами оценки.
+
+        Причина без класса попадает в разряд ``unmapped`` — без него добавление
+        новой причины молча уменьшало бы сумму по классам, то есть новая
+        невыполненная работа выглядела бы как отсутствие отказов.
+        """
+        counts: dict[str, int] = {}
+        for reasons in self.route_rejected.values():
+            for reason, count in reasons.items():
+                failure_class = classify_reason(reason)
+                key = UNMAPPED if failure_class is None else failure_class.value
+                counts[key] = counts.get(key, 0) + count
+        return counts
 
     def snapshot(self) -> dict[str, float | int | None]:
         """Aggregates for ``/stats``; ``None`` where no data exists yet."""

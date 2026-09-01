@@ -43,6 +43,7 @@ async def cmd_stats(
             {"volume": volume},
             telemetry=generator.telemetry.snapshot(),
             collocations=collocations,
+            rejection_classes=generator.telemetry.rejections_by_class(),
         ),
         runtime_state,
     )
