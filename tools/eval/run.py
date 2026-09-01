@@ -15,6 +15,7 @@ generator, verbatim checker). Reproducibility contract (spec):
 from __future__ import annotations
 
 import random
+import sqlite3
 import sys
 import time
 from dataclasses import dataclass, field
@@ -96,6 +97,57 @@ class ConfigRun:
 
 def _content_cf(text: str) -> tuple[str, ...]:
     return tuple(token.casefold() for token in content_tokens(tokenize(text)))
+
+
+@dataclass(slots=True, frozen=True)
+class DfCorpusFacts:
+    """Prod-accumulated df of the SOURCE snapshot (gate-phase5-ndocs-floor).
+
+    Read before the snapshot is copied and before ``_populate_token_df``
+    window-populates the working copy (design D1): reading the copy would
+    always see the retention window the runner itself wrote and turn the
+    corpus precondition into a rubber stamp. ``singleton_share`` is ``None``
+    when the chat has no df rows at all — "df is empty", not a zero division.
+    ``error`` carries the reason when the source could not be read; the gate
+    turns it into ``insufficient data``, never a crashed run.
+    """
+
+    n_docs: int | None = None
+    singleton_share: float | None = None
+    error: str | None = None
+
+
+def read_df_corpus_facts(db_source: Path, chat_id: int | None) -> DfCorpusFacts:
+    """n_docs and the df singleton share of ``pick_chat_id``'s chat (design D2).
+
+    Share is over the distinct tokens of that one chat — other chats have
+    ``n_docs = 0`` (learned before migration 020) and would only dilute the
+    denominator with zeros.
+    """
+    try:
+        resolved = pick_chat_id(db_source, chat_id)
+        con = sqlite3.connect(f"file:{db_source}?mode=ro", uri=True)
+        try:
+            row = con.execute(
+                "SELECT n_docs FROM chat_model_volume WHERE chat_id = ?",
+                (resolved,),
+            ).fetchone()
+            n_docs = int(row[0]) if row is not None else 0
+            total, singles = con.execute(
+                "SELECT COUNT(*), "
+                "COALESCE(SUM(CASE WHEN messages_seen = 1 THEN 1 ELSE 0 END), 0) "
+                "FROM markov_token_df WHERE chat_id = ?",
+                (resolved,),
+            ).fetchone()
+        finally:
+            con.close()
+    except Exception as error:
+        return DfCorpusFacts(error=str(error))
+    if int(total) == 0:
+        return DfCorpusFacts(n_docs=n_docs, singleton_share=None)
+    return DfCorpusFacts(
+        n_docs=n_docs, singleton_share=int(singles) / int(total)
+    )
 
 
 async def _populate_token_df(

@@ -48,6 +48,7 @@ from tools.eval.run import (  # noqa: E402
     DEFAULT_GENERATIONS,
     PROTOCOL_SEEDS,
     SMOKE_GENERATIONS,
+    read_df_corpus_facts,
     run_matrix,
 )
 from tools.eval.synthetic import SYNTHETIC_CHAT_ID, build_synthetic_snapshot  # noqa: E402
@@ -149,6 +150,11 @@ async def _protocol(args: argparse.Namespace) -> int:
     thresholds = load_thresholds(Path(args.thresholds))
     prompt_set = load_prompts(Path(args.prompts))
     db_source = Path(args.db)
+    # gate-phase5-ndocs-floor (design D1): the corpus precondition is measured
+    # on the ORIGINAL snapshot, before the temporal fixture can replace
+    # db_source and before any working copy window-populates df. Reading later
+    # would see the retention window the runner itself writes.
+    df_facts = read_df_corpus_facts(db_source, args.chat_id)
     # Phase 4 (doc 05 §5): the manual rating lives OUTSIDE the repository — it
     # is a list of verbatim chat phrases. Only its aggregate reaches the report,
     # and without it the Phase 4 gate reports insufficient data rather than
@@ -228,6 +234,7 @@ async def _protocol(args: argparse.Namespace) -> int:
         date=date,
         notes=notes,
         context_mode=args.context_mode,
+        df_facts=df_facts,
     )
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     # The mode is part of the file name, not only of the header: two runs of the
