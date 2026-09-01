@@ -343,6 +343,53 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(verbatim_calls[1], call(123, result))
 
+    async def test_winner_route_names_the_extension_per_reply(self) -> None:
+        # M3R-143: пер-ответный сигнал шва — молчаливую связку текст-скан не
+        # видит по построению, маршрут победителя видит всегда.
+        state = _runtime_state()
+        generator = _traced_generator()
+        generator.generate_text = AsyncMock(
+            side_effect=[
+                "training sample has four tokens",
+                "fresh continuation has four tokens",
+            ]
+        )
+        learning_service = _learning_service()
+        learning_service.is_verbatim_copy = AsyncMock(side_effect=[True, False])
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(1.0)),
+        )
+
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            result = await response_generator.generate_with_result(
+                _request(), rng=random.Random(7), candidate_target=1
+            )
+
+        assert result.text is not None
+        self.assertEqual(result.winner_route, "extension")
+
+    async def test_no_reply_carries_no_winner_route(self) -> None:
+        state = _runtime_state()
+        generator = _traced_generator()
+        generator.generate_text = AsyncMock(return_value="")
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=_learning_service(),
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(1.0)),
+        )
+
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            result = await response_generator.generate_with_result(
+                _request(), rng=random.Random(7), candidate_target=1
+            )
+
+        self.assertIsNone(result.text)
+        self.assertIsNone(result.winner_route)
+
     async def test_context_falls_back_after_context_attempt_budget(self) -> None:
         state = _runtime_state()
         generator = _traced_generator()

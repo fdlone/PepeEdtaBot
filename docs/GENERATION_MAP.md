@@ -70,7 +70,7 @@
 | 10 | **политика ответа ★** | `reply_pipeline.py:371` | кулдаун / часовой кап / ролл вероятности |
 | 11 | **сбор контекста ★** | `reply_pipeline.py:392` | `only_for_replies` + переопределение при обращении |
 | 12 | L1-затравка | `reply_pipeline.py:411` | только непрошеные, шанс `hot_ngram_seed_chance` |
-| 13 | `ResponseGenerator.generate_with_result` | `response_generator.py:795` | см. §1.3–§1.5 |
+| 13 | `ResponseGenerator.generate_with_result` | `response_generator.py:800` | см. §1.3–§1.5 |
 | 14 | нет текста | `reply_pipeline.py:423` | обращение → fallback; иначе молчание |
 | 15 | учёт бюджета ответа: слот резервируется **до** генерации в момент решения (`reserve_reply_slot`), при несостоявшемся ответе откатывается | `reply_pipeline.py:479` | O8: атомарность «проверил → записал» без `await` |
 | 16 | причуда завсегдатая (L2) | `reply_pipeline.py:454` | сработала → **редкое событие не роллится** |
@@ -254,11 +254,11 @@ seed-старт уже найден `[код markov.py:2392]` — это сох�
    5. `_pick_global_start` → `weighted_start3_choice` → `_roll_exploration` + выбор;
    6. `rng.randint` на позицию вклейки отложенного якоря `[код markov.py:2503]`;
    7. на каждом шаге проходки: ролл прыжка (**только** после 5 токенов — `and`-цепочка проверяет счётчики до ролла `[код markov.py:2140-2148]`), ролл order-mix (только при непустом order-3 пуле и ненулевой ручке), затем `weighted_next_choice`: 1 `rng.random()` на исследование, +2 при исследовании (`sampled_exploration`), и либо один `rng.choices`, либо **`rng.expovariate` на каждого кандидата пула**;
-   8. швы: `pick_splice_connective` = `rng.random()` + `rng.choice`; вклейка якоря — `pick_jump_connective` без silent-ролла `[код markov.py:2108]`.
+   8. швы: `pick_splice_connective` = `rng.random()` + `rng.choice`; вклейка якоря — `pick_jump_connective` без silent-ролла `[код markov.py:2190]`.
 3. Verbatim-дописка — вложенная проходка с `attempt_budget=2` на **том же** rng.
 4. Слот-мутация: `rng.random()` (только при непустом частотном словаре и незаполненном пуле), затем `rng.shuffle(slots)` и `rng.choices` на каждый пробуемый слот.
 5. Seeded-блок: один `weighted_index_choice(exploring=False)` на бутстрап + пошаговые выборы.
-6. `select_scored_candidate`: `rng.choices` — только если температура >0 и в окне больше одного кандидата `[код response_generator.py:187-200]`.
+6. `select_scored_candidate`: `rng.choices` — только если температура >0 и в окне больше одного кандидата `[код response_generator.py:192-205]`.
 7. `apply_reply_flavor`: один `rng.random()`.
 8. `append_emoji_flavor`: `rng.random()` + `rng.choices`, и **только если статистика эмодзи непуста** `[код response_generator.py:1140-1149]`.
 
@@ -333,7 +333,7 @@ seed-старт уже найден `[код markov.py:2392]` — это сох�
 | `markov_alpha_*` (4) | 0 | временнáя смесь | выключены; при 0.5 **меняют 12.5% ответов**, а телеметрия смеси показывает 0.000 | `[замер blend_probe, 120 генераций]` |
 | `markov_interp_order2_weight` | 0 | вес β проекции order-2 в распределении шага (фаза 9) | выключена; **единственная ручка реестра, добавляющая кандидатов, а не переваживающая существующих** — при β=0.3 средняя зона энтропии 0.0% → 26.2% состояний / 27.0% посещений, детерминированных 97.5% → 72.5% | `[замер tools/eval/state_census.py --beta 0.3]` |
 | `markov_short_half_life_days` | 3 | период полураспада короткого слоя | **живая для записи, инертная для чтения** (alpha 0); на снимке `s_updated_at` NULL во всех строках `[замер SQL]` | `[код temporal.py:70]` |
-| `markov_long_compression` / `_beta` | log / 0.6 | сжатие долгого слоя | **читаются только при alpha>0** | `[код temporal.py:160]` |
+| `markov_long_compression` / `_beta` | log / 0.6 | сжатие долгого слоя | **читаются только при alpha>0** | `[код temporal.py:186]` |
 | `markov_cache_incremental` | true | свёртка кэшей вместо сброса | **живая по латентности, нейтральная по выводу** | контракт `generation_hash` `[код registry.py:262-268]` |
 | `markov_shadow_order4_enabled` | true | теневой селектор order-4 | **чистый замер**, на вывод не влияет | `[код response_generator.py:1104-1123]` |
 | `auto_capitalize_replies` | false | капитализация | выключена | — |
@@ -368,11 +368,11 @@ seed-старт уже найден `[код markov.py:2392]` — это сох�
 | `RECENT_REPLY_LIMIT` | 20 | почти не влияет | `[замер live]` |
 | `JUMP_MAX_PER_REPLY` | 1 | связывает | `[код markov.py:80]` |
 | `JUMP_MIN_TOKENS_BETWEEN` | 6 | **мёртвая** при `JUMP_MAX_PER_REPLY=1` | признано в комментарии `[код markov.py:84-85]` |
-| `SILENT_SPLICE_PROBABILITY` | 0.35 | живая для M4-прыжков, **не применяется** к вклейке якоря | `[код markov.py:2108]` |
+| `SILENT_SPLICE_PROBABILITY` | 0.35 | живая для M4-прыжков, **не применяется** к вклейке якоря | `[код markov.py:2190]` |
 | `max_steps` | 90 | не связывает при `max_reply_tokens=45` | `[вывод]` |
 | `EMOJI_SAMPLE_POWER` | 0.5 | живая в проде | — |
 | `STATS_REBUILD_EVERY_MESSAGES` | 50 | живая (отсрочка IDF) | `[код learning_service.py:41]` |
-| `MIN_PROFILE_MESSAGES` | 200 | порог набран (окно 1000), но профиль вообще не читается при `intonation_profile_strength=0` | `[код intonation.py:23]`, `[код response_generator.py:770-775]` |
+| `MIN_PROFILE_MESSAGES` | 200 | порог набран (окно 1000), но профиль вообще не читается при `intonation_profile_strength=0` | `[код intonation.py:23]`, `[код response_generator.py:775-780]` |
 | `SHADOW_ORDER4_MIN_COUNT` / `_CONFIDENCE_THRESHOLD` | 3 / 0.35 | замер; доля 0.0% в отчётах фазы | `docs/eval_reports/eval_2026-08-13_phase4-verdict.md:37` |
 
 ## 2.3 Кандидаты на удаление или починку
@@ -498,11 +498,13 @@ temporal-фикстуре, и это честно оговорено. Но лю�
 напечатано в отчёте C3 `docs/eval_reports/eval_2026-08-13_phase4-verdict.md:37`
 и читается как «смесь выключена».
 
-**Цена починки:** добавить третью метрику — расхождение blended-весов с сырыми
-счётчиками (а не с `long_p`), ~10 строк в `temporal.py` + поле трассы, 2–3 ч.
-
-**Риск не чинить:** включение alpha будет выглядеть безопасным по телеметрии
-именно в тот момент, когда оно меняет сэмплинг сильнее всего.
+**ЗАКРЫТО 2026-09-01** (change `honest-blend-telemetry`, M3R-142). Третья
+метрика `mean_blend_raw_displacement` — TV-расстояние финальных весов шага от
+нормированных **сырых** счётчиков — считается на каждом пути `blend()`,
+включая «короткий слой пуст», и едет той же проводкой, что пара M2R-210:
+`BlendedPool.raw_displacement` → диагностика → трасса (`raw_shift=`) →
+телеметрия → `/stats`. Репродукция дефекта закреплена тестом (8:2 под
+log-сжатием: прежняя пара нули, новая метрика ненулевая). Хеш не сдвинут.
 
 ## 3.4 Seeded-ветка обходит весь хвостовой конвейер, а не только финализацию
 
@@ -559,11 +561,15 @@ temporal-фикстуре, и это честно оговорено. Но лю�
 (порог «связочного тика» ~0.8), считает только швы проходки. Реальная доля
 ответов со швом выше на величину дописок.
 
-**Цена починки:** учитывать дописку в `jump_count` либо завести отдельный
-счётчик в трассе — ~10 строк, 1–2 ч.
-
-**Риск не чинить:** решения о «связочном тике» принимаются по заниженному
-числу.
+**ЗАКРЫТО 2026-09-01** (change `extension-seam-accounting`, M3R-143).
+Пер-ответный сигнал — `ResponseGenerationResult.winner_route` (маршрут
+победителя из M3R-103); числитель `connective_reply_rate` в свип-харнессе
+стал честным: текст-скан ∨ шов по построению (`reply_has_seam` в
+`tools/eval_prod.py` — маршрут `extension` или `jump_count > 0` у проходки
+базы). Рядом печатается `extension_seam_rate` — вклад поправки виден числом;
+разрыв сопоставимости со свипами до 2026-09-01 обозначен в самом отчёте
+(`connective_numerator`). Перекалибровка порога «связочного тика» (~0.8) —
+отдельным решением после первого честного замера.
 
 ## 3.6 Гейт `meme_regression_pass` требует удачи, а не качества
 
@@ -704,7 +710,7 @@ temporal-фикстуре, и это честно оговорено. Но лю�
 **(в) Проверено и чисто:** остальные пер-чатовые накопители — словари,
 разделяемые по ссылке через `effective()` `[код runtime_state.py:61-80]`;
 кэши `LearningService` ключуются `chat_id` `[код learning_service.py:118-147]`;
-LRU `MarkovGenerator` — по `(chat_id, ...)` `[код markov.py:1000-1011]`;
+LRU `MarkovGenerator` — по `(chat_id, ...)` `[код markov.py:1009-1020]`;
 `lru_cache` в `slot_mutation._tags` чисто морфологический, без чата
 `[код slot_mutation.py:79]`. `GenerationTelemetry` — процессный агрегат по всем
 чатам по построению `[вывод]`.
@@ -760,7 +766,7 @@ eval со стороны `recent_penalty` измерением не обнару
 | `verbatim_extension_share` (0.8) → `verbatim_penalty_strength` (порог 0.6) | штраф реально кусает только полосу доли корпусных 4-грамм [0.6, 0.8): всё что выше — дописывается и перестаёт быть цитатой. Замер: 16–19% кандидатов со штрафом >0, **ни одного** на максимуме 1.5 `[замер]` |
 | `SELECTION_SCORE_MARGIN` → `candidate_selection_temperature` | окно отсекает пул до софтмакса; при среднем 2.4–3.2 кандидата в окне температура почти нечего размазывать — отсюда её инертность `[код registry.py:193]` |
 | наличие контекста → `SELECTION_SCORE_MARGIN` | без контекста скоры сближаются (компонента с размахом 0.5 исчезает), в окно попадает на 33% больше кандидатов, и один и тот же margin означает более случайный отбор `[замер]` |
-| `mood` → `randomness_strength` / `length_mode_weights` / `reply_flavor_strength` / `markov_alpha_*` | mood — единственный вход, который одновременно сдвигает случайность (`randomness_delta`), веса длины, силу вариатора концовки `[код mood.py:75-95]` и **выбор alpha временнóй смеси** `[код response_generator.py:312-319]`. В eval mood всегда отсутствует → всегда «calm» |
+| `mood` → `randomness_strength` / `length_mode_weights` / `reply_flavor_strength` / `markov_alpha_*` | mood — единственный вход, который одновременно сдвигает случайность (`randomness_delta`), веса длины, силу вариатора концовки `[код mood.py:75-95]` и **выбор alpha временнóй смеси** `[код response_generator.py:317-324]`. В eval mood всегда отсутствует → всегда «calm» |
 | `length_mode` → `natural_length` скорера | режим двигает полосу пика, поэтому одна и та же длина кандидата получает от 0.5 до 1.0 в зависимости от одного `rng.choices` в начале генерации `[код candidate_scorer.py:216-230]` |
 | `length_context_adaptation` + `intonation_profile_strength` + mood | три множителя на одном векторе весов длины, применяются последовательно (профиль → mood → зеркалирование) `[код response_generator.py:394-419]`; профиль при этом ещё и укорачивает ответы (замер 2026-07-21) |
 | ретенция `messages` (1000) → IDF → `context_relevance` | IDF считается по окну удержанных сообщений `[код learning_service.py:454]`, а цепь помнит вчетверо больше. Токен, которого нет в окне, получает максимальный IDF `[код candidate_scorer.py:294-295]` — то есть ретенция напрямую задаёт шкалу сильнейшей компоненты скорера |

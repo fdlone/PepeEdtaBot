@@ -376,6 +376,23 @@ _WORDY_CONNECTIVES: tuple[tuple[str, ...], ...] = tuple(
 )
 
 
+def reply_has_seam(
+    tokens: list[str], winner_route: str | None, walk_jumps: int
+) -> bool:
+    """M3R-143: honest seam predicate for connective_reply_rate.
+
+    Text scan OR seam by construction — extension winner or a walk with at
+    least one jump. The text scan alone misses the silent «.» connective by
+    design, and an extension picks it as legitimately as a walk splice does,
+    which is exactly how the old numerator undercounted (map §3.5).
+    """
+    return (
+        contains_splice_connective(tokens)
+        or winner_route == "extension"
+        or walk_jumps > 0
+    )
+
+
 def contains_splice_connective(tokens: list[str]) -> bool:
     """True if the reply contains a splice connective phrase as a contiguous
     token run.
@@ -660,7 +677,13 @@ async def evaluate(
                 novelty = novel_ngram_share(content_cf, verbatim_index)
                 if novelty is not None:
                     novel_shares.append(novelty)
-                if contains_splice_connective(tokenize(result.text)):
+                # M3R-143: у дописки jump_count берётся у проходки её базы
+                # (source_text уже размотан выше через extended_to_original).
+                if reply_has_seam(
+                    tokenize(result.text),
+                    result.winner_route,
+                    generator.attempt_jumps.get(source_text, 0),
+                ):
                     connective_replies += 1
                 jumps = generator.attempt_jumps.get(result.text, -1)
                 if result.text in extended_texts:
@@ -770,10 +793,20 @@ async def evaluate(
         # pure_corpus_reply_rate is its tail: replies where EVERY window is a
         # known corpus 4-gram (novelty exactly 0) — recombination indistin-
         # guishable from quoting at this n-gram size.
-        # Formularity of splices: share of replies carrying a wordy connective
-        # phrase («, кстати» ...). The six-phrase pool at 82% saturation is the
-        # documented perceptual risk this metric was added to track.
+        # Formularity of splices: share of replies carrying a seam — a wordy
+        # connective found in the text OR a seam by construction (extension
+        # winner / a walk with jumps), M3R-143. The six-phrase pool at 82%
+        # saturation is the documented perceptual risk this metric was added
+        # to track.
         "connective_reply_rate": round(connective_replies / produced, 4)
+        if produced else 0.0,
+        # M3R-143: the amended numerator above breaks comparability with
+        # sweeps taken before 2026-09-01 (they text-scanned only and missed
+        # silent seams); recorded here the way distinct_basis_tokens records
+        # its own caveat. extension_seam_rate is the extensions' share alone,
+        # so the amendment's contribution is a number, not a guess.
+        "connective_numerator": "text-scan OR construction seam (since 2026-09-01)",
+        "extension_seam_rate": round(extension_wins / produced, 4)
         if produced else 0.0,
         "novel_ngram_share_mean": round(mean(novel_shares), 4) if novel_shares else 0.0,
         "novel_ngram_share_median": round(median(novel_shares), 4) if novel_shares else 0.0,

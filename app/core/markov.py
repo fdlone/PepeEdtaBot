@@ -270,6 +270,10 @@ class _DiagnosticsAccumulator:
     # intent; these two prove effect.
     blend_covered_steps: int = 0
     blend_displacement_sum: float = 0.0
+    # M3R-142: displacement measured against the RAW counts. Diverges from the
+    # pair above exactly where it used to lie: an empty short layer samples
+    # log-compressed long weights while displacement-vs-long reads 0 (map §3.3).
+    blend_raw_displacement_sum: float = 0.0
     # M2R-901: the same intent-versus-effect pair for the order interpolation.
     # A step counts as covered only when the projection actually ADDED a token:
     # "beta is set but the projection is just as sparse" and "beta is not set"
@@ -292,6 +296,7 @@ class _DiagnosticsAccumulator:
         if blended.displacement > 0.0:
             self.blend_covered_steps += 1
         self.blend_displacement_sum += blended.displacement
+        self.blend_raw_displacement_sum += blended.raw_displacement
 
     def note_pool(self, counts: Sequence[float]) -> float:
         """Accumulate one pool's diagnostics; returns its normalized entropy.
@@ -387,6 +392,9 @@ class GenerationTrace:
     applied_alpha: float = 0.0
     blend_step_coverage: float = 0.0
     mean_blend_displacement: float = 0.0
+    # M3R-142: сдвиг финальных весов от СЫРЫХ счётчиков — ненулевой и тогда,
+    # когда короткий слой пуст и пара выше молчит (map §3.3).
+    mean_blend_raw_displacement: float = 0.0
     # M2R-901: доля шагов, где проекция order-2 добавила токен, и среднее
     # расхождение слитого распределения с чистым P3.
     interp_step_coverage: float = 0.0
@@ -420,10 +428,11 @@ class _GenerationAttempt(NamedTuple):
     diagnostic_steps: int = 0
     # M2R-100: temperature actually applied, averaged over the measured steps.
     mean_applied_temperature: float = 0.0
-    # M2R-210: see GenerationTrace for what these three mean.
+    # M2R-210 / M3R-142: see GenerationTrace for what these mean.
     applied_alpha: float = 0.0
     blend_step_coverage: float = 0.0
     mean_blend_displacement: float = 0.0
+    mean_blend_raw_displacement: float = 0.0
     # M2R-901: доля шагов, где проекция order-2 добавила токен, и среднее
     # расхождение слитого распределения с чистым P3.
     interp_step_coverage: float = 0.0
@@ -1627,6 +1636,7 @@ class MarkovGenerator:
             applied_alpha=last.applied_alpha,
             blend_step_coverage=last.blend_step_coverage,
             mean_blend_displacement=last.mean_blend_displacement,
+            mean_blend_raw_displacement=last.mean_blend_raw_displacement,
             interp_step_coverage=last.interp_step_coverage,
             mean_interp_displacement=last.mean_interp_displacement,
         )
@@ -1644,6 +1654,9 @@ class MarkovGenerator:
             ),
             blend_displacement_sum=(
                 last.mean_blend_displacement * last.diagnostic_steps
+            ),
+            blend_raw_displacement_sum=(
+                last.mean_blend_raw_displacement * last.diagnostic_steps
             ),
             interp_covered_steps=round(
                 last.interp_step_coverage * last.diagnostic_steps
@@ -2081,6 +2094,9 @@ class MarkovGenerator:
             blend_step_coverage=(diag.blend_covered_steps / steps if steps else 0.0),
             mean_blend_displacement=(
                 diag.blend_displacement_sum / steps if steps else 0.0
+            ),
+            mean_blend_raw_displacement=(
+                diag.blend_raw_displacement_sum / steps if steps else 0.0
             ),
             interp_step_coverage=(
                 diag.interp_covered_steps / steps if steps else 0.0

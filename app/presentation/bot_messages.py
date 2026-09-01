@@ -222,10 +222,18 @@ def format_stats_message(
         # blend'а, а не его настройка. Выключенный blend читается как два нуля.
         coverage = telemetry.get("blend_step_coverage")
         displacement = telemetry.get("mean_blend_displacement")
+        raw_displacement = telemetry.get("mean_blend_raw_displacement")
         if coverage is not None and displacement is not None:
+            # M3R-142: третий член — сдвиг от СЫРЫХ счётчиков; он ненулевой и
+            # при пустом коротком слое, когда первые два молчат (map §3.3).
+            raw_txt = (
+                f", от сырых счётчиков {raw_displacement:.3f}"
+                if raw_displacement is not None
+                else ""
+            )
             lines.append(
                 f"свежий слой: покрытие {coverage:.0%}, "
-                f"сдвиг распределения {displacement:.3f}"
+                f"сдвиг распределения {displacement:.3f}{raw_txt}"
             )
         hit_rate = telemetry.get("cache_hit_rate")
         if hit_rate is not None:

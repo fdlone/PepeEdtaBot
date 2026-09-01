@@ -84,6 +84,10 @@ class GenerationTelemetry:
     # M2R-210: effect of the temporal blend, summed over steps.
     blend_covered_steps: int = 0
     blend_displacement_sum: float = 0.0
+    # M3R-142: the same displacement measured against the RAW counts — the
+    # number that stays non-zero when the short layer is empty and the pair
+    # above reads "inert" while sampling runs on compressed weights (map §3.3).
+    blend_raw_displacement_sum: float = 0.0
     # M2R-901: effect of the order interpolation, summed over steps. Coverage
     # counts only steps where the order-2 projection actually ADDED a token, so
     # "beta is set but the projection is just as sparse" stays distinguishable
@@ -207,6 +211,7 @@ class GenerationTelemetry:
         applied_temperature_sum: float = 0.0,
         blend_covered_steps: int = 0,
         blend_displacement_sum: float = 0.0,
+        blend_raw_displacement_sum: float = 0.0,
         interp_covered_steps: int = 0,
         interp_displacement_sum: float = 0.0,
     ) -> None:
@@ -217,6 +222,7 @@ class GenerationTelemetry:
         self.applied_temperature_sum += applied_temperature_sum
         self.blend_covered_steps += blend_covered_steps
         self.blend_displacement_sum += blend_displacement_sum
+        self.blend_raw_displacement_sum += blend_raw_displacement_sum
         self.interp_covered_steps += interp_covered_steps
         self.interp_displacement_sum += interp_displacement_sum
         self.diagnostic_steps += steps
@@ -497,6 +503,9 @@ class GenerationTelemetry:
             ),
             "mean_blend_displacement": (
                 self.blend_displacement_sum / steps if steps else None
+            ),
+            "mean_blend_raw_displacement": (
+                self.blend_raw_displacement_sum / steps if steps else None
             ),
             "interp_step_coverage": (
                 self.interp_covered_steps / steps if steps else None

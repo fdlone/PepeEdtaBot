@@ -345,3 +345,148 @@ Counting SHALL NOT consume random draws and SHALL NOT change generation output.
 
 - **WHEN** the same generation runs with the empty-channel counters present and absent, under the same seed
 - **THEN** the generated text is byte-identical
+
+### Requirement: Темп беседы наблюдаем распределением, а не средним
+
+Система SHALL считать наблюдённый темп чата и отдавать его **распределением по
+диапазонам**, а не одним средним значением.
+
+Среднее здесь непригодно по существу измеряемого: поведение, зависящее от
+темпа, меняется скачком на границах диапазонов, а чат, который часть суток
+спит и часть кипит, даёт среднее, не соответствующее ни одному из своих
+режимов. Границы диапазонов SHALL быть привязаны к тем порогам, которые темп
+фактически переключает, — иначе распределение не отвечает на вопрос, ради
+которого снято.
+
+#### Scenario: Чат с двумя режимами
+
+- **WHEN** чат часть времени идёт медленно, часть — быстро
+- **THEN** в выводе видны оба диапазона с их долями
+- **AND** по выводу можно сказать, какую долю времени чат провёл в каждом
+
+#### Scenario: Нет наблюдений
+
+- **WHEN** с рестарта не наблюдалось ни одного сообщения
+- **THEN** строка темпа не печатается вовсе
+
+### Requirement: У ответов на обращения есть собственный знаменатель
+
+Система SHALL считать отдельно число наблюдённых обращений к боту и число
+обращений, на которые бот ответил.
+
+Пара нужна потому, что путь обращений не подчиняется ни кулдауну между
+ответами, ни часовому пределу: без собственного счётчика нагрузка на него
+ненаблюдаема в принципе, и «канал не нагружен» неотличимо от «канал не
+измеряется».
+
+Система SHALL дополнительно отдавать верхнюю оценку нагрузки — наибольшее
+число ответов на обращения, пришедшееся на один час работы процесса.
+
+#### Scenario: Обращения были и получили ответ
+
+- **WHEN** к боту обращались и он отвечал
+- **THEN** видны оба числа и их отношение
+- **AND** видна верхняя оценка за час
+
+#### Scenario: Обращений не было
+
+- **WHEN** с рестарта не наблюдалось ни одного обращения
+- **THEN** строка не печатается
+
+### Requirement: Фаза берст-ритма наблюдаема по факту, а не по расчёту
+
+Система SHALL считать, сколько ответов сыграно в фазе усиления берст-ритма и
+сколько — в фазе подавления.
+
+Пара отвечает на вопрос, достижима ли фаза подавления вообще: устойчивый ноль
+во второй половине при ненулевой первой означает, что механизм не работает —
+и это утверждение о факте, а не вывод из формулы.
+
+#### Scenario: Фаза подавления не достигается
+
+- **WHEN** ответы играются, но ни один не попал в окно подавления
+- **THEN** это видно из вывода: первое число ненулевое, второе ноль
+
+#### Scenario: Берст-ритм выключен
+
+- **WHEN** механизм берст-ритма отключён настройками
+- **THEN** строка не печатается — нечего измерять
+
+### Requirement: Новые счётчики не меняют поведения
+
+Введение счётчиков темпа SHALL NOT изменять ни одно решение бота: ни
+вероятность ответа, ни пороги, ни порядок обращений к генератору случайных
+чисел.
+
+#### Scenario: Вывод генерации не изменился
+
+- **WHEN** счётчики добавлены
+- **THEN** ответы на тех же входных данных и том же зерне побайтно совпадают с
+  прежними
+
+
+### Requirement: Blend displacement is measured against raw counts
+
+For every walk step where the temporal blend is enabled, the system SHALL
+additionally report the total-variation distance between the step's final
+sampling weights and the normalized **raw counts** of the same pool. The
+existing displacement-versus-long-layer metric SHALL be kept unchanged. The
+raw-count metric SHALL be non-zero whenever the sampled distribution differs
+from the raw counts — including the path where the short layer is empty and
+the blend degenerates to compressed long weights. Computing the metric SHALL
+NOT change generation behavior and SHALL NOT consume random draws.
+
+#### Scenario: Empty short layer no longer reads as inert
+
+- **WHEN** the blend is enabled and a step's short layer has no mass, so the step samples from compressed long weights
+- **THEN** the raw-count displacement of that step is positive whenever compression moved the distribution, while the long-layer displacement remains 0
+
+#### Scenario: Neutral knob stays silent
+
+- **WHEN** `markov_alpha_*` is 0
+- **THEN** no blend arithmetic runs and all three blend metrics read as absent/zero, byte-identical to the frozen baseline
+
+#### Scenario: Metric reaches the operator
+
+- **WHEN** generations run with the blend enabled
+- **THEN** the mean raw-count displacement is visible in the generation trace and in process telemetry alongside the existing coverage/displacement pair
+
+
+### Requirement: The winner's route is reported per reply
+
+The generation result SHALL carry the winning candidate's route (the same
+closed route enumeration the trace and aggregate telemetry already use), so
+that a consumer can tell per reply whether the winner was produced by the
+main walk, a verbatim extension, a seeded assembly, or a mutation — without
+scraping logs. When no reply is produced, the route SHALL be absent.
+Reporting the route SHALL NOT change generation behavior.
+
+#### Scenario: Extended winner is visible per reply
+
+- **WHEN** the selected winner is a verbatim-extended candidate
+- **THEN** the generation result names the extension route, even when the spliced connective is the silent one that text scanning cannot see
+
+#### Scenario: No reply, no route
+
+- **WHEN** generation produces no reply
+- **THEN** the result carries no winner route
+
+### Requirement: Seam share is measured honestly in the sweep harness
+
+The sweep harness's connective-reply metric SHALL count a reply as carrying a
+seam when a wordy connective is found in the text **or** the winner carried a
+seam by construction (extension route, or a walk with at least one jump). The
+share of replies won by an extended candidate SHALL also be published as its
+own number, and the harness output SHALL state that the amended numerator
+breaks comparability with pre-amendment sweeps.
+
+#### Scenario: Silent extension seam is counted
+
+- **WHEN** a sweep reply's winner is an extension whose connective is the silent one
+- **THEN** the connective-reply metric counts that reply, and the extension share reflects it
+
+#### Scenario: The comparability break is visible
+
+- **WHEN** the harness reports the amended metric
+- **THEN** the output names the break with pre-amendment sweeps rather than presenting the numbers as directly comparable
+
