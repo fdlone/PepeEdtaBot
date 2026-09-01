@@ -318,14 +318,23 @@ def main() -> None:
         from tools.eval_prod import pick_chat_id
 
         chat = pick_chat_id(Path(args.db), args.chat_id)
+        # M3R-130: the meme support floor is a gate input, so it comes from the
+        # thresholds file — a set built with a different floor is a different
+        # set, and its version says so.
+        meme_config = load_thresholds().get("meme_regression", {})
         prompt_set = generate_prompts(
             Path(args.db),
             chat_id=chat,
             seed=args.prompt_seed,
             snapshot_label=args.label,
+            meme_support_min=int(meme_config.get("support_min", 1)),
         )
         save_prompts(prompt_set)
-        print(f"prompts: {PROMPTS_PATH} (version {prompt_set.version})")
+        print(
+            f"prompts: {PROMPTS_PATH} (version {prompt_set.version}, "
+            f"{len(prompt_set.memes)} memes at support floor "
+            f"{meme_config.get('support_min', 1)})"
+        )
         raise SystemExit(0)
     if not args.db:
         parser.error("--db is required (or use --smoke)")

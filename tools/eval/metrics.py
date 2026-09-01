@@ -356,16 +356,22 @@ def latency_percentiles(records: list[GenRecord]) -> dict[str, float | None]:
 
 def meme_regression(
     records: list[GenRecord], meme_count: int
-) -> tuple[bool | None, list[int]]:
-    """§3.5 ``meme_regression_pass``: every meme in the fixed list must be
-    reproduced in at least one meme-bait generation. Returns the verdict and
-    the indices of memes never reproduced (``None`` verdict when the list is
-    empty — gate not applicable)."""
+) -> tuple[int, list[int]]:
+    """§3.5 meme regression: how many memes of the fixed list one configuration
+    reproduced, and which ones it never did.
+
+    Returns ``(reproduced_count, missing_indices)`` — a **share numerator**, not
+    a verdict (M3R-130). The old binary form ("every meme at least once") asked
+    for luck: the list had no support floor, so most of it was n-grams seen in a
+    single message and the set of misses drifted between runs. The verdict is
+    now formed by the report, relative to the baseline, over every arm — this
+    function only counts.
+    """
     if meme_count == 0:
-        return None, []
+        return 0, []
     reproduced: set[int] = set()
     for record in records:
         if record.category == "meme-bait":
             reproduced |= record.meme_hits
     missing = [index for index in range(meme_count) if index not in reproduced]
-    return not missing, missing
+    return len(reproduced), missing

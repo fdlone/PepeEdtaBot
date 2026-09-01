@@ -167,6 +167,29 @@ phase5_promotion:
   # rule) — an adjustment of a bar admitted weak up front, not a post-hoc fit.
   df_singleton_share_max: 0.60
 
+meme_regression:
+  # M3R-130, registered 2026-09-01 before any gated run (map §3.6).
+  #
+  # support_min: the set used to be built from chat_hot_ngrams ordered by cnt
+  # DESC with NO support floor, so it was mostly one-off co-occurrences and the
+  # set of non-reproduced memes drifted run to run — the gate measured luck.
+  # Measured on the fresh prod copy: 1079 of 1097 rows have cnt = 1, 16 have
+  # cnt = 2, 2 have cnt = 3. So 2 is not a soft pick — it is the only floor at
+  # which a set still exists and is no longer made of single sightings.
+  support_min: 2
+  # reproduced_tolerance: the verdict is RELATIVE to C0 (share_arm below
+  # share_C0 by more than this fails). An absolute bar was rejected with
+  # precedent: phase 4's absolute 70% was met by neither arm and ended up
+  # measuring the raters, not the algorithm; here it would measure how thick
+  # the corpus is. With a set of ~1.5-2 dozen memes one meme is worth
+  # 0.05-0.07, so 0.10 needs a two-meme gap before it fires.
+  reproduced_tolerance: 0.10
+  # set_min_size: below this the share is noise, not evidence — at five memes
+  # the tolerance is smaller than the price of a single meme, which would make
+  # the gate binary again while looking statistical. Eight is the smallest set
+  # where one meme (0.125) is still commensurate with the tolerance.
+  set_min_size: 8
+
 phase6_anticycle:
   # Two-dimensional gate (ADR-015): BOTH must exceed. Cycle != harm.
   cycle_detection_rate_min: 0.05

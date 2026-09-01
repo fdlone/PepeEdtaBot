@@ -115,12 +115,19 @@ class TestMetricHelpers(unittest.TestCase):
         self.assertAlmostEqual(result["latency_p50"] or 0.0, 50.0, delta=1.0)
         self.assertAlmostEqual(result["latency_p95"] or 0.0, 95.0, delta=1.0)
 
-    def test_meme_regression(self) -> None:
+    def test_meme_regression_counts_reproduced(self) -> None:
+        # M3R-130: числитель доли, а не бинарный вердикт — вердикт формирует
+        # отчёт относительно C0.
         hit = _record(category="meme-bait", meme_hits=frozenset({0}))
         miss = _record(category="meme-bait")
-        self.assertEqual(meme_regression([hit, miss], 2), (False, [1]))
-        self.assertEqual(meme_regression([hit], 1), (True, []))
-        self.assertEqual(meme_regression([hit], 0), (None, []))
+        self.assertEqual(meme_regression([hit, miss], 2), (1, [1]))
+        self.assertEqual(meme_regression([hit], 1), (1, []))
+        self.assertEqual(meme_regression([hit], 0), (0, []))
+
+    def test_meme_regression_ignores_other_categories(self) -> None:
+        # Мемы засчитываются только по своей категории промптов.
+        generic = _record(category="generic", meme_hits=frozenset({0}))
+        self.assertEqual(meme_regression([generic], 2), (0, [0, 1]))
 
     def test_metric_values_insufficient_markers(self) -> None:
         values = metric_values([_record()])
@@ -269,6 +276,162 @@ class TestConfigFiles(unittest.TestCase):
             "performance",
         ):
             self.assertIn(gate, thresholds)
+
+
+class TestMemeRegressionGate(unittest.TestCase):
+    """M3R-130: набор с порогом поддержки, гейт относительно C0 по доле."""
+
+    @staticmethod
+    def _prompt_set(meme_count: int) -> PromptSet:
+        from tools.eval.prompts import PromptSet as _PromptSet
+
+        return _PromptSet(
+            version="stub",
+            snapshot_label="stub",
+            seed=42,
+            categories={"meme-bait": ["наживка"]},
+            memes=[[f"мем{index}"] for index in range(meme_count)],
+        )
+
+    @staticmethod
+    def _thresholds(**extra: object) -> dict:
+        config: dict = {
+            "support_min": 2,
+            "reproduced_tolerance": 0.10,
+            "set_min_size": 8,
+        }
+        config.update(extra)
+        return {"meme_regression": config}
+
+    @staticmethod
+    def _arm(config_id: str, hits: set[int]) -> ConfigRun:
+        return ConfigRun(
+            config_id=config_id,
+            records=[
+                _record(category="meme-bait", meme_hits=frozenset(hits))
+            ],
+        )
+
+    def _rows(
+        self, runs: dict, memes: int = 10, thresholds: dict | None = None
+    ) -> dict[str, tuple[str, str]]:
+        from tools.eval.report import _meme_regression_rows
+
+        rows = _meme_regression_rows(
+            runs, self._prompt_set(memes), thresholds or self._thresholds()
+        )
+        return {row[0]: (row[1], row[2]) for row in rows}
+
+    def test_arm_holding_memory_passes(self) -> None:
+        rows = self._rows({
+            "C0": self._arm("C0", set(range(8))),
+            "C4": self._arm("C4", set(range(8))),
+        })
+        self.assertEqual(rows["meme_regression[C4]"][0], "pass")
+        self.assertEqual(rows["meme_regression[C0]"][0], "baseline")
+        self.assertIn("8/10", rows["meme_regression[C4]"][1])
+
+    def test_arm_erasing_memes_fails_against_the_baseline(self) -> None:
+        # C0 8/10, арм 5/10 — разрыв 0.30 при допуске 0.10.
+        rows = self._rows({
+            "C0": self._arm("C0", set(range(8))),
+            "C4": self._arm("C4", set(range(5))),
+        })
+        verdict, detail = rows["meme_regression[C4]"]
+        self.assertEqual(verdict, "fail")
+        self.assertIn("50%", detail)
+        self.assertIn("80%", detail)
+
+    def test_drop_within_tolerance_is_not_a_failure(self) -> None:
+        # 8/10 против 9/10 — один мем, 0.10 не превышено.
+        rows = self._rows({
+            "C0": self._arm("C0", set(range(9))),
+            "C4": self._arm("C4", set(range(8))),
+        })
+        self.assertEqual(rows["meme_regression[C4]"][0], "pass")
+
+    def test_set_below_minimum_is_insufficient_not_a_verdict(self) -> None:
+        rows = self._rows(
+            {"C0": self._arm("C0", {0}), "C4": self._arm("C4", set())},
+            memes=5,
+        )
+        verdict, detail = rows["meme_regression"]
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("5 entries", detail)
+        self.assertIn("8", detail)
+
+    def test_empty_set_is_insufficient(self) -> None:
+        rows = self._rows({"C0": self._arm("C0", set())}, memes=0)
+        self.assertEqual(rows["meme_regression"][0], "insufficient data")
+
+    def test_unregistered_thresholds_do_not_fall_back_to_defaults(self) -> None:
+        rows = self._rows(
+            {"C0": self._arm("C0", set(range(8)))},
+            thresholds={"meme_regression": {}},
+        )
+        verdict, detail = rows["meme_regression"]
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("not registered", detail)
+
+
+class TestMemeSupportFloor(unittest.TestCase):
+    """Порог поддержки при построении набора (M3R-130, задача 2.1)."""
+
+    def _snapshot(self, path: Path) -> None:
+        import sqlite3
+
+        con = sqlite3.connect(path)
+        con.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, chat_id INTEGER, "
+            "normalized_text TEXT)"
+        )
+        con.execute(
+            "CREATE TABLE transitions (chat_id INTEGER, w1 TEXT, w2 TEXT, "
+            "w3 TEXT, cnt INTEGER)"
+        )
+        con.execute(
+            "CREATE TABLE chat_hot_ngrams (chat_id INTEGER, w1 TEXT, w2 TEXT, "
+            "w3 TEXT, cnt INTEGER)"
+        )
+        messages = [
+            f"сообщение номер {index} про котиков и погоду" for index in range(40)
+        ]
+        con.executemany(
+            "INSERT INTO messages (chat_id, normalized_text) VALUES (1, ?)",
+            [(text,) for text in messages],
+        )
+        con.executemany(
+            "INSERT INTO transitions VALUES (1, ?, ?, ?, ?)",
+            [("а", "б", token, 5) for token in ("котиков", "погоду", "номер")],
+        )
+        con.executemany(
+            "INSERT INTO chat_hot_ngrams VALUES (1, ?, ?, ?, ?)",
+            [
+                ("котиков", "погоду", "", 2),   # поддержка 2 — проходит
+                ("номер", "котиков", "", 1),    # поддержка 1 — отсеивается
+            ],
+        )
+        con.commit()
+        con.close()
+
+    def test_floor_keeps_only_supported_ngrams(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "snapshot.db"
+            self._snapshot(db)
+            with_floor = generate_prompts(
+                db, chat_id=1, seed=42, snapshot_label="t",
+                per_category=4, meme_support_min=2,
+            )
+            without_floor = generate_prompts(
+                db, chat_id=1, seed=42, snapshot_label="t",
+                per_category=4, meme_support_min=1,
+            )
+        self.assertEqual(with_floor.memes, [["котиков", "погоду"]])
+        self.assertIn(["номер", "котиков"], without_floor.memes)
+        # Разный набор — разная версия: разрыв сопоставимости виден.
+        self.assertNotEqual(with_floor.version, without_floor.version)
 
 
 class TestPhase5CorpusPrecondition(unittest.TestCase):

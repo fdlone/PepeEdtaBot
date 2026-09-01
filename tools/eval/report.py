@@ -889,6 +889,71 @@ def _apply_mode_requirement(
     )
 
 
+def _meme_regression_rows(
+    runs: dict[str, ConfigRun],
+    prompt_set: PromptSet,
+    thresholds: dict[str, Any],
+) -> list[tuple[str, str, str]]:
+    """(gate, verdict, detail) rows of the meme-regression check (M3R-130).
+
+    Relative to the baseline, per arm, over a set that carries a support floor.
+    The previous form asked whether the BASELINE reproduced every meme of a
+    floor-less list — luck about the set, computed for C0 only and labelled
+    "informational" because it could not gate anything.
+    """
+    config = thresholds.get("meme_regression", {})
+    tolerance_raw = config.get("reproduced_tolerance")
+    min_size_raw = config.get("set_min_size")
+    total = len(prompt_set.memes)
+    name = "meme_regression"
+    if tolerance_raw is None or min_size_raw is None:
+        # Pre-registration rule: a bar that is not in the thresholds file is not
+        # a bar (precedent: gate-phase5-ndocs-floor design D4).
+        return [(
+            name,
+            INSUFFICIENT,
+            "gate thresholds are not registered "
+            "(reproduced_tolerance / set_min_size)",
+        )]
+    tolerance, min_size = float(tolerance_raw), int(min_size_raw)
+    if total < min_size:
+        return [(
+            name,
+            INSUFFICIENT,
+            f"meme set has {total} entries, below the registered minimum "
+            f"{min_size} (support floor "
+            f"{config.get('support_min', '?')}, prompt set {prompt_set.version})"
+            " — a share over this few memes is noise, not evidence",
+        )]
+    baseline = runs.get("C0")
+    if baseline is None:
+        return [(name, INSUFFICIENT, "no baseline run to compare against")]
+    base_hits, _ = meme_regression(baseline.records, total)
+    base_share = base_hits / total
+    rows: list[tuple[str, str, str]] = []
+    for arm_id in sorted(runs):
+        arm = runs[arm_id]
+        hits, missing = meme_regression(arm.records, total)
+        share = hits / total
+        detail = (
+            f"{hits}/{total} memes reproduced ({share:.0%}); "
+            f"C0 {base_hits}/{total} ({base_share:.0%}), "
+            f"tolerance {tolerance:.0%}; prompt set {prompt_set.version}"
+        )
+        if arm_id == "C0":
+            rows.append((f"{name}[C0]", "baseline", detail))
+            continue
+        if share < base_share - tolerance:
+            rows.append((
+                f"{name}[{arm_id}]",
+                "fail",
+                f"{detail}; never reproduced (indices): {missing}",
+            ))
+        else:
+            rows.append((f"{name}[{arm_id}]", "pass", detail))
+    return rows
+
+
 def evaluate_gates(
     runs: dict[str, ConfigRun],
     thresholds: dict[str, Any],
@@ -1318,22 +1383,8 @@ def build_report(
         runs, thresholds, manual_rating, context_mode, df_facts
     ):
         lines.append(f"- **{gate}**: {verdict} — {detail}")
-    if "C0" in runs:
-        verdict, missing = meme_regression(runs["C0"].records, len(prompt_set.memes))
-        if verdict is None:
-            lines.append(f"- **meme_regression_pass**: {INSUFFICIENT} — empty meme list")
-        else:
-            status = "pass" if verdict else "fail"
-            detail = (
-                "all memes reproduced"
-                if verdict
-                else f"memes never reproduced (indices): {missing}"
-            )
-            lines.append(
-                f"- **meme_regression_pass (C0, informational at Phase 0)**: "
-                f"{status} — {detail} (list of {len(prompt_set.memes)} memes, "
-                f"prompt set {prompt_set.version})"
-            )
+    for row in _meme_regression_rows(runs, prompt_set, thresholds):
+        lines.append(f"- **{row[0]}**: {row[1]} — {row[2]}")
     lines.append("")
 
     lines.append("## Manual eval summary")
