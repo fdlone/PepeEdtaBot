@@ -31,6 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from app.core.hot_ngrams import is_content_ngram  # noqa: E402
 from app.core.lexicon import STOPWORDS  # noqa: E402
 from app.core.markov import content_tokens, tokenize  # noqa: E402
 
@@ -176,7 +177,15 @@ def generate_prompts(
         if len(meme_bait) >= per_category:
             break
         ngram_cf = [token.casefold() for token in ngram]
-        if any(token in STOPWORDS or len(token) < 3 for token in ngram_cf):
+        # 2026-09-02: the meme list uses the CHANNEL's own definition of a
+        # content n-gram (app.core.hot_ngrams.is_content_ngram — at least one
+        # content token), not a stricter "every token is content" filter. The
+        # stricter filter left 3 memes on the 2026-09-01 copy against 13 hot
+        # rows at support >= 2 and had zero overlap with what the L1 route
+        # actually seeds, so the meme gate measured a definition mismatch
+        # rather than generation. Two readers of chat_hot_ngrams must agree on
+        # what a phrase is (the phrase-index rule, generation-phrase-index).
+        if not is_content_ngram(tuple(ngram_cf)):
             continue
         bait = next(
             (

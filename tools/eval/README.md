@@ -43,7 +43,11 @@ deterministic metric summary used by reproducibility checks.
   their configurations by editing this file.
 - `eval_prompts.yaml` — versioned prompt set (doc 05 §1.2), generated from the
   snapshot, four categories ≥30 prompts each, plus the meme list for the
-  §3.5 gate. The `version` field is a content hash; `load_prompts` rejects
+  §3.5 gate. Since 2026-09-02 the meme list uses the channel's own
+  content-n-gram predicate (`app.core.hot_ngrams.is_content_ngram`), so the
+  set and the L1 route read `chat_hot_ngrams` the same way. Current version
+  `bababb4b7693` (snapshot 2026-09-01); reports on `308b7deaea0f` are not
+  comparable with it. The `version` field is a content hash; `load_prompts` rejects
   hand-edited files.
 - `eval_thresholds.yaml` — pre-registered gate thresholds (doc 05 §4). Editing
   after fixation requires a dedicated commit with written justification.
