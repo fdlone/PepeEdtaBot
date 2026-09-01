@@ -49,4 +49,5 @@ pymorphy3-dicts-ru==2.4.417150.4580142
 python-dotenv==1.2.2
 typing-inspection==0.4.4
 typing_extensions==4.16.0
+tzdata==2026.3
 yarl==1.24.5

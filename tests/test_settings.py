@@ -41,7 +41,7 @@ DEPLOYMENT_ENV_VARS: tuple[str, ...] = (
 # Ключи, которые .env.example показывает закомментированными: пустое значение
 # у них означает не «не настроено», а рабочий встроенный дефолт, и раскомментить
 # строку — уже осознанный шаг.
-OPTIONAL_ENV_VARS: tuple[str, ...] = ("BOT_TEXT_ALIASES",)
+OPTIONAL_ENV_VARS: tuple[str, ...] = ("BOT_TEXT_ALIASES", "CHAT_TIMEZONE")
 
 
 def minimal_env(db_path: str = "test_settings.db") -> dict[str, str]:
@@ -182,6 +182,49 @@ class TestSettings(unittest.TestCase):
         env["GEN_TRACE_LOG"] = "enabled"
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaisesRegex(ValueError, "GEN_TRACE_LOG"):
+                load_settings(load_env=False)
+
+    def test_chat_timezone_defaults_to_utc(self) -> None:
+        # Дефолт обязан быть байт-идентичен поведению до появления настройки.
+        from zoneinfo import ZoneInfo
+
+        with patch.dict(os.environ, minimal_env(), clear=True):
+            settings = load_settings(load_env=False)
+        self.assertEqual(settings.chat_timezone, ZoneInfo("UTC"))
+
+    def test_chat_timezone_accepts_iana_name(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        env = minimal_env() | {"CHAT_TIMEZONE": "Europe/Moscow"}
+        with patch.dict(os.environ, env, clear=True):
+            settings = load_settings(load_env=False)
+        self.assertEqual(settings.chat_timezone, ZoneInfo("Europe/Moscow"))
+
+    def test_chat_timezone_reaches_runtime_state_but_not_the_registry(self) -> None:
+        # env-only поле: доезжает до RuntimeState по образцу runtime_state_ttl_sec,
+        # но не становится ручкой /set — часовой пояс есть свойство деплоя,
+        # и вывод /config (порождаемый из реестра) его не показывает.
+        from zoneinfo import ZoneInfo
+
+        from app.config.runtime_state import runtime_state_from_settings
+
+        env = minimal_env() | {"CHAT_TIMEZONE": "Europe/Moscow"}
+        with patch.dict(os.environ, env, clear=True):
+            settings = load_settings(load_env=False)
+        state = runtime_state_from_settings(settings)
+        self.assertEqual(state.chat_timezone, ZoneInfo("Europe/Moscow"))
+        self.assertNotIn(
+            "chat_timezone", {spec.name for spec in RUNTIME_FIELDS}
+        )
+
+    def test_load_settings_rejects_unknown_chat_timezone(self) -> None:
+        # Fail fast: молчаливый фолбэк в UTC воспроизводил бы O12 — снаружи
+        # неотличим от случайного шаблона, а логов у владельца нет.
+        env = minimal_env() | {"CHAT_TIMEZONE": "Europe/Moscw"}
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(
+                ValueError, r"CHAT_TIMEZONE.*Europe/Moscw"
+            ):
                 load_settings(load_env=False)
 
     def test_load_settings_rejects_missing_bot_token(self) -> None:

@@ -607,6 +607,29 @@ class TestPivoTemporalModifiers(unittest.TestCase):
             for line in pool:
                 self.assertIn(line, bottoms, f"month {month}")
 
+    def test_temporal_buckets_follow_the_wall_clock_of_the_zone(self) -> None:
+        # O12: 23:30 UTC четверга — это 02:30 пятницы в MSK; со сдвигом зоны
+        # обязаны включиться и ночной, и пятничный пулы.
+        from datetime import UTC
+        from zoneinfo import ZoneInfo
+
+        from app.domain.pivo_templates import (
+            PIVO_FRIDAY_BOTTOM_PARTS,
+            PIVO_LATE_NIGHT_BOTTOM_PARTS,
+        )
+        from app.services.pivo_message_builder import _temporal_bottoms
+
+        thursday_utc = datetime(2026, 9, 3, 23, 30, tzinfo=UTC)
+        utc_bottoms = _temporal_bottoms(thursday_utc)
+        msk_bottoms = _temporal_bottoms(
+            thursday_utc.astimezone(ZoneInfo("Europe/Moscow"))
+        )
+
+        self.assertNotIn(PIVO_LATE_NIGHT_BOTTOM_PARTS[0], utc_bottoms)
+        self.assertNotIn(PIVO_FRIDAY_BOTTOM_PARTS[0], utc_bottoms)
+        self.assertIn(PIVO_LATE_NIGHT_BOTTOM_PARTS[0], msk_bottoms)
+        self.assertIn(PIVO_FRIDAY_BOTTOM_PARTS[0], msk_bottoms)
+
 
 class TestPivoSubSlots(unittest.TestCase):
     """Recursive sub-pool slots: {chaos_bullet} -> "спор {dispute_topic}" -> text."""

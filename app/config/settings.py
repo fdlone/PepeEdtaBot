@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
@@ -156,6 +157,7 @@ class Settings(RuntimeTunables):
     log_level: str
     gen_trace_log: bool
     bot_text_aliases: frozenset[str]
+    chat_timezone: ZoneInfo
 
 
 def _load_runtime_fields() -> dict[str, object]:
@@ -294,6 +296,20 @@ def load_settings(load_env: bool = True) -> Settings:
     else:
         bot_text_aliases = DEFAULT_BOT_TEXT_ALIASES
 
+    # CHAT_TIMEZONE moves the human-facing time branches (late-night/friday
+    # flavor); service days (caps, quotas, maintenance) deliberately stay on
+    # UTC. Fail fast on a typo: the owner has no access to container logs, so
+    # a silent fallback to UTC would reproduce the very defect (O12) this
+    # setting closes — wrong templates that look like random flavor.
+    chat_timezone_raw = os.getenv("CHAT_TIMEZONE", "UTC").strip() or "UTC"
+    try:
+        chat_timezone = ZoneInfo(chat_timezone_raw)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(
+            f"CHAT_TIMEZONE: unknown IANA timezone {chat_timezone_raw!r} "
+            "(example: Europe/Moscow)"
+        ) from exc
+
     runtime_values = _load_runtime_fields()
 
     settings = Settings(
@@ -316,6 +332,7 @@ def load_settings(load_env: bool = True) -> Settings:
         log_level=log_level,
         gen_trace_log=gen_trace_log,
         bot_text_aliases=bot_text_aliases,
+        chat_timezone=chat_timezone,
         **runtime_values,  # type: ignore[arg-type]
     )
     validate_cross_fields(settings)

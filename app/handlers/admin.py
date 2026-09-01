@@ -72,7 +72,7 @@ async def _reply_global_denied(
     )
 
 
-@router.message(Command("config"))
+@router.message(Command("config"), GROUP_ONLY)
 async def cmd_config(
     message: Message,
     runtime_state: RuntimeState,
