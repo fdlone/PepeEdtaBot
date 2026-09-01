@@ -62,6 +62,9 @@ from app.log_masking import mask_chat_id
 logger = logging.getLogger("chat_markov")
 
 GENERATION_ATTEMPT_BUDGET = 10
+# Default of the runtime knob ``generation_attempts_with_context`` (M3R-110,
+# 2026-09-01): the generator reads the knob, this constant is what the registry
+# default equals (pinned by a test) and what tests reason about.
 GENERATION_ATTEMPTS_WITH_CONTEXT = 5
 CANDIDATE_TARGET = 5
 
@@ -931,6 +934,9 @@ class ResponseGenerator:
         # long the run took, and the eval protocol's bit-for-bit requirement —
         # what makes every phase verdict auditable — would stop holding.
         now = request.now if request.now is not None else int(time.time())
+        # M3R-110: a knob, not the constant — the eval matrix sweeps it and
+        # /set can move the drop point live.
+        attempts_with_context = self.runtime_state.generation_attempts_with_context
 
         gen_trace_log.log_request_header(
             request.chat_id,
@@ -939,7 +945,7 @@ class ResponseGenerator:
             temperature=self.runtime_state.candidate_selection_temperature,
             target=target,
             budget=GENERATION_ATTEMPT_BUDGET,
-            attempts_with_context=GENERATION_ATTEMPTS_WITH_CONTEXT,
+            attempts_with_context=attempts_with_context,
             recent_penalty_strength=recent_penalty_strength,
             verbatim_penalty_strength=verbatim_penalty_strength,
         )
@@ -987,7 +993,7 @@ class ResponseGenerator:
         for attempt in range(GENERATION_ATTEMPT_BUDGET):
             attempt_context_tokens = (
                 request.context_tokens
-                if attempt < GENERATION_ATTEMPTS_WITH_CONTEXT
+                if attempt < attempts_with_context
                 else None
             )
             if request.context_tokens and attempt_context_tokens is None:
@@ -995,7 +1001,7 @@ class ResponseGenerator:
                     gen_trace_log.log_context_dropped(
                         request.chat_id,
                         attempt + 1,
-                        attempts_with_context=GENERATION_ATTEMPTS_WITH_CONTEXT,
+                        attempts_with_context=attempts_with_context,
                     )
                 context_dropped = True
             attempt_randomness_strength = escalated_randomness_strength(

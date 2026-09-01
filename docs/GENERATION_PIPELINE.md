@@ -172,7 +172,7 @@ Telegram message (F.text)
 
 ## 4. Оркестратор: `ResponseGenerator.generate_with_result` (`core/response_generator.py`)
 
-Константы: `GENERATION_ATTEMPT_BUDGET=10`, `GENERATION_ATTEMPTS_WITH_CONTEXT=5`
+Константы: `GENERATION_ATTEMPT_BUDGET=10`, ручка `generation_attempts_with_context` (дефолт `GENERATION_ATTEMPTS_WITH_CONTEXT=5`, с 2026-09-01; 0 — ни одна попытка не получает контекст)
 (после 5-й попытки контекст отбрасывается — наблюдаемо: счётчик
 `context_dropped` в `/stats` и событие CONTEXT DROPPED в трассе, M3R-141),
 `CANDIDATE_TARGET=5`,

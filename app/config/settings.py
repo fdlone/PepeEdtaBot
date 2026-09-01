@@ -110,6 +110,7 @@ class RuntimeTunables:
     reply_context_max_tokens: int
     reply_context_bias: float
     reply_context_start_bias: float
+    generation_attempts_with_context: int
     context_start_affinity: float
     context_anchor_splice_probability: float
     reply_context_only_for_replies: bool

@@ -597,6 +597,14 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _float_in_range(1.0, 4.0)),
     FieldSpec("reply_context_start_bias", "REPLY_CONTEXT_START_BIAS", "2.2",
               _float_in_range(1.0, 4.0)),
+    # M3R-110 (context-attempts-knob, 2026-09-01): how many pool-building
+    # attempts receive the reply context; later attempts run without it and
+    # the switch is reported (CONTEXT DROPPED, context_dropped in /stats). Was
+    # the module constant GENERATION_ATTEMPTS_WITH_CONTEXT (5), promoted so the
+    # axis is sweepable by the eval matrix. Ceiling = GENERATION_ATTEMPT_BUDGET
+    # (10); 0 = no attempt gets context (a ctx input built the noctx way).
+    FieldSpec("generation_attempts_with_context",
+              "GENERATION_ATTEMPTS_WITH_CONTEXT", "5", _int_in_range(0, 10)),
     # Context affinity of GLOBAL start sampling: each learned start's weight is
     # multiplied by affinity^(shared stems with the context's informative
     # tokens). Answers live in starts, not in continuations: for «кто гнойный
