@@ -129,6 +129,7 @@ Track A (ремонт и валидация) и Track B (структурный 
 | `docs/GENERATION_MAP.md` | карта механики генерации: file:line известных дефектов, реестр ручек, скрытые связи. **Актуализируется вместе с любой правкой** `markov.py` / `response_generator.py` / `reply_pipeline.py` — как именно, см. §5 самой карты |
 | `docs/GENERATION_PIPELINE.md` | механика конвейера: этапы, формулы, пороги. **Актуализируется по тому же правилу**, что и карта, — вместе с правками тех же трёх файлов |
 | `docs/v2/05_MARKOV_2_0R_EVAL_PROTOCOL.md` | протокол eval |
+| `docs/SOLO_RATING_ROUND.md` | соло-раунд связности: подготовка, оценка, подсчёт, как из него получается условие гейта фазы 9 |
 | `docs/v2/00_STATUS.md` | трекер фаз Markov 2.0R |
 | `docs/ARCHITECTURE.md`, `docs/OPERATIONS.md` | архитектура; операционный runbook |
 | `docs/OPEN.md`, `docs/CLOSED.md` | открытые вопросы; журнал закрытого |

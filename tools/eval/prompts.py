@@ -89,8 +89,16 @@ def generate_prompts(
     seed: int,
     snapshot_label: str,
     per_category: int = MIN_PER_CATEGORY,
+    meme_support_min: int = 1,
 ) -> PromptSet:
-    """Build the prompt set from ``snapshot_full`` deterministically."""
+    """Build the prompt set from ``snapshot_full`` deterministically.
+
+    ``meme_support_min`` (M3R-130) is the support floor for the meme-regression
+    list, passed in from the thresholds file rather than hardcoded: it decides
+    a verdict, so pre-registration puts it in the thresholds file. The default
+    of 1 is the pre-M3R-130 behaviour and exists so a caller that does not care
+    about the gate (prompt regeneration in tests) keeps working.
+    """
     rng = random.Random(seed)
     con = sqlite3.connect(db_path)
     try:
@@ -109,12 +117,16 @@ def generate_prompts(
                 (chat_id,),
             )
         }
+        # M3R-130: the support floor keeps one-off co-occurrences out of the
+        # meme list. Without it the list was mostly n-grams seen in a single
+        # message (1079 of 1097 rows on the 2026-09-01 prod copy), and the gate
+        # asked generation to reproduce a coincidence.
         hot_ngrams = [
             tuple(token for token in row[:3] if token)
             for row in con.execute(
                 "SELECT w1, w2, w3 FROM chat_hot_ngrams WHERE chat_id = ? "
-                "ORDER BY cnt DESC, w1, w2, w3 LIMIT ?",
-                (chat_id, per_category * 3),
+                "AND cnt >= ? ORDER BY cnt DESC, w1, w2, w3 LIMIT ?",
+                (chat_id, meme_support_min, per_category * 3),
             )
         ]
     finally:

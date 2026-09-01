@@ -285,6 +285,28 @@ class TestBotMessages(unittest.TestCase):
         self.assertIn("мем-анализ: 2 проходов, пар оценено 500", text)
         self.assertIn("41 мс", text)
 
+    def test_stats_message_shows_rejection_classes(self) -> None:
+        """Классы отказов (M3R-021) — с отдельным разрядом неразмеченных."""
+        telemetry = GenerationTelemetry()
+        telemetry.note_route_rejected("vanilla", "context_heavy")
+        telemetry.note_route_rejected("seeded", "no_starts")
+
+        text = format_stats_message(
+            {"volume": 250},
+            rejection_classes=telemetry.rejections_by_class(),
+        )
+
+        self.assertIn("отклонения по классам: F2_context_copy 1", text)
+        self.assertIn("не размечено 1", text)
+
+    def test_stats_message_omits_rejection_classes_without_data(self) -> None:
+        text = format_stats_message(
+            {"volume": 250},
+            rejection_classes=GenerationTelemetry().rejections_by_class(),
+        )
+
+        self.assertNotIn("отклонения по классам", text)
+
     def test_stats_message_shows_the_quirk_funnel(self) -> None:
         """Каждый гейт причуд — со своим знаменателем, воронкой сверху вниз."""
         telemetry = GenerationTelemetry()

@@ -164,6 +164,12 @@ async def _protocol(args: argparse.Namespace) -> int:
         manual_rating = json.loads(
             Path(args.manual_rating).read_text(encoding="utf-8")
         )
+    # Phase 9 condition 6 (M3R-020): same rule as the manual rating above —
+    # only the aggregate reaches the report, and without it the gate reports
+    # insufficient data rather than passing on the automatic half alone.
+    solo_rating: dict[str, Any] | None = None
+    if args.solo_rating:
+        solo_rating = json.loads(Path(args.solo_rating).read_text(encoding="utf-8"))
     fresh_tokens: frozenset[str] | None = None
     evaluation_moment: int | None = None
     notes = [
@@ -235,6 +241,7 @@ async def _protocol(args: argparse.Namespace) -> int:
         notes=notes,
         context_mode=args.context_mode,
         df_facts=df_facts,
+        solo_rating=solo_rating,
     )
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     # The mode is part of the file name, not only of the header: two runs of the
@@ -284,6 +291,16 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--solo-rating",
+        type=str,
+        default=None,
+        help=(
+            "path to the aggregate of a solo connectedness round "
+            "(python -m tools.solo_rating_round score). Numbers only — the "
+            "rated replies stay out of the repository"
+        ),
+    )
+    parser.add_argument(
         "--temporal-fixture",
         action="store_true",
         help=(
@@ -318,14 +335,23 @@ def main() -> None:
         from tools.eval_prod import pick_chat_id
 
         chat = pick_chat_id(Path(args.db), args.chat_id)
+        # M3R-130: the meme support floor is a gate input, so it comes from the
+        # thresholds file — a set built with a different floor is a different
+        # set, and its version says so.
+        meme_config = load_thresholds().get("meme_regression", {})
         prompt_set = generate_prompts(
             Path(args.db),
             chat_id=chat,
             seed=args.prompt_seed,
             snapshot_label=args.label,
+            meme_support_min=int(meme_config.get("support_min", 1)),
         )
         save_prompts(prompt_set)
-        print(f"prompts: {PROMPTS_PATH} (version {prompt_set.version})")
+        print(
+            f"prompts: {PROMPTS_PATH} (version {prompt_set.version}, "
+            f"{len(prompt_set.memes)} memes at support floor "
+            f"{meme_config.get('support_min', 1)})"
+        )
         raise SystemExit(0)
     if not args.db:
         parser.error("--db is required (or use --smoke)")
