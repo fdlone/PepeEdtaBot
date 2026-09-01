@@ -32,6 +32,10 @@ class CandidateRoute(StrEnum):
     SEEDED = "seeded"
     MUTATED = "mutated"
     EXTENSION = "extension"
+    # M3R-230: a walk seeded by a hot n-gram through the L1 route (slot
+    # budget). Extension of such a candidate keeps this route — the extension
+    # is post-processing of the same walk.
+    HOT = "hot"
 
 
 class UserQuirkGate(StrEnum):

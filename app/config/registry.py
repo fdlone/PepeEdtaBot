@@ -416,6 +416,14 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # generation byte-identical; raising it needs the phase's promotion gate.
     FieldSpec("markov_seeded_candidate_ratio", "MARKOV_SEEDED_CANDIDATE_RATIO",
               "0", _float_in_range(0.0, 0.7)),
+    # M3R-230 (l1-hot-route, 2026-09-02): L1 "local memes" as a route with a
+    # slot budget (the O10 mechanism). Share of the pool built from walks
+    # seeded by a hot n-gram — each slot draws its own n-gram from the hot
+    # selection at the current hotness thresholds. Self-initiated replies only:
+    # the pipeline never seeds addressed replies (L1 rule). Default 0 — inert,
+    # generation byte-identical; raising it needs the l1_hot_channel gate.
+    FieldSpec("hot_ngram_slot_ratio", "HOT_NGRAM_SLOT_RATIO",
+              "0", _float_in_range(0.0, 0.7)),
     # Branching band for seed choice (trapezoid, TZ §9.4): a seed below the
     # minimum stalls generation, one far above the ideal is an anchor about
     # nothing. min <= ideal <= max is enforced cross-field.

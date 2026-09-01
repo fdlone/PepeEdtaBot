@@ -398,6 +398,31 @@ class ResponseGenerator:
             return VERBATIM_COPY_REASON
         return None
 
+    async def _draw_hot_seeds(
+        self, request: GenerationRequest, slots: int, rng: random.Random
+    ) -> list[list[str]]:
+        """Hot n-grams for the L1 route, one per slot, without replacement.
+
+        M3R-230, design D2: the hot selection (top-8 at the current hotness
+        thresholds) is read once per generation; slots draw without
+        replacement — two slots on one phrase would be two variations of one
+        opening, not two candidates. The draw comes from the generation RNG and
+        only happens when the budget is positive, so the default ratio stays
+        byte-identical. The draw counter (M3R-141) is noted per route draw.
+        """
+        hot_ngrams = await self.learning_service.get_hot_ngrams(
+            request.chat_id,
+            min_count=self.runtime_state.hot_ngram_min_count,
+            recency_share=self.runtime_state.hot_ngram_recency_share,
+            meme_ordering=self.runtime_state.markov_hot_ngram_meme_ordering,
+        )
+        self.generator.telemetry.note_hot_ngram_draw(empty=not hot_ngrams)
+        pool = [list(ngram) for ngram in hot_ngrams]
+        seeds: list[list[str]] = []
+        while pool and len(seeds) < slots:
+            seeds.append(pool.pop(rng.randrange(len(pool))))
+        return seeds
+
     async def _read_mutation_inputs(
         self, request: GenerationRequest
     ) -> tuple[Mapping[str, Mapping[str, int]], frozenset[str]]:
@@ -985,12 +1010,33 @@ class ResponseGenerator:
                 rng=generation_rng,
             )
 
+        # M3R-230 (l1-hot-route): L1 as a route with a slot budget. Self-
+        # initiated replies only — the pipeline never seeds addressed replies.
+        # The budget is ATTEMPTS of the loop below, each seeded by its own hot
+        # n-gram, so a hot candidate takes exactly the path every other attempt
+        # takes (walk, finalization, form gates, extension, mutation — design
+        # D1). At ratio 0 nothing is drawn and nothing is read.
+        hot_budget = (
+            0
+            if request.context_tokens
+            else route_slot_budget(target, self.runtime_state.hot_ngram_slot_ratio)
+        )
+        hot_seeds: list[list[str]] = (
+            await self._draw_hot_seeds(request, hot_budget, generation_rng)
+            if hot_budget > 0
+            else []
+        )
+
         # M3R-141: a generation that starts with context and runs past the
         # with-context budget finishes on a different mechanism than the one it
         # was asked with — measured at 37% of ctx-answers (map §1.3) and, until
         # now, invisible: neither the trace nor telemetry said it happened.
         context_dropped = False
         for attempt in range(GENERATION_ATTEMPT_BUDGET):
+            # M3R-230: the route's slots are the first attempts; a hot attempt
+            # carries its own seed and its own route attribution.
+            hot_attempt = bool(hot_seeds)
+            attempt_seed = hot_seeds.pop(0) if hot_attempt else seed
             attempt_context_tokens = (
                 request.context_tokens
                 if attempt < attempts_with_context
@@ -1013,7 +1059,7 @@ class ResponseGenerator:
                 chat_id=request.chat_id,
                 max_chars=self.runtime_state.max_reply_chars,
                 max_tokens=max_tokens,
-                seed_tokens=seed,
+                seed_tokens=attempt_seed,
                 context_tokens=attempt_context_tokens,
                 context_bias=self.runtime_state.reply_context_bias,
                 context_start_bias=self.runtime_state.reply_context_start_bias,
@@ -1050,7 +1096,7 @@ class ResponseGenerator:
                     mask_chat_id(request.chat_id),
                     attempt + 1,
                     bool(attempt_context_tokens),
-                    len(seed or []),
+                    len(attempt_seed or []),
                 )
                 gen_trace_log.log_attempt_failed(
                     request.chat_id,
@@ -1124,7 +1170,9 @@ class ResponseGenerator:
                         attempt + 1,
                     )
                     route = (
-                        CandidateRoute.EXTENSION
+                        CandidateRoute.HOT
+                        if hot_attempt
+                        else CandidateRoute.EXTENSION
                         if was_extended
                         else CandidateRoute.VANILLA
                     )
@@ -1167,7 +1215,9 @@ class ResponseGenerator:
                                 text=candidate,
                                 score=score,
                                 route=(
-                                    CandidateRoute.EXTENSION
+                                    CandidateRoute.HOT
+                                    if hot_attempt
+                                    else CandidateRoute.EXTENSION
                                     if was_extended
                                     else CandidateRoute.VANILLA
                                 ),
@@ -1276,6 +1326,8 @@ class ResponseGenerator:
         # нет» — ровно та пара, ради различения которой заведены счётчики.
         if seeded_budget > 0:
             attempted.add(CandidateRoute.SEEDED)
+        if hot_budget > 0:
+            attempted.add(CandidateRoute.HOT)
         if self.runtime_state.slot_mutation_probability > 0.0:
             attempted.add(CandidateRoute.MUTATED)
 

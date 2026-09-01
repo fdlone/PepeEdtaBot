@@ -29,6 +29,7 @@ def _runtime_state() -> MagicMock:
     state.reply_context_bias = 1.8
     state.reply_context_start_bias = 2.2
     state.generation_attempts_with_context = GENERATION_ATTEMPTS_WITH_CONTEXT
+    state.hot_ngram_slot_ratio = 0.0
     state.repetition_penalty_strength = 1.0
     state.markov_order = 3
     state.enable_backoff = True

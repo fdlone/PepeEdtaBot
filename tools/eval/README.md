@@ -86,3 +86,13 @@ resolved through extension and mutation (`resolve_start_source`), so a
 rewritten reply keeps its attempt's source. Run both files in both modes; C0
 is deterministic and its summaries must match between the files.
 
+## Hot route grid (M3R-230)
+
+`matrix_l1_route_grid.yaml` (arms `C7r*`) moves `hot_ngram_slot_ratio` at the
+hotness thresholds 2 / 0.25 and is judged by the same pre-registered
+`l1_hot_channel` gate. Note the instrument dependency: the gate's must-improve
+reads `historical_meme_rate` against the meme set of `eval_prompts.yaml`, so a
+prompt set generated on an older snapshot cannot see today's hot n-grams (the
+2026-09-02 run: zero overlap) — regenerating the prompt set is a version
+change and a deliberate comparability break.
+

@@ -1,0 +1,42 @@
+# M3R-230 L1 hot-route grid (change l1-hot-route).
+#
+# The M3R-145 sweep (matrix_l1_grid.yaml) showed the hotness thresholds are
+# not the binding constraint: at 2 / 0.25 the selection is non-empty and 6 of
+# 8 n-grams open a stored start, yet the seed reaches the reply in <= 2% of
+# self-initiated replies because only the FIRST attempt is seeded and that one
+# candidate wins ~1 pool in 10. This grid keeps those working thresholds and
+# moves the new lever — the route's slot budget.
+#
+# Arm ids start with C7 like the threshold grid: the prefix routes an arm to the
+# l1_hot_channel gate, whose thresholds are pre-registered (2026-09-01) and are
+# not touched. Flavor/emoji silenced as in C0. The route runs in noctx only by
+# construction (no context), so the ctx run measures inertness.
+#
+# route_slot_budget(5, 0.2) = 1 slot, (5, 0.4) = 2 slots (ceiling: half the
+# pool). Expectation written before the run: coverage 15-20% at two slots
+# (0.75 anchoring x 2 of 5 candidates x win share); the risk is copy — seeds
+# are corpus phrases.
+configurations:
+  - id: C0
+    description: "Markov 1.x frozen baseline (registry defaults, flavor/emoji silenced)"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+
+  - id: C7r20
+    description: "M3R-230, hot route ratio 0.2 (1 slot of 5) at thresholds 2 / 0.25"
+    available: true
+    same_as: C0
+    overrides:
+      hot_ngram_slot_ratio: 0.2
+      hot_ngram_min_count: 2
+      hot_ngram_recency_share: 0.25
+  - id: C7r40
+    description: "M3R-230, hot route ratio 0.4 (2 slots of 5) at thresholds 2 / 0.25"
+    available: true
+    same_as: C0
+    overrides:
+      hot_ngram_slot_ratio: 0.4
+      hot_ngram_min_count: 2
+      hot_ngram_recency_share: 0.25

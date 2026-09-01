@@ -83,6 +83,7 @@ class RuntimeTunables:
     markov_collocation_break_penalty: float
     markov_hot_ngram_meme_ordering: bool
     markov_seeded_candidate_ratio: float
+    hot_ngram_slot_ratio: float
     markov_seed_branch_min: float
     markov_seed_branch_ideal: float
     markov_seed_branch_max: float
