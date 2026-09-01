@@ -143,6 +143,29 @@ phase5_promotion:
   affinity_without_copy_delta_min: 0.0
   latency_p95_ms_max: 150        # TZ §17 full-generation budget
   storage_growth_max_share: 0.35 # reverse order-2 ~ transitions table ~30% of DB
+  # Corpus-sufficiency precondition (gate-phase5-ndocs-floor, registered
+  # 2026-09-01, before any verdict run). Two parts because each is blind to the
+  # other failure: volume alone repeats the retired ">=1000 phrases" bar (it
+  # measured supply while selection decides), and a favourable singleton share
+  # over a handful of documents is noise. Either part short => insufficient
+  # data, never pass/fail. Both are read from the SOURCE snapshot before the
+  # runner window-populates df in its working copy (design D1) — reading the
+  # copy would always see the retention window and rubber-stamp the floor.
+  #
+  # n_docs_min: IDF's lever is the SPREAD between frequent and rare tokens,
+  # log(n_docs/(1+df)). At 500 docs the head token (~34% of documents) gives
+  # spread log(500/171) vs log(500/2) = 1.07 vs 5.52 — a scale ranking can
+  # exist on. At the measured 35 docs the same spread is 1.07 vs 2.86 over a
+  # corpus where 81% of tokens sit at one point.
+  n_docs_min: 500
+  # df_singleton_share_max is the WEAKER half, admitted here rather than
+  # discovered later: 0.60 has no direct derivation from the formula — it is
+  # chosen so that no less than 40% of the vocabulary has df > 1, i.e. the
+  # discriminable part of the vocabulary is not a minority. Measured share on
+  # 2026-08-24 is 0.81, comfortably beyond any random wobble. Moving this bar
+  # later is allowed ONLY as a separate commit with rationale (pre-registration
+  # rule) — an adjustment of a bar admitted weak up front, not a post-hoc fit.
+  df_singleton_share_max: 0.60
 
 phase6_anticycle:
   # Two-dimensional gate (ADR-015): BOTH must exceed. Cycle != harm.

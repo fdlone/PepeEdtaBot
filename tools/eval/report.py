@@ -16,7 +16,7 @@ from typing import Any
 from .bootstrap import bootstrap_ci, delta_ci, distinct_delta_ci
 from .metrics import distinct_n, latency_percentiles, meme_regression, metric_values
 from .prompts import PromptSet
-from .run import ConfigRun
+from .run import ConfigRun, DfCorpusFacts
 
 # Phase 2 arms (doc 05 §2 + the "one arm per knob" rule): the shipped
 # combination C1, each knob alone (C1a/C1b), the flat-temperature control
@@ -244,6 +244,54 @@ def _verdict(
 PHASE5_ARM_PREFIX = "C4"
 
 
+def _phase5_corpus_precondition(
+    config: dict[str, Any],
+    df_facts: DfCorpusFacts | None,
+    *,
+    parts: list[str],
+    missing: list[str],
+) -> None:
+    """Corpus-sufficiency precondition of the Phase 5 gate (both parts).
+
+    Any shortfall lands in ``missing`` (=> ``insufficient data``), never in
+    failures: "not enough corpus yet" is not a failed phase. Both measured
+    quantities are printed next to the bars either way, so "not yet" is
+    distinguishable from "measured and did not hold" without reading the DB.
+    """
+    floor_raw = config.get("n_docs_min")
+    ceiling_raw = config.get("df_singleton_share_max")
+    if floor_raw is None or ceiling_raw is None:
+        # Design D4: a default here would be a bar that never went through
+        # pre-registration — the verdict must be checkable against the file.
+        missing.append(
+            "corpus precondition not registered in the thresholds file "
+            "(n_docs_min / df_singleton_share_max)"
+        )
+        return
+    floor, ceiling = int(floor_raw), float(ceiling_raw)
+    if df_facts is None:
+        missing.append("prod df corpus facts were not measured for this run")
+        return
+    if df_facts.error is not None:
+        missing.append(f"source df unreadable: {df_facts.error}")
+        return
+    n_docs = df_facts.n_docs or 0
+    share = df_facts.singleton_share
+    share_txt = f"{share:.0%}" if share is not None else "df empty"
+    parts.append(
+        f"prod corpus: n_docs {n_docs} (floor {floor}), "
+        f"singleton share {share_txt} (ceiling {ceiling:.0%})"
+    )
+    if n_docs < floor:
+        missing.append(f"prod n_docs {n_docs} below the floor {floor}")
+    if share is None:
+        missing.append("prod markov_token_df is empty for this chat")
+    elif share > ceiling:
+        missing.append(
+            f"df singleton share {share:.0%} above the ceiling {ceiling:.0%}"
+        )
+
+
 def _mean_telemetry(arm: ConfigRun, key: str) -> float | None:
     """Mean of a per-seed telemetry value across an arm's snapshots.
 
@@ -258,18 +306,23 @@ def _mean_telemetry(arm: ConfigRun, key: str) -> float | None:
 
 
 def _phase5_arm_verdict(
-    baseline: ConfigRun, arm: ConfigRun, thresholds: dict[str, Any]
+    baseline: ConfigRun,
+    arm: ConfigRun,
+    thresholds: dict[str, Any],
+    df_facts: DfCorpusFacts | None = None,
 ) -> tuple[str, str]:
     """Phase 5 promotion gate for one seeded arm (verdict, detail).
 
     Computes every automatic condition — seeded present rate, seeded win rate
     given present, the affinity-without-copy delta vs the no-seeded baseline,
-    p95 — and prints them. But the verdict is ALWAYS ``insufficient data``
-    here: the eval's df is approximated from the retained message window, not
-    accumulated on live prod (design D4), so a green verdict would be bought
-    over the easy half. The real promotion decision (M2R-430) needs a protocol
-    run over prod-accumulated df, exactly as Phase 4's gate waits on the manual
-    rating.
+    p95 — and prints them. The verdict additionally carries the
+    corpus-sufficiency precondition (gate-phase5-ndocs-floor): both a
+    pre-registered floor on the SOURCE snapshot's prod-accumulated ``n_docs``
+    and a ceiling on its df singleton share must hold, or the verdict is
+    ``insufficient data``, never pass/fail. The quantities are read from the
+    source DB before the runner window-populates its working copy (design D1);
+    a missing thresholds key is an unregistered bar and also reads as
+    ``insufficient data``, never a code default (design D4).
     """
     if arm.shared_with is not None:
         return INSUFFICIENT, f"arm resolves to the same overrides as {arm.shared_with}"
@@ -279,8 +332,8 @@ def _phase5_arm_verdict(
     arm_values = metric_values(arm.records)
     parts: list[str] = []
     failures: list[str] = []
-    missing: list[str] = ["a protocol run over prod-accumulated df (df here is "
-                          "window-approximated, design D4)"]
+    missing: list[str] = []
+    _phase5_corpus_precondition(config, df_facts, parts=parts, missing=missing)
 
     present = _mean_telemetry(arm, "seeded_present_rate")
     win = _mean_telemetry(arm, "seeded_win_rate_given_present")
@@ -841,6 +894,7 @@ def evaluate_gates(
     thresholds: dict[str, Any],
     manual_rating: dict[str, Any] | None = None,
     context_mode: str = "ctx",
+    df_facts: DfCorpusFacts | None = None,
 ) -> list[tuple[str, str, str]]:
     """(gate, verdict, detail) rows. Phase 0: most gates lack their data by
     construction — that is reported, never guessed."""
@@ -904,7 +958,9 @@ def evaluate_gates(
         )
     else:
         for arm_id in phase5_arms:
-            verdict, detail = _phase5_arm_verdict(baseline, runs[arm_id], thresholds)
+            verdict, detail = _phase5_arm_verdict(
+                baseline, runs[arm_id], thresholds, df_facts
+            )
             rows.append((f"phase5_promotion[{arm_id}]", verdict, detail))
 
     phase9_arms = sorted(arm for arm in runs if arm.startswith(PHASE9_ARM_PREFIX))
@@ -1053,6 +1109,7 @@ def build_report(
     notes: list[str],
     manual_rating: dict[str, Any] | None = None,
     context_mode: str = "ctx",
+    df_facts: DfCorpusFacts | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append(
@@ -1258,7 +1315,7 @@ def build_report(
     lines.append("## Gates")
     lines.append("")
     for gate, verdict, detail in evaluate_gates(
-        runs, thresholds, manual_rating, context_mode
+        runs, thresholds, manual_rating, context_mode, df_facts
     ):
         lines.append(f"- **{gate}**: {verdict} — {detail}")
     if "C0" in runs:

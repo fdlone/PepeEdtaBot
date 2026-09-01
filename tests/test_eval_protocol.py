@@ -32,7 +32,7 @@ from tools.eval.metrics import (
     metric_values,
     repeated_ngram_share,
 )
-from tools.eval.prompts import generate_prompts
+from tools.eval.prompts import PromptSet, generate_prompts
 from tools.eval.report import (
     _apply_mode_requirement,
     build_report,
@@ -42,6 +42,16 @@ from tools.eval.report import (
 )
 from tools.eval.run import ConfigRun, run_config_seed, run_matrix
 from tools.eval.synthetic import SYNTHETIC_CHAT_ID, build_synthetic_snapshot
+
+
+def _prompt_set_stub() -> PromptSet:
+    return PromptSet(
+        version="stub",
+        snapshot_label="stub",
+        seed=42,
+        categories={"generic": ["пиво сегодня"]},
+        memes=[],
+    )
 
 
 def _record(**kwargs: object) -> GenRecord:
@@ -259,6 +269,198 @@ class TestConfigFiles(unittest.TestCase):
             "performance",
         ):
             self.assertIn(gate, thresholds)
+
+
+class TestPhase5CorpusPrecondition(unittest.TestCase):
+    """gate-phase5-ndocs-floor: корпусное предусловие гейта фазы 5.
+
+    Величины читаются из ИСХОДНОГО снапшота до оконной подготовки df
+    (design D1): чтение рабочей копии всегда видело бы retention-окно,
+    которое раннер сам и записал, и предусловие стало бы штампом.
+    """
+
+    FLOOR = 500
+    CEILING = 0.60
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self.tmp = Path(tempfile.mkdtemp(prefix="test_ndocs_floor_"))
+        self.addCleanup(
+            lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True)
+        )
+        self.db = self.tmp / "source.db"
+
+    def _make_source(
+        self, *, n_docs: int, singles: int, plural: int, chat_id: int = 1
+    ) -> None:
+        import sqlite3
+
+        con = sqlite3.connect(self.db)
+        con.execute(
+            "CREATE TABLE chat_model_volume "
+            "(chat_id INTEGER PRIMARY KEY, n_docs INTEGER)"
+        )
+        con.execute(
+            "CREATE TABLE markov_token_df "
+            "(chat_id INTEGER, token TEXT, messages_seen INTEGER, "
+            "PRIMARY KEY (chat_id, token))"
+        )
+        con.execute(
+            "INSERT INTO chat_model_volume VALUES (?, ?)", (chat_id, n_docs)
+        )
+        rows = [(chat_id, f"один{i}", 1) for i in range(singles)]
+        rows += [(chat_id, f"част{i}", 3) for i in range(plural)]
+        con.executemany("INSERT INTO markov_token_df VALUES (?, ?, ?)", rows)
+        con.commit()
+        con.close()
+
+    @staticmethod
+    def _thresholds(**extra: object) -> dict:
+        config: dict = {
+            "n_docs_min": TestPhase5CorpusPrecondition.FLOOR,
+            "df_singleton_share_max": TestPhase5CorpusPrecondition.CEILING,
+        }
+        config.update(extra)
+        return {"phase5_promotion": config}
+
+    def _verdict(self, facts: object, thresholds: dict | None = None) -> tuple[str, str]:
+        from tools.eval.report import _phase5_arm_verdict
+
+        baseline = ConfigRun(config_id="C0", records=[_record()])
+        arm = ConfigRun(config_id="C4", records=[_record()])
+        return _phase5_arm_verdict(
+            baseline, arm, thresholds or self._thresholds(), facts
+        )
+
+    def test_facts_read_known_numbers_from_the_source(self) -> None:
+        from tools.eval.run import read_df_corpus_facts
+
+        self._make_source(n_docs=35, singles=140, plural=32)
+        facts = read_df_corpus_facts(self.db, 1)
+        self.assertEqual(facts.n_docs, 35)
+        assert facts.singleton_share is not None
+        self.assertAlmostEqual(facts.singleton_share, 140 / 172)
+        self.assertIsNone(facts.error)
+
+    def test_window_population_does_not_leak_into_the_verdict(self) -> None:
+        # Ловушка design D1/Context §2: после оконной подготовки df рабочая
+        # копия отдаёт другие числа; в вердикт обязаны идти прочитанные из
+        # исходника. Перенос чтения после подготовки роняет оба assert'а.
+        import shutil as _sh
+        import sqlite3
+
+        from tools.eval.run import read_df_corpus_facts
+
+        self._make_source(n_docs=35, singles=140, plural=32)
+        facts_before = read_df_corpus_facts(self.db, 1)
+
+        working_copy = self.tmp / "copy.db"
+        _sh.copyfile(self.db, working_copy)
+        con = sqlite3.connect(working_copy)
+        # Та же арифметика, что у _populate_token_df: окно из 1000 сообщений
+        # перетирает n_docs и досыпает df.
+        con.execute("UPDATE chat_model_volume SET n_docs = 1000 WHERE chat_id = 1")
+        con.executemany(
+            "INSERT INTO markov_token_df VALUES (?, ?, ?) "
+            "ON CONFLICT(chat_id, token) DO UPDATE SET "
+            "messages_seen = messages_seen + 1",
+            [(1, f"окно{i}", 5) for i in range(400)],
+        )
+        con.commit()
+        con.close()
+
+        facts_after = read_df_corpus_facts(working_copy, 1)
+        self.assertNotEqual(facts_after.n_docs, facts_before.n_docs)
+        verdict, detail = self._verdict(facts_before)
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("n_docs 35", detail)
+        self.assertNotIn("1000", detail.split("floor")[0])
+
+    def test_empty_df_reads_as_df_empty_not_zero_division(self) -> None:
+        from tools.eval.run import read_df_corpus_facts
+
+        self._make_source(n_docs=5, singles=0, plural=0)
+        facts = read_df_corpus_facts(self.db, 1)
+        self.assertEqual(facts.n_docs, 5)
+        self.assertIsNone(facts.singleton_share)
+        self.assertIsNone(facts.error)
+        verdict, detail = self._verdict(facts)
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("df", detail)
+
+    def test_unreadable_source_is_insufficient_not_a_crash(self) -> None:
+        from tools.eval.run import read_df_corpus_facts
+
+        facts = read_df_corpus_facts(self.tmp / "no_such.db", 1)
+        self.assertIsNotNone(facts.error)
+        verdict, detail = self._verdict(facts)
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("unreadable", detail)
+
+    def test_volume_shortfall_names_floor_and_measured_number(self) -> None:
+        from tools.eval.run import DfCorpusFacts
+
+        facts = DfCorpusFacts(n_docs=35, singleton_share=0.30)
+        verdict, detail = self._verdict(facts)
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("35", detail)
+        self.assertIn("500", detail)
+
+    def test_shape_shortfall_names_ceiling_and_measured_share(self) -> None:
+        from tools.eval.run import DfCorpusFacts
+
+        facts = DfCorpusFacts(n_docs=800, singleton_share=0.81)
+        verdict, detail = self._verdict(facts)
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("81%", detail)
+        self.assertIn("60%", detail)
+
+    def test_missing_threshold_keys_do_not_fall_back_to_code_defaults(self) -> None:
+        # Design D4: дефолт в коде — это порог, не прошедший предрегистрацию.
+        from tools.eval.run import DfCorpusFacts
+
+        facts = DfCorpusFacts(n_docs=100_000, singleton_share=0.0)
+        verdict, detail = self._verdict(facts, thresholds={"phase5_promotion": {}})
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("not registered", detail)
+
+    def test_both_parts_met_lifts_the_precondition(self) -> None:
+        # Предусловие снято — вердикт решают остальные условия гейта. На
+        # минимальной фикстуре без seeded-телеметрии они сами дают
+        # insufficient, но строки предусловия среди причин быть не должно.
+        from tools.eval.run import DfCorpusFacts
+
+        facts = DfCorpusFacts(n_docs=800, singleton_share=0.30)
+        verdict, detail = self._verdict(facts)
+        self.assertIn("prod corpus: n_docs 800", detail)
+        self.assertNotIn("below the floor", detail)
+        self.assertNotIn("above the ceiling", detail)
+        self.assertNotIn("prod-accumulated df", detail)
+
+    def test_report_prints_measured_quantities_next_to_the_verdict(self) -> None:
+        from tools.eval.run import DfCorpusFacts
+
+        facts = DfCorpusFacts(n_docs=35, singleton_share=0.81)
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=[_record()]),
+            "C4": ConfigRun(config_id="C4", records=[_record()]),
+        }
+        report = build_report(
+            runs=runs,
+            skipped=[],
+            prompt_set=_prompt_set_stub(),
+            thresholds=self._thresholds(),
+            snapshot_label="test",
+            seeds=(42,),
+            generations=1,
+            revision="test",
+            date="2026-09-01",
+            notes=[],
+            df_facts=facts,
+        )
+        self.assertIn("n_docs 35 (floor 500)", report)
+        self.assertIn("singleton share 81% (ceiling 60%)", report)
 
 
 class TestPhase7Gate(unittest.TestCase):
