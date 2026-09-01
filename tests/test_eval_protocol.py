@@ -1005,6 +1005,13 @@ class TestTwoModeRequirement(unittest.TestCase):
             load_thresholds()["phase9_interp"].get("requires_both_modes")
         )
 
+    def test_phase5_declares_it(self) -> None:
+        # Owner decision 2026-09-01, before the M2R-430 run: the seeded channel
+        # acts in both modes, so its promotion may not pass on ctx alone.
+        self.assertTrue(
+            load_thresholds()["phase5_promotion"].get("requires_both_modes")
+        )
+
 
 class TestPhase2Gate(unittest.TestCase):
     """The Phase 2 gate is four-part and asymmetric (doc 03 Phase 2 acceptance,

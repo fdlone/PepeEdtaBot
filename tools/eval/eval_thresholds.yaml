@@ -143,6 +143,16 @@ phase5_promotion:
   affinity_without_copy_delta_min: 0.0
   latency_p95_ms_max: 150        # TZ §17 full-generation budget
   storage_growth_max_share: 0.35 # reverse order-2 ~ transitions table ~30% of DB
+  # ADDED 2026-09-01 by owner decision, BEFORE the M2R-430 verdict run (the
+  # corpus precondition below is not met yet: n_docs 232 of 500). Legitimate
+  # under the pre-registration rule for the same reason as phase9_interp's
+  # flag: it can only turn a one-mode `pass` into `insufficient data`, never
+  # loosen anything. Why the seeded channel needs both modes: its anchors come
+  # from the current message, which is present in BOTH modes, so seeded is the
+  # one Track A mechanism that acts on self-initiated replies too (the noctx
+  # 11% of production, where after the L1 verdict it is the only topicality
+  # source left). A ctx-only pass would be blind to exactly those replies.
+  requires_both_modes: true
   # Corpus-sufficiency precondition (gate-phase5-ndocs-floor, registered
   # 2026-09-01, before any verdict run). Two parts because each is blind to the
   # other failure: volume alone repeats the retired ">=1000 phrases" bar (it
