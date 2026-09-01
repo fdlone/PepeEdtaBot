@@ -100,3 +100,14 @@ prompt set generated on an older snapshot cannot see today's hot n-grams (the
 2026-09-02 run: zero overlap) — regenerating the prompt set is a version
 change and a deliberate comparability break.
 
+## Knob census (M3R-151)
+
+`python -m tools.eval.knob_census plan | run | launch | report`. Builds arms
+from the registry (both domain extremes per measurable knob, a flip for
+booleans, and the same extremes with the parent enabled for gated knobs — see
+`GATED_BY`), runs them against C0 in both modes (`launch` spawns detached
+workers, `report` stitches the JSON samples), and classifies every knob by
+the pre-registered `knob_census` rule in `eval_thresholds.yaml`: dead / gated
+/ inert / weak / strong. Knobs the harness cannot exercise are listed as
+outside the offline measurement. The report carries numbers only.
+

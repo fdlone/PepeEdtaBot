@@ -443,3 +443,43 @@ pool_composition:
   # "coherent" replies may not fall more than 10 p.p. below C0. Without a round
   # the ctx verdict is `insufficient data`, never `pass`.
   manual_connected_delta_floor: -0.10
+
+knob_census:
+  # M3R-151, registered 2026-09-02 BEFORE the census was run (change
+  # knob-census). Classification rule for every measurable knob, from the
+  # paired deltas of its domain extremes against C0 in both modes.
+  #
+  # inert: at EVERY measured extreme, EVERY classification metric's delta
+  # interval lies inside [-tol, +tol]. A CI-containment rule, not a point
+  # rule: an insignificant delta with a wide interval is "not resolved", not
+  # "inert" — and "not resolved" reads as weak, never as inert.
+  # strong: at least one extreme has a SIGNIFICANT delta whose |point| is at
+  # or above the strength bar on some metric.
+  # weak: everything else.
+  # gated: extremes inert with the parent knob at its default and not inert
+  # with the parent enabled.
+  # dead: not read on any live path (static check, no run).
+  #
+  # Tolerances per metric family. Shares: 0.01 is a third of the protocol's
+  # resolution at n=500 (~3 p.p., doc 05 §8) and n here is 1500 per arm.
+  # Trajectory counts (escape / ECB): 0.05 on a scale where the C0 window sits
+  # at ~2.0-2.9 and the headline gate resolves 0.1. Length: 0.3 tokens on a
+  # mean of ~10.5.
+  tolerance:
+    context_affinity_without_copy: 0.01
+    exact_context_copy_rate: 0.01
+    repetition_rate: 0.01
+    historical_meme_rate: 0.01
+    structural_window_escape: 0.05
+    structural_pool_ecb: 0.05
+    mean_response_length: 0.3
+  # Strength bars: a knob is "strong" when it can move a metric by at least
+  # this much — the class where a domain ceiling matters more than removal.
+  strong:
+    context_affinity_without_copy: 0.03
+    exact_context_copy_rate: 0.03
+    repetition_rate: 0.03
+    historical_meme_rate: 0.03
+    structural_window_escape: 0.15
+    structural_pool_ecb: 0.15
+    mean_response_length: 1.0
