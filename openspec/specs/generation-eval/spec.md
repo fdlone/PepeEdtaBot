@@ -2,7 +2,9 @@
 
 ## Purpose
 Offline evaluation harness for the Markov generation pipeline: ablation configuration matrix, normative metric definitions, seeded reproducibility, pre-registered gate thresholds, and report format. It is the acceptance gate for every Markov 2.0R phase (normative source: `docs/v2/05_MARKOV_2_0R_EVAL_PROTOCOL.md`).
+
 ## Requirements
+
 ### Requirement: Ablation configuration matrix
 
 The eval runner SHALL evaluate a configuration matrix that includes, at minimum, C0 (frozen Markov 1.x baseline) and CF (all currently enabled 2.0R features), and SHALL support the per-feature configurations C1–C5 defined in doc 05 §2 as those features come into existence. For each configuration the report SHALL show every metric's value and its delta against C0. A feature's contribution SHALL be reportable both in isolation (its C-config vs C0) and incrementally (CF with the feature vs CF without it).
@@ -373,7 +375,6 @@ generated output.
 - **WHEN** the shadow-eligible step count is below its minimum
 - **THEN** the gate reports `insufficient data`, stating how many eligible steps were observed and how many are required
 
-
 ### Requirement: Phase 4 gate rests on human judgement, and says so
 
 The `phase4_memes` gate SHALL be registered in the thresholds file before any
@@ -708,3 +709,91 @@ metric alongside it.
 
 - **WHEN** a change to the pool composition drops the mean pool count below the registered floor
 - **THEN** the gate fails even if the window count rose
+
+### Requirement: The meme-regression set carries a support floor
+
+N-граммы попадают в набор мем-регресса только при поддержке не ниже
+пре-регистрированного порога. Порог SHALL храниться в файле порогов вместе с
+обоснованием, а не быть константой кода.
+
+Основание измеримое: окно горячих n-грамм затухает, поэтому подавляющее
+большинство его строк имеет поддержку в одно сообщение (замер 2026-09-01:
+1079 строк из 1097). Требование «воспроизведи n-грамму, встреченную однажды»
+проверяет совпадение, а не память модели.
+
+Набор SHALL нести свою версию, и её смена при перегенерации SHALL читаться как
+разрыв сопоставимости с прошлыми отчётами, а не как обновление того же набора.
+
+#### Scenario: Малоподдержанная n-грамма в набор не попадает
+
+- **WHEN** набор строится по снапшоту, где часть n-грамм встречалась однажды
+- **THEN** такие n-граммы в набор не входят, а вошедшие имеют поддержку не ниже порога
+
+#### Scenario: Перегенерация объявлена
+
+- **WHEN** набор перегенерирован с другим порогом или на другом снапшоте
+- **THEN** версия набора меняется, и отчёт показывает, что числа несопоставимы с прежними
+
+### Requirement: Meme regression is a share, measured per configuration
+
+Гейт SHALL считать **долю воспроизведённых** мемов набора и SHALL публиковать
+её вместе с абсолютными числами (сколько из скольких). Доля SHALL считаться
+для **каждой** конфигурации прогона, а не только для базлайна: гейт существует,
+чтобы поймать конфигурацию, стирающую память чата, и по одному базлайну этого
+не видно.
+
+Вердикт SHALL быть **относительным к базлайну**: конфигурация проваливает
+проверку, когда её доля ниже доли базлайна больше чем на пре-регистрированный
+допуск. Абсолютная планка SHALL NOT использоваться: она мерила бы толщину
+корпуса, а не поведение конфигурации.
+
+Если после порога поддержки в наборе меньше пре-регистрированного минимума
+мемов, вердикт SHALL быть `insufficient data` с указанием размера набора —
+доля по нескольким мемам не является свидетельством.
+
+#### Scenario: Конфигурация стирает мемы
+
+- **WHEN** доля воспроизведённых мемов у конфигурации ниже базлайнной больше чем на допуск
+- **THEN** гейт отдаёт `fail`, и отчёт называет обе доли, абсолютные числа и допуск
+
+#### Scenario: Конфигурация держит память
+
+- **WHEN** доля конфигурации не ниже базлайнной за вычетом допуска
+- **THEN** гейт отдаёт `pass`, и обе доли напечатаны
+
+#### Scenario: Набор слишком мал
+
+- **WHEN** после порога поддержки в наборе меньше минимального числа мемов
+- **THEN** вердикт `insufficient data`, и отчёт называет размер набора и минимум
+
+#### Scenario: Пустой набор
+
+- **WHEN** набор пуст
+- **THEN** вердикт `insufficient data`, а не `pass` по отсутствию нарушений
+
+### Requirement: The connectedness condition is computed, not permanently absent
+
+Условие связности гейта фазы 9 SHALL вычисляться из агрегата соло-раунда,
+когда агрегат передан прогону, и SHALL давать `insufficient data` с названной
+причиной, когда агрегата нет или раунд невалиден. Оно SHALL NOT оставаться
+безусловно отсутствующим: «инструмента нет» и «инструмент есть, раунд не
+проведён» — разные состояния, и отчёт обязан их различать.
+
+Агрегат SHALL сверяться с тем же пре-регистрированным порогом отставания от
+базлайна, который записан в файле порогов; порог SHALL NOT дублироваться в
+коде.
+
+#### Scenario: Раунд проведён и валиден
+
+- **WHEN** прогону передан агрегат валидного раунда, где доля связных ответов руки не ниже базлайнной за вычетом порога
+- **THEN** условие связности выполнено, и отчёт называет обе доли
+
+#### Scenario: Рука теряет связность
+
+- **WHEN** доля связных ответов руки ниже базлайнной больше чем на порог
+- **THEN** условие провалено, и это провал гейта, а не недостаток данных
+
+#### Scenario: Раунда нет
+
+- **WHEN** агрегат не передан
+- **THEN** условие отсутствует с причиной «раунд не проведён», и гейт даёт `insufficient data`
