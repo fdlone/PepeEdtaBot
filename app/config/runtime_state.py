@@ -4,6 +4,7 @@ import copy
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.config.registry import RUNTIME_FIELDS
 from app.config.settings import RuntimeTunables, Settings
@@ -47,6 +48,10 @@ class RuntimeState(RuntimeTunables):
     # (settings.py); здесь остаётся только живое состояние процесса.
     runtime_state_ttl_sec: int
     runtime_state_max_chats: int
+    # env-only, не ручка /set: часовой пояс — свойство деплоя (O12). Двигает
+    # человеческие временны́е ветки; служебные сутки остаются на UTC. Дефолт
+    # повторяет дефолт CHAT_TIMEZONE; ZoneInfo иммутабелен, общий дефолт безопасен.
+    chat_timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo("UTC"))
     last_reply_ts: dict[int, float] = field(default_factory=dict)
     learned_messages: dict[int, int] = field(default_factory=dict)
     recent_short_replies: dict[int, deque[str]] = field(default_factory=dict)
@@ -284,4 +289,5 @@ def runtime_state_from_settings(settings: Settings) -> RuntimeState:
         **{spec.name: getattr(settings, spec.name) for spec in RUNTIME_FIELDS},
         runtime_state_ttl_sec=settings.runtime_state_ttl_sec,
         runtime_state_max_chats=settings.runtime_state_max_chats,
+        chat_timezone=settings.chat_timezone,
     )

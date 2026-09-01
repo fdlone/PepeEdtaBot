@@ -667,7 +667,7 @@ class ReplyPipeline:
                     self._runtime_state,
                     msg.chat_id,
                     pool,
-                    now=datetime.now(),
+                    now=datetime.now(self._runtime_state.chat_timezone),
                     mood=obs.mood,
                 )
             ]

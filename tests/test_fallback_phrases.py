@@ -211,6 +211,18 @@ class TestLateNightFallback(unittest.TestCase):
         self.assertEqual(day, base)
         self.assertEqual(night, base + LATE_NIGHT_FALLBACK_PHRASES)
 
+    def test_is_late_night_reads_the_wall_clock_of_its_zone(self) -> None:
+        # O12: один и тот же момент — ночь по UTC, утро по MSK. Функция обязана
+        # смотреть на настенные часы переданной зоны, а не на UTC.
+        from datetime import UTC
+        from zoneinfo import ZoneInfo
+
+        instant = datetime(2026, 1, 1, 4, 0, tzinfo=UTC)  # 07:00 в MSK
+        self.assertTrue(is_late_night(instant))
+        self.assertFalse(
+            is_late_night(instant.astimezone(ZoneInfo("Europe/Moscow")))
+        )
+
     def test_none_now_keeps_base_pool(self) -> None:
         self.assertEqual(
             late_night_pool(NOT_ENOUGH_DATA_PHRASES, None), NOT_ENOUGH_DATA_PHRASES

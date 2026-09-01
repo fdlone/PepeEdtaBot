@@ -238,7 +238,7 @@ async def cmd_pivo(
             explicit_mentions=command_args.explicit_mentions,
             recent_pool_window=runtime_state.pivo_recent_pool_window,
             temporal_flavor_chance=runtime_state.pivo_temporal_flavor_chance,
-            now=datetime.now(),
+            now=datetime.now(runtime_state.chat_timezone),
             mention_by_id=runtime_state.pivo_mention_by_id,
         )
         sent = await message.reply(call.text, parse_mode=ParseMode.HTML)

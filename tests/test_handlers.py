@@ -11,6 +11,7 @@ import unittest
 from collections import deque
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 from app.services.pivo_service import PivoCallMessage
 
@@ -66,6 +67,8 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.typing_min_ms = 0
     s.typing_max_ms = 0
     s.typing_per_char_ms = 0
+    # Реальная зона, не Mock: datetime.now(tz) требует настоящий tzinfo.
+    s.chat_timezone = ZoneInfo("UTC")
     s.recent_fallbacks = {}
     s.recent_replies = {}
     # Hourly-cap guard neutral by default: an empty history never trips the cap.
@@ -920,6 +923,28 @@ class TestPivoHandlers(unittest.IsolatedAsyncioTestCase):
         pivo_service.record_pool_usage.assert_awaited_once_with(
             msg.chat.id, {}, recent_pool_window=5
         )
+
+    async def test_pivo_now_is_taken_in_the_chat_timezone(self) -> None:
+        # O12: временны́е ветки /pivo (ночь/пятница/сезон) считаются по зоне
+        # CHAT_TIMEZONE, а не по часам контейнера.
+        from app.handlers.pivo import cmd_pivo
+        msg = _fake_message()
+        pivo_service = AsyncMock()
+        quota = MagicMock(allowed=True, usage_day="2026-05-12")
+        pivo_service.consume_daily_call_quota = AsyncMock(return_value=quota)
+        pivo_service.build_call_message = AsyncMock(
+            return_value=PivoCallMessage("Выходи пить!", 2, {}, {})
+        )
+        state = _fake_state()
+        state.chat_timezone = ZoneInfo("Europe/Moscow")
+        bot = AsyncMock()
+        bot.get_chat_administrators = AsyncMock(return_value=[])
+        settings = MagicMock(owner_id=None)
+
+        await cmd_pivo(msg, pivo_service, state, bot, settings)
+
+        now = pivo_service.build_call_message.await_args.kwargs["now"]
+        self.assertIs(now.tzinfo, state.chat_timezone)
 
     async def test_pivo_passes_parsed_arguments_to_service(self) -> None:
         from app.handlers.pivo import cmd_pivo
@@ -3284,3 +3309,82 @@ class TestMaintenanceOwnerAlert(unittest.IsolatedAsyncioTestCase):
         )
 
         bot.send_message.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Состав команд, доступных в личке (O13, spec private-chat-diagnostics)
+# ---------------------------------------------------------------------------
+
+class TestPrivateChatCommandSurface(unittest.TestCase):
+    """Пиннит, какие команды отвечают в личном чате.
+
+    Личка — диагностический канал владельца без доступа к логам, ей достаточно
+    /ping и /help; всё остальное живёт под GROUP_ONLY. Новая команда обязана
+    попасть сюда явным решением, а не умолчанием регистрации.
+
+    Проверено мутацией (2026-09-01): снятие GROUP_ONLY со /stats роняет тест
+    со словом "stats" в сообщении; навешивание GROUP_ONLY на /ping — со словом
+    "ping".
+    """
+
+    # Полный инвентарь: команда -> отвечает ли в личке.
+    PINNED: dict[str, bool] = {
+        "ping": True,
+        "help": True,
+        "stats": False,
+        "config": False,
+        "set": False,
+        "setprob": False,
+        "quirk_stats": False,
+        "clear": False,
+        "pivo": False,
+        "pivo_on": False,
+        "pivo_off": False,
+        "pivo_check": False,
+        "pivo_privacy": False,
+    }
+
+    @staticmethod
+    def _observed() -> dict[str, bool]:
+        from aiogram.filters import Command
+
+        from app.filters import GROUP_ONLY
+        from app.handlers import admin, common, errors, learning, pivo
+
+        observed: dict[str, bool] = {}
+        routers = [common.router, admin.router, pivo.router,
+                   learning.router, errors.router]
+        for router in routers:
+            for handler in router.message.handlers:
+                commands: set[str] = set()
+                group_only = False
+                for filter_object in handler.filters or ():
+                    if getattr(filter_object, "magic", None) is GROUP_ONLY:
+                        group_only = True
+                    if isinstance(filter_object.callback, Command):
+                        commands.update(
+                            str(c) for c in filter_object.callback.commands
+                        )
+                # Команда с несколькими регистрациями (например /set с формой
+                # отказа) доступна в личке, если хотя бы одна регистрация без
+                # GROUP_ONLY.
+                for command in commands:
+                    observed[command] = observed.get(command, False) or (
+                        not group_only
+                    )
+        return observed
+
+    def test_command_inventory_matches_pinned_private_surface(self) -> None:
+        observed = self._observed()
+        diverged = sorted(
+            set(self.PINNED) ^ set(observed)
+            | {c for c in set(self.PINNED) & set(observed)
+               if self.PINNED[c] != observed[c]}
+        )
+        self.assertEqual(
+            observed,
+            self.PINNED,
+            "Состав команд разошёлся с решением O13 "
+            f"(разошлись: {', '.join(diverged)}). Личка — только /ping и "
+            "/help; новая команда добавляется в PINNED явным решением.",
+        )

@@ -183,6 +183,25 @@ class TestRespond(ReplyPipelineTestCase):
         self.assertIn((1, 5), state.last_mention_reply_ts)
         self.learning_service.record_user_interaction.assert_awaited_once_with(1, 5)
 
+    async def test_fallback_now_is_taken_in_the_chat_timezone(self) -> None:
+        # O12: ночной пул фолбэков включается по зоне CHAT_TIMEZONE, а не по
+        # часам контейнера — проверяем, что до next_fallback_phrase доезжает
+        # aware-время именно настроенной зоны.
+        from zoneinfo import ZoneInfo
+
+        self.learning_service.get_token_volume.return_value = 0
+        state = _state()
+        state.chat_timezone = ZoneInfo("Europe/Moscow")
+
+        with patch(
+            "app.services.reply_pipeline.next_fallback_phrase",
+            return_value="фолбэк",
+        ) as next_phrase:
+            await self._run(state, _incoming(mentioned=True))
+
+        now = next_phrase.call_args.kwargs["now"]
+        self.assertIs(now.tzinfo, state.chat_timezone)
+
     async def test_unaddressed_message_without_model_data_is_silent(self) -> None:
         self.learning_service.get_token_volume.return_value = 0
         state = _state()

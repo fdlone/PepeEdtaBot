@@ -7,3 +7,8 @@ cryptography>=46.0.7,<51.0.0
 # dictionaries; the ending heuristic alone let ~40% broken swaps win (measured
 # 2026-07-17 on the prod copy).
 pymorphy3>=2.0.0,<3.0.0
+# IANA timezone data for zoneinfo (CHAT_TIMEZONE): pure data, no code — the
+# stdlib's official fallback. Windows dev machines ship no zone database at
+# all, and the slim base image does not guarantee one; where a system
+# database exists, TZPATH wins and this package is simply unused.
+tzdata>=2025.1
