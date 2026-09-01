@@ -499,6 +499,7 @@ class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
                 "chat_phrase_ngrams",
                 "chat_user_interactions",
                 "chat_verbatim_ngrams",
+                "maintenance_meta",
                 "markov_collocations",
                 "markov_token_df",
                 "messages",

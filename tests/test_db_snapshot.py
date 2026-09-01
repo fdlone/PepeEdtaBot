@@ -66,7 +66,7 @@ class TestMakeSnapshot(SnapshotTestCase):
 class TestSendPackedSnapshot(SnapshotTestCase):
     def _packed(self) -> str:
         packed_dir = tempfile.mkdtemp(prefix="pepe_db_snapshot_")
-        packed = os.path.join(packed_dir, "markov-20260901-000000.db.gz")
+        packed = os.path.join(packed_dir, "markov-stamp.db.gz")
         with open(packed, "wb") as fh:
             fh.write(b"gzip-bytes")
         return packed
@@ -150,7 +150,7 @@ class TestSendStartupSnapshot(SnapshotTestCase):
     async def test_delivery_failure_is_swallowed_with_a_warning(self) -> None:
         # Типичный случай — владелец не начинал диалог с ботом.
         packed_dir = tempfile.mkdtemp(prefix="pepe_db_snapshot_")
-        packed = os.path.join(packed_dir, "markov-20260901-000000.db.gz")
+        packed = os.path.join(packed_dir, "markov-stamp.db.gz")
         with open(packed, "wb") as fh:
             fh.write(b"gzip-bytes")
         bot = AsyncMock()

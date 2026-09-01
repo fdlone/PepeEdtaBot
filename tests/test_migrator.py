@@ -35,6 +35,7 @@ EXPECTED_MIGRATIONS = [
     "020_reverse_index_and_token_df",
     "021_recompute_model_volume",
     "022_phrase_ngrams",
+    "023_maintenance_meta",
 ]
 
 EXPECTED_TABLES = {
@@ -52,6 +53,7 @@ EXPECTED_TABLES = {
     "chat_user_interactions",
     "markov_token_df",
     "chat_phrase_ngrams",
+    "maintenance_meta",
     "schema_migrations",
 }
 
