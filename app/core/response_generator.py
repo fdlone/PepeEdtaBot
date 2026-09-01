@@ -90,6 +90,24 @@ def branching_aware_target(
     if mean_branching > degenerate_max:
         return base_target
     return max(1, min(base_target, floor))
+
+
+def route_slot_budget(target: int, ratio: float) -> int:
+    """Slots a route may take from INSIDE the pool budget (O10, ветвь 2).
+
+    Маршруты клали кандидатов **сверх** заполненного пула, поэтому пул рос с
+    каждым включённым маршрутом (замер 2026-09-01: C0 ровно 5, C4 в среднем
+    6.40 при максимуме 7), а страховочный инвариант «ECB ≥ 4» сравнивал
+    абсолютный счёт с плывущим знаменателем. Бюджет заставляет маршрут
+    конкурировать за места: что взял маршрут, того не получит основной обход.
+
+    Потолок в половину пула **побеждает** минимум «хотя бы один слот», и это
+    осознанно: при пуле из одного слота конкурировать не за что, и маршрут не
+    вправе выставить пул, в котором нет ни одного кандидата обхода.
+    """
+    if ratio <= 0.0 or target <= 0:
+        return 0
+    return min(max(1, round(target * ratio)), target // 2)
 # Softmax candidate selection only considers candidates whose score is within
 # this margin of the best one; clearly weaker candidates never win the roll.
 # 0.3 (2026-07-09): this margin, not the temperature, is what decides whether
@@ -594,10 +612,15 @@ class ResponseGenerator:
         entropy_sampling: EntropySampling,
         temporal_blend: TemporalBlend,
         now: int,
-        target: int,
+        slots: int,
         rng: random.Random,
     ) -> set[str]:
         """Grow seeded candidates from the message's best anchors (M2R-410).
+
+        ``slots`` — бюджет мест **внутри** пула, посчитанный вызывающим
+        (``route_slot_budget``). Ветка политикой размера пула не владеет: когда
+        маршрутов станет больше одного, делить бюджет придётся в одном месте,
+        а не в каждой ветке по её формуле (O10, design D3).
 
         The seed ranking is computed once per reply (never per candidate). Each
         seeded slot takes the next distinct top seed above the minimum score and
@@ -628,7 +651,6 @@ class ResponseGenerator:
         usable = [s for s in ranked if s.score >= state.markov_seed_min_score]
         if not usable:
             return set()
-        seeded_slots = max(1, round(target * state.markov_seeded_candidate_ratio))
         # ``randomness_strength`` — шкала 0–3, а ``next_explore`` — вероятность
         # (markov.py сравнивает её с rng.random()): сырое значение >= 1.0 делало
         # исследование безусловным. Отображение то же, что в основном обходе
@@ -636,7 +658,7 @@ class ResponseGenerator:
         strength = max(0.0, min(3.0, state.randomness_strength))
         next_explore = min(0.98, 0.12 + 0.18 * strength)
         seeded_texts: set[str] = set()
-        for seed_score in usable[:seeded_slots]:
+        for seed_score in usable[:slots]:
             tokens = await self.generator.generate_seeded_candidate(
                 request.chat_id,
                 seed_score.token,
@@ -910,6 +932,41 @@ class ResponseGenerator:
             recent_penalty_strength=recent_penalty_strength,
             verbatim_penalty_strength=verbatim_penalty_strength,
         )
+
+        # O10 (route-slot-budget): маршруты берут слоты ИЗНУТРИ бюджета пула,
+        # а не сверх него — иначе пул растёт с каждым включённым маршрутом
+        # (замер: C0 ровно 5, C4 в среднем 6.40 при максимуме 7), и
+        # пре-регистрированный порог ECB ≥ 4 сравнивает абсолютный счёт с
+        # плывущим знаменателем.
+        #
+        # Маршрут идёт ПЕРВЫМ, и это то, что позволяет удержать бюджет, не
+        # уменьшая пул: условие остановки цикла ниже уже считает общий размер
+        # пула, поэтому обход просто добирает то, что маршрут не занял. Резерв
+        # с маршрутом после цикла давал бы недозаполненный пул каждый раз,
+        # когда маршрут ничего не произвёл (design D1).
+        seeded_budget = route_slot_budget(
+            target, self.runtime_state.markov_seeded_candidate_ratio
+        )
+        seeded_texts: set[str] = set()
+        if seeded_budget > 0:
+            seeded_texts = await self._append_seeded_candidates(
+                request,
+                candidates,
+                seen_candidates,
+                length_mode=length_mode,
+                max_tokens=max_tokens,
+                context_idf=context_idf,
+                recent_trigrams=recent_trigrams,
+                recent_penalty_strength=recent_penalty_strength,
+                corpus_ngrams=corpus_ngrams,
+                verbatim_penalty_strength=verbatim_penalty_strength,
+                active_collocations=active_collocations,
+                entropy_sampling=entropy_sampling,
+                temporal_blend=temporal_blend,
+                now=now,
+                slots=seeded_budget,
+                rng=generation_rng,
+            )
 
         # M3R-141: a generation that starts with context and runs past the
         # with-context budget finishes on a different mechanism than the one it
@@ -1185,31 +1242,6 @@ class ResponseGenerator:
         if context_dropped:
             self.generator.telemetry.note_context_dropped()
 
-        # M2R-410 lexical anchoring: seeded candidates join the pool and compete
-        # with no priority (ADR-008). Guarded by the ratio so the neutral default
-        # (0) computes no seed ranking, issues no reverse/df read and draws no
-        # extra RNG — the main loop above stays byte-identical (design D5).
-        seeded_texts: set[str] = set()
-        if self.runtime_state.markov_seeded_candidate_ratio > 0.0:
-            seeded_texts = await self._append_seeded_candidates(
-                request,
-                candidates,
-                seen_candidates,
-                length_mode=length_mode,
-                max_tokens=max_tokens,
-                context_idf=context_idf,
-                recent_trigrams=recent_trigrams,
-                recent_penalty_strength=recent_penalty_strength,
-                corpus_ngrams=corpus_ngrams,
-                verbatim_penalty_strength=verbatim_penalty_strength,
-                active_collocations=active_collocations,
-                entropy_sampling=entropy_sampling,
-                temporal_blend=temporal_blend,
-                now=now,
-                target=target,
-                rng=generation_rng,
-            )
-
         # M3R-103. ``attempted`` is deliberately not "every route in the enum":
         # a route whose knob is off must stay distinguishable from one that ran
         # and produced nothing, and only the knobs know which is which.
@@ -1221,7 +1253,11 @@ class ResponseGenerator:
         # inflates them towards "the route is useful" — the worst direction for
         # a promotion gate (M3R-220).
         attempted = {CandidateRoute.VANILLA, CandidateRoute.EXTENSION}
-        if self.runtime_state.markov_seeded_candidate_ratio > 0.0:
+        # Ручка включена, но бюджет слотов нулевой (пул из одного места) —
+        # маршрут НЕ запускался, и знаменатель «маршрут отработал» его считать
+        # не должен: иначе «не было места» слилось бы с «место было, кандидата
+        # нет» — ровно та пара, ради различения которой заведены счётчики.
+        if seeded_budget > 0:
             attempted.add(CandidateRoute.SEEDED)
         if self.runtime_state.slot_mutation_probability > 0.0:
             attempted.add(CandidateRoute.MUTATED)
@@ -1238,7 +1274,7 @@ class ResponseGenerator:
             # `seeded_present_rate` и `seeded_win_rate_given_present` были
             # завышены ровно на долю провальных генераций. Именно по этим двум
             # числам в /stats принимается решение M2R-430.
-            if self.runtime_state.markov_seeded_candidate_ratio > 0.0:
+            if seeded_budget > 0:
                 self.generator.telemetry.note_seeded(present=False, won=False)
             gen_trace_log.log_selection(
                 request.chat_id,
@@ -1253,7 +1289,7 @@ class ResponseGenerator:
             self.runtime_state.candidate_selection_temperature,
             generation_rng,
         )
-        if self.runtime_state.markov_seeded_candidate_ratio > 0.0:
+        if seeded_budget > 0:
             self.generator.telemetry.note_seeded(
                 present=bool(seeded_texts),
                 won=selected.text in seeded_texts,
