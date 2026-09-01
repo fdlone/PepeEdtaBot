@@ -572,6 +572,135 @@ def _phase9_arm_verdict(
     return _verdict(parts, failures, missing)
 
 
+# M3R-145 arms (hot-n-gram thresholds), same prefix convention: C7 because
+# C0..C6 are taken, and the prefix is what routes an arm to its gate.
+L1_ARM_PREFIX = "C7"
+
+
+def _l1_arm_verdict(
+    baseline: ConfigRun,
+    arm: ConfigRun,
+    thresholds: dict[str, Any],
+    solo_rating: dict[str, Any] | None,
+    context_mode: str,
+) -> tuple[str, str]:
+    """L1 hot-channel gate for one arm (verdict, detail) — M3R-145.
+
+    Asymmetric by mode on purpose: the pipeline never seeds addressed replies,
+    and addressed replies are the ones that carry context, so the seed draw
+    exists in noctx only. noctx checks coverage, the must-improve on the meme
+    rate and connectedness; ctx checks the affinity floor (there the knobs
+    only change which tokens slot mutations protect); copy, repetition and
+    latency are checked in both. Coverage below its floor is `insufficient
+    data` whatever the metrics say — the arm touched too few replies for the
+    protocol to resolve anything about it.
+    """
+    if arm.shared_with is not None:
+        return INSUFFICIENT, f"arm resolves to the same overrides as {arm.shared_with}"
+
+    config = thresholds.get("l1_hot_channel", {})
+    base_values = metric_values(baseline.records)
+    arm_values = metric_values(arm.records)
+    parts: list[str] = []
+    failures: list[str] = []
+    missing: list[str] = []
+
+    if context_mode == "noctx":
+        successful = [record for record in arm.records if record.success]
+        if not successful:
+            return INSUFFICIENT, "no successful generations in the arm"
+        drawn = sum(1 for record in successful if record.seed_drawn)
+        seeded = sum(1 for record in successful if record.start_source == "seed")
+        share = seeded / len(successful)
+        floor = float(config.get("seed_start_share_min", 0.05))
+        parts.append(
+            f"coverage: seeded starts {share:.1%} of {len(successful)} "
+            f"(seeds drawn {drawn}; floor {floor:.0%})"
+        )
+        if share < floor:
+            return (
+                INSUFFICIENT,
+                "; ".join(parts)
+                + " — coverage below the floor: the channel reached too few "
+                "replies to resolve its effect",
+            )
+        meme_min = float(config.get("meme_rate_delta_min", 0.0))
+        meme = _delta_part(
+            "historical_meme_rate",
+            base_values.get("historical_meme_rate"),
+            arm_values.get("historical_meme_rate"),
+            parts=parts,
+            missing=missing,
+        )
+        if meme is not None:
+            point, significant = meme
+            if not (significant and point > meme_min):
+                failures.append("historical_meme_rate did not rise significantly")
+    else:
+        parts.append(
+            "ctx: seed draw not modelled (the pipeline never seeds addressed "
+            "replies); this mode measures the mutation-protection half only"
+        )
+        affinity_floor = float(config.get("affinity_without_copy_delta_floor", 0.0))
+        affinity = _delta_part(
+            "affinity_without_copy",
+            base_values.get("context_affinity_without_copy"),
+            arm_values.get("context_affinity_without_copy"),
+            parts=parts,
+            missing=missing,
+        )
+        if affinity is not None:
+            point, significant = affinity
+            if significant and point < affinity_floor:
+                failures.append("affinity without copies dropped significantly")
+
+    copy_max = float(config.get("exact_copy_delta_max", 0.0))
+    copy_delta = _delta_part(
+        "copy",
+        base_values.get("exact_context_copy_rate"),
+        arm_values.get("exact_context_copy_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if copy_delta is not None:
+        point, significant = copy_delta
+        if significant and point > copy_max:
+            failures.append("copy rose significantly")
+
+    repetition_max = float(config.get("repetition_delta_max", 0.0))
+    repetition_delta = _delta_part(
+        "repetition",
+        base_values.get("repetition_rate"),
+        arm_values.get("repetition_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if repetition_delta is not None:
+        point, significant = repetition_delta
+        if significant and point > repetition_max:
+            failures.append("repetition rose significantly")
+
+    _latency_part(
+        arm,
+        float(config.get("latency_p95_ms_max", 150)),
+        parts=parts,
+        missing=missing,
+        failures=failures,
+    )
+
+    if context_mode == "noctx":
+        _connectedness_part(
+            baseline.config_id,
+            arm.config_id,
+            solo_rating,
+            float(config.get("manual_connected_delta_floor", -0.10)),
+            parts=parts,
+            missing=missing,
+            failures=failures,
+        )
+    return _verdict(parts, failures, missing)
+
+
 def _connectedness_part(
     baseline_id: str,
     arm_id: str,
@@ -1170,6 +1299,24 @@ def evaluate_gates(
             )
             rows.append((f"phase9_interp[{arm_id}]", verdict, detail))
 
+    l1_arms = sorted(arm for arm in runs if arm.startswith(L1_ARM_PREFIX))
+    if baseline is None or not l1_arms:
+        rows.append(
+            (
+                "l1_hot_channel",
+                INSUFFICIENT,
+                "no L1 arm in this run (hot-n-gram thresholds at their defaults)"
+                if baseline
+                else "no baseline run",
+            )
+        )
+    else:
+        for arm_id in l1_arms:
+            verdict, detail = _l1_arm_verdict(
+                baseline, runs[arm_id], thresholds, solo_rating, context_mode
+            )
+            rows.append((f"l1_hot_channel[{arm_id}]", verdict, detail))
+
     rows.extend(_structural_escape_rows(runs, thresholds))
 
     rows.append(("phase6_anticycle", *_phase6_verdict(baseline, thresholds)))
@@ -1468,6 +1615,22 @@ def build_report(
             if shadow_shares
             else INSUFFICIENT
         )
+        # M3R-145: the L1 draw counters (M3R-141 pair) — "switched off by data"
+        # is visible in the report itself, not only in /stats. Draws are
+        # summed over seeds, the empty share averaged over seeds that drew.
+        hot_draws = sum(
+            int(snapshot.get("hot_ngram_draws") or 0) for snapshot in run.telemetry
+        )
+        hot_empty = [
+            float(value)
+            for snapshot in run.telemetry
+            if (value := snapshot.get("hot_ngram_empty_rate")) is not None
+        ]
+        hot_line = (
+            f"{hot_draws} draws, empty {mean(hot_empty):.0%}"
+            if hot_draws and hot_empty
+            else "no draws"
+        )
         lines.append("")
         lines.append(
             f"{config_id}: distinct-2 = {d2 and _fmt(d2)} (basis {basis2}), "
@@ -1481,7 +1644,8 @@ def build_report(
             f"mean applied temperature: {temperature_line}; "
             f"temporal blend: {blend_line}; "
             f"order interpolation: {interp_line}; "
-            f"shadow order-4 share: {shadow_line}; storage_delta: n/a."
+            f"shadow order-4 share: {shadow_line}; hot-ngram seeds: {hot_line}; "
+            "storage_delta: n/a."
         )
     lines.append("")
 

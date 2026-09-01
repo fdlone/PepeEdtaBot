@@ -71,6 +71,12 @@ class GenRecord:
     # break every comparison (design D5).
     winner_route: str | None = None
     pool_routes: tuple[str, ...] = ()
+    # M3R-145: whether the harness drew an L1 hot-n-gram seed for this
+    # generation (noctx only, the pipeline's way), and the walk's start source
+    # of the winner as the generator traced it. The gate's coverage reads the
+    # second: a drawn seed anchors a walk only when it opens a stored start.
+    seed_drawn: bool = False
+    start_source: str | None = None
 
 
 # M3R-011: the similarity threshold lives in eval_thresholds.yaml

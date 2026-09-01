@@ -60,3 +60,18 @@ by the generator at candidate creation (`GenRecord.winner_route`,
 `GenRecord.pool_routes`), never inferred from text; a route whose mechanism
 did not run reads `not attempted`. The bit-for-bit `metrics_summary` does not
 include route fields.
+
+## L1 hot-n-gram seeding (M3R-145)
+
+In the `noctx` mode the runner reproduces the pipeline's L1 seed draw
+(`ReplyPipeline._hot_ngram_seed`): roll `hot_ngram_seed_chance`, then pick one
+of the configuration's hot n-grams (`hot_ngram_min_count`,
+`hot_ngram_recency_share`) with a deterministic RNG separate from the
+generation RNG (`HOT_SEED_RNG_OFFSET`), so a configuration whose hot selection
+is empty stays byte-identical to a run without the draw. `ctx` never seeds:
+the pipeline never seeds addressed replies. Records carry `seed_drawn` and
+the winner's `start_source`; the `l1_hot_channel` gate's coverage is the share
+of successful noctx generations that started from the seed. The grid lives in
+`matrix_l1_grid.yaml` (arms `C7*`); the machinery line prints the draw
+counters (`hot-ngram seeds: N draws, empty X%`).
+

@@ -334,3 +334,54 @@ performance:
   # TZ §17, checked from Phase 1 onward on every protocol run.
   lookup_p95_ms_max: 10
   generation_p95_ms_max: 150
+
+l1_hot_channel:
+  # M3R-145, registered 2026-09-01 BEFORE the L1 grid (matrix_l1_grid.yaml)
+  # was run and before the harness had produced a single seeded generation
+  # (change l1-hot-channel-sweep). Rationale per number, so a later reader can
+  # audit whether an edit was post-hoc.
+  #
+  # The channel is dead by data at the default thresholds (map §3.2б; live
+  # /stats 2026-09-01: hot phrases empty in 100% of draws). The grid lowers the
+  # SELECTION thresholds; the draw probability stays at its default.
+  #
+  # Two modes, and the gate is asymmetric by construction: the pipeline never
+  # seeds addressed replies, and addressed replies are the ones that carry
+  # context — so the seed draw exists in noctx only, and ctx measures the other
+  # half of the same knobs (which tokens slot mutations protect).
+  requires_both_modes: true
+  # Coverage (roadmap §4 template), noctx: share of successful generations
+  # whose walk actually STARTED from the seed — not the share of draws. A drawn
+  # n-gram anchors a walk only when it opens a stored start, and the census
+  # says 3-5 of the top 8 do; at a 0.25 draw chance the reachable ceiling is
+  # 9-16%. Below 5% the arm touched too few replies for the protocol to resolve
+  # its effect (~3 p.p., doc 05 §8): verdict `insufficient data`, never pass.
+  seed_start_share_min: 0.05
+  # must-improve, noctx: historical_meme_rate must rise AND the rise must be
+  # significant. Circularity admitted up front: the meme set (M3R-130) and the
+  # seed pool share the support floor 2, so this measures whether a drawn meme
+  # SURVIVES to the reply through finalization, the verbatim penalty and
+  # selection — which is the channel's question (R4: the nine memes never
+  # appear in any candidate). An insignificant delta is a FAIL: reproducing
+  # local memes is the stated benefit, "no measurable effect" means the channel
+  # still has nothing to say.
+  meme_rate_delta_min: 0.0
+  # must-not-worsen, both modes: only a SIGNIFICANT rise disqualifies (same
+  # convention as every earlier gate; the protocol cannot resolve below ~3
+  # p.p.). Seeds are corpus phrases by construction, so copy is the risk this
+  # channel carries and the pairing with the must-improve above is deliberate.
+  exact_copy_delta_max: 0.0
+  repetition_delta_max: 0.0
+  # must-not-worsen, ctx: topicality without copies may not drop significantly.
+  # In ctx the knobs change only the protected tokens of slot mutations; a
+  # significant drop there would mean the protection is breaking replies.
+  affinity_without_copy_delta_floor: 0.0
+  # TZ §17 budget, restated so the verdict is computable from this block alone.
+  latency_p95_ms_max: 150
+  # Connectedness, noctx only (the channel produces text there; in ctx it
+  # changes nothing a rater could see). Same instrument and floor as phase 9:
+  # the M3R-020 solo round, share of "coherent" replies may not fall more than
+  # 10 p.p. below C0. Validity of the round is read from the phase9_interp
+  # block by the round tool itself (its design: one set of validity bars).
+  # Without a round the noctx verdict is `insufficient data`, never `pass`.
+  manual_connected_delta_floor: -0.10

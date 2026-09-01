@@ -84,6 +84,31 @@ SMOKE_GENERATIONS = 40  # doc 05 §7
 # make the noctx arm measure a different machine, not a different input.
 CONTEXT_MODES = ("ctx", "noctx")
 
+# M3R-145: the L1 seed draw of ``ReplyPipeline._hot_ngram_seed``, reproduced
+# for the noctx mode. Its RNG is seeded per generation at this offset from the
+# generation RNG's seed (``seed * 100_000 + index``) so the two streams never
+# share a seed: a configuration with an empty hot selection stays byte-identical
+# to a run without the draw, and the draw never shifts the walk's RNG.
+HOT_SEED_RNG_OFFSET = 50_000_000
+
+
+def draw_hot_seed(
+    pool: list[tuple[str, ...]], chance: float, rng: random.Random
+) -> tuple[bool, list[str] | None]:
+    """One L1 seed draw the pipeline's way: roll first, then choose.
+
+    Returns ``(rolled, seed)``. ``rolled`` is whether the roll asked for a
+    seed — it is taken before looking at the pool, exactly as in production,
+    so the draw counter keeps the same denominator there and here ("asked and
+    got nothing", M3R-141). ``seed`` is ``None`` when the roll failed or the
+    pool is empty.
+    """
+    if chance <= 0.0 or rng.random() >= chance:
+        return False, None
+    if not pool:
+        return True, None
+    return True, list(rng.choice(pool))
+
 
 @dataclass(slots=True)
 class ConfigRun:
@@ -327,12 +352,35 @@ async def run_config_seed(
                 ),
                 runtime_state=runtime_state,
             )
+            # M3R-145: the hot selection a self-initiated reply would draw
+            # from, read once per (arm, seed) like the pipeline's cache. noctx
+            # only — the pipeline never seeds addressed replies, and addressed
+            # replies are the ones that carry context (design D1).
+            hot_seed_pool: list[tuple[str, ...]] = []
+            if context_mode == "noctx" and runtime_state.hot_ngram_seed_chance > 0.0:
+                hot_seed_pool = await db.chat_hot_ngrams.get_hot(
+                    resolved_chat,
+                    min_count=runtime_state.hot_ngram_min_count,
+                    recency_share=runtime_state.hot_ngram_recency_share,
+                    meme_ordering=runtime_state.markov_hot_ngram_meme_ordering,
+                )
 
             index = 0
             for category, prompts in prompt_set.categories.items():
                 selector = random.Random(seed)
                 for prompt in _select_prompts(prompts, per_category, selector):
                     rng = random.Random(seed * 100_000 + index)
+                    seed_tokens: list[str] | None = None
+                    if context_mode == "noctx":
+                        rolled, seed_tokens = draw_hot_seed(
+                            hot_seed_pool,
+                            runtime_state.hot_ngram_seed_chance,
+                            random.Random(seed * 100_000 + index + HOT_SEED_RNG_OFFSET),
+                        )
+                        if rolled:
+                            generator.telemetry.note_hot_ngram_draw(
+                                empty=not hot_seed_pool
+                            )
                     index += 1
                     generator.reset_generation()
                     pool_sizes[0] = 0
@@ -355,7 +403,7 @@ async def run_config_seed(
                             context_tokens=(
                                 prompt_tokens if context_mode == "ctx" else []
                             ),
-                            seed=None,
+                            seed=seed_tokens,
                             current_message_normalized=sanitize_text(prompt).lower(),
                             # M2R-210: a fixed moment, so a time-dependent
                             # weight stays reproducible. On a reconstructed
@@ -388,6 +436,7 @@ async def run_config_seed(
                                 pool_ecb=pool_ecb,
                                 window_escape=window_escape,
                                 pool_routes=tuple(captured_routes),
+                                seed_drawn=seed_tokens is not None,
                             )
                         )
                         continue
@@ -428,6 +477,13 @@ async def run_config_seed(
                             ),
                             winner_route=result.winner_route,
                             pool_routes=tuple(captured_routes),
+                            seed_drawn=seed_tokens is not None,
+                            # The winner's walk as the generator traced it,
+                            # looked up by text (the eval_prod convention).
+                            # A post-processed reply that no longer matches
+                            # its attempt reads as None — coverage is then
+                            # undercounted, never inflated.
+                            start_source=generator.attempt_sources.get(result.text),
                         )
                     )
         finally:

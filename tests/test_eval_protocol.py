@@ -274,6 +274,7 @@ class TestConfigFiles(unittest.TestCase):
             # молча уводит гейт на дефолты и печатает вердикт как ни в чём не
             # бывало. Этот кортеж — единственная защита.
             "phase9_interp",
+            "l1_hot_channel",
             "performance",
         ):
             self.assertIn(gate, thresholds)
@@ -745,6 +746,151 @@ class TestRouteBreakdownSection(unittest.TestCase):
         self.assertEqual(flat["route_seeded_rejected_unmapped"], 1)
 
 
+class TestHotSeedDraw(unittest.TestCase):
+    """M3R-145: the harness draws L1 seeds the pipeline's way."""
+
+    def test_roll_first_then_choose(self) -> None:
+        from tools.eval.run import draw_hot_seed
+
+        pool = [("пиво", "сегодня"), ("опять", "ты")]
+        self.assertEqual(draw_hot_seed(pool, 0.0, random.Random(1)), (False, None))
+        self.assertEqual(draw_hot_seed([], 1.0, random.Random(1)), (True, None))
+        rolled, seed = draw_hot_seed(pool, 1.0, random.Random(1))
+        self.assertTrue(rolled)
+        self.assertIn(tuple(seed or ()), pool)
+
+    def test_zero_chance_consumes_no_draw(self) -> None:
+        from tools.eval.run import draw_hot_seed
+
+        rng = random.Random(7)
+        draw_hot_seed([("а", "б")], 0.0, rng)
+        self.assertEqual(rng.random(), random.Random(7).random())
+
+    def test_same_seed_same_choice(self) -> None:
+        from tools.eval.run import draw_hot_seed
+
+        pool = [(f"w{i}", "x") for i in range(20)]
+        first = draw_hot_seed(pool, 1.0, random.Random(42))
+        second = draw_hot_seed(pool, 1.0, random.Random(42))
+        self.assertEqual(first, second)
+
+
+class TestL1Gate(unittest.TestCase):
+    """M3R-145 gate: coverage gates the verdict, the meme rate is must-improve
+    in noctx, copy is must-not-worsen in both modes, and no round means no
+    pass."""
+
+    @staticmethod
+    def _records(
+        *,
+        n: int = 20,
+        seeded: int = 0,
+        meme: bool = False,
+        copy: bool = False,
+        affinity: float = 0.3,
+    ) -> list[GenRecord]:
+        records = []
+        for index in range(n):
+            records.append(
+                _record(
+                    category="meme-bait",
+                    meme_hits=frozenset({0}) if meme else frozenset(),
+                    is_copy=copy,
+                    affinity=affinity,
+                    seed_drawn=index < seeded,
+                    start_source="seed" if index < seeded else "global",
+                )
+            )
+        return records
+
+    def _rows(self, runs: dict[str, ConfigRun], mode: str) -> dict[str, tuple[str, str]]:
+        rows = evaluate_gates(runs, load_thresholds(), None, mode, None, None)
+        return {row[0]: (row[1], row[2]) for row in rows}
+
+    @staticmethod
+    def _arm_verdict(runs: dict[str, ConfigRun], mode: str) -> tuple[str, str]:
+        # The arm verdict BEFORE the two-mode downgrade: a one-mode run always
+        # reads `insufficient data` through evaluate_gates (M3R-140), so the
+        # fail/pass logic is tested on the function that computes it.
+        from tools.eval.report import _l1_arm_verdict
+
+        return _l1_arm_verdict(runs["C0"], runs["C7a"], load_thresholds(), None, mode)
+
+    def test_coverage_below_floor_is_insufficient_not_fail(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C7a": ConfigRun(config_id="C7a", records=self._records(meme=True, copy=True)),
+        }
+        verdict, detail = self._rows(runs, "noctx")["l1_hot_channel[C7a]"]
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("coverage below the floor", detail)
+
+    def test_meme_rise_without_round_is_insufficient(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C7a": ConfigRun(config_id="C7a", records=self._records(seeded=4, meme=True)),
+        }
+        verdict, detail = self._rows(runs, "noctx")["l1_hot_channel[C7a]"]
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("historical_meme_rate Δ 1.000", detail)
+        self.assertIn("connectedness round", detail)
+        # The two-mode requirement is named too.
+        self.assertIn("requires both context modes", detail)
+
+    def test_no_meme_rise_is_a_fail(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C7a": ConfigRun(config_id="C7a", records=self._records(seeded=4)),
+        }
+        verdict, detail = self._arm_verdict(runs, "noctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("did not rise significantly", detail)
+
+    def test_copy_rise_fails_in_ctx_too(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C7a": ConfigRun(config_id="C7a", records=self._records(copy=True)),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("copy rose significantly", detail)
+        self.assertIn("seed draw not modelled", detail)
+
+    def test_affinity_drop_fails_in_ctx(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(affinity=0.5)),
+            "C7a": ConfigRun(config_id="C7a", records=self._records(affinity=0.1)),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("affinity without copies dropped", detail)
+
+    def test_no_arm_reports_insufficient(self) -> None:
+        runs = {"C0": ConfigRun(config_id="C0", records=self._records())}
+        verdict, _ = self._rows(runs, "noctx")["l1_hot_channel"]
+        self.assertEqual(verdict, "insufficient data")
+
+    def test_report_prints_hot_seed_counters(self) -> None:
+        run = ConfigRun(
+            config_id="C0",
+            records=self._records(),
+            telemetry=[{"hot_ngram_draws": 12, "hot_ngram_empty_rate": 1.0}],
+        )
+        report = build_report(
+            runs={"C0": run},
+            skipped=[],
+            prompt_set=_prompt_set_stub(),
+            thresholds=load_thresholds(),
+            snapshot_label="test",
+            seeds=(42,),
+            generations=1,
+            revision="test",
+            date="2026-09-01",
+            notes=[],
+        )
+        self.assertIn("hot-ngram seeds: 12 draws, empty 100%", report)
+
+
 class TestPhase7Gate(unittest.TestCase):
     """Phase 7 shadow order-4 gate (ADR-002): a single-dimension sample-size
     gate. Below the eligible bar it is insufficient; at or above it, a selected
@@ -1128,6 +1274,17 @@ class TestSyntheticProtocol(unittest.IsolatedAsyncioTestCase):
                 noctx_runs["C0"].telemetry[0]["ctx_generation_share"], 0.0
             )
             self.assertEqual(ctx_runs["C0"].telemetry[0]["ctx_generation_share"], 1.0)
+            # M3R-145: the L1 seed draw exists in noctx only — the pipeline
+            # never seeds addressed replies. In ctx nothing is drawn and the
+            # draw counter stays at zero; in noctx the roll is taken, and on
+            # the synthetic snapshot (hot selection empty at the defaults) the
+            # draws that happened all came back empty.
+            self.assertTrue(all(not r.seed_drawn for r in ctx_records))
+            self.assertEqual(ctx_runs["C0"].telemetry[0]["hot_ngram_draws"], 0)
+            self.assertTrue(all(not r.seed_drawn for r in noctx_records))
+            noctx_snapshot = noctx_runs["C0"].telemetry[0]
+            if noctx_snapshot["hot_ngram_draws"]:
+                self.assertEqual(noctx_snapshot["hot_ngram_empty_rate"], 1.0)
 
             summary = metrics_summary(noctx_runs, "noctx")
             self.assertEqual(summary["C0"]["context_mode"], "noctx")
