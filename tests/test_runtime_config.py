@@ -84,8 +84,8 @@ class TestRuntimeConfig(unittest.TestCase):
         with self.assertRaises(InvalidRuntimeSettingValueError):
             apply_runtime_setting(state, "user_quirk_min_interactions", "0")
 
-        self.assertEqual(state.user_quirk_chance, 0.1)
-        self.assertEqual(state.user_quirk_min_interactions, 25)
+        self.assertEqual(state.user_quirk_chance, 0.3)
+        self.assertEqual(state.user_quirk_min_interactions, 10)
 
     def test_apply_runtime_setting_rejects_probability_out_of_range(self) -> None:
         state = make_state()

@@ -557,14 +557,23 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # the whole channel — no interaction-counter writes, no reads (same gate
     # pattern as emoji_append_chance / hot_ngram_seed_chance). Additionally
     # capped in code at one quirk per (chat, user) per UTC day.
-    FieldSpec("user_quirk_chance", "USER_QUIRK_CHANCE", "0.1",
+    # 0.3 since 2026-09-01 (tune-user-quirk-channel): the live funnel of
+    # 24.08->01.09 showed the roll rejecting 41 of 44 addressed replies that
+    # reached it at 0.1 — the channel fired twice in a week. 0.3 triples the
+    # rate while the roll stays the main gate (at 0.5 only the daily cap would
+    # be left).
+    FieldSpec("user_quirk_chance", "USER_QUIRK_CHANCE", "0.3",
               _float_in_range(0.0, 1.0)),
     # Answered-mention count (decayed over ~30 days, see
     # CHAT_USER_INTERACTION_DECAY_DAYS) at which a user counts as a regular.
     # Ceiling: the counter decays, so a threshold in the thousands is never
-    # reached and quirks simply stop firing.
+    # reached and quirks simply stop firing. 10 since 2026-09-01 (same
+    # change): with a ~30-day decay ten answered addresses a month is someone
+    # the bot really talks to regularly; 25 was reached by one person in the
+    # chat, and the funnel showed the threshold as the second gate after the
+    # roll.
     FieldSpec("user_quirk_min_interactions", "USER_QUIRK_MIN_INTERACTIONS",
-              "25", _int_in_range(1, 10000)),
+              "10", _int_in_range(1, 10000)),
     # L2.1: share of fired quirks whose vocative addresses the regular by
     # first name (taken live from the incoming update, sanitized, never
     # stored or logged) instead of the anonymous pool phrase. The name is

@@ -395,7 +395,7 @@ seed-старт уже найден `[код markov.py:2392]` — это сох�
 | `reply_flavor_strength` | 1.0 | вариатор концовки | **живая; работает против скорера** | 100% победителей имеют терминальную пунктуацию, из них 25%×strength лишатся точки `[замер + код reply_flavor.py:12]` |
 | `emoji_append_chance` | 0.15 | эмодзи в конце | **живая в проде, мёртвая в eval** | заглушка eval возвращает `{}` `[код tools/eval_prod.py:151-154]`; на снимке 9 строк статистики |
 | `rare_event_chance` / `false_start_chance` / `rare_event_daily_cap` | 0.03 / 0.05 / 3 | слом формы | **живые в проде, отсутствуют в eval** | eval зовёт `ResponseGenerator` напрямую, минуя `ReplyPipeline` `[код tools/eval/run.py:231]` |
-| `user_quirk_*` (3) | 0.1 / 25 / 0 | причуды завсегдатаев | **живые в проде, отсутствуют в eval** | там же |
+| `user_quirk_*` (3) | 0.3 / 10 / 0 (с 2026-09-01; было 0.1 / 25) | причуды завсегдатаев | **живые в проде, отсутствуют в eval** | там же |
 | `mood_*` (8) | — | настроение чата | **живые в проде, отсутствуют в eval**: eval строит `ResponseGenerator` без `mood`/`mood_modifiers` `[код tools/eval/run.py:212-218]` → `NEUTRAL_MODIFIERS` и alpha всегда «calm» | `[код response_generator.py:716,319]` |
 | `reply_probability*`, `reply_director_*`, `reply_burst_*`, `reply_max_per_hour`, `min_cooldown_sec`, `mention_cooldown_sec` | — | политика «отвечать ли» | **живые в проде, отсутствуют в eval** | eval начинается после решения |
 | `min_tokens_for_model` | 200 | гейт объёма | живая | — |
