@@ -849,6 +849,152 @@ def _pool_arm_verdict(
     return _verdict(parts, failures, missing)
 
 
+# M3R-100 arms (selection window), same prefix convention.
+SELECTION_ARM_PREFIX = "C9"
+
+
+def single_trajectory_samples(records: list[Any]) -> list[float] | None:
+    """Per-record 0/1 samples: the window held a single trajectory (M3R-100).
+
+    The coverage form M3R-011 promised — "share of inputs below 2" — as a
+    paired sample list aligned to the successful records, so the delta between
+    arms is a paired bootstrap like every other proportion.
+    """
+    successful = [record for record in records if record.success]
+    if not successful:
+        return None
+    return [1.0 if record.window_escape < 2 else 0.0 for record in successful]
+
+
+def _selection_arm_verdict(
+    baseline: ConfigRun,
+    arm: ConfigRun,
+    thresholds: dict[str, Any],
+    solo_rating: dict[str, Any] | None,
+    context_mode: str,
+) -> tuple[str, str]:
+    """Selection-window gate for one arm (verdict, detail) — M3R-100.
+
+    Coverage first: the share of single-trajectory inputs must drop by at
+    least the floor, else `insufficient data` whatever the mean says. Then
+    the must-improve on the window escape, the must-not-worsen on affinity
+    without copies, copy and repetition, the ECB invariant, latency and (ctx)
+    connectedness. In noctx the context component is zero for every
+    candidate, so the relevance knobs are inert there; the margin and the
+    diversity bonus are not, and the gate reads the same numbers.
+    """
+    if arm.shared_with is not None:
+        return INSUFFICIENT, f"arm resolves to the same overrides as {arm.shared_with}"
+
+    config = thresholds.get("selection_window", {})
+    base_values = metric_values(baseline.records)
+    arm_values = metric_values(arm.records)
+    parts: list[str] = []
+    failures: list[str] = []
+    missing: list[str] = []
+
+    single_floor = float(config.get("single_trajectory_share_delta_max", -0.05))
+    single = _delta_part(
+        "single_trajectory_share",
+        single_trajectory_samples(baseline.records),
+        single_trajectory_samples(arm.records),
+        parts=parts,
+        missing=missing,
+    )
+    if single is None:
+        return INSUFFICIENT, "; ".join(parts) + " — no single-trajectory samples"
+    point, _significant = single
+    if point > single_floor:
+        return (
+            INSUFFICIENT,
+            "; ".join(parts)
+            + f" — coverage below the floor ({single_floor:+.2f}): the share of "
+            "single-trajectory inputs did not drop enough",
+        )
+
+    escape_min = float(config.get("window_escape_delta_min", 0.0))
+    escape = _delta_part(
+        "window_escape",
+        base_values.get("structural_window_escape"),
+        arm_values.get("structural_window_escape"),
+        parts=parts,
+        missing=missing,
+    )
+    if escape is not None:
+        point, significant = escape
+        if not (significant and point > escape_min):
+            failures.append("window escape did not rise significantly")
+
+    affinity_floor = float(config.get("affinity_without_copy_delta_floor", 0.0))
+    affinity = _delta_part(
+        "affinity_without_copy",
+        base_values.get("context_affinity_without_copy"),
+        arm_values.get("context_affinity_without_copy"),
+        parts=parts,
+        missing=missing,
+    )
+    if affinity is not None:
+        point, significant = affinity
+        if significant and point < affinity_floor:
+            failures.append("affinity without copies dropped significantly")
+
+    copy_max = float(config.get("exact_copy_delta_max", 0.0))
+    copy_delta = _delta_part(
+        "copy",
+        base_values.get("exact_context_copy_rate"),
+        arm_values.get("exact_context_copy_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if copy_delta is not None:
+        point, significant = copy_delta
+        if significant and point > copy_max:
+            failures.append("copy rose significantly")
+
+    repetition_max = float(config.get("repetition_delta_max", 0.0))
+    repetition_delta = _delta_part(
+        "repetition",
+        base_values.get("repetition_rate"),
+        arm_values.get("repetition_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if repetition_delta is not None:
+        point, significant = repetition_delta
+        if significant and point > repetition_max:
+            failures.append("repetition rose significantly")
+
+    ecb_min = float(config.get("pool_ecb_min", 4.0))
+    ecb = arm_values.get("structural_pool_ecb")
+    if not ecb:
+        missing.append("pool ECB samples")
+    else:
+        point, lo, hi = bootstrap_ci(ecb)
+        parts.append(f"pool ECB {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}] (floor {ecb_min:.1f})")
+        if point < ecb_min:
+            failures.append("pool ECB below the invariant floor")
+
+    _latency_part(
+        arm,
+        float(config.get("latency_p95_ms_max", 150)),
+        parts=parts,
+        missing=missing,
+        failures=failures,
+    )
+
+    if context_mode == "ctx":
+        _connectedness_part(
+            baseline.config_id,
+            arm.config_id,
+            solo_rating,
+            float(config.get("manual_connected_delta_floor", -0.10)),
+            parts=parts,
+            missing=missing,
+            failures=failures,
+        )
+    return _verdict(parts, failures, missing)
+
+
 def _connectedness_part(
     baseline_id: str,
     arm_id: str,
@@ -1482,6 +1628,24 @@ def evaluate_gates(
                 baseline, runs[arm_id], thresholds, solo_rating, context_mode
             )
             rows.append((f"pool_composition[{arm_id}]", verdict, detail))
+
+    selection_arms = sorted(arm for arm in runs if arm.startswith(SELECTION_ARM_PREFIX))
+    if baseline is None or not selection_arms:
+        rows.append(
+            (
+                "selection_window",
+                INSUFFICIENT,
+                "no selection-window arm in this run (window knobs at their defaults)"
+                if baseline
+                else "no baseline run",
+            )
+        )
+    else:
+        for arm_id in selection_arms:
+            verdict, detail = _selection_arm_verdict(
+                baseline, runs[arm_id], thresholds, solo_rating, context_mode
+            )
+            rows.append((f"selection_window[{arm_id}]", verdict, detail))
 
     rows.extend(_structural_escape_rows(runs, thresholds))
 

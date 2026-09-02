@@ -483,3 +483,40 @@ knob_census:
     structural_window_escape: 0.15
     structural_pool_ecb: 0.15
     mean_response_length: 1.0
+
+selection_window:
+  # M3R-100, registered 2026-09-02 BEFORE the selection grid
+  # (matrix_selection_grid_{1,2}.yaml) was run (change selection-window-grid).
+  # The hypothesis under test: the ctx selection window — not the chain — is
+  # where candidate diversity collapses (M3R-011: pool ECB ~4.5, window ~2,
+  # 36% of inputs with a single trajectory in the window; M3R-110: every
+  # context knob that raised topicality narrowed the window). The arms move
+  # the window itself: the margin, the relevance weight/cap and a diversity
+  # bonus for trajectories distinct from the best-scored one.
+  requires_both_modes: true
+  # Coverage, in the form M3R-011 promised for the route gate: the share of
+  # inputs whose window holds a SINGLE trajectory must drop by at least this
+  # much (paired delta, negative). A mean escape that rises while the same
+  # third of inputs stays at one trajectory would be diversity for the inputs
+  # that already had it.
+  single_trajectory_share_delta_max: -0.05
+  # must-improve: the window escape count must rise AND the rise must be
+  # significant. An insignificant delta is a FAIL — widening the window is the
+  # stated benefit, "no measurable effect" means the arm did not deliver.
+  window_escape_delta_min: 0.0
+  # must-not-worsen (the roadmap's success criterion: affinity not below the
+  # best single configuration): topicality without copies may not drop
+  # significantly. Deliberately a significance floor, not a CI-low tolerance:
+  # a wider window is expected to cost topicality by construction, and the
+  # question is whether it does so measurably.
+  affinity_without_copy_delta_floor: 0.0
+  # must-not-worsen, both modes: same convention as every earlier gate.
+  exact_copy_delta_max: 0.0
+  repetition_delta_max: 0.0
+  # Safety invariant of the roadmap, same absolute floor as structural_escape.
+  pool_ecb_min: 4.0
+  # TZ §17 budget, restated so the verdict is computable from this block alone.
+  latency_p95_ms_max: 150
+  # Connectedness, ctx (the arms change which candidate wins, i.e. the text a
+  # rater sees). Same instrument and floor as phase 9.
+  manual_connected_delta_floor: -0.10

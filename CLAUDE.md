@@ -75,8 +75,9 @@ Track A (ремонт и валидация) и Track B (структурный 
   `noctx` (`--context-mode`), вердикт взвешивается по прод-доле режима
   (`ctx_generation_share`). Прод-доля измерена 2026-09-01: **`ctx` = 89%**
   (409 генераций, окно 24.08→01.09; O7 закрыт). Флаг объявлен у
-  `phase9_interp`, `structural_escape` и (с 2026-09-01, до прогона
-  M2R-430) `phase5_promotion`.
+  `phase9_interp`, `structural_escape`, `phase5_promotion` (с 2026-09-01) и
+  у гейтов Track A/B 2026-09: `l1_hot_channel`, `pool_composition`,
+  `selection_window`.
 - Каждый гейт включает **coverage**; «+10% на 0.5% ответов» результатом не
   считается. Значимость: CI 95%, интервал исключает 0; дельты — парным
   бутстрапом (исключение — distinct-метрики, см. протокол §4).

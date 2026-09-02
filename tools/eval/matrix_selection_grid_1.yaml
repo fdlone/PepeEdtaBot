@@ -1,0 +1,41 @@
+# M3R-100 selection-window grid, file 1 of 2 (change selection-window-grid).
+#
+# Arm ids start with C9: C0..C8 are taken, and the prefix routes an arm to its
+# gate in report.py. Two files so each run fits the tool's time budget; the
+# paired deltas need C0 inside the same run (C0 is deterministic and its
+# summary must match between the files — the verdict prints that check).
+#
+# Flavor/emoji silenced as in C0. The knobs are M3R-100's: the selection
+# margin, the relevance weight and the diversity bonus (selection-knobs).
+#
+# Margin: 0.3 is the default; 0.5 and 0.8 widen the softmax window. The July
+# 2026 synthetic eval collapsed context overlap at 1.0, so the grid stops at
+# 0.8. Weight: 1.6 is the default; 1.0 and 1.3 shrink the spread the
+# strongest component creates between anchored and unanchored candidates.
+configurations:
+  - id: C0
+    description: "Markov 1.x frozen baseline (registry defaults, flavor/emoji silenced)"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+
+  - id: C9m50
+    description: "M3R-100, selection_score_margin 0.5"
+    available: true
+    same_as: C0
+    overrides:
+      selection_score_margin: 0.5
+  - id: C9m80
+    description: "M3R-100, selection_score_margin 0.8"
+    available: true
+    same_as: C0
+    overrides:
+      selection_score_margin: 0.8
+  - id: C9w10
+    description: "M3R-100, context_relevance_weight 1.0 (cap follows)"
+    available: true
+    same_as: C0
+    overrides:
+      context_relevance_weight: 1.0
+      context_relevance_cap: 1.0

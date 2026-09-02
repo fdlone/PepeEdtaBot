@@ -276,6 +276,7 @@ class TestConfigFiles(unittest.TestCase):
             "phase9_interp",
             "l1_hot_channel",
             "pool_composition",
+            "selection_window",
             "performance",
         ):
             self.assertIn(gate, thresholds)
@@ -1018,6 +1019,96 @@ class TestPoolCompositionGate(unittest.TestCase):
         }
         self.assertEqual(rows["pool_composition[C8b30]"][1], "insufficient data")
         self.assertIn("requires both context modes", rows["pool_composition[C8b30]"][2])
+
+
+class TestSelectionWindowGate(unittest.TestCase):
+    """M3R-100 gate: coverage is the drop of the single-trajectory share, the
+    window escape is must-improve, affinity is must-not-worsen."""
+
+    @staticmethod
+    def _records(
+        *,
+        n: int = 20,
+        single: int = 10,
+        escape_multi: int = 3,
+        affinity: float = 0.3,
+        copy: bool = False,
+    ) -> list[GenRecord]:
+        return [
+            _record(
+                window_escape=1 if index < single else escape_multi,
+                pool_ecb=5,
+                affinity=affinity,
+                is_copy=copy,
+            )
+            for index in range(n)
+        ]
+
+    @staticmethod
+    def _arm_verdict(runs: dict[str, ConfigRun], mode: str) -> tuple[str, str]:
+        from tools.eval.report import _selection_arm_verdict
+
+        return _selection_arm_verdict(runs["C0"], runs["C9m50"], load_thresholds(), None, mode)
+
+    def test_mean_rise_without_coverage_is_insufficient(self) -> None:
+        # Same share of single-trajectory inputs; the multi ones got wider.
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(escape_multi=2)),
+            "C9m50": ConfigRun(config_id="C9m50", records=self._records(escape_multi=4)),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("coverage below the floor", detail)
+
+    def test_widened_window_without_round_is_insufficient(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(single=10)),
+            "C9m50": ConfigRun(config_id="C9m50", records=self._records(single=4)),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("single_trajectory_share Δ -0.300", detail)
+        self.assertIn("connectedness round", detail)
+
+    def test_widened_window_passes_in_noctx(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(single=10)),
+            "C9m50": ConfigRun(config_id="C9m50", records=self._records(single=4)),
+        }
+        verdict, _ = self._arm_verdict(runs, "noctx")
+        self.assertEqual(verdict, "pass")
+
+    def test_topicality_price_fails(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(single=10, affinity=0.5)),
+            "C9m50": ConfigRun(
+                config_id="C9m50", records=self._records(single=4, affinity=0.2)
+            ),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("affinity without copies dropped", detail)
+
+    def test_copy_price_fails(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(single=10)),
+            "C9m50": ConfigRun(config_id="C9m50", records=self._records(single=4, copy=True)),
+        }
+        verdict, detail = self._arm_verdict(runs, "noctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("copy rose significantly", detail)
+
+    def test_rows_are_downgraded_to_two_modes(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(single=10)),
+            "C9m50": ConfigRun(config_id="C9m50", records=self._records(single=4)),
+        }
+        rows = {
+            row[0]: row
+            for row in evaluate_gates(runs, load_thresholds(), None, "noctx", None, None)
+        }
+        self.assertEqual(rows["selection_window[C9m50]"][1], "insufficient data")
+        self.assertIn("requires both context modes", rows["selection_window[C9m50]"][2])
 
 
 class TestPhase7Gate(unittest.TestCase):

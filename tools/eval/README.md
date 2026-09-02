@@ -111,3 +111,14 @@ the pre-registered `knob_census` rule in `eval_thresholds.yaml`: dead / gated
 / inert / weak / strong. Knobs the harness cannot exercise are listed as
 outside the offline measurement. The report carries numbers only.
 
+## Selection-window grid (M3R-100)
+
+`matrix_selection_grid_1.yaml` / `matrix_selection_grid_2.yaml` (arms `C9*`)
+move the knobs that define the selection window — `selection_score_margin`,
+`context_relevance_weight` (cap follows) and `selection_diversity_bonus`
+(selection-knobs). The `selection_window` gate's coverage is the paired drop
+of the single-trajectory share (`window_escape < 2`, the form M3R-011
+promised); then the window escape must rise significantly while affinity
+without copies, copy and repetition may not worsen. Run both files in both
+modes.
+
