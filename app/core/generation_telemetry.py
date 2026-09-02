@@ -36,6 +36,9 @@ class CandidateRoute(StrEnum):
     # budget). Extension of such a candidate keeps this route — the extension
     # is post-processing of the same walk.
     HOT = "hot"
+    # M3R-200 pilot: a candidate assembled around an associate of the
+    # message's anchors (assoc-route-pilot).
+    ASSOC = "assoc"
 
 
 class UserQuirkGate(StrEnum):
@@ -189,6 +192,8 @@ class GenerationTelemetry:
     seed_ranking_no_corpus: int = 0
     hot_ngram_draws: int = 0
     hot_ngram_empty: int = 0
+    assoc_draws: int = 0
+    assoc_empty: int = 0
     # Denominator of this one is ctx_generations: only a generation that
     # started with context can lose it.
     context_dropped: int = 0
@@ -317,6 +322,14 @@ class GenerationTelemetry:
         self.hot_ngram_draws += 1
         if empty:
             self.hot_ngram_empty += 1
+
+    def note_assoc_draw(self, *, empty: bool) -> None:
+        """One associate ranking for the assoc route and whether it came back
+        empty (M3R-200 pilot). The pair keeps a route disabled by data apart
+        from one disabled by its knob (CLAUDE.md §5)."""
+        self.assoc_draws += 1
+        if empty:
+            self.assoc_empty += 1
 
     def note_context_dropped(self) -> None:
         """One generation that started with context and ran out of with-context
@@ -507,6 +520,10 @@ class GenerationTelemetry:
                 self.hot_ngram_empty / self.hot_ngram_draws
                 if self.hot_ngram_draws
                 else None
+            ),
+            "assoc_draws": self.assoc_draws,
+            "assoc_empty_rate": (
+                self.assoc_empty / self.assoc_draws if self.assoc_draws else None
             ),
             "context_dropped_rate": (
                 self.context_dropped / self.ctx_generations

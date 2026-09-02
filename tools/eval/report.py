@@ -851,6 +851,130 @@ def _pool_arm_verdict(
 
 # M3R-100 arms (selection window), same prefix convention.
 SELECTION_ARM_PREFIX = "C9"
+# M3R-200 pilot arms (assoc-route-pilot); the verdict is a viability reading,
+# never a promotion gate.
+ASSOC_ARM_PREFIX = "C10"
+VIABLE = "viable"
+NOT_VIABLE = "not viable"
+
+
+def route_presence_share(records: list[Any], route: str) -> float | None:
+    """Share of generations with a pool in which ``route`` placed a candidate."""
+    with_pool = [record for record in records if record.pool_routes]
+    if not with_pool:
+        return None
+    return sum(1 for record in with_pool if route in record.pool_routes) / len(with_pool)
+
+
+def _assoc_pilot_verdict(
+    baseline: ConfigRun,
+    arm: ConfigRun,
+    thresholds: dict[str, Any],
+    context_mode: str,
+) -> tuple[str, str]:
+    """The pilot's four questions for one arm (design D5, assoc-route-pilot).
+
+    Q1 builds — presence share below the floor is `insufficient data`: the
+    route did not exercise. Q2 space — a significant drop of the pool ECB
+    means the associate re-creates walk trajectories: `not viable`; the window
+    escape delta is printed. Q3 cost — p95 over budget: `not viable`. Q4 signal
+    — copy / repetition must not rise significantly; affinity without copies
+    is printed with its CI and has no bar. The vocabulary is deliberately not
+    pass / fail: a viable pilot is the start of a grid, not a promotion.
+    """
+    if arm.shared_with is not None:
+        return INSUFFICIENT, f"arm resolves to the same overrides as {arm.shared_with}"
+
+    config = thresholds.get("assoc_pilot", {})
+    base_values = metric_values(baseline.records)
+    arm_values = metric_values(arm.records)
+    parts: list[str] = []
+    failures: list[str] = []
+    missing: list[str] = []
+
+    presence = route_presence_share(arm.records, str(CandidateRoute.ASSOC))
+    if presence is None:
+        return INSUFFICIENT, "no generation produced a pool"
+    draws = sum(int(snapshot.get("assoc_draws") or 0) for snapshot in arm.telemetry)
+    empty_rates = [
+        float(value)
+        for snapshot in arm.telemetry
+        if (value := snapshot.get("assoc_empty_rate")) is not None
+    ]
+    empty = f", empty {mean(empty_rates):.0%}" if empty_rates else ""
+    floor = float(config.get("present_share_min", 0.10))
+    parts.append(
+        f"Q1 builds: assoc present in {presence:.1%} of pools "
+        f"(draws {draws}{empty}; floor {floor:.0%})"
+    )
+    if presence < floor:
+        return (
+            INSUFFICIENT,
+            "; ".join(parts) + " — presence below the floor: the pilot did not exercise the route",
+        )
+
+    ecb_floor = float(config.get("pool_ecb_delta_floor", 0.0))
+    ecb = _delta_part(
+        "Q2 pool ECB",
+        base_values.get("structural_pool_ecb"),
+        arm_values.get("structural_pool_ecb"),
+        parts=parts,
+        missing=missing,
+    )
+    if ecb is not None:
+        point, significant = ecb
+        if significant and point < ecb_floor:
+            failures.append("pool ECB dropped significantly (associates duplicate the walk)")
+    _delta_part(
+        "window escape",
+        base_values.get("structural_window_escape"),
+        arm_values.get("structural_window_escape"),
+        parts=parts,
+        missing=missing,
+    )
+
+    _latency_part(
+        arm,
+        float(config.get("latency_p95_ms_max", 150)),
+        parts=parts,
+        missing=missing,
+        failures=failures,
+    )
+
+    _delta_part(
+        "Q4 affinity_without_copy",
+        base_values.get("context_affinity_without_copy"),
+        arm_values.get("context_affinity_without_copy"),
+        parts=parts,
+        missing=missing,
+    )
+    copy_max = float(config.get("exact_copy_delta_max", 0.0))
+    copy_delta = _delta_part(
+        "copy",
+        base_values.get("exact_context_copy_rate"),
+        arm_values.get("exact_context_copy_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if copy_delta is not None:
+        point, significant = copy_delta
+        if significant and point > copy_max:
+            failures.append("copy rose significantly")
+    repetition_max = float(config.get("repetition_delta_max", 0.0))
+    repetition_delta = _delta_part(
+        "repetition",
+        base_values.get("repetition_rate"),
+        arm_values.get("repetition_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if repetition_delta is not None:
+        point, significant = repetition_delta
+        if significant and point > repetition_max:
+            failures.append("repetition rose significantly")
+
+    verdict, detail = _verdict(parts, failures, missing)
+    return {"pass": VIABLE, "fail": NOT_VIABLE}.get(verdict, verdict), detail
 
 
 def single_trajectory_samples(records: list[Any]) -> list[float] | None:
@@ -1646,6 +1770,24 @@ def evaluate_gates(
                 baseline, runs[arm_id], thresholds, solo_rating, context_mode
             )
             rows.append((f"selection_window[{arm_id}]", verdict, detail))
+
+    assoc_arms = sorted(arm for arm in runs if arm.startswith(ASSOC_ARM_PREFIX))
+    if baseline is None or not assoc_arms:
+        rows.append(
+            (
+                "assoc_pilot",
+                INSUFFICIENT,
+                "no assoc-pilot arm in this run (assoc_slot_ratio at its default)"
+                if baseline
+                else "no baseline run",
+            )
+        )
+    else:
+        for arm_id in assoc_arms:
+            verdict, detail = _assoc_pilot_verdict(
+                baseline, runs[arm_id], thresholds, context_mode
+            )
+            rows.append((f"assoc_pilot[{arm_id}]", verdict, detail))
 
     rows.extend(_structural_escape_rows(runs, thresholds))
 

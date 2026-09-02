@@ -178,6 +178,29 @@ class MarkovRepo(BaseRepo):
         )
         return [(str(r[0]), int(r[1])) for r in rows]
 
+    async def get_seed_backward(
+        self, chat_id: int, token: str
+    ) -> list[tuple[str, int]]:
+        """Predecessors of ``token`` as a pair's second member: ``(w1, total_cnt)``.
+
+        M3R-200: the left-hand distance-1 neighbours of an anchor, the mirror
+        of ``get_seed_forward``. Served by the prefix ``(chat_id, w2)`` of
+        ``idx_transitions_reverse`` — forced, for the same reason as the other
+        reverse reads (no ``sqlite_stat1``, the planner would scan the chat).
+        Full ``ORDER BY`` so a consumer that feeds an RNG sees one order.
+        """
+        rows = await self._fetch_all(
+            """
+            SELECT w1, SUM(cnt)
+            FROM transitions INDEXED BY idx_transitions_reverse
+            WHERE chat_id = ? AND w2 = ?
+            GROUP BY w1
+            ORDER BY w1
+            """,
+            (chat_id, token),
+        )
+        return [(str(r[0]), int(r[1])) for r in rows]
+
     async def get_reverse_branch(self, chat_id: int, token: str) -> int:
         """How many distinct tokens the seed can be preceded by (M2R-410).
 

@@ -70,7 +70,7 @@
 | 10 | **политика ответа ★** | `reply_pipeline.py:371` | кулдаун / часовой кап / ролл вероятности |
 | 11 | **сбор контекста ★** | `reply_pipeline.py:392` | `only_for_replies` + переопределение при обращении |
 | 12 | L1-затравка | `reply_pipeline.py:411` | только непрошеные, шанс `hot_ngram_seed_chance` |
-| 13 | `ResponseGenerator.generate_with_result` | `response_generator.py:877` | см. §1.3–§1.5 |
+| 13 | `ResponseGenerator.generate_with_result` | `response_generator.py:987` | см. §1.3–§1.5 |
 | 14 | нет текста | `reply_pipeline.py:423` | обращение → fallback; иначе молчание |
 | 15 | учёт бюджета ответа: слот резервируется **до** генерации в момент решения (`reserve_reply_slot`), при несостоявшемся ответе откатывается | `reply_pipeline.py:479` | O8: атомарность «проверил → записал» без `await` |
 | 16 | причуда завсегдатая (L2) | `reply_pipeline.py:454` | сработала → **редкое событие не роллится** |
@@ -147,7 +147,7 @@ short-degenerate 0.25. В `noctx` — 0.00 во всех четырёх.
 | `noctx` | 0.043 | 0.413 | 0.540 | 0.003 | — | — | — |
 
 `GENERATION_ATTEMPTS_WITH_CONTEXT = 5`: с шестой попытки `attempt_context_tokens`
-становится `None` `[код response_generator.py:893-819]`. В арме `ctx` за
+становится `None` `[код response_generator.py:1003-929]`. В арме `ctx` за
 попытку №5 заходят **0.370** генераций, в `noctx` — 0.003. То есть переключение
 «контекст выключается» затрагивает **больше трети ответов в контекстном
 режиме** и практически ничего в бесконтекстном (там попытки почти не тратятся
@@ -168,21 +168,21 @@ short-degenerate 0.25. В `noctx` — 0.00 во всех четырёх.
 
 | # | условие | код | частота | видно в трассе |
 |---|---|---|---|---|
-| 1 | контекст отключается с 6-й попытки | `response_generator.py:893` | 0.370 генераций (`ctx`) `[замер]` | **да, с M3R-141** (`CONTEXT DROPPED` + счётчик) |
-| 2 | `escalated_randomness_strength` линейно тянет случайность к 3.0 по номеру попытки | `markov.py:452` | каждая попытка | только косвенно (`base_randomness` в шапке) |
-| 3 | отложенный якорь **не вклеился** → `start_source` молча становится `global`, счётчики матчей обнуляются | `markov.py:2544-2547` | 0.000 (все 0.427 отложенных вклеились) `[замер ctx]` | нет — трасса показывает уже переписанный источник |
-| 4 | контекстный старт пробовался, ни одно окно не совпало → откат на глобальный | `markov.py:2447` | считается `hidden_context_fallbacks` | да (`context=HIDDEN_FALLBACK`) |
-| 5 | пустой order-3 пул → бэкофф на order-2 | `markov.py:2254` | `order_used` в трассе | да |
-| 6 | пустой order-2 пул → фраза обрывается на полуслове | `markov.py:2284` | — | нет |
-| 7 | `has_degraded_recent_window` обрывает проходку | `markov.py:2287` | — | нет |
-| 8 | `trim_repetitive_tail` срезает вырожденный хвост | `markov.py:1938` | — | нет |
-| 9 | `max_steps=90` / `max_reply_tokens` / `max_reply_chars` | `markov.py:997`, `2290` | — | нет |
+| 1 | контекст отключается с 6-й попытки | `response_generator.py:1003` | 0.370 генераций (`ctx`) `[замер]` | **да, с M3R-141** (`CONTEXT DROPPED` + счётчик) |
+| 2 | `escalated_randomness_strength` линейно тянет случайность к 3.0 по номеру попытки | `markov.py:464` | каждая попытка | только косвенно (`base_randomness` в шапке) |
+| 3 | отложенный якорь **не вклеился** → `start_source` молча становится `global`, счётчики матчей обнуляются | `markov.py:2638-2641` | 0.000 (все 0.427 отложенных вклеились) `[замер ctx]` | нет — трасса показывает уже переписанный источник |
+| 4 | контекстный старт пробовался, ни одно окно не совпало → откат на глобальный | `markov.py:2541` | считается `hidden_context_fallbacks` | да (`context=HIDDEN_FALLBACK`) |
+| 5 | пустой order-3 пул → бэкофф на order-2 | `markov.py:2348` | `order_used` в трассе | да |
+| 6 | пустой order-2 пул → фраза обрывается на полуслове | `markov.py:2378` | — | нет |
+| 7 | `has_degraded_recent_window` обрывает проходку | `markov.py:2381` | — | нет |
+| 8 | `trim_repetitive_tail` срезает вырожденный хвост | `markov.py:2032` | — | нет |
+| 9 | `max_steps=90` / `max_reply_tokens` / `max_reply_chars` | `markov.py:1009`, `2290` | — | нет |
 | 10 | `sample_length_mode`: все веса обнулены mood'ом → откат на до-mood веса | `candidate_scorer.py:45` | 0 на дефолтах `[вывод: strength 1.0 не зануляет]` | нет |
-| 11 | `rank_seeds`: `n_docs <= 0` → seeded-ветка молча пропускается | `markov.py:1652` | **100% на живом проде**: `markov_token_df` пуст, `n_docs=0` во всех чатах снимка `[замер SQL]` | **да, с M3R-141** (`seed_ranking_no_corpus_rate`) |
+| 11 | `rank_seeds`: `n_docs <= 0` → seeded-ветка молча пропускается | `markov.py:1664` | **100% на живом проде**: `markov_token_df` пуст, `n_docs=0` во всех чатах снимка `[замер SQL]` | **да, с M3R-141** (`seed_ranking_no_corpus_rate`) |
 | 12 | `get_hot` вернул пустой список → L1-затравки нет, `protected_tokens` пуст | `reply_pipeline.py:661`, `response_generator.py:435` | **100% на снимке при дефолтах** `[замер SQL]` | **да, с M3R-141** (`hot_ngram_empty_rate`) |
 | 13 | IDF/интонация пересобираются не чаще 1 раза на 50 выученных сообщений | `learning_service.py:41,558` | постоянно | нет |
 | 14 | кэши чата вытесняются по TTL 24 ч / лимиту чатов | `learning_service.py:536` | — | нет |
-| 15 | `_extend_verbatim_candidate` вернул `None` → кандидат остаётся как был | `response_generator.py:995` | 0.000 (все 1.3–1.5 дописок/ген удались) `[замер]` | да, только успех |
+| 15 | `_extend_verbatim_candidate` вернул `None` → кандидат остаётся как был | `response_generator.py:1105` | 0.000 (все 1.3–1.5 дописок/ген удались) `[замер]` | да, только успех |
 | 16 | причуда завсегдатая отсечена одним из пяти гейтов подряд (адресность, ручка, суточный лимит, розыгрыш, порог) | `reply_pipeline.py:787` | не измерена: канал молчит с 2026-07-16, окно накопления стартует с ближайшего рестарта | **да, с `observe-user-quirk-channel`** (`user_quirk_rejected_*` со своим знаменателем на каждом гейте, воронка в `/stats`) |
 
 Позиции 11 и 12 — самые дорогие: две подсистемы (фаза 5 и L1 «локальные мемы»)
@@ -209,9 +209,9 @@ short-degenerate 0.25. В `noctx` — 0.00 во всех четырёх.
 побайтно совпадающий с `noctx` по всем таблицам — затравки не нашлось
 `[замер]`.
 
-Приоритет стартов: seed → контекстный → глобальный `[код markov.py:2375-2482]`.
+Приоритет стартов: seed → контекстный → глобальный `[код markov.py:2469-2576]`.
 Ролл `use_contextual_start` делается **всегда**, даже без контекста и даже когда
-seed-старт уже найден `[код markov.py:2392]` — это сохраняет порядок RNG.
+seed-старт уже найден `[код markov.py:2486]` — это сохраняет порядок RNG.
 
 **Окно отбора измерено гридом M3R-100 (2026-09-02, `eval_2026-09-02_selection-grid-verdict.md`):** запас softmax 0.5 или бонус различности 0.2 снижают долю ctx-входов с единственной траекторией в окне с 36% до 23% (escape окна +0.4…+0.55*) и копирование на 2 п.п.*, но affinity без копий падает на 0.010* (−4%); запас 0.8 — escape +1.2* при −0.026*; вес тематичности — самый дорогой способ открыть окно. В noctx бонус 0.2 открывает окно бесплатно; бонус выше запаса окна его сужает (поднятый кандидат становится максимумом). Развилка «тематичность против окна» подтверждена как размен, решение — O19.
 
@@ -244,7 +244,7 @@ seed-старт уже найден `[код markov.py:2392]` — это сох�
 
 ## 1.5 Ветки, собирающие кандидата мимо общего хвостового конвейера
 
-Эталонный хвост — `_finalize_attempt` `[код markov.py:1916]`:
+Эталонный хвост — `_finalize_attempt` `[код markov.py:2010]`:
 `trim_repetitive_tail` → `trim_to_sentence_boundary` → `finalize_reply_ending`
 → `strip_leading_punctuation` → `detokenize`, затем четыре гейта формы
 (`result_too_short`, `low_diversity`, `short_context_copy`, `context_heavy`).
@@ -254,8 +254,9 @@ seed-старт уже найден `[код markov.py:2392]` — это сох�
 | основной обход | всё | все 4 | эталон |
 | ~~**seeded**~~ **закрыто 2026-08-14** (M3R-101) | **всё** — общий `finalize_candidate_tokens` | все 4 | было: терминальная пунктуация у **22.8%** против 91.7% у органических, **4.5%** начинались с пунктуации `[замер, арм seeded, n=421]` |
 | **hot-маршрут** (M3R-230, с 2026-09-02; `hot_ngram_slot_ratio`, дефолт 0) | **всё** — это первые попытки основного цикла с `seed_tokens` из горячей n-граммы, отдельной ветки сборки нет (design D1 `l1-hot-route`) | все 4 | эталон по построению; атрибуция `route=hot` ставится по факту попытки, дописка её не перебивает |
+| **assoc-маршрут** (пилот M3R-200, с 2026-09-02; `assoc_slot_ratio`, дефолт 0) | **всё** — общий с seeded helper `_append_anchored_candidates` (`finalize_candidate_tokens` + `_evaluate_candidate` + `_build_score`), отдельной ветки нет (design D1 `assoc-route-pilot`) | все 4 | эталон по построению; якорь — не токен входа, а его PMI-сосед (`rank_associates`, `markov.py`); пилот 02.09: present 73%, отказы только `F4_stale` |
 | **verbatim-дописка** (`response_generator.py:572`) | только `finalize_reply_ending`; нет `trim_repetitive_tail`, `trim_to_sentence_boundary`, `strip_leading_punctuation` | нет (перепроверяются только гейты дублей/цитаты) | вырожденный хвост дописанной части не срезается `[вывод]` |
-| **слот-мутант** (`response_generator.py:764`) | ничего, но исходные токены уже финализированы; первый и последний токены не мутируются `[код slot_mutation.py:147]` | нет | дефекта нет: терминальная пунктуация 98.2% `[замер]` |
+| **слот-мутант** (`response_generator.py:880`) | ничего, но исходные токены уже финализированы; первый и последний токены не мутируются `[код slot_mutation.py:147]` | нет | дефекта нет: терминальная пунктуация 98.2% `[замер]` |
 | **reply_flavor** (`reply_flavor.py:18`) | работает **после** скоринга | — | в 25%×`strength` срезает ту самую точку, за которую скорер только что дал `CLEAN_END_BONUS=0.35` |
 | **эмодзи-канал** (`emoji.py:132`) | после всего | — | итоговый текст ≠ оценённый кандидат |
 | **редкие события** (`reply_flavor.py:143`) | заменяют/режут текст целиком | — | `verdict` подменяет ответ одним словом; в анти-повтор при этом пишется **исходный** текст `[код reply_pipeline.py:463]` |
@@ -268,7 +269,7 @@ seed-старт уже найден `[код markov.py:2392]` — это сох�
 
 ## 1.6 Порядок потребления RNG
 
-Один `random.Random` на генерацию `[код response_generator.py:788]`. В проде он
+Один `random.Random` на генерацию `[код response_generator.py:902]`. В проде он
 создаётся **несидированным**: `rng=random.Random()` `[код reply_pipeline.py:420]`.
 Воспроизводимость существует только через вход харнесса/eval, который передаёт
 свой сидированный генератор.
@@ -278,19 +279,19 @@ seed-старт уже найден `[код markov.py:2392]` — это сох�
 1. `sample_length_mode` — ровно один `rng.choices` `[код response_generator.py:510]`.
 2. Для каждой попытки (`_generate_text_once`):
    1. `_pick_seed_start` — RNG только если seed попал в 2-граммный старт;
-   2. `rng.random()` на `use_contextual_start` — **безусловно** `[код markov.py:2392]`;
+   2. `rng.random()` на `use_contextual_start` — **безусловно** `[код markov.py:2486]`;
    3. контекстный каскад: `_roll_exploration` (1 или 3 draw'а) + взвешенный выбор; для 2-граммного тира ещё `weighted_next_choice`;
-   4. `rng.random()` на сегментацию якоря — **только при ненулевой ручке** (короткое замыкание проверяет ручку до ролла) `[код markov.py:2417-2422]`;
+   4. `rng.random()` на сегментацию якоря — **только при ненулевой ручке** (короткое замыкание проверяет ручку до ролла) `[код markov.py:2511-2516]`;
    5. `_pick_global_start` → `weighted_start3_choice` → `_roll_exploration` + выбор;
-   6. `rng.randint` на позицию вклейки отложенного якоря `[код markov.py:2503]`;
-   7. на каждом шаге проходки: ролл прыжка (**только** после 5 токенов — `and`-цепочка проверяет счётчики до ролла `[код markov.py:2140-2148]`), ролл order-mix (только при непустом order-3 пуле и ненулевой ручке), затем `weighted_next_choice`: 1 `rng.random()` на исследование, +2 при исследовании (`sampled_exploration`), и либо один `rng.choices`, либо **`rng.expovariate` на каждого кандидата пула**;
-   8. швы: `pick_splice_connective` = `rng.random()` + `rng.choice`; вклейка якоря — `pick_jump_connective` без silent-ролла `[код markov.py:2190]`.
+   6. `rng.randint` на позицию вклейки отложенного якоря `[код markov.py:2597]`;
+   7. на каждом шаге проходки: ролл прыжка (**только** после 5 токенов — `and`-цепочка проверяет счётчики до ролла `[код markov.py:2234-2242]`), ролл order-mix (только при непустом order-3 пуле и ненулевой ручке), затем `weighted_next_choice`: 1 `rng.random()` на исследование, +2 при исследовании (`sampled_exploration`), и либо один `rng.choices`, либо **`rng.expovariate` на каждого кандидата пула**;
+   8. швы: `pick_splice_connective` = `rng.random()` + `rng.choice`; вклейка якоря — `pick_jump_connective` без silent-ролла `[код markov.py:2284]`.
 3. Verbatim-дописка — вложенная проходка с `attempt_budget=2` на **том же** rng.
 4. Слот-мутация: `rng.random()` (только при непустом частотном словаре и незаполненном пуле), затем `rng.shuffle(slots)` и `rng.choices` на каждый пробуемый слот.
 5. Seeded-блок: один `weighted_index_choice(exploring=False)` на бутстрап + пошаговые выборы.
 6. `select_scored_candidate`: `rng.choices` — только если температура >0 и в окне больше одного кандидата `[код response_generator.py:196-205]`.
 7. `apply_reply_flavor`: один `rng.random()`.
-8. `append_emoji_flavor`: `rng.random()` + `rng.choices`, и **только если статистика эмодзи непуста** `[код response_generator.py:1243-1149]`.
+8. `append_emoji_flavor`: `rng.random()` + `rng.choices`, и **только если статистика эмодзи непуста** `[код response_generator.py:1381-1287]`.
 
 Вне этого генератора — модульный `random` без сида: ролл ответа
 `[код reply_pipeline.py:377]`, L1-затравка `[код reply_pipeline.py:782,667]`,
@@ -303,11 +304,11 @@ seed-старт уже найден `[код markov.py:2392]` — это сох�
 |---|---|---|
 | `get_transitions`/`get_transitions3` | `ORDER BY w3`/`w4` `[код markov_repo.py:98,113]` | `weighted_next_choice` (предусловие в комментарии + тест) |
 | `get_starts`/`get_starts3` | `ORDER BY` `[код markov_repo.py:47,60]` | `weighted_start2/3_choice` |
-| `get_states` | `ORDER BY` `[код markov_repo.py:213]` | `ContextStateMatcher` (дополнительно сортирует) |
+| `get_states` | `ORDER BY` `[код markov_repo.py:236]` | `ContextStateMatcher` (дополнительно сортирует) |
 | `get_seed_forward` / `get_reverse_transitions` | `ORDER BY` `[код markov_repo.py:158,135]` | seeded-сборка |
-| **`get_word_frequencies`** | **`ORDER BY` нет** `[код markov_repo.py:234-241]` | `pick_replacement` строит `pool`/`weights` в порядке словаря и зовёт `rng.choices` `[код slot_mutation.py:178-200]` |
+| **`get_word_frequencies`** | **`ORDER BY` нет** `[код markov_repo.py:257-264]` | `pick_replacement` строит `pool`/`weights` в порядке словаря и зовёт `rng.choices` `[код slot_mutation.py:178-200]` |
 | **`chat_hot_ngrams.get_hot`** | `ORDER BY 4 DESC` без вторичного ключа `[код chat_hot_ngrams_repo.py:81]` | `random.choice(hot_ngrams)` `[код reply_pipeline.py:750]` |
-| свёртка кэша | `bisect` по тому же ключу, copy-on-write `[код markov.py:960]` | те же потребители |
+| свёртка кэша | `bisect` по тому же ключу, copy-on-write `[код markov.py:972]` | те же потребители |
 
 Две последние строки — незакреплённые инварианты, см. §3.7.
 
@@ -368,20 +369,20 @@ seed-старт уже найден `[код markov.py:2392]` — это сох�
 | `intonation_profile_strength` | 0 | смешение весов длины и концовок с профилем чата | выключена (осознанно) | `[код registry.py:257]` |
 | `max_reply_tokens` / `max_reply_chars` | 45 / 280 | потолки проходки | **живая** | ограничивают long-режим |
 | `markov_order` | 3 | порядок цепи | **живая** | — |
-| `enable_backoff` | true | бэкофф 3→2 | **живая** | без него проходка обрывается `[код markov.py:2248-2252]` |
+| `enable_backoff` | true | бэкофф 3→2 | **живая** | без него проходка обрывается `[код markov.py:2342-2346]` |
 | `order_mix_probability` | 0.75 | шаг из order-2 пула при непустом order-3 | **живая** | свип 2026-07-21 (B1) |
 | `markov_jump_probability` | 0.12 | прыжок темы | **живая** | 36–54% победителей несут шов `[замер]` |
-| `context_jump_boost` | 2.0 | множитель прыжка для контекстных стартов | **живая с контекстом, инертная без** | применяется только при `start_source in (context, hidden_context)` `[код markov.py:2490]`; в `noctx` таких стартов 0 `[замер]` |
+| `context_jump_boost` | 2.0 | множитель прыжка для контекстных стартов | **живая с контекстом, инертная без** | применяется только при `start_source in (context, hidden_context)` `[код markov.py:2584]`; в `noctx` таких стартов 0 `[замер]` |
 | `context_anchor_splice_probability` | 0.25 | отложенный якорь | **живая с контекстом, инертная без** | 0.427 отложений/ген в `ctx`, 0 в `noctx` `[замер]` |
 | `reply_context_bias` | 1.8 | step-bias на контекстные токены | **живая с контекстом, инертная без** | `[вывод: context_token_set пуст]` |
-| `reply_context_start_bias` | 2.2 | вероятность попытки контекстного старта ≈0.545 | **живая с контекстом, инертная без** | `[код markov.py:469]` |
+| `reply_context_start_bias` | 2.2 | вероятность попытки контекстного старта ≈0.545 | **живая с контекстом, инертная без** | `[код markov.py:481]` |
 | `context_start_affinity` | 6.0 | буст глобальных стартов по общим стемам | **живая с контекстом, инертная без** | `context_stems` пуст без контекста `[код markov.py:2349-2353]` |
 | `use_reply_context` | true | мастер-выключатель контекста | **живая** | — |
 | `reply_context_only_for_replies` | true | контекст только для реплаев | **живая и самая влиятельная из непроверенных** | см. §1.2 |
 | `reply_context_include_current_message` | true | добавлять текущее сообщение в контекст | **живая** | — |
 | `reply_context_max_tokens` | 12 | хвост контекста | **живая** | — |
 | `fuzzy_context_casefold` | true | casefold-тир каскада контекстных стартов | **константная (структурно мёртвая)** | после миграции 015 модель полностью в нижнем регистре: 0 коллизий casefold на 26 273 состояниях order-3 и 23 821 order-2 `[замер SQL]`; тир может вернуть только состояние, равное точному окну, а оно отбрасывается `[код context_state_matcher.py:97-98]` |
-| `normalize_lower` | true | регистр при токенизации входа | **живая** (и она же оживляет предыдущую при false) | `[код markov.py:427]` |
+| `normalize_lower` | true | регистр при токенизации входа | **живая** (и она же оживляет предыдущую при false) | `[код markov.py:439]` |
 | `slot_mutation_probability` | 0.15 | мутированная копия кандидата | **живая** | 0.56–0.61 предложений, 0.50–0.55 принятий, **0.077–0.117 побед на генерацию** `[замер]` |
 | `verbatim_extension_share` | 0.8 | порог «почти цитаты» для дописки | **живая, очень активная** | 1.313–1.517 дописок на генерацию, успех 100% `[замер]` |
 | `hot_ngram_seed_chance` | 0.25 | шанс L1-затравки | **мёртвая на этом корпусе** | `get_hot` при дефолтах возвращает `[]` `[замер SQL]` |
@@ -392,10 +393,11 @@ seed-старт уже найден `[код markov.py:2392]` — это сох�
 | `markov_meme_*`, `markov_collocation_max_entries` | 3/10/30/100 | ручки суточного мемо-пасса | **живые для реестра, не для генерации** (пока веса 0) | `[вывод]` |
 | `markov_seeded_candidate_ratio` | 0 | доля seeded-кандидатов | выключена; при 0.3 seeded даёт 21.9% пула и win 0.109 против 0.175 у органических | `[замер seeded]` |
 | `hot_ngram_slot_ratio` | 0 | доля пула из прогулок с затравкой горячей n-граммы (L1 как маршрут, M3R-230) | выключена; при > 0 первые `route_slot_budget` попыток цикла сидируются своими n-граммами (без возврата, из `generation_rng`), только для ответов без контекста; пороги отбора — `hot_ngram_min_count` / `hot_ngram_recency_share` | `[код response_generator.py, _draw_hot_seeds]` |
+| `assoc_slot_ratio` | 0 | доля пула из кандидатов вокруг ассоциатов якорей входа (PMI-соседи расстояния 1 из `transitions`, пилот M3R-200) | выключена; пилот 02.09 (`eval_2026-09-02_assoc-pilot-verdict.md`): present 72–73%, ECB пула +0.10…+0.18\*, copy в ctx −2.3…−3.0 п.п.\*, affinity без копий в noctx +0.007…+0.012\*, p95 22–37 мс — viable, ждёт гейта M3R-220 | `[замер, оба режима]` |
 | `selection_score_margin` | 0.3 | окно softmax-розыгрыша | **живая и решающая** (была константой `SELECTION_SCORE_MARGIN`); свип — грид M3R-100 `matrix_selection_grid_1.yaml` | `[код response_generator.py, select_scored_candidate]` |
 | `context_relevance_weight` / `context_relevance_cap` | 1.6 / 1.6 | вес и потолок IDF-тематичности | сильнейшая компонента скорера в ctx (были константами); свип — грид M3R-100 | `[код candidate_scorer.py, idf_context_relevance]` |
 | `selection_diversity_bonus` | 0 | бонус траекториям, отличным от лучшей (перекрытие рёбер < 0.5): `bonus × (1 − overlap)` | выключена; candidate-level подъём различных прогулок в окно отбора (M3R-100, design D2); при 0 ничего не считается | `[код response_generator.py, apply_diversity_bonus]` |
-| `markov_seed_*` (7 ручек) | — | ранжирование сида | **недостижимы в проде**: `n_docs=0`, `markov_token_df` пуст `[замер SQL]` | `[код markov.py:1652]` |
+| `markov_seed_*` (7 ручек) | — | ранжирование сида | **недостижимы в проде**: `n_docs=0`, `markov_token_df` пуст `[замер SQL]` | `[код markov.py:1664]` |
 | `markov_entropy_temp_gain` и 3 спутника | 0 | энтропийная температура | выключена, гейт фазы 2 провален | `docs/eval_reports/eval_2026-08-12_phase2-verdict.md` |
 | `markov_branching_degenerate_max` / `_candidate_floor` | 0 / 2 | ранняя остановка на вырожденной цепи | выключена, гейт фазы 2 провален | там же |
 | `markov_alpha_*` (4) | 0 | временнáя смесь | выключены; при 0.5 **меняют 12.5% ответов**, а телеметрия смеси показывает 0.000 | `[замер blend_probe, 120 генераций]` |
@@ -403,13 +405,13 @@ seed-старт уже найден `[код markov.py:2392]` — это сох�
 | `markov_short_half_life_days` | 3 | период полураспада короткого слоя | **живая для записи, инертная для чтения** (alpha 0); на снимке `s_updated_at` NULL во всех строках `[замер SQL]` | `[код temporal.py:70]` |
 | `markov_long_compression` / `_beta` | log / 0.6 | сжатие долгого слоя | **читаются только при alpha>0** | `[код temporal.py:186]` |
 | `markov_cache_incremental` | true | свёртка кэшей вместо сброса | **живая по латентности, нейтральная по выводу** | контракт `generation_hash` `[код registry.py:262-268]` |
-| `markov_shadow_order4_enabled` | true | теневой селектор order-4 | **чистый замер**, на вывод не влияет | `[код response_generator.py:1205-1123]` |
+| `markov_shadow_order4_enabled` | true | теневой селектор order-4 | **чистый замер**, на вывод не влияет | `[код response_generator.py:1343-1261]` |
 | `auto_capitalize_replies` | false | капитализация | выключена | — |
 | `reply_flavor_strength` | 1.0 | вариатор концовки | **живая; работает против скорера** | 100% победителей имеют терминальную пунктуацию, из них 25%×strength лишатся точки `[замер + код reply_flavor.py:12]` |
 | `emoji_append_chance` | 0.15 | эмодзи в конце | **живая в проде, мёртвая в eval** | заглушка eval возвращает `{}` `[код tools/eval_prod.py:151-154]`; на снимке 9 строк статистики |
 | `rare_event_chance` / `false_start_chance` / `rare_event_daily_cap` | 0.03 / 0.05 / 3 | слом формы | **живые в проде, отсутствуют в eval** | eval зовёт `ResponseGenerator` напрямую, минуя `ReplyPipeline` `[код tools/eval/run.py:231]` |
 | `user_quirk_*` (3) | 0.3 / 10 / 0 (с 2026-09-01; было 0.1 / 25) | причуды завсегдатаев | **живые в проде, отсутствуют в eval** | там же |
-| `mood_*` (8) | — | настроение чата | **живые в проде, отсутствуют в eval**: eval строит `ResponseGenerator` без `mood`/`mood_modifiers` `[код tools/eval/run.py:212-218]` → `NEUTRAL_MODIFIERS` и alpha всегда «calm» | `[код response_generator.py:789,319]` |
+| `mood_*` (8) | — | настроение чата | **живые в проде, отсутствуют в eval**: eval строит `ResponseGenerator` без `mood`/`mood_modifiers` `[код tools/eval/run.py:212-218]` → `NEUTRAL_MODIFIERS` и alpha всегда «calm» | `[код response_generator.py:903,319]` |
 | `reply_probability*`, `reply_director_*`, `reply_burst_*`, `reply_max_per_hour`, `min_cooldown_sec`, `mention_cooldown_sec` | — | политика «отвечать ли» | **живые в проде, отсутствуют в eval** | eval начинается после решения |
 | `min_tokens_for_model` | 200 | гейт объёма | живая | — |
 
@@ -434,13 +436,13 @@ seed-старт уже найден `[код markov.py:2392]` — это сох�
 | `VERBATIM_NGRAM_SIZE` | 4 | живая | — |
 | `EXTENSION_MAX_TOKENS` | 10 | живая | 1.3–1.5 дописок/ген |
 | `RECENT_REPLY_LIMIT` | 20 | почти не влияет | `[замер live]` |
-| `JUMP_MAX_PER_REPLY` | 1 | связывает | `[код markov.py:80]` |
-| `JUMP_MIN_TOKENS_BETWEEN` | 6 | **мёртвая** при `JUMP_MAX_PER_REPLY=1` | признано в комментарии `[код markov.py:84-85]` |
-| `SILENT_SPLICE_PROBABILITY` | 0.35 | живая для M4-прыжков, **не применяется** к вклейке якоря | `[код markov.py:2190]` |
+| `JUMP_MAX_PER_REPLY` | 1 | связывает | `[код markov.py:92]` |
+| `JUMP_MIN_TOKENS_BETWEEN` | 6 | **мёртвая** при `JUMP_MAX_PER_REPLY=1` | признано в комментарии `[код markov.py:96-97]` |
+| `SILENT_SPLICE_PROBABILITY` | 0.35 | живая для M4-прыжков, **не применяется** к вклейке якоря | `[код markov.py:2284]` |
 | `max_steps` | 90 | не связывает при `max_reply_tokens=45` | `[вывод]` |
 | `EMOJI_SAMPLE_POWER` | 0.5 | живая в проде | — |
 | `STATS_REBUILD_EVERY_MESSAGES` | 50 | живая (отсрочка IDF) | `[код learning_service.py:41]` |
-| `MIN_PROFILE_MESSAGES` | 200 | порог набран (окно 1000), но профиль вообще не читается при `intonation_profile_strength=0` | `[код intonation.py:23]`, `[код response_generator.py:852-780]` |
+| `MIN_PROFILE_MESSAGES` | 200 | порог набран (окно 1000), но профиль вообще не читается при `intonation_profile_strength=0` | `[код intonation.py:23]`, `[код response_generator.py:962-894]` |
 | `SHADOW_ORDER4_MIN_COUNT` / `_CONFIDENCE_THRESHOLD` | 3 / 0.35 | замер; доля 0.0% в отчётах фазы | `docs/eval_reports/eval_2026-08-13_phase4-verdict.md:37` |
 
 ## 2.3 Кандидаты на удаление или починку
@@ -507,7 +509,7 @@ seed-старт уже найден `[код markov.py:2392]` — это сох�
 **Класс:** тихие переключения + наблюдаемость.
 
 **(а) Фаза 5 (lexical anchoring) в проде недостижима.** `rank_seeds` возвращает
-`[]` при `n_docs <= 0` `[код markov.py:1652-1654]`. На снимке
+`[]` при `n_docs <= 0` `[код markov.py:1664-1666]`. На снимке
 `markov_token_df` — **0 строк**, `n_docs = 0` у всех четырёх чатов
 `[замер SQL]`. Значит даже при `markov_seeded_candidate_ratio > 0` ветка
 пропускается целиком, без лога.
@@ -566,7 +568,7 @@ seed-старт уже найден `[код markov.py:2392]` — это сох�
 сырые счётчики на log-сжатые нормированные вероятности**, а `displacement`
 объявляет нулём. `blend_step_coverage` и `mean_blend_displacement` заведены
 ровно для того, чтобы отличать «ручка выставлена» от «ручка работает»
-`[код markov.py:366-374]` — и именно этот случай они показывают как «не
+`[код markov.py:378-386]` — и именно этот случай они показывают как «не
 работает».
 
 **Чем доказано:** `[замер blend_probe, 120 генераций, сид 42]`: при
@@ -637,7 +639,7 @@ log-сжатием: прежняя пара нули, новая метрика 
 в `noctx` при 4.5–5.3 принятых кандидатах — шов несёт ~28% кандидатов. Успех
 дописки 100% (все вызовы вернули текст). При этом шов дописки **не
 инкрементирует `jump_count`** (тот берётся из трассы исходной проходки
-`[код response_generator.py:934]`), поэтому измеренная доля победителей со швом
+`[код response_generator.py:1044]`), поэтому измеренная доля победителей со швом
 (0.543 / 0.363) — нижняя оценка.
 
 **На какие вердикты влияло:** метрика `connective_reply_rate`, которой
@@ -716,7 +718,7 @@ log-сжатием: прежняя пара нули, новая метрика 
 
 **Класс:** неявные инварианты без теста.
 
-**(а) `get_word_frequencies` не имеет `ORDER BY`** `[код markov_repo.py:234-241]`,
+**(а) `get_word_frequencies` не имеет `ORDER BY`** `[код markov_repo.py:257-264]`,
 а `pick_replacement` строит `pool`/`weights` в порядке словаря и передаёт их в
 `rng.choices` `[код slot_mutation.py:178-200]`. Порядок влияет на результат
 розыгрыша при фиксированном сиде. Хуже: `_absorb_message` **дописывает** новые
@@ -766,7 +768,7 @@ log-сжатием: прежняя пара нули, новая метрика 
 **Класс:** обход конвейеров / внутренняя несогласованность.
 
 **Что:** `finalize_reply_ending` дописывает точку всем ответам
-`[код markov.py:631-632]`, `completion_quality` даёт за неё +0.35
+`[код markov.py:643-644]`, `completion_quality` даёт за неё +0.35
 `[код candidate_scorer.py:203-200]`, а `apply_reply_flavor` с вероятностью
 `0.25 × strength` эту точку снимает `[код reply_flavor.py:12,79]`.
 
@@ -799,7 +801,7 @@ log-сжатием: прежняя пара нули, новая метрика 
 **(в) Проверено и чисто:** остальные пер-чатовые накопители — словари,
 разделяемые по ссылке через `effective()` `[код runtime_state.py:61-80]`;
 кэши `LearningService` ключуются `chat_id` `[код learning_service.py:118-147]`;
-LRU `MarkovGenerator` — по `(chat_id, ...)` `[код markov.py:1009-1020]`;
+LRU `MarkovGenerator` — по `(chat_id, ...)` `[код markov.py:1021-1032]`;
 `lru_cache` в `slot_mutation._tags` чисто морфологический, без чата
 `[код slot_mutation.py:79]`. `GenerationTelemetry` — процессный агрегат по всем
 чатам по построению `[вывод]`.
@@ -862,7 +864,7 @@ eval со стороны `recent_penalty` измерением не обнару
 | `STATS_REBUILD_EVERY_MESSAGES` (50) → `context_relevance` | IDF в активном чате отстаёт до 50 сообщений; в тихом — не пересобирается неделями `[код learning_service.py:558]` |
 | `markov_cache_incremental` → слот-мутации | тёплый кэш частот дописывает новые слова в конец словаря, холодное чтение отдаёт SQL-порядок; порядок влияет на розыгрыш замены (§3.7а) |
 | `hot_ngram_min_count`/`recency_share` → `slot_mutation_probability` | пороги горячести определяют `protected_tokens`; при пустом списке мутации свободно ломают мемы `[код response_generator.py:435-377]` |
-| `markov_alpha_*` → `pool_diagnostics` → `markov_entropy_temp_gain` | при включённой смеси энтропия считается по смешанным весам `[код markov.py:2224-2229]`, то есть фаза 2 отвечает на распределение, созданное фазой 3 |
+| `markov_alpha_*` → `pool_diagnostics` → `markov_entropy_temp_gain` | при включённой смеси энтропия считается по смешанным весам `[код markov.py:2318-2323]`, то есть фаза 2 отвечает на распределение, созданное фазой 3 |
 | `markov_interp_order2_weight` → **все sampling-ручки** | β — единственная ручка, создающая среднюю зону энтропии, а `markov_entropy_temp_gain`, `candidate_selection_temperature` и `markov_alpha_*` имеют рычаг только в ней. То есть при β=0 они инертны **по построению корпуса**, а не по своей слабости, и их прошлые вердикты (фазы 2/3) сняты в условиях, где механизма для них не существовало. Ре-замер температуры поверх победившей β — M2R-910, отдельный гейт |
 | `markov_interp_order2_weight` → `order_mix_probability` | обе читают проекцию `(w2, w3)` того же состояния и обе расширяют выбор, но по-разному: order-mix **заменяет** пул order-3 на order-2 целиком с вероятностью ручки, интерполяция **смешивает** их на каждом шаге. Включённые вместе они конкурируют за один шаг; совместный замер в грид фазы 9 не входит |
 | `markov_short_half_life_days` → долговечность данных | единственная ручка реестра, чьё изменение уничтожает накопленное `[код registry.py:313-318]`, и при глобальном /set — во всех чатах (§3.9б) |

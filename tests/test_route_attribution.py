@@ -21,7 +21,7 @@ class TestRouteEnumeration(unittest.TestCase):
         как «механизм работает и не выигрывает»."""
         self.assertEqual(
             {str(route) for route in CandidateRoute},
-            {"vanilla", "seeded", "mutated", "extension", "hot"},
+            {"vanilla", "seeded", "mutated", "extension", "hot", "assoc"},
         )
 
     def test_breakdown_covers_every_member(self) -> None:

@@ -1,0 +1,38 @@
+# M3R-200 associative route PILOT (change assoc-route-pilot).
+#
+# The route grows candidates around ASSOCIATES of the message's anchors —
+# distance-1 neighbours by normalized PMI over the chain's own transition
+# counts — with the seeded assembler and the common finalization. It displaces
+# walk slots inside the pool (route_slot_budget), so pool size stays 5.
+#
+# Arm ids start with C10: the prefix routes an arm to the assoc_pilot bars,
+# registered 2026-09-02 before this file was run. The reading is viable / not
+# viable / insufficient data — the pilot answers four questions (builds, adds
+# trajectories, costs, carries a signal) and does not decide promotion.
+#
+# route_slot_budget(5, 0.2) = 1 slot, (5, 0.4) = 2. Both modes: anchors come
+# from the message itself (as for seeded), the mode changes only the scorer
+# (context_relevance is 0 in noctx). Expectation written before the run:
+# presence 30-40% at two slots; ECB not worse; affinity without copies in ctx
+# below C0 (an associate carries none of the message's words), in noctx flat
+# or above; copy flat.
+configurations:
+  - id: C0
+    description: "Markov 1.x frozen baseline (registry defaults, flavor/emoji silenced)"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+
+  - id: C10a20
+    description: "M3R-200 pilot, assoc route ratio 0.2 (1 slot of 5)"
+    available: true
+    same_as: C0
+    overrides:
+      assoc_slot_ratio: 0.2
+  - id: C10a40
+    description: "M3R-200 pilot, assoc route ratio 0.4 (2 slots of 5)"
+    available: true
+    same_as: C0
+    overrides:
+      assoc_slot_ratio: 0.4

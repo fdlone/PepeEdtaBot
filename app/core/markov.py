@@ -10,6 +10,11 @@ from collections.abc import Container, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple, cast
 
+from app.core.collocations import (
+    MIN_SUPPORTABLE_JOINT_COUNT,
+    normalized_pmi,
+    support_factor,
+)
 from app.core.context_state_matcher import ContextStateMatcher
 from app.core.generation_telemetry import GenerationTelemetry
 from app.core.interpolation import InterpolatedPool, OrderInterpolation
@@ -35,6 +40,13 @@ EXPLORATION_POWER_FLOOR = 0.02
 # T to zero or below, and 1/T is taken right after.
 _MIN_SAMPLING_TEMPERATURE = 0.01
 SHORT_REPLY_MAX_CONTENT_TOKENS = 3
+# M3R-200 pilot (assoc-route-pilot, design D2): how many anchors of the message
+# are looked at, how many neighbours per anchor get a marginal read, and the
+# pair count at which support saturates. Constants, not knobs: the pilot
+# prices this one configuration; a grid over them is the promotion's business.
+ASSOC_ANCHORS_MAX = 3
+ASSOC_NEIGHBOURS_MAX = 8
+ASSOC_SUPPORT_TARGET = 5.0
 REJECTION_NO_STARTS = "no_starts"
 REJECTION_NO_START_TRANSITION = "no_start_transition"
 REJECTION_RESULT_TOO_SHORT = "result_too_short"
@@ -1805,6 +1817,88 @@ class MarkovGenerator:
             branch_max=branch_max,
             min_token_len=min_token_len,
         )
+
+    async def rank_associates(
+        self,
+        chat_id: int,
+        tokens: list[str],
+        *,
+        slots: int,
+        min_token_len: int,
+    ) -> list[str]:
+        """Associates of the message's anchors, best first (M3R-200 pilot).
+
+        An anchor is a scorable token of the message (same filter as the seeded
+        route); an associate is a distance-1 neighbour of an anchor on either
+        side, scored by normalized PMI times pair support over the chain's own
+        transition counts. Tokens of the message itself are never associates —
+        that would be the seeded route again. Anchors are visited round-robin
+        so two slots do not spend themselves on one anchor's neighbourhood.
+
+        No df, no RNG: the ranking is deterministic and needs only index-served
+        reads (design D2). ``total(x)`` is the token's count as a LEFT member,
+        which doubles as the "has a forward continuation" check the assembler
+        makes first; the right marginal is not read (an approximation the
+        pilot's cost question is meant to price).
+        """
+        message = {token.casefold() for token in tokens}
+        anchors = [
+            token
+            for token in dict.fromkeys(tokens)
+            if is_scorable(token, min_token_len=min_token_len)
+        ][:ASSOC_ANCHORS_MAX]
+        if not anchors or slots <= 0:
+            return []
+        volume = await self.db.get_model_volume(chat_id)
+        total = float(volume[0]) if volume else 0.0
+        if total <= 0.0:
+            return []
+        per_anchor: list[list[tuple[float, str]]] = []
+        seen: set[str] = set()
+        for anchor in anchors:
+            forward = await self.db.get_seed_forward(chat_id, anchor)
+            backward = await self.db.get_seed_backward(chat_id, anchor)
+            # The anchor's frequency: the larger of its counts as a left and as
+            # a right member. A token that ends messages is never a left member
+            # (rows are (w1, w2) -> w3, the pair (w2, w3) has no row of its own)
+            # and would otherwise read as absent — the same edge the collocation
+            # registry accepts; neighbours are still read from both sides.
+            anchor_total = float(
+                max(sum(cnt for _, cnt in forward), sum(cnt for _, cnt in backward))
+            )
+            if anchor_total <= 0.0:
+                continue
+            joint_of: dict[str, int] = {}
+            for neighbour, joint in [*forward, *backward]:
+                if (
+                    neighbour.casefold() in message
+                    or neighbour in seen
+                    or joint < MIN_SUPPORTABLE_JOINT_COUNT
+                    or not is_scorable(neighbour, min_token_len=min_token_len)
+                ):
+                    continue
+                joint_of[neighbour] = max(joint_of.get(neighbour, 0), joint)
+            shortlist = sorted(joint_of.items(), key=lambda item: (-item[1], item[0]))
+            scored: list[tuple[float, str]] = []
+            for neighbour, joint in shortlist[:ASSOC_NEIGHBOURS_MAX]:
+                neighbour_total = float(
+                    sum(cnt for _, cnt in await self.db.get_seed_forward(chat_id, neighbour))
+                )
+                if neighbour_total <= 0.0:
+                    continue
+                score = normalized_pmi(joint, anchor_total, neighbour_total, total)
+                score *= support_factor(joint, ASSOC_SUPPORT_TARGET)
+                if score > 0.0:
+                    scored.append((score, neighbour))
+                    seen.add(neighbour)
+            scored.sort(key=lambda item: (-item[0], item[1]))
+            per_anchor.append(scored)
+        picked: list[str] = []
+        while len(picked) < slots and any(per_anchor):
+            for scored in per_anchor:
+                if scored and len(picked) < slots:
+                    picked.append(scored.pop(0)[1])
+        return picked
 
     def _seeded_step(
         self,

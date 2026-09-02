@@ -1593,3 +1593,85 @@ if __name__ == "__main__":
 
 # Keep Path import honest for tooling that trims unused imports.
 _ = Path
+
+
+class TestAssocPilot(unittest.TestCase):
+    """assoc-route-pilot: presence gates the reading, an ECB drop or a copy rise
+    reads `not viable`, and the vocabulary is never pass / fail."""
+
+    @staticmethod
+    def _records(*, n: int = 20, present: int = 0, copy: bool = False, ecb: int = 4):
+        records = []
+        for index in range(n):
+            routes = ("assoc", "vanilla", "vanilla") if index < present else ("vanilla",) * 3
+            records.append(
+                _record(
+                    category="topical",
+                    is_copy=copy,
+                    affinity=0.3,
+                    pool_ecb=ecb,
+                    window_escape=2,
+                    pool_routes=routes,
+                )
+            )
+        return records
+
+    @staticmethod
+    def _verdict(runs, mode="ctx"):
+        from tools.eval.report import _assoc_pilot_verdict
+
+        return _assoc_pilot_verdict(runs["C0"], runs["C10a40"], load_thresholds(), mode)
+
+    def test_presence_below_floor_is_insufficient(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C10a40": ConfigRun(config_id="C10a40", records=self._records(present=1, copy=True)),
+        }
+        verdict, detail = self._verdict(runs)
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("did not exercise", detail)
+
+    def test_ecb_drop_is_not_viable(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(ecb=5)),
+            "C10a40": ConfigRun(config_id="C10a40", records=self._records(present=10, ecb=3)),
+        }
+        verdict, detail = self._verdict(runs)
+        self.assertEqual(verdict, "not viable")
+        self.assertIn("duplicate the walk", detail)
+
+    def test_copy_rise_is_not_viable(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C10a40": ConfigRun(config_id="C10a40", records=self._records(present=10, copy=True)),
+        }
+        verdict, detail = self._verdict(runs)
+        self.assertEqual(verdict, "not viable")
+        self.assertIn("copy rose", detail)
+
+    def test_clean_arm_is_viable_and_prints_the_four_questions(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C10a40": ConfigRun(config_id="C10a40", records=self._records(present=10)),
+        }
+        verdict, detail = self._verdict(runs)
+        self.assertEqual(verdict, "viable")
+        for label in ("Q1 builds", "Q2 pool ECB", "window escape", "p95", "Q4 affinity"):
+            self.assertIn(label, detail)
+        self.assertNotIn("pass", verdict)
+
+    def test_gate_rows_downgrade_to_both_modes(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C10a40": ConfigRun(config_id="C10a40", records=self._records(present=10)),
+        }
+        rows = evaluate_gates(runs, load_thresholds(), None, "ctx", None, None)
+        row = {r[0]: (r[1], r[2]) for r in rows}["assoc_pilot[C10a40]"]
+        self.assertEqual(row[0], "insufficient data")
+        self.assertIn("requires both context modes", row[1])
+
+    def test_no_arm_reports_insufficient(self) -> None:
+        runs = {"C0": ConfigRun(config_id="C0", records=self._records())}
+        rows = evaluate_gates(runs, load_thresholds(), None, "ctx", None, None)
+        row = {r[0]: r[1] for r in rows}["assoc_pilot"]
+        self.assertEqual(row, "insufficient data")
