@@ -197,6 +197,32 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # tune the margin, not this, if the wrong candidate keeps winning.
     FieldSpec("candidate_selection_temperature", "CANDIDATE_SELECTION_TEMPERATURE",
               "0.7", _float_in_range(0.0, 3.0)),
+    # M3R-100 (selection-knobs, 2026-09-02): the three module constants that
+    # define the selection window became knobs with the same defaults, so the
+    # eval matrix and the knob census can move them. The window is where the
+    # structural escape gate found the bottleneck (2 trajectories in the ctx
+    # window at 4.5 in the pool).
+    # Softmax draw considers candidates within this margin of the best score.
+    # 0.3 (2026-07-09): the margin, not the temperature, decides whether the
+    # top candidate survives the roll; 1.0 collapsed context overlap on the
+    # synthetic eval.
+    FieldSpec("selection_score_margin", "SELECTION_SCORE_MARGIN", "0.3",
+              _float_in_range(0.0, 3.0)),
+    # Weight and cap of the IDF context-relevance component (the strongest
+    # scorer component in ctx). Cap is pinned to the weight by default: the
+    # relevance share is already in [0, 1], a lower cap only clips the
+    # strongest on-topic matches.
+    FieldSpec("context_relevance_weight", "CONTEXT_RELEVANCE_WEIGHT", "1.6",
+              _float_in_range(0.0, 4.0)),
+    FieldSpec("context_relevance_cap", "CONTEXT_RELEVANCE_CAP", "1.6",
+              _float_in_range(0.0, 4.0)),
+    # Diversity bonus (M3R-100, design D2): every candidate other than the
+    # best-scored one whose trajectory is substantially different from it
+    # (edge overlap below EDGE_OVERLAP_SIMILAR) gains bonus x (1 - overlap) —
+    # a candidate-level lift of distinct walks into the selection window.
+    # 0 disables: nothing computed, no RNG draw, byte-identical generation.
+    FieldSpec("selection_diversity_bonus", "SELECTION_DIVERSITY_BONUS", "0",
+              _float_in_range(0.0, 1.0)),
     FieldSpec("reply_flavor_strength", "REPLY_FLAVOR_STRENGTH", "1.0",
               _float_in_range(0.0, 2.0)),
     # M3 emoji channel: chance to append a frequency-sampled emoji (from this

@@ -140,6 +140,9 @@ class CandidateScore:
     # score only needs their net effect. 0 until the phase-4 gate raises the
     # weights from their neutral defaults.
     collocation_delta: float = 0.0
+    # M3R-100 (selection-knobs): lift of a trajectory substantially different
+    # from the best-scored candidate's (design D2). 0 unless the knob is on.
+    diversity_bonus: float = 0.0
 
     @property
     def total(self) -> float:
@@ -148,6 +151,7 @@ class CandidateScore:
             + self.natural_length
             + self.context_relevance
             + self.collocation_delta
+            + self.diversity_bonus
             - self.repetition_penalty
             - self.recent_penalty
             - self.verbatim_penalty
@@ -230,13 +234,19 @@ def natural_length(tokens: list[str], mode: str = "medium") -> float:
     return NATURAL_LENGTH_WEIGHT * 0.5
 
 
-def context_relevance(tokens: list[str], context_tokens: list[str]) -> float:
+def context_relevance(
+    tokens: list[str],
+    context_tokens: list[str],
+    *,
+    weight: float = CONTEXT_RELEVANCE_WEIGHT,
+    cap: float = CONTEXT_RELEVANCE_CAP,
+) -> float:
     candidate = set(meaningful_tokens(tokens))
     context = set(meaningful_tokens(context_tokens))
     if not candidate or not context:
         return 0.0
     overlap_ratio = len(candidate & context) / len(candidate)
-    return min(CONTEXT_RELEVANCE_CAP, overlap_ratio * CONTEXT_RELEVANCE_WEIGHT)
+    return min(cap, overlap_ratio * weight)
 
 
 def build_token_idf(documents: Iterable[list[str]]) -> dict[str, float]:
@@ -263,6 +273,9 @@ def idf_context_relevance(
     tokens: list[str],
     context_tokens: list[str],
     idf: Mapping[str, float],
+    *,
+    weight: float = CONTEXT_RELEVANCE_WEIGHT,
+    cap: float = CONTEXT_RELEVANCE_CAP,
 ) -> float:
     """Share of the context's *informative* mass that the candidate echoes back.
 
@@ -290,16 +303,13 @@ def idf_context_relevance(
     if candidate <= context:
         return 0.0
     if not idf:
-        return context_relevance(tokens, context_tokens)
+        return context_relevance(tokens, context_tokens, weight=weight, cap=cap)
     default = max(idf.values())
     context_mass = sum(idf.get(token, default) for token in context)
     if context_mass <= 0.0:
         return 0.0
     shared_mass = sum(idf.get(token, default) for token in candidate & context)
-    return min(
-        CONTEXT_RELEVANCE_CAP,
-        (shared_mass / context_mass) * CONTEXT_RELEVANCE_WEIGHT,
-    )
+    return min(cap, (shared_mass / context_mass) * weight)
 
 
 def _repeated_ratio(items: list[tuple[str, ...]] | list[str]) -> float:

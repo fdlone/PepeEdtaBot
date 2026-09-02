@@ -49,6 +49,10 @@ class RuntimeTunables:
     typing_per_char_ms: int
     randomness_strength: float
     candidate_selection_temperature: float
+    selection_score_margin: float
+    context_relevance_weight: float
+    context_relevance_cap: float
+    selection_diversity_bonus: float
     reply_flavor_strength: float
     emoji_append_chance: float
     repetition_penalty_strength: float

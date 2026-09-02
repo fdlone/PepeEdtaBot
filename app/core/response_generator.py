@@ -57,6 +57,7 @@ from app.core.shadow_order import shadow_order4_stats
 from app.core.slot_mutation import mutate_candidate_tokens
 from app.core.temporal import TemporalBlend
 from app.core.text import capitalize_reply_sentences, sanitize_text
+from app.core.trajectory import EDGE_OVERLAP_SIMILAR, edge_overlap, trajectory_edges
 from app.log_masking import mask_chat_id
 
 logger = logging.getLogger("chat_markov")
@@ -211,10 +212,13 @@ def select_scored_candidate(
     candidates: list[_ScoredCandidate],
     temperature: float,
     rng: random.Random,
+    *,
+    margin: float = SELECTION_SCORE_MARGIN,
 ) -> _ScoredCandidate:
     """Pick a candidate via softmax over scores; temperature 0 means argmax.
 
-    Sampling within SELECTION_SCORE_MARGIN of the best score keeps the
+    Sampling within ``margin`` of the best score (the knob
+    ``selection_score_margin``, default SELECTION_SCORE_MARGIN) keeps the
     long-tail (odd but valid) candidates reachable instead of always
     collapsing onto the single "safest" reply.
     """
@@ -224,7 +228,7 @@ def select_scored_candidate(
     eligible = [
         candidate
         for candidate in candidates
-        if candidate.score.total >= best.score.total - SELECTION_SCORE_MARGIN
+        if candidate.score.total >= best.score.total - margin
     ]
     if len(eligible) == 1:
         return eligible[0]
@@ -233,6 +237,47 @@ def select_scored_candidate(
         for candidate in eligible
     ]
     return rng.choices(population=eligible, weights=weights, k=1)[0]
+
+
+def apply_diversity_bonus(
+    candidates: list[_ScoredCandidate], bonus: float
+) -> list[_ScoredCandidate]:
+    """Lift trajectories substantially different from the best one (M3R-100).
+
+    Candidate-level by design: the walk is untouched, only who lands inside
+    the selection window changes — the place where the structural escape gate
+    located the collapse (2 trajectories in the ctx window at 4.5 in the
+    pool). The best-scored candidate keeps its score; every other candidate
+    whose edge overlap with it is below ``EDGE_OVERLAP_SIMILAR`` (the same
+    definition and threshold as the gate) gains ``bonus * (1 - overlap)``.
+    At ``bonus <= 0`` the list is returned as is: nothing computed, no RNG
+    draw, byte-identical generation (design D3).
+    """
+    if bonus <= 0.0 or len(candidates) < 2:
+        return candidates
+    edges = [
+        trajectory_edges(
+            tuple(token.casefold() for token in content_tokens(tokenize(c.text)))
+        )
+        for c in candidates
+    ]
+    best_index = max(range(len(candidates)), key=lambda i: candidates[i].score.total)
+    lifted: list[_ScoredCandidate] = []
+    for index, candidate in enumerate(candidates):
+        if index == best_index:
+            lifted.append(candidate)
+            continue
+        overlap = edge_overlap(edges[index], edges[best_index])
+        if overlap >= EDGE_OVERLAP_SIMILAR:
+            lifted.append(candidate)
+            continue
+        lifted.append(
+            replace(
+                candidate,
+                score=replace(candidate.score, diversity_bonus=bonus * (1.0 - overlap)),
+            )
+        )
+    return lifted
 
 
 def normalize_reply_for_repeat(text: str) -> str:
@@ -779,7 +824,11 @@ class ResponseGenerator:
         return replace(
             self.scorer(text, tokens, _NO_CONTEXT, length_mode),
             context_relevance=idf_context_relevance(
-                tokens, context_tokens, context_idf
+                tokens,
+                context_tokens,
+                context_idf,
+                weight=self.runtime_state.context_relevance_weight,
+                cap=self.runtime_state.context_relevance_cap,
             ),
             recent_penalty=recent_penalty_strength
             * recent_reply_overlap(tokens, recent_trigrams),
@@ -1349,14 +1398,21 @@ class ResponseGenerator:
                 request.chat_id,
                 candidates,
                 temperature=self.runtime_state.candidate_selection_temperature,
-                margin=SELECTION_SCORE_MARGIN,
+                margin=self.runtime_state.selection_score_margin,
                 selection_margin_used=True,
             )
             return ResponseGenerationResult(text=None, candidates_scored=0)
+        # M3R-100: the diversity bonus is applied to the pool before the
+        # window is read — the trace, the telemetry and the eval capture the
+        # lifted scores, so the gate sees exactly what the draw saw.
+        candidates = apply_diversity_bonus(
+            candidates, self.runtime_state.selection_diversity_bonus
+        )
         selected = select_scored_candidate(
             candidates,
             self.runtime_state.candidate_selection_temperature,
             generation_rng,
+            margin=self.runtime_state.selection_score_margin,
         )
         if seeded_budget > 0:
             self.generator.telemetry.note_seeded(
@@ -1372,7 +1428,7 @@ class ResponseGenerator:
             request.chat_id,
             candidates,
             temperature=self.runtime_state.candidate_selection_temperature,
-            margin=SELECTION_SCORE_MARGIN,
+            margin=self.runtime_state.selection_score_margin,
             selection_margin_used=True,
             selected=selected,
         )

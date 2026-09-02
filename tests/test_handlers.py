@@ -132,6 +132,10 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.user_quirk_min_interactions = 25
     s.generation_attempts_with_context = 5
     s.hot_ngram_slot_ratio = 0.0
+    s.selection_score_margin = 0.3
+    s.context_relevance_weight = 1.6
+    s.context_relevance_cap = 1.6
+    s.selection_diversity_bonus = 0.0
     s.user_quirk_name_share = 0.0
     s.rare_events_today = {}
     # Bind the real cap methods so handler tests exercise actual budget logic.
