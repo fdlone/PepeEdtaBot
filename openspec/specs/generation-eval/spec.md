@@ -797,3 +797,175 @@ N-граммы попадают в набор мем-регресса тольк
 
 - **WHEN** агрегат не передан
 - **THEN** условие отсутствует с причиной «раунд не проведён», и гейт даёт `insufficient data`
+
+### Requirement: Every route's contribution is reported with its two denominators
+
+The report SHALL contain a per-route breakdown for every configuration that
+was actually run. For each member of the closed route enumeration it SHALL
+show: the route's share of the candidate pool, the share of generations in
+which the route placed at least one candidate, its win rate given presence,
+the topical affinity without copies and the copy rate of the replies it won,
+the mean latency of generations with and without the route in the pool, and
+its rejections before the pool grouped by failure class (M3R-021). Pool share
+and presence SHALL be printed separately, and a win rate SHALL NOT appear
+without its presence denominator. Routes SHALL be attributed by the generator
+at candidate creation, never inferred from reply text by the harness.
+
+A route whose mechanism did not run in a configuration SHALL be marked as not
+attempted, never printed as a zero row: "ran and produced nothing" and "was
+off" are different findings.
+
+Route fields SHALL NOT enter the deterministic metric summary used for
+bit-for-bit comparisons between runs and revisions.
+
+#### Scenario: Seeded arm
+
+- **WHEN** a configuration with seeded generation enabled is evaluated
+- **THEN** the seeded row shows pool share, presence, win given presence,
+  winners' affinity without copies and copy rate, latency with and without
+  the route, and rejections by failure class
+
+#### Scenario: Route off in the baseline
+
+- **WHEN** the baseline is evaluated with the seeded knob at zero
+- **THEN** the seeded row reads as not attempted, not as zeros
+
+#### Scenario: Summary unchanged by attribution
+
+- **WHEN** two record sets differ only in route attribution fields
+- **THEN** their metric summaries are identical
+
+### Requirement: The L1 seed draw is modelled in the harness and gated
+
+The eval runner SHALL reproduce the reply pipeline's hot-n-gram seed draw for
+self-initiated replies: in the `noctx` mode, with the configuration's
+`hot_ngram_seed_chance`, `hot_ngram_min_count` and `hot_ngram_recency_share`,
+using a deterministic RNG separate from the generation RNG, so that a
+configuration whose hot selection is empty produces byte-identical records to
+a run without the draw. The runner SHALL NOT seed generations in the `ctx`
+mode, because the pipeline never seeds addressed replies.
+
+Each record SHALL carry whether a seed was drawn and the winner's
+`start_source`; the L1 gate's coverage SHALL be the share of successful
+`noctx` generations whose walk started from the seed, not the share of draws.
+The report SHALL print the hot-n-gram draw counters (draws, empty share) so a
+channel switched off by data is visible in the report itself.
+
+The gate `l1_hot_channel` SHALL be pre-registered before the grid is run and
+SHALL require: coverage at or above its floor (below it the verdict is
+`insufficient data`, never `pass`), a significant rise of
+`historical_meme_rate` in `noctx`, no significant rise of copy or repetition
+in either mode, no significant drop of affinity without copies in `ctx`,
+latency within budget, a connectedness round (M3R-020) in `noctx`, and both
+modes.
+
+#### Scenario: Baseline unchanged by the draw
+
+- **WHEN** C0 is run in `noctx` and its hot selection is empty
+- **THEN** its records equal those of a run without the seed draw
+- **AND** the report shows the draws counted with an empty share of 100%
+
+#### Scenario: Addressed replies are never seeded
+
+- **WHEN** any configuration is run in `ctx` mode
+- **THEN** no record has a seed drawn
+
+#### Scenario: Coverage below the floor
+
+- **WHEN** an arm's seeded starts cover fewer successful `noctx` generations
+  than the pre-registered floor
+- **THEN** its `l1_hot_channel` verdict is `insufficient data`, whatever the
+  metrics say
+
+### Requirement: The pool-composition gate is pre-registered and coverage is a shift
+
+The gate `pool_composition` SHALL be pre-registered before the grid is run and
+SHALL require, for an arm against C0: a significant rise of
+`context_affinity_without_copy` in `ctx`; no significant rise of copy or
+repetition in either mode; the pool ECB invariant (mean at or above the
+absolute floor shared with `structural_escape`); no significant drop of the
+window escape count; latency within budget; a connectedness round (M3R-020) in
+`ctx`; both modes. Its coverage SHALL be the shift of the share of successful
+`ctx` replies whose winner started from context (context, hidden context or
+spliced anchor) against C0; an arm whose shift is below the floor SHALL read
+`insufficient data`, never `pass`.
+
+#### Scenario: Arm that did not move the start budget
+
+- **WHEN** an arm's context-start share differs from C0 by less than the floor
+- **THEN** its `pool_composition` verdict is `insufficient data` whatever the
+  affinity delta says
+
+#### Scenario: Arm that narrows the window
+
+- **WHEN** an arm raises affinity significantly and lowers the window escape
+  count significantly
+- **THEN** its verdict is `fail`
+
+### Requirement: The winner's start source survives extension and mutation
+
+The harness SHALL attribute the winner's `start_source` to the attempt that
+produced it even when the winning text was extended or mutated after the walk:
+the harness follows the trace's extension and mutation events back to the
+original attempt instead of looking the final text up alone. Attribution SHALL
+be captured outside the timed section.
+
+#### Scenario: Extended winner
+
+- **WHEN** the winning reply is a verbatim extension of a context-started attempt
+- **THEN** the record's `start_source` is that attempt's source, not `None`
+
+### Requirement: The selection-window gate is pre-registered with a single-trajectory coverage
+
+The gate `selection_window` SHALL be pre-registered before the grid is run and
+SHALL require, for an arm against C0: the share of successful replies whose
+selection window holds a single trajectory drops by at least the registered
+floor (coverage; below it the verdict is `insufficient data`, never `pass`);
+a significant rise of the window escape count; no significant drop of
+affinity without copies; no significant rise of copy or repetition in either
+mode; pool ECB at or above the invariant floor; latency within budget; a
+connectedness round (M3R-020) in `ctx`; both modes.
+
+#### Scenario: Mean rises, coverage does not
+
+- **WHEN** an arm raises the mean window escape significantly while the share
+  of single-trajectory inputs drops by less than the floor
+- **THEN** its verdict is `insufficient data`
+
+#### Scenario: Window widened at a topicality price
+
+- **WHEN** an arm raises the window escape and drops affinity without copies
+  significantly
+- **THEN** its verdict is `fail`
+
+### Requirement: The knob census is a reproducible run with a pre-registered rule
+
+The eval tooling SHALL provide a knob census that builds its arms from the
+runtime registry (the extremes of each measurable knob's domain, a flipped
+value for booleans, and the same extremes with the parent knob enabled for
+knobs gated by another knob), runs them on a snapshot in both context modes
+against one baseline, and classifies every knob by a rule registered in
+`eval_thresholds.yaml` before the run: dead (not read on a live path), gated,
+inert, weak, strong. Knobs the harness cannot exercise SHALL be listed as
+outside the offline measurement, never as inert. The census report SHALL
+carry numbers only — no reply text and no n-grams — and SHALL NOT change any
+default: deletions and merges are a separate change.
+
+#### Scenario: Inert knob
+
+- **WHEN** both extremes of a knob leave every classification metric's delta
+  interval inside the tolerance band in both modes
+- **THEN** the knob is classified inert and the report proposes removing it or
+  reducing it to a constant
+
+#### Scenario: Gated knob
+
+- **WHEN** a knob's extremes move nothing while its parent is at the default
+  but move a metric significantly with the parent enabled
+- **THEN** the knob is classified gated, not inert
+
+#### Scenario: Knob outside the harness
+
+- **WHEN** a knob is read only by the reply pipeline or handlers
+- **THEN** the report lists it as outside the offline measurement with the
+  place it is read

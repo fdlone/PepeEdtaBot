@@ -1,0 +1,32 @@
+# M3R-110 pool-composition grid, file 2 of 2 (change pool-composition-sweep).
+# See matrix_pool_grid_1.yaml for why the grid is split and what C8 means.
+#
+# generation_attempts_with_context 5 -> 10: context on every attempt of the
+# budget, so the "context silently dropped from the sixth attempt" switch
+# (37% of ctx replies on the 13.08 copy, 20% live on 01.09) never fires. C8m is
+# the mild combination — bias 3.0 + splice 0.4 + attempts 10 — chosen mild on
+# purpose: the July sweep found knob effects sub-additive and the hot
+# combination (bias 4.0 + splice 0.4 + jump 0.2 + order_mix 0.75) crossing the
+# connective tic by accumulation.
+configurations:
+  - id: C0
+    description: "Markov 1.x frozen baseline (registry defaults, flavor/emoji silenced)"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+
+  - id: C8a10
+    description: "M3R-110, generation_attempts_with_context 10 (context on every attempt)"
+    available: true
+    same_as: C0
+    overrides:
+      generation_attempts_with_context: 10
+  - id: C8m
+    description: "M3R-110, mild combination: bias 3.0 + splice 0.4 + attempts 10"
+    available: true
+    same_as: C0
+    overrides:
+      reply_context_start_bias: 3.0
+      context_anchor_splice_probability: 0.4
+      generation_attempts_with_context: 10

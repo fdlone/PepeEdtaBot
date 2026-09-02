@@ -1,0 +1,50 @@
+# M3R-145 hot-n-gram (L1) threshold grid (change l1-hot-channel-sweep).
+#
+# Not the protocol matrix: this file exists so the run that decides the L1
+# thresholds is reproducible instead of being a command someone typed once.
+#
+# Arm ids start with C7: C0..C6 are taken (matrix.yaml and the phase 9 grid),
+# and the prefix is what routes an arm to its gate in report.py.
+#
+# Flavor/emoji stay silenced exactly as in C0, so the metrics measure the word
+# model alone. hot_ngram_seed_chance stays at the registry default (0.25): the
+# grid moves the SELECTION thresholds, not the draw probability. The question
+# is whether the channel has anything to say, not how often it speaks.
+#
+# The axis is what the prod copy (2026-09-01) makes measurable. chat_hot_ngrams
+# holds 1097 rows, 18 with cnt >= 2 and 2 with cnt >= 3; at the default 3/0.5
+# the selection is empty. min_count = 1 is deliberately NOT an arm: get_hot
+# returns the top 8 by count, and with 18 rows at cnt >= 2 the eight it returns
+# at min_count 1 are the same eight as at min_count 2. The axis below 2 is
+# inert by construction (LIMIT 8), not by data. What moves the selection is the
+# recency share: 9 eligible rows at 0.5, 12 at 0.25, 18 at 0.0 (of which 3, 6
+# and 11 open a stored start; the seed can only anchor a walk there).
+configurations:
+  - id: C0
+    description: "Markov 1.x frozen baseline (registry defaults, flavor/emoji silenced)"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+
+  - id: C7a
+    description: "M3R-145, hot_ngram_min_count 2, recency_share 0.5"
+    available: true
+    same_as: C0
+    overrides:
+      hot_ngram_min_count: 2
+      hot_ngram_recency_share: 0.5
+  - id: C7b
+    description: "M3R-145, hot_ngram_min_count 2, recency_share 0.25"
+    available: true
+    same_as: C0
+    overrides:
+      hot_ngram_min_count: 2
+      hot_ngram_recency_share: 0.25
+  - id: C7c
+    description: "M3R-145, hot_ngram_min_count 2, recency_share 0.0 (no recency filter)"
+    available: true
+    same_as: C0
+    overrides:
+      hot_ngram_min_count: 2
+      hot_ngram_recency_share: 0.0

@@ -1,0 +1,47 @@
+# M3R-110 pool-composition grid, file 1 of 2 (change pool-composition-sweep).
+#
+# Not the protocol matrix: this file exists so the run that decides the
+# ctx-mode pool composition is reproducible instead of a command typed once.
+#
+# Arm ids start with C8: C0..C7 are taken, and the prefix is what routes an arm
+# to its gate in report.py. Two files because six arms x 1500 generations x two
+# modes do not fit one run's time budget, and the paired deltas need C0 inside
+# the same run — C0 is deterministic (seed, prompts, copy), so its summary must
+# match between the files, and the verdict prints that check.
+#
+# Flavor/emoji stay silenced exactly as in C0, so the metrics measure the word
+# model alone. Every knob here acts only when context is present: the noctx run
+# of this grid measures inertness, not effect, and keeps the two-mode weighting
+# honest.
+#
+# Axis values: reply_context_start_bias 2.2 -> 3.0 / 4.0 (the July 2026 knob
+# sweep put 4.0 at ctx_anchored +0.036, significant, and 1.0 at a full collapse
+# of contextual relevance); context_anchor_splice_probability 0.25 -> 0.4 (0.5
+# already pushed the connective share to 0.75 against the ~0.8 "connective tic"
+# and is not taken).
+configurations:
+  - id: C0
+    description: "Markov 1.x frozen baseline (registry defaults, flavor/emoji silenced)"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+
+  - id: C8b30
+    description: "M3R-110, reply_context_start_bias 3.0"
+    available: true
+    same_as: C0
+    overrides:
+      reply_context_start_bias: 3.0
+  - id: C8b40
+    description: "M3R-110, reply_context_start_bias 4.0"
+    available: true
+    same_as: C0
+    overrides:
+      reply_context_start_bias: 4.0
+  - id: C8s40
+    description: "M3R-110, context_anchor_splice_probability 0.4"
+    available: true
+    same_as: C0
+    overrides:
+      context_anchor_splice_probability: 0.4

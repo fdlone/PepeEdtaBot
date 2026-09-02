@@ -49,6 +49,10 @@ class RuntimeTunables:
     typing_per_char_ms: int
     randomness_strength: float
     candidate_selection_temperature: float
+    selection_score_margin: float
+    context_relevance_weight: float
+    context_relevance_cap: float
+    selection_diversity_bonus: float
     reply_flavor_strength: float
     emoji_append_chance: float
     repetition_penalty_strength: float
@@ -83,6 +87,7 @@ class RuntimeTunables:
     markov_collocation_break_penalty: float
     markov_hot_ngram_meme_ordering: bool
     markov_seeded_candidate_ratio: float
+    hot_ngram_slot_ratio: float
     markov_seed_branch_min: float
     markov_seed_branch_ideal: float
     markov_seed_branch_max: float
@@ -110,6 +115,7 @@ class RuntimeTunables:
     reply_context_max_tokens: int
     reply_context_bias: float
     reply_context_start_bias: float
+    generation_attempts_with_context: int
     context_start_affinity: float
     context_anchor_splice_probability: float
     reply_context_only_for_replies: bool

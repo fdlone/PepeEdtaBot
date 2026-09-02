@@ -143,6 +143,16 @@ phase5_promotion:
   affinity_without_copy_delta_min: 0.0
   latency_p95_ms_max: 150        # TZ §17 full-generation budget
   storage_growth_max_share: 0.35 # reverse order-2 ~ transitions table ~30% of DB
+  # ADDED 2026-09-01 by owner decision, BEFORE the M2R-430 verdict run (the
+  # corpus precondition below is not met yet: n_docs 232 of 500). Legitimate
+  # under the pre-registration rule for the same reason as phase9_interp's
+  # flag: it can only turn a one-mode `pass` into `insufficient data`, never
+  # loosen anything. Why the seeded channel needs both modes: its anchors come
+  # from the current message, which is present in BOTH modes, so seeded is the
+  # one Track A mechanism that acts on self-initiated replies too (the noctx
+  # 11% of production, where after the L1 verdict it is the only topicality
+  # source left). A ctx-only pass would be blind to exactly those replies.
+  requires_both_modes: true
   # Corpus-sufficiency precondition (gate-phase5-ndocs-floor, registered
   # 2026-09-01, before any verdict run). Two parts because each is blind to the
   # other failure: volume alone repeats the retired ">=1000 phrases" bar (it
@@ -334,3 +344,179 @@ performance:
   # TZ §17, checked from Phase 1 onward on every protocol run.
   lookup_p95_ms_max: 10
   generation_p95_ms_max: 150
+
+l1_hot_channel:
+  # M3R-145, registered 2026-09-01 BEFORE the L1 grid (matrix_l1_grid.yaml)
+  # was run and before the harness had produced a single seeded generation
+  # (change l1-hot-channel-sweep). Rationale per number, so a later reader can
+  # audit whether an edit was post-hoc.
+  #
+  # The channel is dead by data at the default thresholds (map §3.2б; live
+  # /stats 2026-09-01: hot phrases empty in 100% of draws). The grid lowers the
+  # SELECTION thresholds; the draw probability stays at its default.
+  #
+  # Two modes, and the gate is asymmetric by construction: the pipeline never
+  # seeds addressed replies, and addressed replies are the ones that carry
+  # context — so the seed draw exists in noctx only, and ctx measures the other
+  # half of the same knobs (which tokens slot mutations protect).
+  requires_both_modes: true
+  # Coverage (roadmap §4 template), noctx: share of successful generations
+  # whose walk actually STARTED from the seed — not the share of draws. A drawn
+  # n-gram anchors a walk only when it opens a stored start, and the census
+  # says 3-5 of the top 8 do; at a 0.25 draw chance the reachable ceiling is
+  # 9-16%. Below 5% the arm touched too few replies for the protocol to resolve
+  # its effect (~3 p.p., doc 05 §8): verdict `insufficient data`, never pass.
+  seed_start_share_min: 0.05
+  # must-improve, noctx: historical_meme_rate must rise AND the rise must be
+  # significant. Circularity admitted up front: the meme set (M3R-130) and the
+  # seed pool share the support floor 2, so this measures whether a drawn meme
+  # SURVIVES to the reply through finalization, the verbatim penalty and
+  # selection — which is the channel's question (R4: the nine memes never
+  # appear in any candidate). An insignificant delta is a FAIL: reproducing
+  # local memes is the stated benefit, "no measurable effect" means the channel
+  # still has nothing to say.
+  meme_rate_delta_min: 0.0
+  # must-not-worsen, both modes: only a SIGNIFICANT rise disqualifies (same
+  # convention as every earlier gate; the protocol cannot resolve below ~3
+  # p.p.). Seeds are corpus phrases by construction, so copy is the risk this
+  # channel carries and the pairing with the must-improve above is deliberate.
+  exact_copy_delta_max: 0.0
+  repetition_delta_max: 0.0
+  # must-not-worsen, ctx: topicality without copies may not drop significantly.
+  # In ctx the knobs change only the protected tokens of slot mutations; a
+  # significant drop there would mean the protection is breaking replies.
+  affinity_without_copy_delta_floor: 0.0
+  # TZ §17 budget, restated so the verdict is computable from this block alone.
+  latency_p95_ms_max: 150
+  # Connectedness, noctx only (the channel produces text there; in ctx it
+  # changes nothing a rater could see). Same instrument and floor as phase 9:
+  # the M3R-020 solo round, share of "coherent" replies may not fall more than
+  # 10 p.p. below C0. Validity of the round is read from the phase9_interp
+  # block by the round tool itself (its design: one set of validity bars).
+  # Without a round the noctx verdict is `insufficient data`, never `pass`.
+  manual_connected_delta_floor: -0.10
+
+pool_composition:
+  # M3R-110, registered 2026-09-01 BEFORE the pool grid
+  # (matrix_pool_grid_1.yaml, matrix_pool_grid_2.yaml) was run (change
+  # pool-composition-sweep). Rationale per number, so a later reader can audit
+  # whether an edit was post-hoc.
+  #
+  # The grid moves three ctx-only knobs (context start bias, anchor splice
+  # share, attempts with context). They are inert without context, so the
+  # noctx half of this gate measures inertness and keeps the two-mode weighting
+  # honest rather than measuring an effect.
+  requires_both_modes: true
+  # Coverage (roadmap §4 template), ctx: the knobs claim to shift the start
+  # budget from global starts to contextual ones, so the measured share of
+  # successful replies whose winner started from context (context / hidden
+  # context / spliced anchor) must MOVE against C0 by at least this much. An
+  # arm that did not move it changed nothing it claims to change; whatever its
+  # affinity delta says is noise or a side effect — verdict `insufficient
+  # data`, never pass. 5 p.p. is the protocol's resolution class (~3 p.p. at
+  # n=500, doc 05 §8) with margin.
+  context_start_share_delta_min: 0.05
+  # must-improve, ctx: topicality without copies must rise AND the rise must be
+  # significant. An insignificant delta is a FAIL — moving the budget toward
+  # contextual starts is the stated benefit, "no measurable effect" means the
+  # arm did not deliver. Paired with the copy bound below on purpose: affinity
+  # is trivially inflated by copying.
+  affinity_without_copy_delta_min: 0.0
+  # must-not-worsen, both modes: only a SIGNIFICANT rise disqualifies (same
+  # convention as every earlier gate). Contextual starts retrace the corpus
+  # around the prompt, so copy is the price this grid could pay.
+  exact_copy_delta_max: 0.0
+  repetition_delta_max: 0.0
+  # Safety invariant of the roadmap (ECB >= 4/5 over the pool), same absolute
+  # floor as structural_escape.pool_ecb_min and comparable for the same reason
+  # (the slot budget keeps the pool at five, O10).
+  pool_ecb_min: 4.0
+  # must-not-worsen, ctx: the window escape count may not drop significantly.
+  # M3R-011 located the bottleneck in the selection window (2.169 in ctx with
+  # 36% of inputs at one trajectory); a knob that buys topicality by narrowing
+  # the window further is exactly the trade the roadmap warns against.
+  window_escape_delta_floor: 0.0
+  # TZ §17 budget, restated so the verdict is computable from this block alone.
+  latency_p95_ms_max: 150
+  # Connectedness, ctx only (the arms change text only with context). Same
+  # instrument and floor as phase 9: the M3R-020 solo round, share of
+  # "coherent" replies may not fall more than 10 p.p. below C0. Without a round
+  # the ctx verdict is `insufficient data`, never `pass`.
+  manual_connected_delta_floor: -0.10
+
+knob_census:
+  # M3R-151, registered 2026-09-02 BEFORE the census was run (change
+  # knob-census). Classification rule for every measurable knob, from the
+  # paired deltas of its domain extremes against C0 in both modes.
+  #
+  # inert: at EVERY measured extreme, EVERY classification metric's delta
+  # interval lies inside [-tol, +tol]. A CI-containment rule, not a point
+  # rule: an insignificant delta with a wide interval is "not resolved", not
+  # "inert" — and "not resolved" reads as weak, never as inert.
+  # strong: at least one extreme has a SIGNIFICANT delta whose |point| is at
+  # or above the strength bar on some metric.
+  # weak: everything else.
+  # gated: extremes inert with the parent knob at its default and not inert
+  # with the parent enabled.
+  # dead: not read on any live path (static check, no run).
+  #
+  # Tolerances per metric family. Shares: 0.01 is a third of the protocol's
+  # resolution at n=500 (~3 p.p., doc 05 §8) and n here is 1500 per arm.
+  # Trajectory counts (escape / ECB): 0.05 on a scale where the C0 window sits
+  # at ~2.0-2.9 and the headline gate resolves 0.1. Length: 0.3 tokens on a
+  # mean of ~10.5.
+  tolerance:
+    context_affinity_without_copy: 0.01
+    exact_context_copy_rate: 0.01
+    repetition_rate: 0.01
+    historical_meme_rate: 0.01
+    structural_window_escape: 0.05
+    structural_pool_ecb: 0.05
+    mean_response_length: 0.3
+  # Strength bars: a knob is "strong" when it can move a metric by at least
+  # this much — the class where a domain ceiling matters more than removal.
+  strong:
+    context_affinity_without_copy: 0.03
+    exact_context_copy_rate: 0.03
+    repetition_rate: 0.03
+    historical_meme_rate: 0.03
+    structural_window_escape: 0.15
+    structural_pool_ecb: 0.15
+    mean_response_length: 1.0
+
+selection_window:
+  # M3R-100, registered 2026-09-02 BEFORE the selection grid
+  # (matrix_selection_grid_{1,2}.yaml) was run (change selection-window-grid).
+  # The hypothesis under test: the ctx selection window — not the chain — is
+  # where candidate diversity collapses (M3R-011: pool ECB ~4.5, window ~2,
+  # 36% of inputs with a single trajectory in the window; M3R-110: every
+  # context knob that raised topicality narrowed the window). The arms move
+  # the window itself: the margin, the relevance weight/cap and a diversity
+  # bonus for trajectories distinct from the best-scored one.
+  requires_both_modes: true
+  # Coverage, in the form M3R-011 promised for the route gate: the share of
+  # inputs whose window holds a SINGLE trajectory must drop by at least this
+  # much (paired delta, negative). A mean escape that rises while the same
+  # third of inputs stays at one trajectory would be diversity for the inputs
+  # that already had it.
+  single_trajectory_share_delta_max: -0.05
+  # must-improve: the window escape count must rise AND the rise must be
+  # significant. An insignificant delta is a FAIL — widening the window is the
+  # stated benefit, "no measurable effect" means the arm did not deliver.
+  window_escape_delta_min: 0.0
+  # must-not-worsen (the roadmap's success criterion: affinity not below the
+  # best single configuration): topicality without copies may not drop
+  # significantly. Deliberately a significance floor, not a CI-low tolerance:
+  # a wider window is expected to cost topicality by construction, and the
+  # question is whether it does so measurably.
+  affinity_without_copy_delta_floor: 0.0
+  # must-not-worsen, both modes: same convention as every earlier gate.
+  exact_copy_delta_max: 0.0
+  repetition_delta_max: 0.0
+  # Safety invariant of the roadmap, same absolute floor as structural_escape.
+  pool_ecb_min: 4.0
+  # TZ §17 budget, restated so the verdict is computable from this block alone.
+  latency_p95_ms_max: 150
+  # Connectedness, ctx (the arms change which candidate wins, i.e. the text a
+  # rater sees). Same instrument and floor as phase 9.
+  manual_connected_delta_floor: -0.10

@@ -172,7 +172,7 @@ Telegram message (F.text)
 
 ## 4. Оркестратор: `ResponseGenerator.generate_with_result` (`core/response_generator.py`)
 
-Константы: `GENERATION_ATTEMPT_BUDGET=10`, `GENERATION_ATTEMPTS_WITH_CONTEXT=5`
+Константы: `GENERATION_ATTEMPT_BUDGET=10`, ручка `generation_attempts_with_context` (дефолт `GENERATION_ATTEMPTS_WITH_CONTEXT=5`, с 2026-09-01; 0 — ни одна попытка не получает контекст)
 (после 5-й попытки контекст отбрасывается — наблюдаемо: счётчик
 `context_dropped` в `/stats` и событие CONTEXT DROPPED в трассе, M3R-141),
 `CANDIDATE_TARGET=5`,
@@ -277,9 +277,34 @@ Telegram message (F.text)
    выиграл ли при наличии (ТЗ §9.6, docs/v2/02_MARKOV_2_0R_TZ.md). Гейт
    промоушена (M2R-430) — отдельно, ему
    нужен df, накопленный на проде.
+5c. **Hot-маршрут — L1 «локальные мемы» с бюджетом слотов** (M3R-230,
+   `hot_ngram_slot_ratio`, дефолт 0 — выключено; с 2026-09-02): только для
+   ответов без контекста первые `route_slot_budget(target, ratio)` попыток
+   цикла п.3 получают `seed_tokens` — каждая свою горячую n-грамму из
+   отбора `get_hot` по действующим `hot_ngram_min_count` /
+   `hot_ngram_recency_share` (без возврата, розыгрыш из `generation_rng`,
+   `_draw_hot_seeds`). Отдельной ветки сборки нет: кандидат идёт той же
+   прогулкой, финализацией, гейтами п.4, дописками и мутациями, что и
+   основной обход; атрибуция `route = hot` ставится по факту попытки. Слот —
+   это попытка, а не гарантированный кандидат: отклонённая hot-попытка
+   отдаёт место обходу (условие остановки считает пул). Легаси-затравка
+   конвейера (`request.seed`, одна попытка с шансом 0.25) при включённом
+   маршруте не подаётся. При ratio 0 — ни розыгрыша, ни чтения, хеш
+   бит-в-бит. Замер — гейт `l1_hot_channel`, грид
+   `tools/eval/matrix_l1_route_grid.yaml`.
+5d. **Бонус различности** (M3R-100, `selection_diversity_bonus`, дефолт 0 —
+   выключено; с 2026-09-02): перед отбором кандидату, чья траектория
+   существенно отлична от лучшей по скору (перекрытие рёбер контентных
+   токенов ниже 0.5 — то же определение, что у гейта M3R-011,
+   `app/core/trajectory.py`), добавляется компонент `bonus × (1 − overlap)`;
+   лучший кандидат не трогается. Это меняет, кто попадает в окно отбора,
+   а не прогулку. При 0 — ни вычислений, ни ГСЧ.
 6. **Выбор**: `select_scored_candidate` — softmax с
-   `candidate_selection_temperature` среди кандидатов в пределах 0.3
-   (`SELECTION_SCORE_MARGIN`) от лучшего скора; t=0 или один кандидат → argmax.
+   `candidate_selection_temperature` среди кандидатов в пределах
+   `selection_score_margin` (дефолт 0.3, была константа
+   `SELECTION_SCORE_MARGIN`) от лучшего скора; t=0 или один кандидат → argmax.
+   Вес и потолок IDF-тематичности — тоже ручки с 2026-09-02
+   (`context_relevance_weight` / `context_relevance_cap`, дефолт 1.6).
    Именно `SELECTION_SCORE_MARGIN`, а не температура, решает, победит ли лучший
    кандидат: окно отсекает слабых до того, как софтмаксу есть что размазывать.
 7. **Пост-обработка**:

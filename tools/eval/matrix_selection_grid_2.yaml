@@ -1,0 +1,36 @@
+# M3R-100 selection-window grid, file 2 of 2 (change selection-window-grid).
+# See matrix_selection_grid_1.yaml for the prefix and the split.
+#
+# Diversity bonus (selection-knobs, design D2): candidates whose trajectory is
+# substantially different from the best-scored one gain bonus x (1 - overlap).
+# 0.2 is below the default margin (0.3): a distinct candidate within 0.1 of
+# the best enters the window, one further away does not. 0.4 exceeds the
+# margin: any distinct candidate within 0.7 enters. C9w13 is the milder
+# weight arm of the relevance axis.
+configurations:
+  - id: C0
+    description: "Markov 1.x frozen baseline (registry defaults, flavor/emoji silenced)"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+
+  - id: C9d20
+    description: "M3R-100, selection_diversity_bonus 0.2"
+    available: true
+    same_as: C0
+    overrides:
+      selection_diversity_bonus: 0.2
+  - id: C9d40
+    description: "M3R-100, selection_diversity_bonus 0.4"
+    available: true
+    same_as: C0
+    overrides:
+      selection_diversity_bonus: 0.4
+  - id: C9w13
+    description: "M3R-100, context_relevance_weight 1.3 (cap follows)"
+    available: true
+    same_as: C0
+    overrides:
+      context_relevance_weight: 1.3
+      context_relevance_cap: 1.3

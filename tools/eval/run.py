@@ -18,6 +18,7 @@ import random
 import sqlite3
 import sys
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +31,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from app import log_masking  # noqa: E402
 from app.config.registry import RUNTIME_FIELDS  # noqa: E402
 from app.core import gen_trace_log  # noqa: E402
+from app.core.failure_taxonomy import UNMAPPED, classify_reason  # noqa: E402
+from app.core.generation_telemetry import GenerationTelemetry  # noqa: E402
 from app.core.markov import content_tokens, tokenize  # noqa: E402
 from app.core.response_generator import (  # noqa: E402
     CANDIDATE_TARGET,
@@ -81,6 +84,31 @@ SMOKE_GENERATIONS = 40  # doc 05 §7
 # mode is about. Blanking it too would silently turn off seeded generation and
 # make the noctx arm measure a different machine, not a different input.
 CONTEXT_MODES = ("ctx", "noctx")
+
+# M3R-145: the L1 seed draw of ``ReplyPipeline._hot_ngram_seed``, reproduced
+# for the noctx mode. Its RNG is seeded per generation at this offset from the
+# generation RNG's seed (``seed * 100_000 + index``) so the two streams never
+# share a seed: a configuration with an empty hot selection stays byte-identical
+# to a run without the draw, and the draw never shifts the walk's RNG.
+HOT_SEED_RNG_OFFSET = 50_000_000
+
+
+def draw_hot_seed(
+    pool: list[tuple[str, ...]], chance: float, rng: random.Random
+) -> tuple[bool, list[str] | None]:
+    """One L1 seed draw the pipeline's way: roll first, then choose.
+
+    Returns ``(rolled, seed)``. ``rolled`` is whether the roll asked for a
+    seed — it is taken before looking at the pool, exactly as in production,
+    so the draw counter keeps the same denominator there and here ("asked and
+    got nothing", M3R-141). ``seed`` is ``None`` when the roll failed or the
+    pool is empty.
+    """
+    if chance <= 0.0 or rng.random() >= chance:
+        return False, None
+    if not pool:
+        return True, None
+    return True, list(rng.choice(pool))
 
 
 @dataclass(slots=True)
@@ -210,6 +238,8 @@ async def run_config_seed(
     db_copy, temp_dir = copy_database(db_source)
     saved_log_selection = gen_trace_log.log_selection
     saved_log_rejected = gen_trace_log.log_attempt_rejected
+    saved_log_extended = gen_trace_log.log_attempt_extended
+    saved_log_mutated = gen_trace_log.log_attempt_mutated
     records: list[GenRecord] = []
     try:
         resolved_chat = pick_chat_id(db_copy, chat_id)
@@ -267,6 +297,10 @@ async def run_config_seed(
             # is written, only the winning text survives.
             captured_pool: list[tuple[tuple[str, ...], float]] = []
             captured_margin: list[float] = [0.0]
+            # M3R-103 (reporting half): the route of every pool candidate, as
+            # the generator attributed it. Same hook, same rule — capture only,
+            # nothing is counted inside the timed section.
+            captured_routes: list[str] = []
 
             def _on_selection(_chat_id: int, candidates: Any, **kwargs: Any) -> None:
                 pool = list(candidates or ())
@@ -275,6 +309,7 @@ async def run_config_seed(
                     (_content_cf(candidate.text), float(candidate.score.total))
                     for candidate in pool
                 ]
+                captured_routes[:] = [str(candidate.route) for candidate in pool]
                 # The margin comes from the selection itself (design D3):
                 # hardcoding SELECTION_SCORE_MARGIN would keep measuring an old
                 # window the day that margin becomes a knob.
@@ -301,8 +336,23 @@ async def run_config_seed(
             def _on_rejected(*_args: Any, **_kw: Any) -> None:
                 rg_rejected[0] += 1
 
+            # M3R-110 (design D2): extension and mutation rewrite a candidate's
+            # text after the walk, so the winner's text no longer keys
+            # ``attempt_sources``. Keep the derivation so the start source is
+            # resolved through it instead of lost. Capture only — nothing is
+            # computed inside the timed section.
+            derived_from: dict[str, str] = {}
+
+            def _on_extended(*_args: Any, **kwargs: Any) -> None:
+                derived_from[str(kwargs["extended"])] = str(kwargs["original"])
+
+            def _on_mutated(*_args: Any, **kwargs: Any) -> None:
+                derived_from[str(kwargs["mutated"])] = str(kwargs["original"])
+
             gen_trace_log.log_selection = _on_selection  # type: ignore[assignment]
             gen_trace_log.log_attempt_rejected = _on_rejected  # type: ignore[assignment]
+            gen_trace_log.log_attempt_extended = _on_extended  # type: ignore[assignment]
+            gen_trace_log.log_attempt_mutated = _on_mutated  # type: ignore[assignment]
 
             runtime_state = SimpleNamespace(
                 **{spec.name: spec.parse(spec.default) for spec in RUNTIME_FIELDS}
@@ -320,16 +370,41 @@ async def run_config_seed(
                 ),
                 runtime_state=runtime_state,
             )
+            # M3R-145: the hot selection a self-initiated reply would draw
+            # from, read once per (arm, seed) like the pipeline's cache. noctx
+            # only — the pipeline never seeds addressed replies, and addressed
+            # replies are the ones that carry context (design D1).
+            hot_seed_pool: list[tuple[str, ...]] = []
+            if context_mode == "noctx" and runtime_state.hot_ngram_seed_chance > 0.0:
+                hot_seed_pool = await db.chat_hot_ngrams.get_hot(
+                    resolved_chat,
+                    min_count=runtime_state.hot_ngram_min_count,
+                    recency_share=runtime_state.hot_ngram_recency_share,
+                    meme_ordering=runtime_state.markov_hot_ngram_meme_ordering,
+                )
 
             index = 0
             for category, prompts in prompt_set.categories.items():
                 selector = random.Random(seed)
                 for prompt in _select_prompts(prompts, per_category, selector):
                     rng = random.Random(seed * 100_000 + index)
+                    seed_tokens: list[str] | None = None
+                    if context_mode == "noctx":
+                        rolled, seed_tokens = draw_hot_seed(
+                            hot_seed_pool,
+                            runtime_state.hot_ngram_seed_chance,
+                            random.Random(seed * 100_000 + index + HOT_SEED_RNG_OFFSET),
+                        )
+                        if rolled:
+                            generator.telemetry.note_hot_ngram_draw(
+                                empty=not hot_seed_pool
+                            )
                     index += 1
                     generator.reset_generation()
                     pool_sizes[0] = 0
                     captured_pool.clear()
+                    captured_routes.clear()
+                    derived_from.clear()
                     rejected_before = sum(generator.rejections.values()) + rg_rejected[0]
                     prompt_tokens = tokenize(prompt)
                     started = time.perf_counter()
@@ -347,7 +422,7 @@ async def run_config_seed(
                             context_tokens=(
                                 prompt_tokens if context_mode == "ctx" else []
                             ),
-                            seed=None,
+                            seed=seed_tokens,
                             current_message_normalized=sanitize_text(prompt).lower(),
                             # M2R-210: a fixed moment, so a time-dependent
                             # weight stays reproducible. On a reconstructed
@@ -379,6 +454,8 @@ async def run_config_seed(
                                 rejected_count=rejected,
                                 pool_ecb=pool_ecb,
                                 window_escape=window_escape,
+                                pool_routes=tuple(captured_routes),
+                                seed_drawn=seed_tokens is not None,
                             )
                         )
                         continue
@@ -417,6 +494,17 @@ async def run_config_seed(
                                 if fresh_tokens is None
                                 else fresh_share(reply_content, fresh_tokens)
                             ),
+                            winner_route=result.winner_route,
+                            pool_routes=tuple(captured_routes),
+                            seed_drawn=seed_tokens is not None,
+                            # The winner's walk as the generator traced it:
+                            # looked up by text, following extension and
+                            # mutation back to the attempt (M3R-110, D2). A
+                            # reply that still matches nothing reads as None
+                            # — undercounted, never inflated.
+                            start_source=resolve_start_source(
+                                result.text, generator.attempt_sources, derived_from
+                            ),
                         )
                     )
         finally:
@@ -425,7 +513,64 @@ async def run_config_seed(
         temp_dir.cleanup()
         gen_trace_log.log_selection = saved_log_selection  # type: ignore[assignment]
         gen_trace_log.log_attempt_rejected = saved_log_rejected  # type: ignore[assignment]
-    return records, generator.telemetry.snapshot()
+        gen_trace_log.log_attempt_extended = saved_log_extended  # type: ignore[assignment]
+        gen_trace_log.log_attempt_mutated = saved_log_mutated  # type: ignore[assignment]
+    snapshot = generator.telemetry.snapshot()
+    snapshot.update(route_telemetry(generator.telemetry))
+    return records, snapshot
+
+
+def resolve_start_source(
+    text: str,
+    attempt_sources: Mapping[str, str],
+    derived_from: Mapping[str, str],
+    *,
+    max_hops: int = 4,
+) -> str | None:
+    """The walk's start source behind a (possibly rewritten) reply text.
+
+    Extension and mutation each rewrite a candidate once, and a mutation can
+    sit on top of an extension, so the lookup follows ``derived_from`` for a
+    few hops until it lands on a traced attempt. ``None`` when nothing on the
+    chain was traced.
+    """
+    current = text
+    for _ in range(max_hops + 1):
+        source = attempt_sources.get(current)
+        if source is not None:
+            return source
+        parent = derived_from.get(current)
+        if parent is None or parent == current:
+            return None
+        current = parent
+    return None
+
+
+def route_telemetry(
+    telemetry: GenerationTelemetry,
+) -> dict[str, float | int | None]:
+    """Per-route counters flattened for the report (M3R-103, reporting half).
+
+    ``route_breakdown`` is nested and stays out of ``snapshot`` because
+    ``/stats`` prints flat numbers; the report wants the same numbers per seed,
+    so they travel as ``route_<route>_<key>``. Rejections are summed by failure
+    class (M3R-021), not by raw reason: the class is the vocabulary features
+    and rating rounds are compared in, and the raw reasons are already in the
+    trace. An unmapped reason lands in ``unmapped`` rather than vanishing.
+    """
+    flat: dict[str, float | int | None] = {}
+    for route, numbers in telemetry.route_breakdown().items():
+        for key, value in numbers.items():
+            flat[f"route_{route}_{key}"] = value
+    for route, reasons in telemetry.route_rejection_reasons().items():
+        for reason, count in reasons.items():
+            failure_class = classify_reason(reason)
+            key = (
+                f"route_{route}_rejected_"
+                f"{UNMAPPED if failure_class is None else failure_class.value}"
+            )
+            flat[key] = int(flat.get(key) or 0) + count
+    return flat
 
 
 async def run_matrix(

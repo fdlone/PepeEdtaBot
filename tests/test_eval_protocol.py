@@ -17,6 +17,7 @@ from typing import Any
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from app.core.generation_telemetry import CandidateRoute
 from tools.eval.bootstrap import bootstrap_ci, delta_ci
 from tools.eval.config import load_matrix, load_thresholds, resolve_overrides
 from tools.eval.metrics import (
@@ -273,6 +274,9 @@ class TestConfigFiles(unittest.TestCase):
             # молча уводит гейт на дефолты и печатает вердикт как ни в чём не
             # бывало. Этот кортеж — единственная защита.
             "phase9_interp",
+            "l1_hot_channel",
+            "pool_composition",
+            "selection_window",
             "performance",
         ):
             self.assertIn(gate, thresholds)
@@ -626,6 +630,487 @@ class TestPhase5CorpusPrecondition(unittest.TestCase):
         self.assertIn("singleton share 81% (ceiling 60%)", report)
 
 
+class TestRouteBreakdownSection(unittest.TestCase):
+    """M3R-103, reporting half: the per-route table of the report.
+
+    Two denominators printed separately (design D3), an off route is "not
+    attempted" rather than a zero row (D4), and the bit-for-bit summary does
+    not see route fields at all (D5)."""
+
+    @staticmethod
+    def _report(runs: dict[str, ConfigRun]) -> str:
+        return build_report(
+            runs=runs,
+            skipped=[],
+            prompt_set=_prompt_set_stub(),
+            thresholds=load_thresholds(),
+            snapshot_label="test",
+            seeds=(42,),
+            generations=1,
+            revision="test",
+            date="2026-09-01",
+            notes=[],
+        )
+
+    @staticmethod
+    def _row(report: str, config_id: str, route: str) -> str:
+        return next(
+            line
+            for line in report.splitlines()
+            if line.startswith(f"| {config_id} | {route} |")
+        )
+
+    def test_two_denominators_are_printed_separately(self) -> None:
+        records = [
+            _record(
+                winner_route="seeded",
+                pool_routes=("vanilla", "vanilla", "seeded"),
+                affinity=0.4,
+                latency_ms=30.0,
+            ),
+            _record(
+                winner_route="vanilla",
+                pool_routes=("vanilla", "vanilla", "vanilla"),
+                affinity=0.2,
+                latency_ms=10.0,
+            ),
+        ]
+        arm = ConfigRun(
+            config_id="C4",
+            records=records,
+            telemetry=[
+                {
+                    "route_seeded_attempts": 2,
+                    "route_seeded_rejected_F2_context_copy": 3,
+                    "route_vanilla_attempts": 2,
+                }
+            ],
+        )
+        report = self._report(
+            {"C0": ConfigRun(config_id="C0", records=[_record()]), "C4": arm}
+        )
+        row = self._row(report, "C4", "seeded")
+        cells = [cell.strip() for cell in row.strip("|").split("|")]
+        # config, route, attempts, pool share, presence, win given present,
+        # winners' affinity, winners' copy, latency, rejected
+        self.assertEqual(cells[2], "2")
+        self.assertTrue(cells[3].startswith("0.167"))  # (1/3 + 0) / 2
+        self.assertTrue(cells[4].startswith("0.500"))  # present in 1 of 2
+        self.assertTrue(cells[5].startswith("1.000"))  # won the one it was in
+        self.assertTrue(cells[6].startswith("0.400"))  # its winner's affinity
+        self.assertEqual(cells[8], "30.0 / 10.0")
+        self.assertEqual(cells[9], "F2_context_copy 3")
+
+    def test_route_that_never_ran_is_not_a_zero_row(self) -> None:
+        baseline = ConfigRun(
+            config_id="C0",
+            records=[_record(winner_route="vanilla", pool_routes=("vanilla",))],
+            telemetry=[{"route_vanilla_attempts": 1}],
+        )
+        report = self._report({"C0": baseline})
+        self.assertIn("not attempted", self._row(report, "C0", "seeded"))
+        self.assertNotIn("not attempted", self._row(report, "C0", "vanilla"))
+
+    def test_shared_configuration_has_no_rows_of_its_own(self) -> None:
+        base = ConfigRun(config_id="C0", records=[_record(pool_routes=("vanilla",))])
+        alias = ConfigRun(config_id="CF", records=base.records, shared_with="C0")
+        report = self._report({"C0": base, "CF": alias})
+        self.assertNotIn("| CF | vanilla |", report)
+
+    def test_summary_is_blind_to_route_fields(self) -> None:
+        plain = metrics_summary({"C0": ConfigRun(config_id="C0", records=[_record()])})
+        attributed = metrics_summary(
+            {
+                "C0": ConfigRun(
+                    config_id="C0",
+                    records=[_record(winner_route="seeded", pool_routes=("seeded",))],
+                )
+            }
+        )
+        self.assertEqual(plain, attributed)
+
+    def test_route_telemetry_sums_rejections_by_failure_class(self) -> None:
+        from app.core.generation_telemetry import GenerationTelemetry
+        from tools.eval.run import route_telemetry
+
+        telemetry = GenerationTelemetry()
+        telemetry.note_routes(
+            attempted={"vanilla", "seeded"}, present={"vanilla"}, winner="vanilla"
+        )
+        telemetry.note_route_rejected("seeded", "short_context_copy")
+        telemetry.note_route_rejected("seeded", "context_heavy")
+        telemetry.note_route_rejected("seeded", "no such reason")
+        flat = route_telemetry(telemetry)
+        self.assertEqual(flat["route_seeded_attempts"], 1)
+        self.assertEqual(flat["route_seeded_present"], 0)
+        self.assertEqual(flat["route_vanilla_won"], 1)
+        self.assertEqual(flat["route_seeded_rejected_F2_context_copy"], 2)
+        self.assertEqual(flat["route_seeded_rejected_unmapped"], 1)
+
+
+class TestHotSeedDraw(unittest.TestCase):
+    """M3R-145: the harness draws L1 seeds the pipeline's way."""
+
+    def test_roll_first_then_choose(self) -> None:
+        from tools.eval.run import draw_hot_seed
+
+        pool = [("пиво", "сегодня"), ("опять", "ты")]
+        self.assertEqual(draw_hot_seed(pool, 0.0, random.Random(1)), (False, None))
+        self.assertEqual(draw_hot_seed([], 1.0, random.Random(1)), (True, None))
+        rolled, seed = draw_hot_seed(pool, 1.0, random.Random(1))
+        self.assertTrue(rolled)
+        self.assertIn(tuple(seed or ()), pool)
+
+    def test_zero_chance_consumes_no_draw(self) -> None:
+        from tools.eval.run import draw_hot_seed
+
+        rng = random.Random(7)
+        draw_hot_seed([("а", "б")], 0.0, rng)
+        self.assertEqual(rng.random(), random.Random(7).random())
+
+    def test_same_seed_same_choice(self) -> None:
+        from tools.eval.run import draw_hot_seed
+
+        pool = [(f"w{i}", "x") for i in range(20)]
+        first = draw_hot_seed(pool, 1.0, random.Random(42))
+        second = draw_hot_seed(pool, 1.0, random.Random(42))
+        self.assertEqual(first, second)
+
+
+class TestL1Gate(unittest.TestCase):
+    """M3R-145 gate: coverage gates the verdict, the meme rate is must-improve
+    in noctx, copy is must-not-worsen in both modes, and no round means no
+    pass."""
+
+    @staticmethod
+    def _records(
+        *,
+        n: int = 20,
+        seeded: int = 0,
+        meme: bool = False,
+        copy: bool = False,
+        affinity: float = 0.3,
+    ) -> list[GenRecord]:
+        records = []
+        for index in range(n):
+            records.append(
+                _record(
+                    category="meme-bait",
+                    meme_hits=frozenset({0}) if meme else frozenset(),
+                    is_copy=copy,
+                    affinity=affinity,
+                    seed_drawn=index < seeded,
+                    start_source="seed" if index < seeded else "global",
+                )
+            )
+        return records
+
+    def _rows(self, runs: dict[str, ConfigRun], mode: str) -> dict[str, tuple[str, str]]:
+        rows = evaluate_gates(runs, load_thresholds(), None, mode, None, None)
+        return {row[0]: (row[1], row[2]) for row in rows}
+
+    @staticmethod
+    def _arm_verdict(runs: dict[str, ConfigRun], mode: str) -> tuple[str, str]:
+        # The arm verdict BEFORE the two-mode downgrade: a one-mode run always
+        # reads `insufficient data` through evaluate_gates (M3R-140), so the
+        # fail/pass logic is tested on the function that computes it.
+        from tools.eval.report import _l1_arm_verdict
+
+        return _l1_arm_verdict(runs["C0"], runs["C7a"], load_thresholds(), None, mode)
+
+    def test_coverage_below_floor_is_insufficient_not_fail(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C7a": ConfigRun(config_id="C7a", records=self._records(meme=True, copy=True)),
+        }
+        verdict, detail = self._rows(runs, "noctx")["l1_hot_channel[C7a]"]
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("coverage below the floor", detail)
+
+    def test_meme_rise_without_round_is_insufficient(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C7a": ConfigRun(config_id="C7a", records=self._records(seeded=4, meme=True)),
+        }
+        verdict, detail = self._rows(runs, "noctx")["l1_hot_channel[C7a]"]
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("historical_meme_rate Δ 1.000", detail)
+        self.assertIn("connectedness round", detail)
+        # The two-mode requirement is named too.
+        self.assertIn("requires both context modes", detail)
+
+    def test_no_meme_rise_is_a_fail(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C7a": ConfigRun(config_id="C7a", records=self._records(seeded=4)),
+        }
+        verdict, detail = self._arm_verdict(runs, "noctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("did not rise significantly", detail)
+
+    def test_copy_rise_fails_in_ctx_too(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C7a": ConfigRun(config_id="C7a", records=self._records(copy=True)),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("copy rose significantly", detail)
+        self.assertIn("seed draw not modelled", detail)
+
+    def test_affinity_drop_fails_in_ctx(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(affinity=0.5)),
+            "C7a": ConfigRun(config_id="C7a", records=self._records(affinity=0.1)),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("affinity without copies dropped", detail)
+
+    def test_no_arm_reports_insufficient(self) -> None:
+        runs = {"C0": ConfigRun(config_id="C0", records=self._records())}
+        verdict, _ = self._rows(runs, "noctx")["l1_hot_channel"]
+        self.assertEqual(verdict, "insufficient data")
+
+    def test_report_prints_hot_seed_counters(self) -> None:
+        run = ConfigRun(
+            config_id="C0",
+            records=self._records(),
+            telemetry=[{"hot_ngram_draws": 12, "hot_ngram_empty_rate": 1.0}],
+        )
+        report = build_report(
+            runs={"C0": run},
+            skipped=[],
+            prompt_set=_prompt_set_stub(),
+            thresholds=load_thresholds(),
+            snapshot_label="test",
+            seeds=(42,),
+            generations=1,
+            revision="test",
+            date="2026-09-01",
+            notes=[],
+        )
+        self.assertIn("hot-ngram seeds: 12 draws, empty 100%", report)
+
+
+class TestStartSourceResolution(unittest.TestCase):
+    """M3R-110 (D2): the winner's start source follows extension and
+    mutation back to the traced attempt."""
+
+    def test_follows_extension_then_mutation(self) -> None:
+        from tools.eval.run import resolve_start_source
+
+        attempts = {"а б": "context"}
+        derived = {"а б в": "а б", "а г в": "а б в"}
+        self.assertEqual(resolve_start_source("а г в", attempts, derived), "context")
+        self.assertEqual(resolve_start_source("а б", attempts, derived), "context")
+
+    def test_unknown_text_is_none_not_a_guess(self) -> None:
+        from tools.eval.run import resolve_start_source
+
+        self.assertIsNone(resolve_start_source("x", {"а": "global"}, {}))
+        # A self-loop in the derivation must not spin.
+        self.assertIsNone(resolve_start_source("x", {}, {"x": "x"}))
+
+
+class TestPoolCompositionGate(unittest.TestCase):
+    """M3R-110 gate: coverage is the shift of the context-start share, affinity
+    is must-improve in ctx, the window may not narrow, and no round means no
+    pass; noctx only checks that nothing moved."""
+
+    @staticmethod
+    def _records(
+        *,
+        n: int = 20,
+        context_starts: int = 0,
+        affinity: float = 0.3,
+        copy: bool = False,
+        window_escape: int = 2,
+        pool_ecb: int = 5,
+    ) -> list[GenRecord]:
+        return [
+            _record(
+                start_source="context" if index < context_starts else "global",
+                affinity=affinity,
+                is_copy=copy,
+                window_escape=window_escape,
+                pool_ecb=pool_ecb,
+            )
+            for index in range(n)
+        ]
+
+    @staticmethod
+    def _arm_verdict(runs: dict[str, ConfigRun], mode: str) -> tuple[str, str]:
+        from tools.eval.report import _pool_arm_verdict
+
+        return _pool_arm_verdict(runs["C0"], runs["C8b30"], load_thresholds(), None, mode)
+
+    def test_unmoved_start_budget_is_insufficient_not_a_verdict(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(context_starts=4)),
+            "C8b30": ConfigRun(
+                config_id="C8b30", records=self._records(context_starts=4, affinity=0.9)
+            ),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("start budget did not move", detail)
+
+    def test_affinity_rise_without_round_is_insufficient(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(context_starts=4)),
+            "C8b30": ConfigRun(
+                config_id="C8b30", records=self._records(context_starts=10, affinity=0.9)
+            ),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("context starts 50.0% vs 20.0%", detail)
+        self.assertIn("connectedness round", detail)
+
+    def test_narrowed_window_fails_despite_affinity(self) -> None:
+        runs = {
+            "C0": ConfigRun(
+                config_id="C0", records=self._records(context_starts=4, window_escape=3)
+            ),
+            "C8b30": ConfigRun(
+                config_id="C8b30",
+                records=self._records(context_starts=10, affinity=0.9, window_escape=1),
+            ),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("window escape dropped", detail)
+
+    def test_flat_affinity_is_a_fail(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(context_starts=4)),
+            "C8b30": ConfigRun(config_id="C8b30", records=self._records(context_starts=10)),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("did not rise significantly", detail)
+
+    def test_noctx_with_nothing_moved_passes_at_arm_level(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C8b30": ConfigRun(config_id="C8b30", records=self._records()),
+        }
+        verdict, detail = self._arm_verdict(runs, "noctx")
+        self.assertEqual(verdict, "pass")
+        self.assertIn("inert without context", detail)
+
+    def test_noctx_copy_rise_still_fails(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C8b30": ConfigRun(config_id="C8b30", records=self._records(copy=True)),
+        }
+        verdict, _ = self._arm_verdict(runs, "noctx")
+        self.assertEqual(verdict, "fail")
+
+    def test_rows_are_downgraded_to_two_modes(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C8b30": ConfigRun(config_id="C8b30", records=self._records()),
+        }
+        rows = {
+            row[0]: row
+            for row in evaluate_gates(runs, load_thresholds(), None, "noctx", None, None)
+        }
+        self.assertEqual(rows["pool_composition[C8b30]"][1], "insufficient data")
+        self.assertIn("requires both context modes", rows["pool_composition[C8b30]"][2])
+
+
+class TestSelectionWindowGate(unittest.TestCase):
+    """M3R-100 gate: coverage is the drop of the single-trajectory share, the
+    window escape is must-improve, affinity is must-not-worsen."""
+
+    @staticmethod
+    def _records(
+        *,
+        n: int = 20,
+        single: int = 10,
+        escape_multi: int = 3,
+        affinity: float = 0.3,
+        copy: bool = False,
+    ) -> list[GenRecord]:
+        return [
+            _record(
+                window_escape=1 if index < single else escape_multi,
+                pool_ecb=5,
+                affinity=affinity,
+                is_copy=copy,
+            )
+            for index in range(n)
+        ]
+
+    @staticmethod
+    def _arm_verdict(runs: dict[str, ConfigRun], mode: str) -> tuple[str, str]:
+        from tools.eval.report import _selection_arm_verdict
+
+        return _selection_arm_verdict(runs["C0"], runs["C9m50"], load_thresholds(), None, mode)
+
+    def test_mean_rise_without_coverage_is_insufficient(self) -> None:
+        # Same share of single-trajectory inputs; the multi ones got wider.
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(escape_multi=2)),
+            "C9m50": ConfigRun(config_id="C9m50", records=self._records(escape_multi=4)),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("coverage below the floor", detail)
+
+    def test_widened_window_without_round_is_insufficient(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(single=10)),
+            "C9m50": ConfigRun(config_id="C9m50", records=self._records(single=4)),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("single_trajectory_share Δ -0.300", detail)
+        self.assertIn("connectedness round", detail)
+
+    def test_widened_window_passes_in_noctx(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(single=10)),
+            "C9m50": ConfigRun(config_id="C9m50", records=self._records(single=4)),
+        }
+        verdict, _ = self._arm_verdict(runs, "noctx")
+        self.assertEqual(verdict, "pass")
+
+    def test_topicality_price_fails(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(single=10, affinity=0.5)),
+            "C9m50": ConfigRun(
+                config_id="C9m50", records=self._records(single=4, affinity=0.2)
+            ),
+        }
+        verdict, detail = self._arm_verdict(runs, "ctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("affinity without copies dropped", detail)
+
+    def test_copy_price_fails(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(single=10)),
+            "C9m50": ConfigRun(config_id="C9m50", records=self._records(single=4, copy=True)),
+        }
+        verdict, detail = self._arm_verdict(runs, "noctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("copy rose significantly", detail)
+
+    def test_rows_are_downgraded_to_two_modes(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(single=10)),
+            "C9m50": ConfigRun(config_id="C9m50", records=self._records(single=4)),
+        }
+        rows = {
+            row[0]: row
+            for row in evaluate_gates(runs, load_thresholds(), None, "noctx", None, None)
+        }
+        self.assertEqual(rows["selection_window[C9m50]"][1], "insufficient data")
+        self.assertIn("requires both context modes", rows["selection_window[C9m50]"][2])
+
+
 class TestPhase7Gate(unittest.TestCase):
     """Phase 7 shadow order-4 gate (ADR-002): a single-dimension sample-size
     gate. Below the eligible bar it is insufficient; at or above it, a selected
@@ -738,6 +1223,13 @@ class TestTwoModeRequirement(unittest.TestCase):
     def test_phase9_declares_it(self) -> None:
         self.assertTrue(
             load_thresholds()["phase9_interp"].get("requires_both_modes")
+        )
+
+    def test_phase5_declares_it(self) -> None:
+        # Owner decision 2026-09-01, before the M2R-430 run: the seeded channel
+        # acts in both modes, so its promotion may not pass on ctx alone.
+        self.assertTrue(
+            load_thresholds()["phase5_promotion"].get("requires_both_modes")
         )
 
 
@@ -956,6 +1448,21 @@ class TestSyntheticProtocol(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(section, report)
             self.assertIn("insufficient data", report)  # temporal/seeded honesty
             self.assertIn("mode=ctx", report)  # M3R-140: the mode is named
+            # M3R-103 (reporting half): every successful record carries the
+            # winner's route and one route per pool candidate, as attributed
+            # by the generator; the report prints the per-route table.
+            self.assertIn("## Per-route breakdown", report)
+            routes = {str(route) for route in CandidateRoute}
+            successful = [r for r in first["C0"].records if r.success]
+            self.assertTrue(successful)
+            for record in successful:
+                self.assertIn(record.winner_route, routes)
+                self.assertEqual(len(record.pool_routes), record.pool_size)
+                self.assertTrue(set(record.pool_routes) <= routes)
+            self.assertIn("route_vanilla_attempts", first["C0"].telemetry[0])
+            # M3R-110 (D2): extension and mutation no longer lose the walk's
+            # start source — every successful winner resolves to an attempt.
+            self.assertTrue(all(r.start_source is not None for r in successful))
         finally:
             if temp_dir is not None:
                 temp_dir.cleanup()
@@ -997,6 +1504,17 @@ class TestSyntheticProtocol(unittest.IsolatedAsyncioTestCase):
                 noctx_runs["C0"].telemetry[0]["ctx_generation_share"], 0.0
             )
             self.assertEqual(ctx_runs["C0"].telemetry[0]["ctx_generation_share"], 1.0)
+            # M3R-145: the L1 seed draw exists in noctx only — the pipeline
+            # never seeds addressed replies. In ctx nothing is drawn and the
+            # draw counter stays at zero; in noctx the roll is taken, and on
+            # the synthetic snapshot (hot selection empty at the defaults) the
+            # draws that happened all came back empty.
+            self.assertTrue(all(not r.seed_drawn for r in ctx_records))
+            self.assertEqual(ctx_runs["C0"].telemetry[0]["hot_ngram_draws"], 0)
+            self.assertTrue(all(not r.seed_drawn for r in noctx_records))
+            noctx_snapshot = noctx_runs["C0"].telemetry[0]
+            if noctx_snapshot["hot_ngram_draws"]:
+                self.assertEqual(noctx_snapshot["hot_ngram_empty_rate"], 1.0)
 
             summary = metrics_summary(noctx_runs, "noctx")
             self.assertEqual(summary["C0"]["context_mode"], "noctx")

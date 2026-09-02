@@ -197,6 +197,32 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # tune the margin, not this, if the wrong candidate keeps winning.
     FieldSpec("candidate_selection_temperature", "CANDIDATE_SELECTION_TEMPERATURE",
               "0.7", _float_in_range(0.0, 3.0)),
+    # M3R-100 (selection-knobs, 2026-09-02): the three module constants that
+    # define the selection window became knobs with the same defaults, so the
+    # eval matrix and the knob census can move them. The window is where the
+    # structural escape gate found the bottleneck (2 trajectories in the ctx
+    # window at 4.5 in the pool).
+    # Softmax draw considers candidates within this margin of the best score.
+    # 0.3 (2026-07-09): the margin, not the temperature, decides whether the
+    # top candidate survives the roll; 1.0 collapsed context overlap on the
+    # synthetic eval.
+    FieldSpec("selection_score_margin", "SELECTION_SCORE_MARGIN", "0.3",
+              _float_in_range(0.0, 3.0)),
+    # Weight and cap of the IDF context-relevance component (the strongest
+    # scorer component in ctx). Cap is pinned to the weight by default: the
+    # relevance share is already in [0, 1], a lower cap only clips the
+    # strongest on-topic matches.
+    FieldSpec("context_relevance_weight", "CONTEXT_RELEVANCE_WEIGHT", "1.6",
+              _float_in_range(0.0, 4.0)),
+    FieldSpec("context_relevance_cap", "CONTEXT_RELEVANCE_CAP", "1.6",
+              _float_in_range(0.0, 4.0)),
+    # Diversity bonus (M3R-100, design D2): every candidate other than the
+    # best-scored one whose trajectory is substantially different from it
+    # (edge overlap below EDGE_OVERLAP_SIMILAR) gains bonus x (1 - overlap) —
+    # a candidate-level lift of distinct walks into the selection window.
+    # 0 disables: nothing computed, no RNG draw, byte-identical generation.
+    FieldSpec("selection_diversity_bonus", "SELECTION_DIVERSITY_BONUS", "0",
+              _float_in_range(0.0, 1.0)),
     FieldSpec("reply_flavor_strength", "REPLY_FLAVOR_STRENGTH", "1.0",
               _float_in_range(0.0, 2.0)),
     # M3 emoji channel: chance to append a frequency-sampled emoji (from this
@@ -416,6 +442,14 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # generation byte-identical; raising it needs the phase's promotion gate.
     FieldSpec("markov_seeded_candidate_ratio", "MARKOV_SEEDED_CANDIDATE_RATIO",
               "0", _float_in_range(0.0, 0.7)),
+    # M3R-230 (l1-hot-route, 2026-09-02): L1 "local memes" as a route with a
+    # slot budget (the O10 mechanism). Share of the pool built from walks
+    # seeded by a hot n-gram — each slot draws its own n-gram from the hot
+    # selection at the current hotness thresholds. Self-initiated replies only:
+    # the pipeline never seeds addressed replies (L1 rule). Default 0 — inert,
+    # generation byte-identical; raising it needs the l1_hot_channel gate.
+    FieldSpec("hot_ngram_slot_ratio", "HOT_NGRAM_SLOT_RATIO",
+              "0", _float_in_range(0.0, 0.7)),
     # Branching band for seed choice (trapezoid, TZ §9.4): a seed below the
     # minimum stalls generation, one far above the ideal is an anchor about
     # nothing. min <= ideal <= max is enforced cross-field.
@@ -557,14 +591,23 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # the whole channel — no interaction-counter writes, no reads (same gate
     # pattern as emoji_append_chance / hot_ngram_seed_chance). Additionally
     # capped in code at one quirk per (chat, user) per UTC day.
-    FieldSpec("user_quirk_chance", "USER_QUIRK_CHANCE", "0.1",
+    # 0.3 since 2026-09-01 (tune-user-quirk-channel): the live funnel of
+    # 24.08->01.09 showed the roll rejecting 41 of 44 addressed replies that
+    # reached it at 0.1 — the channel fired twice in a week. 0.3 triples the
+    # rate while the roll stays the main gate (at 0.5 only the daily cap would
+    # be left).
+    FieldSpec("user_quirk_chance", "USER_QUIRK_CHANCE", "0.3",
               _float_in_range(0.0, 1.0)),
     # Answered-mention count (decayed over ~30 days, see
     # CHAT_USER_INTERACTION_DECAY_DAYS) at which a user counts as a regular.
     # Ceiling: the counter decays, so a threshold in the thousands is never
-    # reached and quirks simply stop firing.
+    # reached and quirks simply stop firing. 10 since 2026-09-01 (same
+    # change): with a ~30-day decay ten answered addresses a month is someone
+    # the bot really talks to regularly; 25 was reached by one person in the
+    # chat, and the funnel showed the threshold as the second gate after the
+    # roll.
     FieldSpec("user_quirk_min_interactions", "USER_QUIRK_MIN_INTERACTIONS",
-              "25", _int_in_range(1, 10000)),
+              "10", _int_in_range(1, 10000)),
     # L2.1: share of fired quirks whose vocative addresses the regular by
     # first name (taken live from the incoming update, sanitized, never
     # stored or logged) instead of the anonymous pool phrase. The name is
@@ -588,6 +631,14 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _float_in_range(1.0, 4.0)),
     FieldSpec("reply_context_start_bias", "REPLY_CONTEXT_START_BIAS", "2.2",
               _float_in_range(1.0, 4.0)),
+    # M3R-110 (context-attempts-knob, 2026-09-01): how many pool-building
+    # attempts receive the reply context; later attempts run without it and
+    # the switch is reported (CONTEXT DROPPED, context_dropped in /stats). Was
+    # the module constant GENERATION_ATTEMPTS_WITH_CONTEXT (5), promoted so the
+    # axis is sweepable by the eval matrix. Ceiling = GENERATION_ATTEMPT_BUDGET
+    # (10); 0 = no attempt gets context (a ctx input built the noctx way).
+    FieldSpec("generation_attempts_with_context",
+              "GENERATION_ATTEMPTS_WITH_CONTEXT", "5", _int_in_range(0, 10)),
     # Context affinity of GLOBAL start sampling: each learned start's weight is
     # multiplied by affinity^(shared stems with the context's informative
     # tokens). Answers live in starts, not in continuations: for «кто гнойный

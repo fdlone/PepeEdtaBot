@@ -13,6 +13,8 @@ from collections import Counter
 from statistics import mean
 from typing import Any
 
+from app.core.generation_telemetry import CandidateRoute
+
 from .bootstrap import bootstrap_ci, delta_ci, distinct_delta_ci
 from .metrics import distinct_n, latency_percentiles, meme_regression, metric_values
 from .prompts import PromptSet
@@ -79,6 +81,84 @@ def _delta_cell(base: list[float] | None, other: list[float] | None) -> str:
     point, lo, hi, significant = result
     marker = " *" if significant else ""
     return f"{_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]{marker}"
+
+
+ROUTE_NOT_ATTEMPTED = "not attempted"
+
+
+def _route_rows(config_id: str, run: ConfigRun) -> list[str]:
+    """Per-route table rows of one configuration (M3R-103, reporting half).
+
+    Two denominators printed separately: pool share (candidates of the route
+    among all candidates, per generation) and presence (generations where the
+    route placed at least one candidate); the win rate is conditioned on
+    presence and never printed alone. Affinity and copy are over the replies
+    the route won. Latency is the mean of generations with the route in the
+    pool against those without — an upper bound on the route's cost, not a
+    measurement of its step (design D3). Rejections come from the generator's
+    telemetry, summed by failure class (M3R-021).
+
+    A route with zero attempts and no presence reads ``not attempted``: an
+    off route printed as zeros would look like "runs and never wins" (D4).
+    """
+    with_pool = [record for record in run.records if record.pool_routes]
+    rows: list[str] = []
+    for route in CandidateRoute:
+        name = str(route)
+        attempts = sum(
+            int(snapshot.get(f"route_{name}_attempts") or 0)
+            for snapshot in run.telemetry
+        )
+        present = [record for record in with_pool if name in record.pool_routes]
+        if attempts == 0 and not present:
+            rows.append(f"| {config_id} | {name} | 0 | {ROUTE_NOT_ATTEMPTED} |" + " — |" * 7)
+            continue
+        absent = [record for record in with_pool if name not in record.pool_routes]
+        winners = [
+            record
+            for record in run.records
+            if record.success and record.winner_route == name
+        ]
+        pool_share = _cell(
+            [record.pool_routes.count(name) / len(record.pool_routes) for record in with_pool]
+        )
+        presence = _cell([float(name in record.pool_routes) for record in with_pool])
+        win_given_present = _cell(
+            [float(record.winner_route == name) for record in present]
+        )
+        winners_affinity = _cell(
+            [
+                record.affinity
+                for record in winners
+                if not record.is_copy and record.affinity is not None
+            ]
+        )
+        winners_copy = _cell([float(record.is_copy) for record in winners])
+        latency_present = (
+            f"{mean(record.latency_ms for record in present):.1f}"
+            if present
+            else "—"
+        )
+        latency_absent = (
+            f"{mean(record.latency_ms for record in absent):.1f}" if absent else "—"
+        )
+        rejected: Counter[str] = Counter()
+        prefix = f"route_{name}_rejected_"
+        for snapshot in run.telemetry:
+            for key, value in snapshot.items():
+                if key.startswith(prefix) and value:
+                    rejected[key[len(prefix) :]] += int(value)
+        rejected_cell = (
+            ", ".join(f"{cls} {count}" for cls, count in sorted(rejected.items()))
+            if rejected
+            else "0"
+        )
+        rows.append(
+            f"| {config_id} | {name} | {attempts} | {pool_share} | {presence} "
+            f"| {win_given_present} | {winners_affinity} | {winners_copy} "
+            f"| {latency_present} / {latency_absent} | {rejected_cell} |"
+        )
+    return rows
 
 
 def _finite(samples: list[float] | None) -> list[float]:
@@ -489,6 +569,429 @@ def _phase9_arm_verdict(
         missing=missing,
         failures=failures,
     )
+    return _verdict(parts, failures, missing)
+
+
+# M3R-145 arms (hot-n-gram thresholds), same prefix convention: C7 because
+# C0..C6 are taken, and the prefix is what routes an arm to its gate.
+L1_ARM_PREFIX = "C7"
+
+
+def _l1_arm_verdict(
+    baseline: ConfigRun,
+    arm: ConfigRun,
+    thresholds: dict[str, Any],
+    solo_rating: dict[str, Any] | None,
+    context_mode: str,
+) -> tuple[str, str]:
+    """L1 hot-channel gate for one arm (verdict, detail) — M3R-145.
+
+    Asymmetric by mode on purpose: the pipeline never seeds addressed replies,
+    and addressed replies are the ones that carry context, so the seed draw
+    exists in noctx only. noctx checks coverage, the must-improve on the meme
+    rate and connectedness; ctx checks the affinity floor (there the knobs
+    only change which tokens slot mutations protect); copy, repetition and
+    latency are checked in both. Coverage below its floor is `insufficient
+    data` whatever the metrics say — the arm touched too few replies for the
+    protocol to resolve anything about it.
+    """
+    if arm.shared_with is not None:
+        return INSUFFICIENT, f"arm resolves to the same overrides as {arm.shared_with}"
+
+    config = thresholds.get("l1_hot_channel", {})
+    base_values = metric_values(baseline.records)
+    arm_values = metric_values(arm.records)
+    parts: list[str] = []
+    failures: list[str] = []
+    missing: list[str] = []
+
+    if context_mode == "noctx":
+        successful = [record for record in arm.records if record.success]
+        if not successful:
+            return INSUFFICIENT, "no successful generations in the arm"
+        drawn = sum(1 for record in successful if record.seed_drawn)
+        seeded = sum(1 for record in successful if record.start_source == "seed")
+        share = seeded / len(successful)
+        floor = float(config.get("seed_start_share_min", 0.05))
+        parts.append(
+            f"coverage: seeded starts {share:.1%} of {len(successful)} "
+            f"(seeds drawn {drawn}; floor {floor:.0%})"
+        )
+        if share < floor:
+            return (
+                INSUFFICIENT,
+                "; ".join(parts)
+                + " — coverage below the floor: the channel reached too few "
+                "replies to resolve its effect",
+            )
+        meme_min = float(config.get("meme_rate_delta_min", 0.0))
+        meme = _delta_part(
+            "historical_meme_rate",
+            base_values.get("historical_meme_rate"),
+            arm_values.get("historical_meme_rate"),
+            parts=parts,
+            missing=missing,
+        )
+        if meme is not None:
+            point, significant = meme
+            if not (significant and point > meme_min):
+                failures.append("historical_meme_rate did not rise significantly")
+    else:
+        parts.append(
+            "ctx: seed draw not modelled (the pipeline never seeds addressed "
+            "replies); this mode measures the mutation-protection half only"
+        )
+        affinity_floor = float(config.get("affinity_without_copy_delta_floor", 0.0))
+        affinity = _delta_part(
+            "affinity_without_copy",
+            base_values.get("context_affinity_without_copy"),
+            arm_values.get("context_affinity_without_copy"),
+            parts=parts,
+            missing=missing,
+        )
+        if affinity is not None:
+            point, significant = affinity
+            if significant and point < affinity_floor:
+                failures.append("affinity without copies dropped significantly")
+
+    copy_max = float(config.get("exact_copy_delta_max", 0.0))
+    copy_delta = _delta_part(
+        "copy",
+        base_values.get("exact_context_copy_rate"),
+        arm_values.get("exact_context_copy_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if copy_delta is not None:
+        point, significant = copy_delta
+        if significant and point > copy_max:
+            failures.append("copy rose significantly")
+
+    repetition_max = float(config.get("repetition_delta_max", 0.0))
+    repetition_delta = _delta_part(
+        "repetition",
+        base_values.get("repetition_rate"),
+        arm_values.get("repetition_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if repetition_delta is not None:
+        point, significant = repetition_delta
+        if significant and point > repetition_max:
+            failures.append("repetition rose significantly")
+
+    _latency_part(
+        arm,
+        float(config.get("latency_p95_ms_max", 150)),
+        parts=parts,
+        missing=missing,
+        failures=failures,
+    )
+
+    if context_mode == "noctx":
+        _connectedness_part(
+            baseline.config_id,
+            arm.config_id,
+            solo_rating,
+            float(config.get("manual_connected_delta_floor", -0.10)),
+            parts=parts,
+            missing=missing,
+            failures=failures,
+        )
+    return _verdict(parts, failures, missing)
+
+
+# M3R-110 arms (pool composition in the ctx mode), same prefix convention.
+POOL_ARM_PREFIX = "C8"
+# Start sources that mean "the walk was anchored by the context" — the share
+# the M3R-110 knobs claim to move (map §1.4).
+CONTEXT_START_SOURCES = frozenset({"context", "hidden_context", "context_spliced"})
+
+
+def context_start_share(records: list[Any]) -> float | None:
+    """Share of successful records whose winner started from context."""
+    successful = [record for record in records if record.success]
+    if not successful:
+        return None
+    return sum(
+        1 for record in successful if record.start_source in CONTEXT_START_SOURCES
+    ) / len(successful)
+
+
+def _pool_arm_verdict(
+    baseline: ConfigRun,
+    arm: ConfigRun,
+    thresholds: dict[str, Any],
+    solo_rating: dict[str, Any] | None,
+    context_mode: str,
+) -> tuple[str, str]:
+    """Pool-composition gate for one arm (verdict, detail) — M3R-110.
+
+    ctx: coverage is the SHIFT of the context-start share against C0 (below
+    the floor the arm changed nothing it claims to — `insufficient data`,
+    whatever affinity says), then the must-improve on affinity without copies,
+    the window-escape floor, the ECB invariant and connectedness. noctx: the
+    knobs are inert without context, so only the must-not-worsen parts are
+    checked — that half exists to keep the two-mode weighting honest. Copy,
+    repetition and latency are checked in both.
+    """
+    if arm.shared_with is not None:
+        return INSUFFICIENT, f"arm resolves to the same overrides as {arm.shared_with}"
+
+    config = thresholds.get("pool_composition", {})
+    base_values = metric_values(baseline.records)
+    arm_values = metric_values(arm.records)
+    parts: list[str] = []
+    failures: list[str] = []
+    missing: list[str] = []
+
+    if context_mode == "ctx":
+        base_share = context_start_share(baseline.records)
+        arm_share = context_start_share(arm.records)
+        if base_share is None or arm_share is None:
+            return INSUFFICIENT, "no successful generations to measure the start budget"
+        shift = arm_share - base_share
+        floor = float(config.get("context_start_share_delta_min", 0.05))
+        parts.append(
+            f"coverage: context starts {arm_share:.1%} vs {base_share:.1%} "
+            f"(shift {shift:+.3f}; floor ±{floor:.0%})"
+        )
+        if abs(shift) < floor:
+            return (
+                INSUFFICIENT,
+                "; ".join(parts)
+                + " — start budget did not move: the arm changed nothing it "
+                "claims to change",
+            )
+        affinity_min = float(config.get("affinity_without_copy_delta_min", 0.0))
+        affinity = _delta_part(
+            "affinity_without_copy",
+            base_values.get("context_affinity_without_copy"),
+            arm_values.get("context_affinity_without_copy"),
+            parts=parts,
+            missing=missing,
+        )
+        if affinity is not None:
+            point, significant = affinity
+            if not (significant and point > affinity_min):
+                failures.append("affinity without copies did not rise significantly")
+        escape_floor = float(config.get("window_escape_delta_floor", 0.0))
+        escape = _delta_part(
+            "window_escape",
+            base_values.get("structural_window_escape"),
+            arm_values.get("structural_window_escape"),
+            parts=parts,
+            missing=missing,
+        )
+        if escape is not None:
+            point, significant = escape
+            if significant and point < escape_floor:
+                failures.append("window escape dropped significantly")
+        ecb_min = float(config.get("pool_ecb_min", 4.0))
+        ecb = arm_values.get("structural_pool_ecb")
+        if not ecb:
+            missing.append("pool ECB samples")
+        else:
+            point, lo, hi = bootstrap_ci(ecb)
+            parts.append(f"pool ECB {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}] (floor {ecb_min:.1f})")
+            if point < ecb_min:
+                failures.append("pool ECB below the invariant floor")
+    else:
+        parts.append(
+            "noctx: the context knobs are inert without context; this mode "
+            "checks that nothing moved"
+        )
+
+    copy_max = float(config.get("exact_copy_delta_max", 0.0))
+    copy_delta = _delta_part(
+        "copy",
+        base_values.get("exact_context_copy_rate"),
+        arm_values.get("exact_context_copy_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if copy_delta is not None:
+        point, significant = copy_delta
+        if significant and point > copy_max:
+            failures.append("copy rose significantly")
+
+    repetition_max = float(config.get("repetition_delta_max", 0.0))
+    repetition_delta = _delta_part(
+        "repetition",
+        base_values.get("repetition_rate"),
+        arm_values.get("repetition_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if repetition_delta is not None:
+        point, significant = repetition_delta
+        if significant and point > repetition_max:
+            failures.append("repetition rose significantly")
+
+    _latency_part(
+        arm,
+        float(config.get("latency_p95_ms_max", 150)),
+        parts=parts,
+        missing=missing,
+        failures=failures,
+    )
+
+    if context_mode == "ctx":
+        _connectedness_part(
+            baseline.config_id,
+            arm.config_id,
+            solo_rating,
+            float(config.get("manual_connected_delta_floor", -0.10)),
+            parts=parts,
+            missing=missing,
+            failures=failures,
+        )
+    return _verdict(parts, failures, missing)
+
+
+# M3R-100 arms (selection window), same prefix convention.
+SELECTION_ARM_PREFIX = "C9"
+
+
+def single_trajectory_samples(records: list[Any]) -> list[float] | None:
+    """Per-record 0/1 samples: the window held a single trajectory (M3R-100).
+
+    The coverage form M3R-011 promised — "share of inputs below 2" — as a
+    paired sample list aligned to the successful records, so the delta between
+    arms is a paired bootstrap like every other proportion.
+    """
+    successful = [record for record in records if record.success]
+    if not successful:
+        return None
+    return [1.0 if record.window_escape < 2 else 0.0 for record in successful]
+
+
+def _selection_arm_verdict(
+    baseline: ConfigRun,
+    arm: ConfigRun,
+    thresholds: dict[str, Any],
+    solo_rating: dict[str, Any] | None,
+    context_mode: str,
+) -> tuple[str, str]:
+    """Selection-window gate for one arm (verdict, detail) — M3R-100.
+
+    Coverage first: the share of single-trajectory inputs must drop by at
+    least the floor, else `insufficient data` whatever the mean says. Then
+    the must-improve on the window escape, the must-not-worsen on affinity
+    without copies, copy and repetition, the ECB invariant, latency and (ctx)
+    connectedness. In noctx the context component is zero for every
+    candidate, so the relevance knobs are inert there; the margin and the
+    diversity bonus are not, and the gate reads the same numbers.
+    """
+    if arm.shared_with is not None:
+        return INSUFFICIENT, f"arm resolves to the same overrides as {arm.shared_with}"
+
+    config = thresholds.get("selection_window", {})
+    base_values = metric_values(baseline.records)
+    arm_values = metric_values(arm.records)
+    parts: list[str] = []
+    failures: list[str] = []
+    missing: list[str] = []
+
+    single_floor = float(config.get("single_trajectory_share_delta_max", -0.05))
+    single = _delta_part(
+        "single_trajectory_share",
+        single_trajectory_samples(baseline.records),
+        single_trajectory_samples(arm.records),
+        parts=parts,
+        missing=missing,
+    )
+    if single is None:
+        return INSUFFICIENT, "; ".join(parts) + " — no single-trajectory samples"
+    point, _significant = single
+    if point > single_floor:
+        return (
+            INSUFFICIENT,
+            "; ".join(parts)
+            + f" — coverage below the floor ({single_floor:+.2f}): the share of "
+            "single-trajectory inputs did not drop enough",
+        )
+
+    escape_min = float(config.get("window_escape_delta_min", 0.0))
+    escape = _delta_part(
+        "window_escape",
+        base_values.get("structural_window_escape"),
+        arm_values.get("structural_window_escape"),
+        parts=parts,
+        missing=missing,
+    )
+    if escape is not None:
+        point, significant = escape
+        if not (significant and point > escape_min):
+            failures.append("window escape did not rise significantly")
+
+    affinity_floor = float(config.get("affinity_without_copy_delta_floor", 0.0))
+    affinity = _delta_part(
+        "affinity_without_copy",
+        base_values.get("context_affinity_without_copy"),
+        arm_values.get("context_affinity_without_copy"),
+        parts=parts,
+        missing=missing,
+    )
+    if affinity is not None:
+        point, significant = affinity
+        if significant and point < affinity_floor:
+            failures.append("affinity without copies dropped significantly")
+
+    copy_max = float(config.get("exact_copy_delta_max", 0.0))
+    copy_delta = _delta_part(
+        "copy",
+        base_values.get("exact_context_copy_rate"),
+        arm_values.get("exact_context_copy_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if copy_delta is not None:
+        point, significant = copy_delta
+        if significant and point > copy_max:
+            failures.append("copy rose significantly")
+
+    repetition_max = float(config.get("repetition_delta_max", 0.0))
+    repetition_delta = _delta_part(
+        "repetition",
+        base_values.get("repetition_rate"),
+        arm_values.get("repetition_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if repetition_delta is not None:
+        point, significant = repetition_delta
+        if significant and point > repetition_max:
+            failures.append("repetition rose significantly")
+
+    ecb_min = float(config.get("pool_ecb_min", 4.0))
+    ecb = arm_values.get("structural_pool_ecb")
+    if not ecb:
+        missing.append("pool ECB samples")
+    else:
+        point, lo, hi = bootstrap_ci(ecb)
+        parts.append(f"pool ECB {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}] (floor {ecb_min:.1f})")
+        if point < ecb_min:
+            failures.append("pool ECB below the invariant floor")
+
+    _latency_part(
+        arm,
+        float(config.get("latency_p95_ms_max", 150)),
+        parts=parts,
+        missing=missing,
+        failures=failures,
+    )
+
+    if context_mode == "ctx":
+        _connectedness_part(
+            baseline.config_id,
+            arm.config_id,
+            solo_rating,
+            float(config.get("manual_connected_delta_floor", -0.10)),
+            parts=parts,
+            missing=missing,
+            failures=failures,
+        )
     return _verdict(parts, failures, missing)
 
 
@@ -1090,6 +1593,60 @@ def evaluate_gates(
             )
             rows.append((f"phase9_interp[{arm_id}]", verdict, detail))
 
+    l1_arms = sorted(arm for arm in runs if arm.startswith(L1_ARM_PREFIX))
+    if baseline is None or not l1_arms:
+        rows.append(
+            (
+                "l1_hot_channel",
+                INSUFFICIENT,
+                "no L1 arm in this run (hot-n-gram thresholds at their defaults)"
+                if baseline
+                else "no baseline run",
+            )
+        )
+    else:
+        for arm_id in l1_arms:
+            verdict, detail = _l1_arm_verdict(
+                baseline, runs[arm_id], thresholds, solo_rating, context_mode
+            )
+            rows.append((f"l1_hot_channel[{arm_id}]", verdict, detail))
+
+    pool_arms = sorted(arm for arm in runs if arm.startswith(POOL_ARM_PREFIX))
+    if baseline is None or not pool_arms:
+        rows.append(
+            (
+                "pool_composition",
+                INSUFFICIENT,
+                "no pool-composition arm in this run (context knobs at their defaults)"
+                if baseline
+                else "no baseline run",
+            )
+        )
+    else:
+        for arm_id in pool_arms:
+            verdict, detail = _pool_arm_verdict(
+                baseline, runs[arm_id], thresholds, solo_rating, context_mode
+            )
+            rows.append((f"pool_composition[{arm_id}]", verdict, detail))
+
+    selection_arms = sorted(arm for arm in runs if arm.startswith(SELECTION_ARM_PREFIX))
+    if baseline is None or not selection_arms:
+        rows.append(
+            (
+                "selection_window",
+                INSUFFICIENT,
+                "no selection-window arm in this run (window knobs at their defaults)"
+                if baseline
+                else "no baseline run",
+            )
+        )
+    else:
+        for arm_id in selection_arms:
+            verdict, detail = _selection_arm_verdict(
+                baseline, runs[arm_id], thresholds, solo_rating, context_mode
+            )
+            rows.append((f"selection_window[{arm_id}]", verdict, detail))
+
     rows.extend(_structural_escape_rows(runs, thresholds))
 
     rows.append(("phase6_anticycle", *_phase6_verdict(baseline, thresholds)))
@@ -1388,6 +1945,22 @@ def build_report(
             if shadow_shares
             else INSUFFICIENT
         )
+        # M3R-145: the L1 draw counters (M3R-141 pair) — "switched off by data"
+        # is visible in the report itself, not only in /stats. Draws are
+        # summed over seeds, the empty share averaged over seeds that drew.
+        hot_draws = sum(
+            int(snapshot.get("hot_ngram_draws") or 0) for snapshot in run.telemetry
+        )
+        hot_empty = [
+            float(value)
+            for snapshot in run.telemetry
+            if (value := snapshot.get("hot_ngram_empty_rate")) is not None
+        ]
+        hot_line = (
+            f"{hot_draws} draws, empty {mean(hot_empty):.0%}"
+            if hot_draws and hot_empty
+            else "no draws"
+        )
         lines.append("")
         lines.append(
             f"{config_id}: distinct-2 = {d2 and _fmt(d2)} (basis {basis2}), "
@@ -1401,7 +1974,8 @@ def build_report(
             f"mean applied temperature: {temperature_line}; "
             f"temporal blend: {blend_line}; "
             f"order interpolation: {interp_line}; "
-            f"shadow order-4 share: {shadow_line}; storage_delta: n/a."
+            f"shadow order-4 share: {shadow_line}; hot-ngram seeds: {hot_line}; "
+            "storage_delta: n/a."
         )
     lines.append("")
 
@@ -1424,6 +1998,38 @@ def build_report(
                 f"| {_cell(values['repetition_rate'])} "
                 f"| {_cell(values['context_affinity'])} |"
             )
+    lines.append("")
+
+    # M3R-103 (reporting half): the third axis — configuration x route — as its
+    # own table rather than extra metric rows. Without it "quality rose by X%"
+    # has no answer to WHICH mechanism moved it (roadmap: not accepted as a
+    # result).
+    lines.append("## Per-route breakdown (M3R-103)")
+    lines.append("")
+    lines.append(
+        "Маршрут — механизм, построивший кандидата (`CandidateRoute`), как его "
+        "атрибутировал генератор при создании. Два знаменателя раздельно: "
+        "**доля пула** — кандидаты маршрута среди всех кандидатов генерации; "
+        "**присутствие** — доля генераций, где маршрут положил хотя бы одного "
+        "кандидата; **win given present** — доля побед среди них. Affinity без "
+        "копий и copy — по ответам, которые выиграл маршрут. Латентность — "
+        "средняя по генерациям с маршрутом в пуле / без него: верхняя оценка "
+        "цены маршрута, не измерение его шага. Отклонения — до пула, по классам "
+        f"M3R-021, из телеметрии генератора. `{ROUTE_NOT_ATTEMPTED}` — механизм "
+        "маршрута в этой конфигурации не запускался (не то же, что «запускался и "
+        "ничего не произвёл»)."
+    )
+    lines.append("")
+    lines.append(
+        "| config | route | attempts | pool share | presence | win given present "
+        "| winners' affinity w/o copy | winners' copy | latency with / without, ms "
+        "| rejected before pool (F-classes) |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    for config_id in ordered:
+        if runs[config_id].shared_with:
+            continue
+        lines.extend(_route_rows(config_id, runs[config_id]))
     lines.append("")
 
     lines.append("## Gates")

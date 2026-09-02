@@ -62,6 +62,21 @@ class GenRecord:
     # opposite.
     pool_ecb: int = 0
     window_escape: int = 0
+    # M3R-103 (reporting half): the mechanism that built the winner and the
+    # route of every candidate in the pool, as the generator attributed them at
+    # creation — never inferred from text afterwards. ``None`` / empty on a
+    # generation that produced no pool. Inputs of the per-route table only:
+    # they stay out of ``metrics_summary`` on purpose, because that object is
+    # compared bit-for-bit across runs and revisions and a new key there would
+    # break every comparison (design D5).
+    winner_route: str | None = None
+    pool_routes: tuple[str, ...] = ()
+    # M3R-145: whether the harness drew an L1 hot-n-gram seed for this
+    # generation (noctx only, the pipeline's way), and the walk's start source
+    # of the winner as the generator traced it. The gate's coverage reads the
+    # second: a drawn seed anchors a walk only when it opens a stored start.
+    seed_drawn: bool = False
+    start_source: str | None = None
 
 
 # M3R-011: the similarity threshold lives in eval_thresholds.yaml
@@ -70,35 +85,10 @@ class GenRecord:
 DEFAULT_EDGE_OVERLAP_SIMILAR = 0.5
 
 
-def trajectory_edges(tokens: tuple[str, ...]) -> frozenset[tuple[str, str]]:
-    """Adjacent token pairs of a candidate — the edges its walk used (M3R-011).
-
-    Edges rather than tokens because the question is which *path through the
-    chain* the candidate took: two answers built from the same words in a
-    different order are different walks, and a bag of words cannot tell them
-    apart. Content tokens only, so two candidates differing by a comma are the
-    same trajectory rather than two.
-    """
-    return frozenset(zip(tokens, tokens[1:], strict=False))
-
-
-def edge_overlap(
-    a: frozenset[tuple[str, str]], b: frozenset[tuple[str, str]]
-) -> float:
-    """Share of edges two candidates have in common, normalized by the smaller.
-
-    Normalizing by the smaller set — not by the union, as Jaccard would — makes
-    a candidate whose edges are a subset of another's (the same walk cut short,
-    or extended past the same base) count as the SAME trajectory. Jaccard would
-    call them two, inflating the project's headline metric exactly where there
-    is no difference to report.
-
-    Two edgeless candidates (a single token each) overlap fully only when they
-    are the same edgeless set; otherwise a token has no path to share.
-    """
-    if not a or not b:
-        return 1.0 if a == b else 0.0
-    return len(a & b) / min(len(a), len(b))
+# M3R-100: the trajectory identity lives in app.core.trajectory so the
+# diversity bonus and this gate cannot drift apart on what "the same
+# trajectory" means; re-exported here for the existing callers.
+from app.core.trajectory import edge_overlap, trajectory_edges  # noqa: E402
 
 
 def distinct_trajectories(

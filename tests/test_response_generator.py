@@ -28,6 +28,12 @@ def _runtime_state() -> MagicMock:
     state.max_reply_tokens = 45
     state.reply_context_bias = 1.8
     state.reply_context_start_bias = 2.2
+    state.generation_attempts_with_context = GENERATION_ATTEMPTS_WITH_CONTEXT
+    state.hot_ngram_slot_ratio = 0.0
+    state.selection_score_margin = 0.3
+    state.context_relevance_weight = 1.6
+    state.context_relevance_cap = 1.6
+    state.selection_diversity_bonus = 0.0
     state.repetition_penalty_strength = 1.0
     state.markov_order = 3
     state.enable_backoff = True
@@ -504,6 +510,57 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(strengths, sorted(strengths))
         self.assertEqual(strengths[0], state.randomness_strength)
 
+
+    async def test_context_attempt_knob_moves_the_drop_point(self) -> None:
+        # M3R-110 (context-attempts-knob): the drop point is the knob, not the
+        # constant — at 2 the third attempt already runs without context.
+        state = _runtime_state()
+        state.generation_attempts_with_context = 2
+        generator = _traced_generator()
+        generator.generate_text = AsyncMock(side_effect=["", "", "accepted"])
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=_learning_service(),
+            runtime_state=state,
+        )
+        request = _request()
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            result = await response_generator.generate(
+                request, rng=random.Random(11), candidate_target=1
+            )
+        self.assertEqual(result, "accepted")
+        calls = generator.generate_text.await_args_list
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[0].kwargs["context_tokens"], request.context_tokens)
+        self.assertEqual(calls[1].kwargs["context_tokens"], request.context_tokens)
+        self.assertIsNone(calls[2].kwargs["context_tokens"])
+
+    async def test_zero_context_attempts_never_pass_context(self) -> None:
+        state = _runtime_state()
+        state.generation_attempts_with_context = 0
+        generator = _traced_generator()
+        generator.generate_text = AsyncMock(side_effect=["accepted"])
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=_learning_service(),
+            runtime_state=state,
+        )
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            await response_generator.generate(
+                _request(), rng=random.Random(11), candidate_target=1
+            )
+        calls = generator.generate_text.await_args_list
+        self.assertIsNone(calls[0].kwargs["context_tokens"])
+        self.assertEqual(generator.telemetry.context_dropped, 1)
+
+    def test_registry_default_equals_the_constant(self) -> None:
+        from app.config.registry import RUNTIME_FIELDS
+
+        spec = next(
+            spec for spec in RUNTIME_FIELDS
+            if spec.name == "generation_attempts_with_context"
+        )
+        self.assertEqual(spec.parse(spec.default), GENERATION_ATTEMPTS_WITH_CONTEXT)
     async def test_returns_none_after_single_bounded_budget(self) -> None:
         state = _runtime_state()
         generator = _traced_generator()

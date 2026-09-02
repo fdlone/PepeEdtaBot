@@ -57,11 +57,15 @@ from app.core.shadow_order import shadow_order4_stats
 from app.core.slot_mutation import mutate_candidate_tokens
 from app.core.temporal import TemporalBlend
 from app.core.text import capitalize_reply_sentences, sanitize_text
+from app.core.trajectory import EDGE_OVERLAP_SIMILAR, edge_overlap, trajectory_edges
 from app.log_masking import mask_chat_id
 
 logger = logging.getLogger("chat_markov")
 
 GENERATION_ATTEMPT_BUDGET = 10
+# Default of the runtime knob ``generation_attempts_with_context`` (M3R-110,
+# 2026-09-01): the generator reads the knob, this constant is what the registry
+# default equals (pinned by a test) and what tests reason about.
 GENERATION_ATTEMPTS_WITH_CONTEXT = 5
 CANDIDATE_TARGET = 5
 
@@ -208,10 +212,13 @@ def select_scored_candidate(
     candidates: list[_ScoredCandidate],
     temperature: float,
     rng: random.Random,
+    *,
+    margin: float = SELECTION_SCORE_MARGIN,
 ) -> _ScoredCandidate:
     """Pick a candidate via softmax over scores; temperature 0 means argmax.
 
-    Sampling within SELECTION_SCORE_MARGIN of the best score keeps the
+    Sampling within ``margin`` of the best score (the knob
+    ``selection_score_margin``, default SELECTION_SCORE_MARGIN) keeps the
     long-tail (odd but valid) candidates reachable instead of always
     collapsing onto the single "safest" reply.
     """
@@ -221,7 +228,7 @@ def select_scored_candidate(
     eligible = [
         candidate
         for candidate in candidates
-        if candidate.score.total >= best.score.total - SELECTION_SCORE_MARGIN
+        if candidate.score.total >= best.score.total - margin
     ]
     if len(eligible) == 1:
         return eligible[0]
@@ -230,6 +237,47 @@ def select_scored_candidate(
         for candidate in eligible
     ]
     return rng.choices(population=eligible, weights=weights, k=1)[0]
+
+
+def apply_diversity_bonus(
+    candidates: list[_ScoredCandidate], bonus: float
+) -> list[_ScoredCandidate]:
+    """Lift trajectories substantially different from the best one (M3R-100).
+
+    Candidate-level by design: the walk is untouched, only who lands inside
+    the selection window changes — the place where the structural escape gate
+    located the collapse (2 trajectories in the ctx window at 4.5 in the
+    pool). The best-scored candidate keeps its score; every other candidate
+    whose edge overlap with it is below ``EDGE_OVERLAP_SIMILAR`` (the same
+    definition and threshold as the gate) gains ``bonus * (1 - overlap)``.
+    At ``bonus <= 0`` the list is returned as is: nothing computed, no RNG
+    draw, byte-identical generation (design D3).
+    """
+    if bonus <= 0.0 or len(candidates) < 2:
+        return candidates
+    edges = [
+        trajectory_edges(
+            tuple(token.casefold() for token in content_tokens(tokenize(c.text)))
+        )
+        for c in candidates
+    ]
+    best_index = max(range(len(candidates)), key=lambda i: candidates[i].score.total)
+    lifted: list[_ScoredCandidate] = []
+    for index, candidate in enumerate(candidates):
+        if index == best_index:
+            lifted.append(candidate)
+            continue
+        overlap = edge_overlap(edges[index], edges[best_index])
+        if overlap >= EDGE_OVERLAP_SIMILAR:
+            lifted.append(candidate)
+            continue
+        lifted.append(
+            replace(
+                candidate,
+                score=replace(candidate.score, diversity_bonus=bonus * (1.0 - overlap)),
+            )
+        )
+    return lifted
 
 
 def normalize_reply_for_repeat(text: str) -> str:
@@ -394,6 +442,31 @@ class ResponseGenerator:
         ):
             return VERBATIM_COPY_REASON
         return None
+
+    async def _draw_hot_seeds(
+        self, request: GenerationRequest, slots: int, rng: random.Random
+    ) -> list[list[str]]:
+        """Hot n-grams for the L1 route, one per slot, without replacement.
+
+        M3R-230, design D2: the hot selection (top-8 at the current hotness
+        thresholds) is read once per generation; slots draw without
+        replacement — two slots on one phrase would be two variations of one
+        opening, not two candidates. The draw comes from the generation RNG and
+        only happens when the budget is positive, so the default ratio stays
+        byte-identical. The draw counter (M3R-141) is noted per route draw.
+        """
+        hot_ngrams = await self.learning_service.get_hot_ngrams(
+            request.chat_id,
+            min_count=self.runtime_state.hot_ngram_min_count,
+            recency_share=self.runtime_state.hot_ngram_recency_share,
+            meme_ordering=self.runtime_state.markov_hot_ngram_meme_ordering,
+        )
+        self.generator.telemetry.note_hot_ngram_draw(empty=not hot_ngrams)
+        pool = [list(ngram) for ngram in hot_ngrams]
+        seeds: list[list[str]] = []
+        while pool and len(seeds) < slots:
+            seeds.append(pool.pop(rng.randrange(len(pool))))
+        return seeds
 
     async def _read_mutation_inputs(
         self, request: GenerationRequest
@@ -751,7 +824,11 @@ class ResponseGenerator:
         return replace(
             self.scorer(text, tokens, _NO_CONTEXT, length_mode),
             context_relevance=idf_context_relevance(
-                tokens, context_tokens, context_idf
+                tokens,
+                context_tokens,
+                context_idf,
+                weight=self.runtime_state.context_relevance_weight,
+                cap=self.runtime_state.context_relevance_cap,
             ),
             recent_penalty=recent_penalty_strength
             * recent_reply_overlap(tokens, recent_trigrams),
@@ -931,6 +1008,9 @@ class ResponseGenerator:
         # long the run took, and the eval protocol's bit-for-bit requirement —
         # what makes every phase verdict auditable — would stop holding.
         now = request.now if request.now is not None else int(time.time())
+        # M3R-110: a knob, not the constant — the eval matrix sweeps it and
+        # /set can move the drop point live.
+        attempts_with_context = self.runtime_state.generation_attempts_with_context
 
         gen_trace_log.log_request_header(
             request.chat_id,
@@ -939,7 +1019,7 @@ class ResponseGenerator:
             temperature=self.runtime_state.candidate_selection_temperature,
             target=target,
             budget=GENERATION_ATTEMPT_BUDGET,
-            attempts_with_context=GENERATION_ATTEMPTS_WITH_CONTEXT,
+            attempts_with_context=attempts_with_context,
             recent_penalty_strength=recent_penalty_strength,
             verbatim_penalty_strength=verbatim_penalty_strength,
         )
@@ -979,15 +1059,36 @@ class ResponseGenerator:
                 rng=generation_rng,
             )
 
+        # M3R-230 (l1-hot-route): L1 as a route with a slot budget. Self-
+        # initiated replies only — the pipeline never seeds addressed replies.
+        # The budget is ATTEMPTS of the loop below, each seeded by its own hot
+        # n-gram, so a hot candidate takes exactly the path every other attempt
+        # takes (walk, finalization, form gates, extension, mutation — design
+        # D1). At ratio 0 nothing is drawn and nothing is read.
+        hot_budget = (
+            0
+            if request.context_tokens
+            else route_slot_budget(target, self.runtime_state.hot_ngram_slot_ratio)
+        )
+        hot_seeds: list[list[str]] = (
+            await self._draw_hot_seeds(request, hot_budget, generation_rng)
+            if hot_budget > 0
+            else []
+        )
+
         # M3R-141: a generation that starts with context and runs past the
         # with-context budget finishes on a different mechanism than the one it
         # was asked with — measured at 37% of ctx-answers (map §1.3) and, until
         # now, invisible: neither the trace nor telemetry said it happened.
         context_dropped = False
         for attempt in range(GENERATION_ATTEMPT_BUDGET):
+            # M3R-230: the route's slots are the first attempts; a hot attempt
+            # carries its own seed and its own route attribution.
+            hot_attempt = bool(hot_seeds)
+            attempt_seed = hot_seeds.pop(0) if hot_attempt else seed
             attempt_context_tokens = (
                 request.context_tokens
-                if attempt < GENERATION_ATTEMPTS_WITH_CONTEXT
+                if attempt < attempts_with_context
                 else None
             )
             if request.context_tokens and attempt_context_tokens is None:
@@ -995,7 +1096,7 @@ class ResponseGenerator:
                     gen_trace_log.log_context_dropped(
                         request.chat_id,
                         attempt + 1,
-                        attempts_with_context=GENERATION_ATTEMPTS_WITH_CONTEXT,
+                        attempts_with_context=attempts_with_context,
                     )
                 context_dropped = True
             attempt_randomness_strength = escalated_randomness_strength(
@@ -1007,7 +1108,7 @@ class ResponseGenerator:
                 chat_id=request.chat_id,
                 max_chars=self.runtime_state.max_reply_chars,
                 max_tokens=max_tokens,
-                seed_tokens=seed,
+                seed_tokens=attempt_seed,
                 context_tokens=attempt_context_tokens,
                 context_bias=self.runtime_state.reply_context_bias,
                 context_start_bias=self.runtime_state.reply_context_start_bias,
@@ -1044,7 +1145,7 @@ class ResponseGenerator:
                     mask_chat_id(request.chat_id),
                     attempt + 1,
                     bool(attempt_context_tokens),
-                    len(seed or []),
+                    len(attempt_seed or []),
                 )
                 gen_trace_log.log_attempt_failed(
                     request.chat_id,
@@ -1118,7 +1219,9 @@ class ResponseGenerator:
                         attempt + 1,
                     )
                     route = (
-                        CandidateRoute.EXTENSION
+                        CandidateRoute.HOT
+                        if hot_attempt
+                        else CandidateRoute.EXTENSION
                         if was_extended
                         else CandidateRoute.VANILLA
                     )
@@ -1161,7 +1264,9 @@ class ResponseGenerator:
                                 text=candidate,
                                 score=score,
                                 route=(
-                                    CandidateRoute.EXTENSION
+                                    CandidateRoute.HOT
+                                    if hot_attempt
+                                    else CandidateRoute.EXTENSION
                                     if was_extended
                                     else CandidateRoute.VANILLA
                                 ),
@@ -1270,6 +1375,8 @@ class ResponseGenerator:
         # нет» — ровно та пара, ради различения которой заведены счётчики.
         if seeded_budget > 0:
             attempted.add(CandidateRoute.SEEDED)
+        if hot_budget > 0:
+            attempted.add(CandidateRoute.HOT)
         if self.runtime_state.slot_mutation_probability > 0.0:
             attempted.add(CandidateRoute.MUTATED)
 
@@ -1291,14 +1398,21 @@ class ResponseGenerator:
                 request.chat_id,
                 candidates,
                 temperature=self.runtime_state.candidate_selection_temperature,
-                margin=SELECTION_SCORE_MARGIN,
+                margin=self.runtime_state.selection_score_margin,
                 selection_margin_used=True,
             )
             return ResponseGenerationResult(text=None, candidates_scored=0)
+        # M3R-100: the diversity bonus is applied to the pool before the
+        # window is read — the trace, the telemetry and the eval capture the
+        # lifted scores, so the gate sees exactly what the draw saw.
+        candidates = apply_diversity_bonus(
+            candidates, self.runtime_state.selection_diversity_bonus
+        )
         selected = select_scored_candidate(
             candidates,
             self.runtime_state.candidate_selection_temperature,
             generation_rng,
+            margin=self.runtime_state.selection_score_margin,
         )
         if seeded_budget > 0:
             self.generator.telemetry.note_seeded(
@@ -1314,7 +1428,7 @@ class ResponseGenerator:
             request.chat_id,
             candidates,
             temperature=self.runtime_state.candidate_selection_temperature,
-            margin=SELECTION_SCORE_MARGIN,
+            margin=self.runtime_state.selection_score_margin,
             selection_margin_used=True,
             selected=selected,
         )
