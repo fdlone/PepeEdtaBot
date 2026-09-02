@@ -109,7 +109,13 @@ booleans, and the same extremes with the parent enabled for gated knobs — see
 workers, `report` stitches the JSON samples), and classifies every knob by
 the pre-registered `knob_census` rule in `eval_thresholds.yaml`: dead / gated
 / inert / weak / strong. Knobs the harness cannot exercise are listed as
-outside the offline measurement. The report carries numbers only.
+outside the offline measurement. The report carries numbers only; the
+owner-facing verdict is appended by hand below it.
+
+Run of 2026-09-02 (`eval_2026-09-02_knob-census.md`, samples in
+`knob-census-2026-09-02.json`): `launch --workers 9` spawned 10 windowless
+workers (2 × C0 + 8 chunks of 36 arms) and finished in 34 minutes; both C0
+matched the version baseline bit for bit.
 
 ## Selection-window grid (M3R-100)
 

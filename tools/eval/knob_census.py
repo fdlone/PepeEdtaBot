@@ -144,13 +144,16 @@ class Arm:
 def _read_sites() -> dict[str, list[str]]:
     """Where each registry knob is read, by module (static, whole app/)."""
     sites: dict[str, list[str]] = {spec.name: [] for spec in RUNTIME_FIELDS}
-    skip = {"registry.py", "settings.py", "runtime_state.py", "bot_messages.py"}
+    skip = {"registry.py", "settings.py", "bot_messages.py"}
     for path in sorted((PROJECT_ROOT / "app").rglob("*.py")):
         if path.name in skip:
             continue
         text = path.read_text(encoding="utf-8")
+        # runtime_state.py declares every knob, so a bare name there is not a
+        # read; ``self.<name>`` is (mood config, the rare-event daily cap).
+        prefix = r"self\." if path.name == "runtime_state.py" else r"\b"
         for name in sites:
-            if re.search(rf"\b{re.escape(name)}\b", text):
+            if re.search(rf"{prefix}{re.escape(name)}\b", text):
                 sites[name].append(path.relative_to(PROJECT_ROOT).as_posix())
     return sites
 

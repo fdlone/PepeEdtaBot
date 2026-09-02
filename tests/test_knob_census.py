@@ -49,6 +49,15 @@ class TestExtremes(unittest.TestCase):
                 f"{spec.name} is read by the generation core but neither planned nor listed",
             )
 
+    def test_runtime_state_reads_count_as_sites(self) -> None:
+        # runtime_state.py declares every knob (not a read) but also consumes a
+        # few itself: the mood config and the rare-event daily cap. The first
+        # census printed those as "dead".
+        _, _, sites = plan()
+        for name in ("mood_ewma_alpha", "rare_event_daily_cap"):
+            self.assertIn("app/config/runtime_state.py", sites[name], name)
+        self.assertNotIn("app/config/runtime_state.py", sites["markov_order"])
+
     def test_gated_children_get_a_parent_on_arm(self) -> None:
         arms, _, _ = plan()
         for child in GATED_BY:

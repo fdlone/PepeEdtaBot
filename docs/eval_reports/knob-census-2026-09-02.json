@@ -1,0 +1,502 @@
+{
+  "knobs": {
+    "auto_capitalize_replies": {
+      "class": "inert",
+      "errors": []
+    },
+    "candidate_selection_temperature": {
+      "class": "weak",
+      "errors": []
+    },
+    "context_anchor_splice_probability": {
+      "class": "strong",
+      "errors": []
+    },
+    "context_jump_boost": {
+      "class": "weak",
+      "errors": []
+    },
+    "context_relevance_cap": {
+      "class": "strong",
+      "errors": []
+    },
+    "context_relevance_weight": {
+      "class": "strong",
+      "errors": []
+    },
+    "context_start_affinity": {
+      "class": "weak",
+      "errors": []
+    },
+    "emoji_append_chance": {
+      "class": "inert",
+      "errors": []
+    },
+    "enable_backoff": {
+      "class": "strong",
+      "errors": []
+    },
+    "fuzzy_context_casefold": {
+      "class": "weak",
+      "errors": []
+    },
+    "generation_attempts_with_context": {
+      "class": "strong",
+      "errors": []
+    },
+    "hot_ngram_min_count": {
+      "class": "weak",
+      "errors": []
+    },
+    "hot_ngram_recency_share": {
+      "class": "strong",
+      "errors": []
+    },
+    "hot_ngram_slot_ratio": {
+      "class": "inert",
+      "errors": []
+    },
+    "intonation_profile_strength": {
+      "class": "weak",
+      "errors": []
+    },
+    "length_context_adaptation": {
+      "class": "weak",
+      "errors": []
+    },
+    "markov_alpha_calm": {
+      "class": "strong",
+      "errors": []
+    },
+    "markov_branching_candidate_floor": {
+      "class": "gated",
+      "errors": []
+    },
+    "markov_branching_degenerate_max": {
+      "class": "strong",
+      "errors": []
+    },
+    "markov_cache_incremental": {
+      "class": "inert",
+      "errors": []
+    },
+    "markov_collocation_bonus": {
+      "class": "strong",
+      "errors": []
+    },
+    "markov_collocation_break_penalty": {
+      "class": "strong",
+      "errors": []
+    },
+    "markov_entropy_pivot": {
+      "class": "gated",
+      "errors": []
+    },
+    "markov_entropy_temp_gain": {
+      "class": "weak",
+      "errors": []
+    },
+    "markov_entropy_temp_max": {
+      "class": "gated",
+      "errors": []
+    },
+    "markov_entropy_temp_min": {
+      "class": "gated",
+      "errors": []
+    },
+    "markov_hot_ngram_meme_ordering": {
+      "class": "inert",
+      "errors": []
+    },
+    "markov_interp_order2_weight": {
+      "class": "strong",
+      "errors": []
+    },
+    "markov_jump_probability": {
+      "class": "strong",
+      "errors": []
+    },
+    "markov_long_compression_beta": {
+      "class": "gated",
+      "errors": []
+    },
+    "markov_order": {
+      "class": "strong",
+      "errors": []
+    },
+    "markov_seed_branch_ideal": {
+      "class": "gated",
+      "errors": []
+    },
+    "markov_seed_branch_max": {
+      "class": "gated",
+      "errors": []
+    },
+    "markov_seed_branch_min": {
+      "class": "gated",
+      "errors": []
+    },
+    "markov_seed_head_share": {
+      "class": "gated",
+      "errors": []
+    },
+    "markov_seed_min_score": {
+      "class": "gated",
+      "errors": []
+    },
+    "markov_seed_min_support": {
+      "class": "gated",
+      "errors": []
+    },
+    "markov_seed_min_token_len": {
+      "class": "gated",
+      "errors": []
+    },
+    "markov_seeded_candidate_ratio": {
+      "class": "strong",
+      "errors": []
+    },
+    "markov_shadow_order4_enabled": {
+      "class": "inert",
+      "errors": []
+    },
+    "markov_short_half_life_days": {
+      "class": "gated",
+      "errors": []
+    },
+    "max_reply_chars": {
+      "class": "strong",
+      "errors": []
+    },
+    "max_reply_tokens": {
+      "class": "strong",
+      "errors": []
+    },
+    "order_mix_probability": {
+      "class": "strong",
+      "errors": []
+    },
+    "randomness_strength": {
+      "class": "weak",
+      "errors": []
+    },
+    "recent_reply_penalty_strength": {
+      "class": "inert",
+      "errors": []
+    },
+    "repetition_penalty_strength": {
+      "class": "weak",
+      "errors": []
+    },
+    "reply_context_bias": {
+      "class": "weak",
+      "errors": []
+    },
+    "reply_context_start_bias": {
+      "class": "strong",
+      "errors": []
+    },
+    "reply_flavor_strength": {
+      "class": "inert",
+      "errors": []
+    },
+    "selection_diversity_bonus": {
+      "class": "strong",
+      "errors": []
+    },
+    "selection_score_margin": {
+      "class": "strong",
+      "errors": []
+    },
+    "slot_mutation_probability": {
+      "class": "strong",
+      "errors": []
+    },
+    "verbatim_extension_share": {
+      "class": "strong",
+      "errors": []
+    },
+    "verbatim_penalty_strength": {
+      "class": "strong",
+      "errors": []
+    },
+    "verbatim_recognized_unit": {
+      "class": "weak",
+      "errors": []
+    }
+  },
+  "outside": {
+    "false_start_chance": {
+      "class": "outside",
+      "sites": [
+        "app/core/reply_flavor.py",
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "hot_ngram_seed_chance": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "markov_collocation_max_entries": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "markov_meme_min_joint_count": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "markov_meme_min_support": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "markov_meme_recency_days": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "mention_cooldown_sec": {
+      "class": "outside",
+      "sites": [
+        "app/core/generation_telemetry.py",
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "min_cooldown_sec": {
+      "class": "outside",
+      "sites": [
+        "app/core/reply_policy.py",
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "min_tokens_for_model": {
+      "class": "outside",
+      "sites": [
+        "app/core/reply_policy.py",
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "mood_enabled": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "mood_ewma_alpha": {
+      "class": "outside",
+      "sites": [
+        "app/config/runtime_state.py"
+      ]
+    },
+    "mood_heated_intensity": {
+      "class": "outside",
+      "sites": [
+        "app/config/runtime_state.py"
+      ]
+    },
+    "mood_lively_rate_per_min": {
+      "class": "outside",
+      "sites": [
+        "app/config/runtime_state.py",
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "mood_max_rate_per_min": {
+      "class": "outside",
+      "sites": [
+        "app/config/runtime_state.py"
+      ]
+    },
+    "mood_mention_heated_share": {
+      "class": "outside",
+      "sites": [
+        "app/config/runtime_state.py"
+      ]
+    },
+    "mood_modulation_strength": {
+      "class": "outside",
+      "sites": [
+        "app/core/mood.py",
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "mood_sleepy_rate_per_min": {
+      "class": "outside",
+      "sites": [
+        "app/config/runtime_state.py"
+      ]
+    },
+    "pivo_mention_by_id": {
+      "class": "outside",
+      "sites": [
+        "app/handlers/pivo.py"
+      ]
+    },
+    "pivo_recent_pool_window": {
+      "class": "outside",
+      "sites": [
+        "app/handlers/pivo.py"
+      ]
+    },
+    "pivo_report_to_owner": {
+      "class": "outside",
+      "sites": [
+        "app/handlers/pivo.py"
+      ]
+    },
+    "pivo_temporal_flavor_chance": {
+      "class": "outside",
+      "sites": [
+        "app/handlers/pivo.py"
+      ]
+    },
+    "rare_event_chance": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "rare_event_daily_cap": {
+      "class": "outside",
+      "sites": [
+        "app/config/runtime_state.py"
+      ]
+    },
+    "reply_burst_boost_mult": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "reply_burst_boost_sec": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "reply_burst_suppress_mult": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "reply_burst_suppress_sec": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "reply_context_include_current_message": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "reply_context_max_tokens": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "reply_context_only_for_replies": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "reply_director_enabled": {
+      "class": "outside",
+      "sites": [
+        "app/handlers/admin.py",
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "reply_max_per_hour": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "reply_probability": {
+      "class": "outside",
+      "sites": [
+        "app/core/reply_policy.py",
+        "app/handlers/admin.py",
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "reply_probability_max": {
+      "class": "outside",
+      "sites": [
+        "app/handlers/admin.py",
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "reply_probability_min": {
+      "class": "outside",
+      "sites": [
+        "app/handlers/admin.py",
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "typing_max_ms": {
+      "class": "outside",
+      "sites": [
+        "app/handlers/_helpers.py"
+      ]
+    },
+    "typing_min_ms": {
+      "class": "outside",
+      "sites": [
+        "app/handlers/_helpers.py"
+      ]
+    },
+    "typing_per_char_ms": {
+      "class": "outside",
+      "sites": [
+        "app/handlers/_helpers.py"
+      ]
+    },
+    "use_reply_context": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "user_quirk_chance": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "user_quirk_min_interactions": {
+      "class": "outside",
+      "sites": [
+        "app/handlers/admin.py",
+        "app/services/reply_pipeline.py"
+      ]
+    },
+    "user_quirk_name_share": {
+      "class": "outside",
+      "sites": [
+        "app/services/reply_pipeline.py"
+      ]
+    }
+  },
+  "skipped": {
+    "length_mode_weights": "composite value (three weights); sweep needs a grid of its own",
+    "markov_alpha_heated": "mood-gated: the harness runs in the neutral mood, which reads alpha_calm",
+    "markov_alpha_lively": "mood-gated: the harness runs in the neutral mood, which reads alpha_calm",
+    "markov_alpha_sleepy": "mood-gated: the harness runs in the neutral mood, which reads alpha_calm",
+    "markov_long_compression": "string enum (log|pow); measured as the parent of its beta",
+    "normalize_lower": "tokenization of the LEARNED corpus, not a generation knob; the copy is lowercased already"
+  }
+}
