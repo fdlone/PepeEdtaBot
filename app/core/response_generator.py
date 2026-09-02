@@ -724,17 +724,133 @@ class ResponseGenerator:
         usable = [s for s in ranked if s.score >= state.markov_seed_min_score]
         if not usable:
             return set()
+        return await self._append_anchored_candidates(
+            request,
+            candidates,
+            seen_candidates,
+            anchors=[seed_score.token for seed_score in usable[:slots]],
+            route=CandidateRoute.SEEDED,
+            length_mode=length_mode,
+            max_tokens=max_tokens,
+            context_idf=context_idf,
+            recent_trigrams=recent_trigrams,
+            recent_penalty_strength=recent_penalty_strength,
+            corpus_ngrams=corpus_ngrams,
+            verbatim_penalty_strength=verbatim_penalty_strength,
+            active_collocations=active_collocations,
+            entropy_sampling=entropy_sampling,
+            temporal_blend=temporal_blend,
+            now=now,
+            rng=rng,
+        )
+
+    async def _append_assoc_candidates(
+        self,
+        request: GenerationRequest,
+        candidates: list[_ScoredCandidate],
+        seen_candidates: set[str],
+        *,
+        length_mode: str,
+        max_tokens: int,
+        context_idf: Mapping[str, float],
+        recent_trigrams: set[tuple[str, ...]],
+        recent_penalty_strength: float,
+        corpus_ngrams: AbstractSet[tuple[str, ...]],
+        verbatim_penalty_strength: float,
+        active_collocations: frozenset[tuple[str, str]],
+        entropy_sampling: EntropySampling,
+        temporal_blend: TemporalBlend,
+        now: int,
+        slots: int,
+        rng: random.Random,
+    ) -> set[str]:
+        """Grow candidates around ASSOCIATES of the message's anchors (M3R-200).
+
+        The associative route differs from seeded in the anchor's origin only:
+        a distance-1 PMI neighbour of a message token instead of the token
+        itself (design D1). Ranking is deterministic and read-only
+        (``rank_associates``); the draw counter records an empty ranking so a
+        route starved by data stays distinguishable from one switched off.
+        """
+        state = self.runtime_state
+        message_tokens = tokenize(
+            request.current_message_normalized,
+            normalize_lower=state.normalize_lower,
+        )
+        associates = await self.generator.rank_associates(
+            request.chat_id,
+            message_tokens,
+            slots=slots,
+            min_token_len=state.markov_seed_min_token_len,
+        )
+        self.generator.telemetry.note_assoc_draw(empty=not associates)
+        if not associates:
+            return set()
+        return await self._append_anchored_candidates(
+            request,
+            candidates,
+            seen_candidates,
+            anchors=associates,
+            route=CandidateRoute.ASSOC,
+            length_mode=length_mode,
+            max_tokens=max_tokens,
+            context_idf=context_idf,
+            recent_trigrams=recent_trigrams,
+            recent_penalty_strength=recent_penalty_strength,
+            corpus_ngrams=corpus_ngrams,
+            verbatim_penalty_strength=verbatim_penalty_strength,
+            active_collocations=active_collocations,
+            entropy_sampling=entropy_sampling,
+            temporal_blend=temporal_blend,
+            now=now,
+            rng=rng,
+        )
+
+    async def _append_anchored_candidates(
+        self,
+        request: GenerationRequest,
+        candidates: list[_ScoredCandidate],
+        seen_candidates: set[str],
+        *,
+        anchors: list[str],
+        route: str,
+        length_mode: str,
+        max_tokens: int,
+        context_idf: Mapping[str, float],
+        recent_trigrams: set[tuple[str, ...]],
+        recent_penalty_strength: float,
+        corpus_ngrams: AbstractSet[tuple[str, ...]],
+        verbatim_penalty_strength: float,
+        active_collocations: frozenset[tuple[str, str]],
+        entropy_sampling: EntropySampling,
+        temporal_blend: TemporalBlend,
+        now: int,
+        rng: random.Random,
+    ) -> set[str]:
+        """Assemble one bidirectional candidate per anchor and admit survivors.
+
+        Shared by the seeded and the associative routes (assoc-route-pilot,
+        design D1): one assembler, one tail pipeline, the same four form gates,
+        the same staleness and verbatim screens, a full score and no priority
+        in the pool. Returns the texts admitted, for telemetry.
+
+        The "same gates" claim is load-bearing and was false until M3R-101: the
+        seeded branch went straight to ``detokenize``, so it skipped the tail
+        pipeline and all four form gates while its docstring already claimed
+        parity.
+        """
+        state = self.runtime_state
         # ``randomness_strength`` — шкала 0–3, а ``next_explore`` — вероятность
         # (markov.py сравнивает её с rng.random()): сырое значение >= 1.0 делало
         # исследование безусловным. Отображение то же, что в основном обходе
         # (см. ``_generate_text_once`` в markov.py).
         strength = max(0.0, min(3.0, state.randomness_strength))
         next_explore = min(0.98, 0.12 + 0.18 * strength)
-        seeded_texts: set[str] = set()
-        for seed_score in usable[:slots]:
+        admitted: set[str] = set()
+        for anchor in anchors:
             tokens = await self.generator.generate_seeded_candidate(
                 request.chat_id,
-                seed_score.token,
+                anchor,
                 max_tokens=max_tokens,
                 head_share=state.markov_seed_head_share,
                 next_explore=next_explore,
@@ -761,7 +877,7 @@ class ResponseGenerator:
             if final.rejection_reason is not None:
                 self._note_rejected(
                     request.chat_id,
-                    CandidateRoute.SEEDED,
+                    route,
                     final.rejection_reason,
                     detokenize(tokens, max_chars=state.max_reply_chars),
                 )
@@ -773,12 +889,10 @@ class ResponseGenerator:
                 request, text
             )
             if reject is not None:
-                self._note_rejected(
-                    request.chat_id, CandidateRoute.SEEDED, reject, text
-                )
+                self._note_rejected(request.chat_id, route, reject, text)
                 continue
             seen_candidates.add(text)
-            seeded_texts.add(text)
+            admitted.add(text)
             score = self._build_score(
                 text,
                 candidate_tokens,
@@ -792,12 +906,8 @@ class ResponseGenerator:
                 chat_id=request.chat_id,
                 active_collocations=active_collocations,
             )
-            candidates.append(
-                _ScoredCandidate(
-                    text=text, score=score, route=CandidateRoute.SEEDED
-                )
-            )
-        return seeded_texts
+            candidates.append(_ScoredCandidate(text=text, score=score, route=route))
+        return admitted
 
     def _build_score(
         self,
@@ -1075,6 +1185,34 @@ class ResponseGenerator:
             if hot_budget > 0
             else []
         )
+
+        # M3R-200 pilot (assoc-route-pilot): candidates grown around associates
+        # of the message's anchors, placed before the loop like seeded. The
+        # walk keeps at least one slot whatever routes are on (design D3):
+        # three routes at 0.4 would otherwise fill a pool of five by themselves.
+        assoc_budget = min(
+            route_slot_budget(target, self.runtime_state.assoc_slot_ratio),
+            max(0, target - 1 - seeded_budget - hot_budget),
+        )
+        if assoc_budget > 0:
+            await self._append_assoc_candidates(
+                request,
+                candidates,
+                seen_candidates,
+                length_mode=length_mode,
+                max_tokens=max_tokens,
+                context_idf=context_idf,
+                recent_trigrams=recent_trigrams,
+                recent_penalty_strength=recent_penalty_strength,
+                corpus_ngrams=corpus_ngrams,
+                verbatim_penalty_strength=verbatim_penalty_strength,
+                active_collocations=active_collocations,
+                entropy_sampling=entropy_sampling,
+                temporal_blend=temporal_blend,
+                now=now,
+                slots=assoc_budget,
+                rng=generation_rng,
+            )
 
         # M3R-141: a generation that starts with context and runs past the
         # with-context budget finishes on a different mechanism than the one it
@@ -1377,6 +1515,8 @@ class ResponseGenerator:
             attempted.add(CandidateRoute.SEEDED)
         if hot_budget > 0:
             attempted.add(CandidateRoute.HOT)
+        if assoc_budget > 0:
+            attempted.add(CandidateRoute.ASSOC)
         if self.runtime_state.slot_mutation_probability > 0.0:
             attempted.add(CandidateRoute.MUTATED)
 

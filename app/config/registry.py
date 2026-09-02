@@ -450,6 +450,14 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # generation byte-identical; raising it needs the l1_hot_channel gate.
     FieldSpec("hot_ngram_slot_ratio", "HOT_NGRAM_SLOT_RATIO",
               "0", _float_in_range(0.0, 0.7)),
+    # M3R-200 pilot (assoc-route-pilot, 2026-09-02): the associative route.
+    # Share of the pool assembled around ASSOCIATES of the message's anchors —
+    # distance-1 neighbours by normalized PMI over the chain's own transition
+    # counts — grown by the seeded assembler and finished by the common
+    # pipeline. Default 0 — inert, generation byte-identical; a pilot bar, not
+    # a promotion gate, decides whether it is worth a grid (assoc_pilot).
+    FieldSpec("assoc_slot_ratio", "ASSOC_SLOT_RATIO",
+              "0", _float_in_range(0.0, 0.7)),
     # Branching band for seed choice (trapezoid, TZ §9.4): a seed below the
     # minimum stalls generation, one far above the ideal is an anchor about
     # nothing. min <= ideal <= max is enforced cross-field.

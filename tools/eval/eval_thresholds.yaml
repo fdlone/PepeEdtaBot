@@ -520,3 +520,31 @@ selection_window:
   # Connectedness, ctx (the arms change which candidate wins, i.e. the text a
   # rater sees). Same instrument and floor as phase 9.
   manual_connected_delta_floor: -0.10
+
+assoc_pilot:
+  # M3R-200 PILOT (change assoc-route-pilot), registered 2026-09-02 BEFORE the
+  # pilot grid (matrix_assoc_pilot.yaml) was run. These are VIABILITY bars for
+  # a pilot that answers four questions; they are not a promotion gate and the
+  # verdict vocabulary is viable / not viable / insufficient data — never pass.
+  # Promotion (M3R-220) gets its own block later, with the connectedness round
+  # and the "share of inputs below 2" escape form.
+  requires_both_modes: true
+  # Q1 builds: share of generations with a pool in which the route placed at
+  # least one candidate. Below the floor the pilot did not exercise the route
+  # and nothing about it can be read: insufficient data, whatever the deltas.
+  # Expectation written before the run: 30-40% at two slots (seeded at 0.3
+  # gave 21.9% of the pool).
+  present_share_min: 0.10
+  # Q2 space: paired delta of the pool ECB. The route DISPLACES walk slots, so
+  # an associate that only re-creates a walk trajectory lowers the count. A
+  # significant drop is the one outcome that makes the route not viable on
+  # this question; the window escape delta is printed alongside, no bar.
+  pool_ecb_delta_floor: 0.0
+  # Q3 cost: TZ §17 budget, the same number every gate uses.
+  latency_p95_ms_max: 150
+  # Q4 signal: copy and repetition are must-not-worsen (a significant rise
+  # disqualifies, the usual convention); affinity without copies is printed
+  # with its CI and has NO bar here — the pilot reads its sign, the promotion
+  # gate will set the floor.
+  exact_copy_delta_max: 0.0
+  repetition_delta_max: 0.0

@@ -262,6 +262,16 @@ class TestBotMessages(unittest.TestCase):
         empty = format_stats_message({"volume": 250}, collocations={})
         self.assertNotIn("коллокации", empty)
 
+    def test_stats_message_shows_assoc_draw_counters(self) -> None:
+        """assoc-route-pilot: the empty-draw pair is printed; None = not asked."""
+        telemetry = {"generations": 3, "assoc_draws": 4, "assoc_empty_rate": 0.25}
+        text = format_stats_message({"volume": 250}, telemetry=telemetry)
+        self.assertIn("ассоциаты: пусто в 25% из 4 розыгрышей", text)
+        silent = format_stats_message(
+            {"volume": 250}, telemetry={"generations": 3, "assoc_empty_rate": None}
+        )
+        self.assertNotIn("ассоциаты", silent)
+
     def test_stats_message_shows_collocation_effect_counters(self) -> None:
         """Telemetry spec: applied and withheld counts are the effect."""
         telemetry = {

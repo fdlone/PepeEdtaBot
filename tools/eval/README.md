@@ -117,6 +117,18 @@ Run of 2026-09-02 (`eval_2026-09-02_knob-census.md`, samples in
 workers (2 × C0 + 8 chunks of 36 arms) and finished in 34 minutes; both C0
 matched the version baseline bit for bit.
 
+## Associative route pilot (M3R-200)
+
+`matrix_assoc_pilot.yaml` (arms `C10*`) moves `assoc_slot_ratio`, the slot
+budget of the route that grows candidates around associates of the message's
+anchors (assoc-route-pilot). The `assoc_pilot` block holds VIABILITY bars,
+not a promotion gate: the arm reads `viable` / `not viable` / `insufficient
+data` against the pilot's four questions — presence share (Q1, below the
+floor = did not exercise), paired pool-ECB and window-escape deltas (Q2, a
+significant ECB drop = associates duplicate the walk), p95 (Q3), affinity
+without copies printed with its CI plus copy / repetition must-not-worsen
+(Q4). Two modes, as every route gate.
+
 ## Selection-window grid (M3R-100)
 
 `matrix_selection_grid_1.yaml` / `matrix_selection_grid_2.yaml` (arms `C9*`)

@@ -212,6 +212,12 @@ def format_stats_message(
                 f"горячие фразы: пусто в {hot_empty:.0%} из "
                 f"{telemetry.get('hot_ngram_draws')} розыгрышей"
             )
+        assoc_empty = telemetry.get("assoc_empty_rate")
+        if assoc_empty is not None:
+            lines.append(
+                f"ассоциаты: пусто в {assoc_empty:.0%} из "
+                f"{telemetry.get('assoc_draws')} розыгрышей"
+            )
         mean_entropy = telemetry.get("mean_normalized_entropy")
         mean_branching = telemetry.get("mean_branching")
         if mean_entropy is not None and mean_branching is not None:

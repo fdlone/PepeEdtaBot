@@ -85,6 +85,19 @@ class MarkovReadPort(Protocol):
         для бутстрапа хвоста seeded-кандидата (M2R-410)."""
         ...
 
+    async def get_seed_backward(
+        self, chat_id: int, token: str
+    ) -> list[tuple[str, int]]:
+        """Предшественники ``token`` как второго члена пары: ``(w1, суммарный
+        count)`` — левые соседи расстояния 1 для ассоциативного маршрута
+        (M3R-200)."""
+        ...
+
+    async def get_model_volume(self, chat_id: int) -> tuple[int, int] | None:
+        """``(volume2, volume3)`` — суммарные счётчики переходов чата, или None,
+        если строки ещё нет; знаменатель PMI ассоциатов (M3R-200)."""
+        ...
+
     async def get_reverse_branch(self, chat_id: int, token: str) -> int:
         """Обратное ветвление сида: сколько разных токенов ему предшествуют."""
         ...
