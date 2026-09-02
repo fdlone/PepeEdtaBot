@@ -977,6 +977,147 @@ def _assoc_pilot_verdict(
     return {"pass": VIABLE, "fail": NOT_VIABLE}.get(verdict, verdict), detail
 
 
+# M3R-220 route-gate arms (change route-gate): the promotion gate of a route.
+ROUTE_GATE_ARM_PREFIX = "C11"
+
+
+def route_under_test(baseline: ConfigRun, arm: ConfigRun) -> str | list[str]:
+    """The route the gate measures: present in the arm's pools, absent in C0's.
+
+    Returns the route name, or the list of candidates when it is not exactly
+    one — the caller turns that into `insufficient data` with the list, so a
+    matrix that switched on two routes at once is named rather than judged.
+    """
+    base_routes = {route for record in baseline.records for route in record.pool_routes}
+    arm_routes = {route for record in arm.records for route in record.pool_routes}
+    new_routes = sorted(arm_routes - base_routes)
+    return new_routes[0] if len(new_routes) == 1 else new_routes
+
+
+def _route_gate_verdict(
+    baseline: ConfigRun,
+    arm: ConfigRun,
+    thresholds: dict[str, Any],
+    solo_rating: dict[str, Any] | None,
+    context_mode: str,
+) -> tuple[str, str]:
+    """Promotion gate of one route arm (verdict, detail) — M3R-220, design D2.
+
+    Coverage (presence share) first; then the must-improve — the paired drop
+    of the single-trajectory share, significant and at least the registered
+    size; then affinity without copies, copy and repetition as must-not-
+    worsen, the absolute pool-ECB invariant, latency, and (ctx) connectedness
+    from the solo round. The route is read from the data, never from the
+    arm id.
+    """
+    if arm.shared_with is not None:
+        return INSUFFICIENT, f"arm resolves to the same overrides as {arm.shared_with}"
+
+    config = thresholds.get("route_gate", {})
+    route = route_under_test(baseline, arm)
+    if not isinstance(route, str):
+        return (
+            INSUFFICIENT,
+            "route under test is not exactly one new route in the arm's pools: "
+            + (", ".join(route) if route else "none"),
+        )
+    base_values = metric_values(baseline.records)
+    arm_values = metric_values(arm.records)
+    parts: list[str] = []
+    failures: list[str] = []
+    missing: list[str] = []
+
+    presence = route_presence_share(arm.records, route)
+    floor = float(config.get("present_share_min", 0.10))
+    parts.append(f"route {route}: present in {presence:.1%} of pools (floor {floor:.0%})")
+    if presence is None or presence < floor:
+        return (
+            INSUFFICIENT,
+            "; ".join(parts) + " — presence below the floor: the route reached too few inputs",
+        )
+
+    single_max = float(config.get("single_trajectory_share_delta_max", -0.05))
+    single = _delta_part(
+        "single_trajectory_share",
+        single_trajectory_samples(baseline.records),
+        single_trajectory_samples(arm.records),
+        parts=parts,
+        missing=missing,
+    )
+    if single is not None:
+        point, significant = single
+        if not (significant and point <= single_max):
+            failures.append(
+                f"single-trajectory share did not drop significantly by {-single_max:.0%}"
+            )
+
+    affinity_floor = float(config.get("affinity_without_copy_delta_floor", 0.0))
+    affinity = _delta_part(
+        "affinity_without_copy",
+        base_values.get("context_affinity_without_copy"),
+        arm_values.get("context_affinity_without_copy"),
+        parts=parts,
+        missing=missing,
+    )
+    if affinity is not None:
+        point, significant = affinity
+        if significant and point < affinity_floor:
+            failures.append("affinity without copies dropped significantly")
+    copy_max = float(config.get("exact_copy_delta_max", 0.0))
+    copy_delta = _delta_part(
+        "copy",
+        base_values.get("exact_context_copy_rate"),
+        arm_values.get("exact_context_copy_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if copy_delta is not None:
+        point, significant = copy_delta
+        if significant and point > copy_max:
+            failures.append("copy rose significantly")
+    repetition_max = float(config.get("repetition_delta_max", 0.0))
+    repetition_delta = _delta_part(
+        "repetition",
+        base_values.get("repetition_rate"),
+        arm_values.get("repetition_rate"),
+        parts=parts,
+        missing=missing,
+    )
+    if repetition_delta is not None:
+        point, significant = repetition_delta
+        if significant and point > repetition_max:
+            failures.append("repetition rose significantly")
+
+    ecb_samples = _finite(arm_values.get("structural_pool_ecb"))
+    ecb_min = float(config.get("pool_ecb_min", 4.0))
+    if ecb_samples:
+        ecb = mean(ecb_samples)
+        parts.append(f"pool ECB {ecb:.3f} (floor {ecb_min:.1f})")
+        if ecb < ecb_min:
+            failures.append("pool ECB below the invariant")
+    else:
+        missing.append("pool ECB samples")
+
+    _latency_part(
+        arm,
+        float(config.get("latency_p95_ms_max", 150)),
+        parts=parts,
+        missing=missing,
+        failures=failures,
+    )
+    if context_mode == "ctx":
+        _connectedness_part(
+            baseline.config_id,
+            arm.config_id,
+            solo_rating,
+            float(config.get("manual_connected_delta_floor", -0.10)),
+            parts=parts,
+            missing=missing,
+            failures=failures,
+        )
+    return _verdict(parts, failures, missing)
+
+
 def single_trajectory_samples(records: list[Any]) -> list[float] | None:
     """Per-record 0/1 samples: the window held a single trajectory (M3R-100).
 
@@ -1788,6 +1929,22 @@ def evaluate_gates(
                 baseline, runs[arm_id], thresholds, context_mode
             )
             rows.append((f"assoc_pilot[{arm_id}]", verdict, detail))
+
+    gate_arms = sorted(arm for arm in runs if arm.startswith(ROUTE_GATE_ARM_PREFIX))
+    if baseline is None or not gate_arms:
+        rows.append(
+            (
+                "route_gate",
+                INSUFFICIENT,
+                "no route-gate arm in this run" if baseline else "no baseline run",
+            )
+        )
+    else:
+        for arm_id in gate_arms:
+            verdict, detail = _route_gate_verdict(
+                baseline, runs[arm_id], thresholds, solo_rating, context_mode
+            )
+            rows.append((f"route_gate[{arm_id}]", verdict, detail))
 
     rows.extend(_structural_escape_rows(runs, thresholds))
 

@@ -1675,3 +1675,107 @@ class TestAssocPilot(unittest.TestCase):
         rows = evaluate_gates(runs, load_thresholds(), None, "ctx", None, None)
         row = {r[0]: r[1] for r in rows}["assoc_pilot"]
         self.assertEqual(row, "insufficient data")
+
+
+class TestRouteGate(unittest.TestCase):
+    """route-gate (M3R-220): the route is read from the pools, coverage gates
+    the reading, the single-trajectory drop is the must-improve, and no round
+    means no pass in ctx."""
+
+    @staticmethod
+    def _records(*, n: int = 40, route: str | None = None, present: int = 0,
+                 single: int = 0, copy: bool = False, ecb: int = 5):
+        records = []
+        for index in range(n):
+            routes = ((route, "vanilla", "vanilla") if route and index < present
+                      else ("vanilla",) * 3)
+            records.append(
+                _record(
+                    category="topical",
+                    is_copy=copy,
+                    affinity=0.3,
+                    pool_ecb=ecb,
+                    window_escape=1 if index < single else 3,
+                    pool_routes=routes,
+                )
+            )
+        return records
+
+    @classmethod
+    def _arm(cls, **kwargs) -> ConfigRun:
+        return ConfigRun(config_id="C11a40", records=cls._records(route="assoc", **kwargs))
+
+    @staticmethod
+    def _verdict(runs, mode="ctx", solo=None):
+        from tools.eval.report import _route_gate_verdict
+
+        return _route_gate_verdict(runs["C0"], runs["C11a40"], load_thresholds(), solo, mode)
+
+    def test_route_is_read_from_the_pools(self) -> None:
+        from tools.eval.report import route_under_test
+
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C11a40": self._arm(present=20),
+        }
+        self.assertEqual(route_under_test(runs["C0"], runs["C11a40"]), "assoc")
+        none = ConfigRun(config_id="C11a40", records=self._records())
+        self.assertEqual(route_under_test(runs["C0"], none), [])
+        verdict, detail = self._verdict({"C0": runs["C0"], "C11a40": none})
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("not exactly one new route", detail)
+
+    def test_presence_below_floor_is_insufficient(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records()),
+            "C11a40": self._arm(present=2),
+        }
+        verdict, detail = self._verdict(runs)
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("too few inputs", detail)
+
+    def test_single_share_not_dropping_is_a_fail(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(single=14)),
+            "C11a40": self._arm(present=20, single=14),
+        }
+        verdict, detail = self._verdict(runs, "noctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("single-trajectory share did not drop", detail)
+
+    def test_drop_without_round_is_insufficient_in_ctx(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(single=20)),
+            "C11a40": self._arm(present=20, single=4),
+        }
+        verdict, detail = self._verdict(runs, "ctx")
+        self.assertEqual(verdict, "insufficient data")
+        self.assertIn("connectedness round", detail)
+        self.assertIn("single_trajectory_share Δ -0.400", detail)
+
+    def test_drop_passes_in_noctx_without_a_round(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(single=20)),
+            "C11a40": self._arm(present=20, single=4),
+        }
+        verdict, _ = self._verdict(runs, "noctx")
+        self.assertEqual(verdict, "pass")
+
+    def test_copy_rise_fails(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(single=20)),
+            "C11a40": self._arm(present=20, single=4, copy=True),
+        }
+        verdict, detail = self._verdict(runs, "noctx")
+        self.assertEqual(verdict, "fail")
+        self.assertIn("copy rose", detail)
+
+    def test_gate_rows_downgrade_to_both_modes(self) -> None:
+        runs = {
+            "C0": ConfigRun(config_id="C0", records=self._records(single=20)),
+            "C11a40": self._arm(present=20, single=4),
+        }
+        rows = evaluate_gates(runs, load_thresholds(), None, "noctx", None, None)
+        row = {r[0]: (r[1], r[2]) for r in rows}["route_gate[C11a40]"]
+        self.assertEqual(row[0], "insufficient data")
+        self.assertIn("requires both context modes", row[1])

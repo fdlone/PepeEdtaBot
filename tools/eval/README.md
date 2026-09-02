@@ -117,6 +117,18 @@ Run of 2026-09-02 (`eval_2026-09-02_knob-census.md`, samples in
 workers (2 × C0 + 8 chunks of 36 arms) and finished in 34 minutes; both C0
 matched the version baseline bit for bit.
 
+## Route gate (M3R-220)
+
+`matrix_route_gate.yaml` (arms `C11*`) is the promotion gate of a candidate
+route (route-gate). One `route_gate` block for every route: the route under
+test is read from the data (the single route present in the arm's pools and
+absent from C0's), never from the arm id. Coverage = presence share; the
+must-improve is the paired drop of the single-trajectory share (significant
+and at least 5 p.p.) — the escape form M3R-011 promised, since the mean
+window escape is one C0 already takes; affinity without copies, copy and
+repetition must not worsen; pool ECB >= 4; p95 <= 150; connectedness from
+the solo round in ctx (`rating_rounds/assoc-gate`). Two modes.
+
 ## Associative route pilot (M3R-200)
 
 `matrix_assoc_pilot.yaml` (arms `C10*`) moves `assoc_slot_ratio`, the slot

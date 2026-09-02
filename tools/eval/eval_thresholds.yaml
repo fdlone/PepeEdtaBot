@@ -548,3 +548,40 @@ assoc_pilot:
   # gate will set the floor.
   exact_copy_delta_max: 0.0
   repetition_delta_max: 0.0
+
+route_gate:
+  # M3R-220 (change route-gate), registered 2026-09-02 BEFORE the route-gate
+  # grid (matrix_route_gate.yaml) was run and AFTER the M3R-200 pilot, whose
+  # reports are not re-read under this block. One block for every candidate
+  # route: the route under test is the single route present in the arm's
+  # pools and absent from C0's (design D1) — no knob-to-route map.
+  requires_both_modes: true
+  # Coverage: share of generations with a pool in which the route placed a
+  # candidate. Below the floor the route reached too few inputs to resolve
+  # anything: insufficient data, whatever the deltas.
+  present_share_min: 0.10
+  # MUST-IMPROVE, the escape form M3R-011 promised for the route gate: the
+  # share of inputs whose selection window holds a single trajectory must
+  # drop by at least this much (paired delta, negative) AND the drop must be
+  # significant. The mean window escape is not the bar — C0 takes it at 2.17
+  # while 36% of ctx inputs sit at one trajectory — and the pilot showed the
+  # associative route leaves that mean flat. Expectation before the run:
+  # ctx -3..-6 p.p. at two slots; noctx (6% at C0) has little to move.
+  single_trajectory_share_delta_max: -0.05
+  # must-not-worsen, both modes: the roadmap's "affinity not below the best
+  # single configuration" — a significant drop disqualifies.
+  affinity_without_copy_delta_floor: 0.0
+  exact_copy_delta_max: 0.0
+  repetition_delta_max: 0.0
+  # Safety invariant of the roadmap, same absolute floor as structural_escape
+  # (comparable because route slots come from inside the target, O10).
+  pool_ecb_min: 4.0
+  # TZ §17 budget.
+  latency_p95_ms_max: 150
+  # Connectedness, ctx only: the mode of 89% of prod replies (O7). The M3R-020
+  # solo round with the phase-9 validity bars; the share of "coherent" replies
+  # may not fall more than 10 p.p. below C0. Without a round the ctx verdict is
+  # `insufficient data`, never `pass`. noctx is not asked for a round so the
+  # owner's manual work is not doubled — stated here so the omission is a
+  # decision, not an oversight.
+  manual_connected_delta_floor: -0.10
