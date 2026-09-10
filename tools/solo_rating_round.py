@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import random
 import re
 import sys
@@ -135,10 +136,50 @@ def _round_entries(
                 }
             )
 
-    repeats = round(len(entries) * repeat_share)
+    # Вверх, а не к ближайшему: валидность сверяет ДОЛЮ повторов с тем же
+    # порогом, поэтому округление вниз собирает раунд, невалидный при любом
+    # качестве оценки (26/132 = 19.70% при пороге 20%). Промах систематический —
+    # при 2 и 4 руках он был, при 3 и 5 его не было.
+    repeats = math.ceil(len(entries) * repeat_share)
     for entry in rng.sample(entries, min(repeats, len(entries))):
         entries.append(dict(entry))
     return entries, below_minimum
+
+
+def _shuffle_spreading_repeats(
+    entries: list[dict[str, Any]], rng: random.Random
+) -> list[dict[str, Any]]:
+    """Перемешать так, чтобы два предъявления одной позиции не встали рядом.
+
+    Рядом стоящий дубль узнаётся, и само-согласие тогда меряет память оценщика,
+    а не устойчивость его суждения (design D3).
+
+    Дубли вставляются по одному в перемешанный список различных элементов, в
+    слот, не соседний со своим близнецом. Вставка одного элемента не может
+    свести вместе два других, поэтому инвариант держится по построению:
+    запрещённых слотов ровно два из ``len + 1``, подходящий есть всегда.
+    Перетасовка до успеха дала бы то же в среднем, но без верхней границы по
+    времени — а простого ``shuffle`` не хватает: соседи выпадали примерно в
+    трети раундов.
+    """
+    ordered: list[dict[str, Any]] = []
+    duplicates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        (duplicates if entry["item"] in seen else ordered).append(entry)
+        seen.add(entry["item"])
+
+    rng.shuffle(ordered)
+    rng.shuffle(duplicates)
+    for entry in duplicates:
+        twin = next(
+            index for index, other in enumerate(ordered) if other["item"] == entry["item"]
+        )
+        # Вставка в слот k ставит элемент между k-1 и k, поэтому соседним с
+        # близнецом он оказывается ровно при k == twin и k == twin + 1.
+        slots = [k for k in range(len(ordered) + 1) if k not in (twin, twin + 1)]
+        ordered.insert(rng.choice(slots), entry)
+    return ordered
 
 
 def build_round(
@@ -154,7 +195,7 @@ def build_round(
         replies_by_arm, rated_min=rated_min, repeat_share=repeat_share, seed=seed
     )
     rng = random.Random(seed + 1)
-    rng.shuffle(entries)
+    entries = _shuffle_spreading_repeats(entries, rng)
 
     classes = ", ".join(item.value for item in FailureClass)
     listing = HEADER.format(classes=classes) + "\n".join(
@@ -314,6 +355,23 @@ def score_round(
     }
 
 
+def unusable_reasons(key: dict[str, Any], thresholds: dict[str, Any]) -> list[str]:
+    """Почему собранный раунд не посчитается даже у безупречного оценщика.
+
+    Вопрос задаётся самой валидации: ей подставляются ответы, в которых все
+    настоящие позиции связны, а все декои опознаны, и всё, что она после этого
+    называет, — свойство **списка**, а не оценщика. Второго списка условий при
+    этом не заводится: если завтра в валидность добавится условие о составе,
+    предупреждение подхватит его само — по той же причине, по которой пороги не
+    дублируются в инструменте.
+    """
+    answers = {
+        int(position): (1 if meta["decoy"] else 3, None)
+        for position, meta in key["positions"].items()
+    }
+    return list(score_round(key, answers, thresholds)["invalid_reasons"])
+
+
 async def prepare(args: argparse.Namespace, out_dir: Path) -> None:
     log_masking.init_masking("solo-rating-round")
     thresholds = load_thresholds(Path(args.thresholds))
@@ -356,6 +414,12 @@ async def prepare(args: argparse.Namespace, out_dir: Path) -> None:
     )
     if key["below_minimum"]:
         print(f"below the per-arm minimum: {', '.join(key['below_minimum'])}")
+    # Раунд, который не сможет быть посчитан, стоит увидеть ДО того, как на него
+    # потрачен вечер — и не только по выборке ниже минимума: округление числа
+    # повторов вниз однажды собрало раунд, невалидный при любом качестве оценки,
+    # и это выяснилось после того, как его оценили два человека.
+    for reason in unusable_reasons(key, thresholds):
+        print(f"cannot be scored: {reason}")
     print(f"list: {list_path}")
     print(f"key : {key_path}")
 

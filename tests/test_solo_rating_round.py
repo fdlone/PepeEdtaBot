@@ -16,6 +16,7 @@ from tools.solo_rating_round import (
     parse_answers,
     score,
     score_round,
+    unusable_reasons,
 )
 
 THRESHOLDS: dict[str, Any] = {
@@ -55,15 +56,35 @@ class BuildRoundTest(unittest.TestCase):
             self.assertIn(f"\n{position}. ", "\n" + body)
 
     def test_repeats_do_not_sit_next_to_each_other(self) -> None:
-        """Иначе согласие меряет память, а не устойчивость суждения (D3)."""
-        _listing, key = self._round()
-        order = [
-            key["positions"][str(position)]["item"]
-            for position in range(1, key["counts"]["positions"] + 1)
-        ]
-        self.assertGreater(key["counts"]["repeat_pairs"], 0)
-        for first, second in zip(order, order[1:]):
-            self.assertNotEqual(first, second)
+        """Иначе согласие меряет память, а не устойчивость суждения (D3).
+
+        Перебор сидов, а не один: соседние повторы выпадали примерно в трети
+        раундов, поэтому односидовая проверка годами подтверждала свойство,
+        которого в коде не было — разведение держалось на удачном перемешивании.
+        """
+        for arms in (2, 3, 4):
+            for seed in range(40):
+                with self.subTest(arms=arms, seed=seed):
+                    _listing, key = build_round(
+                        {
+                            f"C{index}": _replies(f"C{index}", 12)
+                            for index in range(arms)
+                        },
+                        rated_min=10,
+                        repeat_share=0.20,
+                        seed=seed,
+                    )
+                    order = [
+                        key["positions"][str(position)]["item"]
+                        for position in range(1, key["counts"]["positions"] + 1)
+                    ]
+                    self.assertGreater(key["counts"]["repeat_pairs"], 0)
+                    for index, (first, second) in enumerate(zip(order, order[1:])):
+                        self.assertNotEqual(
+                            first,
+                            second,
+                            f"позиции {index + 1} и {index + 2} — один элемент",
+                        )
 
     def test_decoys_keep_the_words_and_lose_the_order(self) -> None:
         """Декой — тот же ответ с переставленными токенами (D2)."""
@@ -89,6 +110,32 @@ class BuildRoundTest(unittest.TestCase):
             # ...но не он сам.
             self.assertNotIn(decoy, _replies("C0", 8) + _replies("C4", 8))
 
+    def test_repeat_share_reaches_the_bar_for_any_number_of_arms(self) -> None:
+        """Подготовка обязана выполнить то условие, которым сама управляет.
+
+        Проверяется свойство, а не число: «при четырёх руках повторов 27» зелено
+        и на сломанной арифметике, если подобрать число рук. Округление к
+        ближайшему давало 26/132 = 19.70% при пороге 20%, и раунд на 2 и 4 руки
+        был невалиден при любом качестве оценки — дефект дожил до двух чужих
+        вечеров при полностью зелёном сьюте.
+        """
+        share_min = 0.20
+        for arms in (2, 3, 4, 5):
+            with self.subTest(arms=arms):
+                _listing, key = build_round(
+                    {f"C{index}": _replies(f"C{index}", 40) for index in range(arms)},
+                    rated_min=30,
+                    repeat_share=share_min,
+                    seed=42,
+                )
+                distinct = len({meta["item"] for meta in key["positions"].values()})
+                pairs = key["counts"]["repeat_pairs"]
+                self.assertGreaterEqual(
+                    pairs / distinct,
+                    share_min,
+                    f"{pairs}/{distinct} — раунд невалиден по построению",
+                )
+
     def test_short_sample_is_named_in_the_key(self) -> None:
         _listing, key = build_round(
             {"C0": _replies("C0", 8), "C4": _replies("C4", 2)},
@@ -101,6 +148,50 @@ class BuildRoundTest(unittest.TestCase):
 
     def test_round_is_reproducible_for_a_seed(self) -> None:
         self.assertEqual(self._round()[0], self._round()[0])
+
+
+class UnusableRoundTest(unittest.TestCase):
+    """Негодный по составу раунд виден при подготовке, а не после оценки."""
+
+    @staticmethod
+    def _key(arms: int, repeat_share: float) -> dict[str, Any]:
+        _listing, key = build_round(
+            {f"C{index}": _replies(f"C{index}", 12) for index in range(arms)},
+            rated_min=4,
+            repeat_share=repeat_share,
+            seed=11,
+        )
+        return key
+
+    def test_prepared_round_is_scoreable(self) -> None:
+        """То, что собрал инструмент, обязано проходить его же проверку."""
+        for arms in (2, 3, 4, 5):
+            with self.subTest(arms=arms):
+                self.assertEqual(unusable_reasons(self._key(arms, 0.20), THRESHOLDS), [])
+
+    def test_too_few_repeats_are_named_before_the_round_is_rated(self) -> None:
+        reasons = unusable_reasons(self._key(4, 0.05), THRESHOLDS)
+
+        self.assertTrue(any("repeats" in reason for reason in reasons), reasons)
+        # Причина названа как свойство списка, а не как претензия к оценщику:
+        # безупречные ответы подставлены, и всё остальное сошлось.
+        self.assertFalse(any("self-agreement" in reason for reason in reasons), reasons)
+        # Подготовка печатает эти строки, а её вывод — счётчики и пути, но не
+        # дословные ответы частного чата.
+        self.assertNotIn("пиво", " ".join(reasons))
+
+    def test_short_sample_is_named_too(self) -> None:
+        """Условие, которое подготовка исправить не может, тоже видно заранее."""
+        _listing, key = build_round(
+            {"C0": _replies("C0", 12), "C4": _replies("C4", 2)},
+            rated_min=4,
+            repeat_share=0.20,
+            seed=11,
+        )
+
+        reasons = unusable_reasons(key, THRESHOLDS)
+
+        self.assertTrue(any("fewer than" in reason for reason in reasons), reasons)
 
 
 class ParseAnswersTest(unittest.TestCase):
