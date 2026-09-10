@@ -20,8 +20,8 @@
 ## 4. Integration check
 
 - [x] 4.1 Verify `python -m tools.eval --smoke` runs clean on the refreshed lock
-- [ ] 4.2 **Not runnable locally — no Docker on this machine (`docker` absent from PATH and no Docker Desktop install); CI's `docker-build` job runs exactly this on the PR.** Verify `docker build` succeeds on 3.14.7-slim and the image smoke-test passes — imports live, migrations matching by name, build stamp parseable. This is what settles the lock-frozen-on-3.14.1 vs image-ships-3.14.7 gap noted in the proposal; if the resolver would have picked different wheels on 3.14.7, this is where it shows
-- [ ] 4.3 Verify CI is green on the PR across the whole 3.12/3.13/3.14 matrix — also the live proof for the `setup-python@v7` bump
+- [x] 4.2 **Not runnable locally — no Docker on this machine (`docker` absent from PATH and no Docker Desktop install); settled by CI's `docker-build` job on PR #184, green in 24s.** The 3.14.7 image resolved the same wheels the lock was frozen on under 3.14.1 — the gap named in the proposal is closed, not merely untested. Verify `docker build` succeeds on 3.14.7-slim and the image smoke-test passes — imports live, migrations matching by name, build stamp parseable. This is what settles the lock-frozen-on-3.14.1 vs image-ships-3.14.7 gap noted in the proposal; if the resolver would have picked different wheels on 3.14.7, this is where it shows
+- [x] 4.3 Verify CI is green on the PR across the whole 3.12/3.13/3.14 matrix — also the live proof for the `setup-python@v7` bump. All four checks pass on PR #184: test (3.12) 3m16s, test (3.13) 2m34s, test (3.14) 2m12s, docker-build 24s
 
 ## 5. Runbook note
 
@@ -29,4 +29,4 @@
 
 ## 6. Close-out
 
-- [ ] 6.1 Archive this change after merge
+- [x] 6.1 Archive this change. Done **before** merge, inside PR #184, at the owner's call — the 2026-08-12 precedent archived in a separate later PR (#140), so this is a deliberate deviation, not the house pattern
