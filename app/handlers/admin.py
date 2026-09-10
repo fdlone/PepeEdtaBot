@@ -243,14 +243,30 @@ async def cmd_set(
     if key == "markov_short_half_life_days":
         new_half_life = float(value)
         if new_half_life != previous_half_life:
-            reset_chat = None if is_global else message.chat.id
-            await learning_service.reset_short_layer(reset_chat)
+            # A chat that overrides the half-life keeps its own scale when the
+            # base moves, so a global wipe would only destroy its data (map
+            # §3.9б). The per-chat form has nothing to exempt.
+            spared: set[int] = set()
+            if is_global:
+                spared = {
+                    chat_id
+                    for chat_id, overrides in runtime_state_base.chat_overrides.items()
+                    if key in overrides
+                }
+                await learning_service.reset_short_layer(None, exclude=spared)
+            else:
+                await learning_service.reset_short_layer(message.chat.id)
             text += (
                 "\n\nВнимание: короткий слой обнулён — счётчик свежести "
                 "математически привязан к прежнему периоду полураспада и "
                 f"несопоставим с новым. Долгая память чата не тронута, "
                 f"свежесть накопится заново примерно за {value} дн."
             )
+            if spared:
+                text += (
+                    "\nЧатов со своим периодом полураспада, сохранивших слой: "
+                    f"{len(spared)}."
+                )
 
     await reply_humanized_state(message, text, runtime_state)
 

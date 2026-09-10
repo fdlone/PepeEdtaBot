@@ -522,7 +522,52 @@ class TestAdminHandlers(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(base.markov_short_half_life_days, 7.0)
-        learning_service.reset_short_layer.assert_awaited_once_with(None)
+        learning_service.reset_short_layer.assert_awaited_once_with(
+            None, exclude={100}
+        )
+
+    async def test_set_global_half_life_spares_chats_with_their_own(self) -> None:
+        # Chat 200 overrides the half-life: its effective value does not move
+        # with the base, so its short layer must survive — and the reply says
+        # how many chats were spared, without naming them.
+        from app.handlers.admin import cmd_set
+
+        msg = _fake_message(
+            text="/set global markov_short_half_life_days 7", user_id=42, chat_id=100
+        )
+        base = _real_runtime_state()
+        base.set_override(200, "markov_short_half_life_days", 5.0)
+        base.set_override(300, "emoji_append_chance", 0.5)
+        learning_service = AsyncMock()
+
+        await cmd_set(
+            msg, base.effective(100), MagicMock(owner_id=42), base, learning_service
+        )
+
+        learning_service.reset_short_layer.assert_awaited_once_with(
+            None, exclude={200}
+        )
+        reply = msg.reply.await_args.args[0]
+        self.assertIn("сохранивших слой: 1", reply)
+        self.assertNotIn("200", reply)
+
+    async def test_set_global_half_life_without_overrides_spares_nobody(self) -> None:
+        from app.handlers.admin import cmd_set
+
+        msg = _fake_message(
+            text="/set global markov_short_half_life_days 7", user_id=42, chat_id=100
+        )
+        base = _real_runtime_state()
+        learning_service = AsyncMock()
+
+        await cmd_set(
+            msg, base.effective(100), MagicMock(owner_id=42), base, learning_service
+        )
+
+        learning_service.reset_short_layer.assert_awaited_once_with(
+            None, exclude=set()
+        )
+        self.assertNotIn("сохранивших", msg.reply.await_args.args[0])
 
     async def test_set_global_half_life_unchanged_base_keeps_the_layers(self) -> None:
         # The base stays 3.0; the invoking chat's differing override must not

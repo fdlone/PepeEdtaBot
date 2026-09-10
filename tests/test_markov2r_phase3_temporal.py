@@ -433,6 +433,21 @@ class TestShortLayerReset(unittest.IsolatedAsyncioTestCase):
             rows = await self._rows(chat_id)
             self.assertEqual(rows[0][2], 0.0, chat_id)
 
+    async def test_global_reset_spares_excluded_chats(self) -> None:
+        await self.db.reset_short_layer(None, exclude={88})
+        self.assertEqual((await self._rows(77))[0][2], 0.0)
+        self.assertGreater((await self._rows(88))[0][2], 0.0)
+
+    async def test_global_reset_with_empty_exclusions_covers_every_chat(self) -> None:
+        await self.db.reset_short_layer(None, exclude=set())
+        for chat_id in (77, 88):
+            self.assertEqual((await self._rows(chat_id))[0][2], 0.0, chat_id)
+
+    async def test_per_chat_reset_rejects_exclusions(self) -> None:
+        with self.assertRaises(ValueError):
+            await self.db.reset_short_layer(77, exclude={88})
+        self.assertGreater((await self._rows(77))[0][2], 0.0)
+
     async def test_first_seen_survives_the_reset(self) -> None:
         """The reset throws away "recent", never the record of when it began."""
         async with self.db._lock:
