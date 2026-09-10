@@ -159,6 +159,10 @@ class GenerationTelemetry:
     # счётчика у него нет нигде больше.
     mentions_observed: int = 0
     mentions_answered: int = 0
+    # Срезано пер-чатовым потолком `mention_max_per_hour` (O15). Печатается и
+    # нулём: потолок, выключенный ручкой, обязан быть отличим от потолка,
+    # который ни разу не сработал.
+    mentions_capped: int = 0
     # Верхняя оценка нагрузки: максимум ответов на обращения, пришедшийся на
     # любой СКОЛЬЗЯЩИЙ час — тем же окном, которым считает `within_hourly_cap`
     # для самостоятельных ответов. Первая редакция раскладывала по
@@ -404,6 +408,10 @@ class GenerationTelemetry:
         while len(self.mention_answer_times) > MENTION_TIME_WINDOW_MAX:
             self.mention_answer_times.popleft()
 
+    def note_mention_capped(self) -> None:
+        """Обращение понижено пер-чатовым потолком за час (O15)."""
+        self.mentions_capped += 1
+
     def note_burst_phase(self, *, suppressing: bool) -> None:
         """Один ответ, сыгранный в фазе усиления или подавления берст-ритма.
 
@@ -605,6 +613,7 @@ class GenerationTelemetry:
         values["mention_answers_peak_hour"] = _peak_in_sliding_hour(
             self.mention_answer_times
         )
+        values["mentions_capped"] = self.mentions_capped
         values["anchor_splice_deferred"] = self.anchor_splice_deferred or None
         values["anchor_splice_share"] = (
             self.anchor_splice_done / self.anchor_splice_deferred

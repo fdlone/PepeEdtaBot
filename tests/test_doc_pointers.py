@@ -40,15 +40,15 @@ _EMPTY_TARGETS = {"", ")", "):", '"""', "'''", "(", "]", "}"}
 # знает — он проверяет только, что там не пустота. Первая редакция гарда такую
 # проверку содержала и сразу же дала ложную тревогу на правке O8.
 _KNOWN_STALE = {
-    "GENERATION_MAP.md: reply_pipeline.py:353 — пустая строка или скобка",
-    "GENERATION_MAP.md: reply_pipeline.py:371 — пустая строка или скобка",
-    "GENERATION_MAP.md: reply_pipeline.py:392 — пустая строка или скобка",
-    "GENERATION_MAP.md: reply_pipeline.py:411 — пустая строка или скобка",
+    "GENERATION_MAP.md: reply_pipeline.py:365 — пустая строка или скобка",
+    "GENERATION_MAP.md: reply_pipeline.py:383 — пустая строка или скобка",
+    "GENERATION_MAP.md: reply_pipeline.py:404 — пустая строка или скобка",
     "GENERATION_MAP.md: reply_pipeline.py:423 — пустая строка или скобка",
-    "GENERATION_MAP.md: reply_pipeline.py:465 — пустая строка или скобка",
+    "GENERATION_MAP.md: reply_pipeline.py:435 — пустая строка или скобка",
+    "GENERATION_MAP.md: reply_pipeline.py:477 — пустая строка или скобка",
     "GENERATION_MAP.md: reply_pipeline.py:174 — пустая строка или скобка",
-    "GENERATION_MAP.md: reply_pipeline.py:413 — пустая строка или скобка",
-    "GENERATION_MAP.md: reply_pipeline.py:514 — пустая строка или скобка",
+    "GENERATION_MAP.md: reply_pipeline.py:425 — пустая строка или скобка",
+    "GENERATION_MAP.md: reply_pipeline.py:526 — пустая строка или скобка",
     "GENERATION_MAP.md: response_generator.py:61 — пустая строка или скобка",
     "GENERATION_MAP.md: response_generator.py:694 — пустая строка или скобка",
     "GENERATION_MAP.md: markov.py:2349 — пустая строка или скобка",

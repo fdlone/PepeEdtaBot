@@ -291,6 +291,18 @@ class ReplyPipeline:
             address_reply = cooldown_allows_reply(
                 now, last_mention_ts, state.mention_cooldown_sec
             )
+        # O15: кулдаун выше считается на человека и чат целиком не
+        # ограничивает. Пер-чатовый потолок за скользящий час — тем же окном,
+        # что и `reply_max_per_hour`. Проверяется после кулдауна: обращение,
+        # уже погашенное им, потолок не видит и в срез не пишет — одна причина
+        # на одно понижение, иначе счётчик среза насчитал бы чужое.
+        if address_reply and not within_hourly_cap(
+            state.recent_mention_reply_times.get(msg.chat_id, ()),
+            now,
+            state.mention_max_per_hour,
+        ):
+            address_reply = False
+            self._generator.telemetry.note_mention_capped()
 
         # M1/M2: fold this message into the per-chat rhythm state before any
         # early return so even short/non-learnable messages still count toward

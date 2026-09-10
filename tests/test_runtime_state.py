@@ -246,6 +246,7 @@ class TestRuntimeState(unittest.TestCase):
         state.recent_short_replies[100] = deque(["hi"], maxlen=5)
         state.recent_replies[100] = deque(["длинный недавний ответ"], maxlen=20)
         state.recent_reply_times[100] = deque([1.0])
+        state.note_mention_reply(100, 1001, 1.0)
         state.note_rare_event(100, "2026-07-04")
         state.note_user_quirk(100, 1001, "2026-07-04")
         state.note_user_quirk(200, 1001, "2026-07-04")
@@ -258,9 +259,27 @@ class TestRuntimeState(unittest.TestCase):
         self.assertEqual(state.recent_short_replies, {})
         self.assertEqual(state.recent_replies, {})
         self.assertEqual(state.recent_reply_times, {})
+        self.assertEqual(state.recent_mention_reply_times, {})
+        self.assertEqual(state.last_mention_reply_ts, {})
         self.assertEqual(state.rare_events_today, {})
         # Only the forgotten chat's quirk stamps are swept.
         self.assertEqual(state.last_user_quirk_day, {(200, 1001): "2026-07-04"})
+
+    def test_mention_reply_window_is_per_chat_and_trimmed_to_an_hour(
+        self,
+    ) -> None:
+        state = make_runtime_state()
+        state.note_mention_reply(1, 5, 100.0)
+        state.note_mention_reply(1, 6, 200.0)
+        state.note_mention_reply(2, 5, 300.0)
+        # Час спустя первая метка чата 1 выпадает, вторая остаётся.
+        state.note_mention_reply(1, 7, 3750.0)
+
+        self.assertEqual(
+            list(state.recent_mention_reply_times[1]), [200.0, 3750.0]
+        )
+        self.assertEqual(list(state.recent_mention_reply_times[2]), [300.0])
+        self.assertEqual(state.last_mention_reply_ts[(1, 5)], 100.0)
 
     def test_rare_event_cap_counts_per_day(self) -> None:
         state = make_runtime_state()

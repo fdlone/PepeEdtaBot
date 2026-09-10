@@ -19,6 +19,7 @@ _DIALOGUE_HELP_KNOBS: tuple[tuple[str, str], ...] = (
     ("reply_director_enabled", "директор шанса ответа"),
     ("reply_max_per_hour", "лимит ответов в час"),
     ("mention_cooldown_sec", "пауза на упоминания, сек"),
+    ("mention_max_per_hour", "потолок ответов на упоминания в час"),
     ("emoji_append_chance", "эмодзи в ответах"),
     ("markov_jump_probability", "дрейф темы"),
     ("hot_ngram_seed_chance", "подхват мемов чата"),
@@ -164,7 +165,8 @@ def format_stats_message(
         lines.append(
             f"обращений: {telemetry['mentions_observed']}, "
             f"отвечено {answered:.0%}, "
-            f"пик за час {telemetry.get('mention_answers_peak_hour') or 0}"
+            f"пик за час {telemetry.get('mention_answers_peak_hour') or 0}, "
+            f"срезано потолком {telemetry.get('mentions_capped') or 0}"
         )
     if telemetry and telemetry.get("burst_phase_replies") is not None:
         suppress = telemetry.get("burst_suppress_share") or 0.0

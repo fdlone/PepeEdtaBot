@@ -63,21 +63,21 @@
 | 3 | `observe`: активность чата | `reply_pipeline.py:263` | — |
 | 4 | mention-cooldown | `reply_pipeline.py:257` | обращение в кулдауне → `address_reply=False`, путь непрошеного |
 | 5 | mood/ритм (EWMA) | `reply_pipeline.py:274` | считается, если включён mood **или** директор |
-| 6 | эмодзи-канал (учёт) | `reply_pipeline.py:302` | только при `emoji_append_chance>0` |
-| 7 | срез ведущего вокатива + `sanitize_text` + `tokenize` | `reply_pipeline.py:352` | — |
-| 8 | гейт обучаемости | `reply_pipeline.py:318-321` | не обучаемо и не обращение → **выход, сообщение не существует для бота** |
-| 9 | гейт объёма модели | `reply_pipeline.py:353` | мало данных + обращение → fallback; мало данных без обращения → молчание |
-| 10 | **политика ответа ★** | `reply_pipeline.py:371` | кулдаун / часовой кап / ролл вероятности |
-| 11 | **сбор контекста ★** | `reply_pipeline.py:392` | `only_for_replies` + переопределение при обращении |
-| 12 | L1-затравка | `reply_pipeline.py:411` | только непрошеные, шанс `hot_ngram_seed_chance` |
+| 6 | эмодзи-канал (учёт) | `reply_pipeline.py:314` | только при `emoji_append_chance>0` |
+| 7 | срез ведущего вокатива + `sanitize_text` + `tokenize` | `reply_pipeline.py:364` | — |
+| 8 | гейт обучаемости | `reply_pipeline.py:330-333` | не обучаемо и не обращение → **выход, сообщение не существует для бота** |
+| 9 | гейт объёма модели | `reply_pipeline.py:365` | мало данных + обращение → fallback; мало данных без обращения → молчание |
+| 10 | **политика ответа ★** | `reply_pipeline.py:383` | кулдаун / часовой кап / ролл вероятности |
+| 11 | **сбор контекста ★** | `reply_pipeline.py:404` | `only_for_replies` + переопределение при обращении |
+| 12 | L1-затравка | `reply_pipeline.py:423` | только непрошеные, шанс `hot_ngram_seed_chance` |
 | 13 | `ResponseGenerator.generate_with_result` | `response_generator.py:987` | см. §1.3–§1.5 |
-| 14 | нет текста | `reply_pipeline.py:423` | обращение → fallback; иначе молчание |
-| 15 | учёт бюджета ответа: слот резервируется **до** генерации в момент решения (`reserve_reply_slot`), при несостоявшемся ответе откатывается | `reply_pipeline.py:479` | O8: атомарность «проверил → записал» без `await` |
-| 16 | причуда завсегдатая (L2) | `reply_pipeline.py:454` | сработала → **редкое событие не роллится** |
-| 17 | редкое событие (L3) | `reply_pipeline.py:527` | verdict / caps / double / false_start |
+| 14 | нет текста | `reply_pipeline.py:435` | обращение → fallback; иначе молчание |
+| 15 | учёт бюджета ответа: слот резервируется **до** генерации в момент решения (`reserve_reply_slot`), при несостоявшемся ответе откатывается | `reply_pipeline.py:491` | O8: атомарность «проверил → записал» без `await` |
+| 16 | причуда завсегдатая (L2) | `reply_pipeline.py:466` | сработала → **редкое событие не роллится** |
+| 17 | редкое событие (L3) | `reply_pipeline.py:539` | verdict / caps / double / false_start |
 | 18 | отправка с имитацией набора | `handlers/_helpers.py` | — |
-| 19 | анти-повторная память | `reply_pipeline.py:569` | запоминается **`reply_text`, а не отправленное** ★ |
-| 20 | `learn` в `finally` | `reply_pipeline.py:465` | выполняется даже при падении ответа |
+| 19 | анти-повторная память | `reply_pipeline.py:581` | запоминается **`reply_text`, а не отправленное** ★ |
+| 20 | `learn` в `finally` | `reply_pipeline.py:477` | выполняется даже при падении ответа |
 | 21 | суточное обслуживание | `handlers/learning.py:171` | обходит **все** чаты ★ |
 
 ## 1.2 Главная развилка: есть контекст или нет — это два разных бота
@@ -85,7 +85,7 @@
 `extract_context_tokens` возвращает пустой список, если
 `reply_context_only_for_replies=true` (дефолт) и сообщение не является реплаем
 `[код reply_pipeline.py:174]`. Прямое обращение переопределяет это
-`[код reply_pipeline.py:757]`. Значит **непрошеный ответ на сообщение, которое
+`[код reply_pipeline.py:769]`. Значит **непрошеный ответ на сообщение, которое
 не является реплаем, идёт вообще без контекста**.
 
 Какая доля прод-ответов приходится на этот режим — **не измерено**: для этого
@@ -134,7 +134,7 @@ short-degenerate 0.25. В `noctx` — 0.00 во всех четырёх.
 
 `GENERATION_ATTEMPT_BUDGET = 10` — бюджет попыток, `CANDIDATE_TARGET = 5` —
 цель по кандидатам `[код response_generator.py:61-63]`. `reply_pipeline`
-вызывает `generate` без переопределения цели `[код reply_pipeline.py:413]`.
+вызывает `generate` без переопределения цели `[код reply_pipeline.py:425]`.
 
 Пул набирается до 5 в **300 из 300** генераций во всех армах
 `[замер 6 армов × 300]`. Пустой ответ — 0.000 везде.
@@ -179,11 +179,11 @@ short-degenerate 0.25. В `noctx` — 0.00 во всех четырёх.
 | 9 | `max_steps=90` / `max_reply_tokens` / `max_reply_chars` | `markov.py:1009`, `2290` | — | нет |
 | 10 | `sample_length_mode`: все веса обнулены mood'ом → откат на до-mood веса | `candidate_scorer.py:45` | 0 на дефолтах `[вывод: strength 1.0 не зануляет]` | нет |
 | 11 | `rank_seeds`: `n_docs <= 0` → seeded-ветка молча пропускается | `markov.py:1664` | **100% на живом проде**: `markov_token_df` пуст, `n_docs=0` во всех чатах снимка `[замер SQL]` | **да, с M3R-141** (`seed_ranking_no_corpus_rate`) |
-| 12 | `get_hot` вернул пустой список → L1-затравки нет, `protected_tokens` пуст | `reply_pipeline.py:661`, `response_generator.py:435` | **100% на снимке при дефолтах** `[замер SQL]` | **да, с M3R-141** (`hot_ngram_empty_rate`) |
+| 12 | `get_hot` вернул пустой список → L1-затравки нет, `protected_tokens` пуст | `reply_pipeline.py:673`, `response_generator.py:435` | **100% на снимке при дефолтах** `[замер SQL]` | **да, с M3R-141** (`hot_ngram_empty_rate`) |
 | 13 | IDF/интонация пересобираются не чаще 1 раза на 50 выученных сообщений | `learning_service.py:41,558` | постоянно | нет |
 | 14 | кэши чата вытесняются по TTL 24 ч / лимиту чатов | `learning_service.py:539` | — | нет |
 | 15 | `_extend_verbatim_candidate` вернул `None` → кандидат остаётся как был | `response_generator.py:1105` | 0.000 (все 1.3–1.5 дописок/ген удались) `[замер]` | да, только успех |
-| 16 | причуда завсегдатая отсечена одним из пяти гейтов подряд (адресность, ручка, суточный лимит, розыгрыш, порог) | `reply_pipeline.py:787` | не измерена: канал молчит с 2026-07-16, окно накопления стартует с ближайшего рестарта | **да, с `observe-user-quirk-channel`** (`user_quirk_rejected_*` со своим знаменателем на каждом гейте, воронка в `/stats`) |
+| 16 | причуда завсегдатая отсечена одним из пяти гейтов подряд (адресность, ручка, суточный лимит, розыгрыш, порог) | `reply_pipeline.py:799` | не измерена: канал молчит с 2026-07-16, окно накопления стартует с ближайшего рестарта | **да, с `observe-user-quirk-channel`** (`user_quirk_rejected_*` со своим знаменателем на каждом гейте, воронка в `/stats`) |
 
 Позиции 11 и 12 — самые дорогие: две подсистемы (фаза 5 и L1 «локальные мемы»)
 в проде **не работают вовсе**. ~~и об этом нет ни лога, ни счётчика~~ — счётчики
@@ -259,7 +259,7 @@ seed-старт уже найден `[код markov.py:2486]` — это сох�
 | **слот-мутант** (`response_generator.py:880`) | ничего, но исходные токены уже финализированы; первый и последний токены не мутируются `[код slot_mutation.py:147]` | нет | дефекта нет: терминальная пунктуация 98.2% `[замер]` |
 | **reply_flavor** (`reply_flavor.py:18`) | работает **после** скоринга | — | в 25%×`strength` срезает ту самую точку, за которую скорер только что дал `CLEAN_END_BONUS=0.35` |
 | **эмодзи-канал** (`emoji.py:132`) | после всего | — | итоговый текст ≠ оценённый кандидат |
-| **редкие события** (`reply_flavor.py:143`) | заменяют/режут текст целиком | — | `verdict` подменяет ответ одним словом; в анти-повтор при этом пишется **исходный** текст `[код reply_pipeline.py:463]` |
+| **редкие события** (`reply_flavor.py:143`) | заменяют/режут текст целиком | — | `verdict` подменяет ответ одним словом; в анти-повтор при этом пишется **исходный** текст `[код reply_pipeline.py:475]` |
 
 Доля дописок: **1.313/ген** в `ctx` и **1.517/ген** в `noctx`, при 4.5–5.3
 принятых кандидатах — то есть шов дописки несёт ~28% кандидатов
@@ -270,7 +270,7 @@ seed-старт уже найден `[код markov.py:2486]` — это сох�
 ## 1.6 Порядок потребления RNG
 
 Один `random.Random` на генерацию `[код response_generator.py:902]`. В проде он
-создаётся **несидированным**: `rng=random.Random()` `[код reply_pipeline.py:420]`.
+создаётся **несидированным**: `rng=random.Random()` `[код reply_pipeline.py:432]`.
 Воспроизводимость существует только через вход харнесса/eval, который передаёт
 свой сидированный генератор.
 
@@ -294,7 +294,7 @@ seed-старт уже найден `[код markov.py:2486]` — это сох�
 8. `append_emoji_flavor`: `rng.random()` + `rng.choices`, и **только если статистика эмодзи непуста** `[код response_generator.py:1381-1287]`.
 
 Вне этого генератора — модульный `random` без сида: ролл ответа
-`[код reply_pipeline.py:377]`, L1-затравка `[код reply_pipeline.py:782,667]`,
+`[код reply_pipeline.py:389]`, L1-затравка `[код reply_pipeline.py:794,667]`,
 причуды и редкие события. То есть **выбор горячей n-граммы, меняющий всю
 генерацию, лежит вне контракта воспроизводимости**.
 
@@ -307,7 +307,7 @@ seed-старт уже найден `[код markov.py:2486]` — это сох�
 | `get_states` | `ORDER BY` `[код markov_repo.py:236]` | `ContextStateMatcher` (дополнительно сортирует) |
 | `get_seed_forward` / `get_reverse_transitions` | `ORDER BY` `[код markov_repo.py:158,135]` | seeded-сборка |
 | **`get_word_frequencies`** | **`ORDER BY` нет** `[код markov_repo.py:257-264]` | `pick_replacement` строит `pool`/`weights` в порядке словаря и зовёт `rng.choices` `[код slot_mutation.py:178-200]` |
-| **`chat_hot_ngrams.get_hot`** | `ORDER BY 4 DESC` без вторичного ключа `[код chat_hot_ngrams_repo.py:81]` | `random.choice(hot_ngrams)` `[код reply_pipeline.py:750]` |
+| **`chat_hot_ngrams.get_hot`** | `ORDER BY 4 DESC` без вторичного ключа `[код chat_hot_ngrams_repo.py:81]` | `random.choice(hot_ngrams)` `[код reply_pipeline.py:762]` |
 | свёртка кэша | `bisect` по тому же ключу, copy-on-write `[код markov.py:972]` | те же потребители |
 
 Две последние строки — незакреплённые инварианты, см. §3.7.
@@ -412,7 +412,7 @@ seed-старт уже найден `[код markov.py:2486]` — это сох�
 | `rare_event_chance` / `false_start_chance` / `rare_event_daily_cap` | 0.03 / 0.05 / 3 | слом формы | **живые в проде, отсутствуют в eval** | eval зовёт `ResponseGenerator` напрямую, минуя `ReplyPipeline` `[код tools/eval/run.py:231]` |
 | `user_quirk_*` (3) | 0.3 / 10 / 0 (с 2026-09-01; было 0.1 / 25) | причуды завсегдатаев | **живые в проде, отсутствуют в eval** | там же |
 | `mood_*` (8) | — | настроение чата | **живые в проде, отсутствуют в eval**: eval строит `ResponseGenerator` без `mood`/`mood_modifiers` `[код tools/eval/run.py:212-218]` → `NEUTRAL_MODIFIERS` и alpha всегда «calm» | `[код response_generator.py:903,319]` |
-| `reply_probability*`, `reply_director_*`, `reply_burst_*`, `reply_max_per_hour`, `min_cooldown_sec`, `mention_cooldown_sec` | — | политика «отвечать ли» | **живые в проде, отсутствуют в eval** | eval начинается после решения |
+| `reply_probability*`, `reply_director_*`, `reply_burst_*`, `reply_max_per_hour`, `min_cooldown_sec`, `mention_cooldown_sec`, `mention_max_per_hour` | — | политика «отвечать ли» | **живые в проде, отсутствуют в eval** | eval начинается после решения |
 | `min_tokens_for_model` | 200 | гейт объёма | живая | — |
 
 Вне механики генерации (перечислены для полноты `RUNTIME_FIELDS`):
@@ -731,7 +731,7 @@ log-сжатием: прежняя пара нули, новая метрика 
 
 **(б) `chat_hot_ngrams.get_hot` сортирует `ORDER BY 4 DESC` без вторичного
 ключа** `[код chat_hot_ngrams_repo.py:81]`, результат идёт в
-`random.choice(hot_ngrams)` `[код reply_pipeline.py:750]`. Тай-брейк не
+`random.choice(hot_ngrams)` `[код reply_pipeline.py:762]`. Тай-брейк не
 определён. Сейчас безвреден, потому что список пуст (§3.2б).
 
 **ЗАКРЫТО 2026-08-14** (change `pre-w1c-seeded-ordering-and-routes`, M3R-144) —
@@ -790,7 +790,7 @@ log-сжатием: прежняя пара нули, новая метрика 
 
 **(а) Подтверждённый прецедент.** `run_due_maintenance` собирает `MemeSettings`
 из представления чата, чьё сообщение запустило пасс, а пасс обходит все чаты
-`[код reply_pipeline.py:514-524]` — оговорено `ponytail:`-комментарием.
+`[код reply_pipeline.py:526-536]` — оговорено `ponytail:`-комментарием.
 
 **(б) Закрыто 2026-09-10 (`global-half-life-reset-spares-overrides`).** Было:
 глобальная смена `markov_short_half_life_days` обнуляла короткий слой и у
@@ -802,7 +802,7 @@ database.py:340-368]`; ответ на команду называет числ�
 их ID. Пер-чатовые формы не изменились.
 
 **(в) Проверено и чисто:** остальные пер-чатовые накопители — словари,
-разделяемые по ссылке через `effective()` `[код runtime_state.py:61-80]`;
+разделяемые по ссылке через `effective()` `[код runtime_state.py:61-95]`;
 кэши `LearningService` ключуются `chat_id` `[код learning_service.py:118-147]`;
 LRU `MarkovGenerator` — по `(chat_id, ...)` `[код markov.py:1021-1032]`;
 `lru_cache` в `slot_mutation._tags` чисто морфологический, без чата
@@ -816,7 +816,7 @@ LRU `MarkovGenerator` — по `(chat_id, ...)` `[код markov.py:1021-1032]`;
 **Класс:** обход конвейеров, мелкий.
 
 **Что:** `remember_recent_reply(state, chat_id, reply_text)` вызывается с
-исходным текстом `[код reply_pipeline.py:463]`, а отправлено могло быть
+исходным текстом `[код reply_pipeline.py:475]`, а отправлено могло быть
 `verdict`-слово, UPPERCASE или две части `[код reply_flavor.py:143-162]`. При
 `verdict` в память попадает текст, которого чат не видел, а отправленное слово
 не попадает.
