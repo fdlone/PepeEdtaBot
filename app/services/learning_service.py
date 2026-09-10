@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import Counter, deque
-from collections.abc import Callable, Iterable, Mapping, Set
+from collections.abc import Callable, Collection, Iterable, Mapping, Set
 from dataclasses import dataclass
 
 from app.config.defaults import SHORT_HALF_LIFE_DAYS
@@ -350,7 +350,9 @@ class LearningService:
                 (time.monotonic() - started) * 1000.0,
             )
 
-    async def reset_short_layer(self, chat_id: int | None) -> None:
+    async def reset_short_layer(
+        self, chat_id: int | None, *, exclude: Collection[int] = ()
+    ) -> None:
         """Discard the short layer (TZ §7.2), leaving the long one intact.
 
         Called when the half-life changes: a decayed counter only means
@@ -360,10 +362,11 @@ class LearningService:
         *recent*, never its memory.
 
         ``chat_id=None`` resets every chat, which is what a global ``/set``
-        means; the distribution caches are dropped so the change is visible
-        without a restart.
+        means, sparing the chats in ``exclude`` (those override the half-life
+        for themselves); the distribution caches are dropped so the change is
+        visible without a restart.
         """
-        await self._db.reset_short_layer(chat_id)
+        await self._db.reset_short_layer(chat_id, exclude=exclude)
         if chat_id is None:
             self._generator.invalidate_all_caches()
         else:

@@ -5,7 +5,7 @@ import enum
 import logging
 import time
 from collections import Counter
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Collection, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import TypeVar
@@ -337,26 +337,35 @@ class Database:
             payload,
         )
 
-    async def reset_short_layer(self, chat_id: int | None = None) -> None:
+    async def reset_short_layer(
+        self, chat_id: int | None = None, *, exclude: Collection[int] = ()
+    ) -> None:
         """Zero the short layer, keeping counts and timestamps (TZ §7.2).
 
         ``chat_id=None`` covers every chat — what a global half-life change
-        means. Deliberately scoped to ``s_value``/``s_updated_at``: the long
-        counter and ``first_seen``/``last_seen`` are a different question and
-        must survive a half-life change untouched.
+        means — except the chats in ``exclude``: those override the half-life
+        for themselves, so their effective value did not move and their layer
+        stays comparable. ``exclude`` is only meaningful for the global form.
+        Deliberately scoped to ``s_value``/``s_updated_at``: the long counter
+        and ``first_seen``/``last_seen`` are a different question and must
+        survive a half-life change untouched.
         """
+        excluded = sorted(set(exclude))
+        if chat_id is not None and excluded:
+            raise ValueError("exclude is only valid for a global reset")
+        where = ""
+        params: tuple[int, ...] = ()
+        if chat_id is not None:
+            where, params = "WHERE chat_id = ?", (chat_id,)
+        elif excluded:
+            marks = ", ".join("?" for _ in excluded)
+            where, params = f"WHERE chat_id NOT IN ({marks})", tuple(excluded)
         async with self._write_transaction() as db:
             for table in ("starts", "starts3", "transitions", "transitions3"):
-                if chat_id is None:
-                    await db.execute(
-                        f"UPDATE {table} SET s_value = 0, s_updated_at = NULL"  # nosec B608
-                    )
-                else:
-                    await db.execute(
-                        f"UPDATE {table} SET s_value = 0, s_updated_at = NULL "  # nosec B608
-                        "WHERE chat_id = ?",
-                        (chat_id,),
-                    )
+                await db.execute(
+                    f"UPDATE {table} SET s_value = 0, s_updated_at = NULL {where}",  # nosec B608
+                    params,
+                )
 
     async def save_message_and_update_model(
         self,
