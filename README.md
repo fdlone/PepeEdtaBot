@@ -235,6 +235,17 @@ python -m unittest discover tests -v
 Статическая проверка типов охватывает только `app/` (принятое ограничение).
 Состав CI — [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#тесты-и-ci).
 
+Гейт зависимостей локально на Windows требует `PYTHONUTF8=1`:
+
+```bash
+PYTHONUTF8=1 python -m pip_audit -r requirements.lock
+```
+
+Без него парсер требований читает UTF-8 заголовок `requirements.lock`
+(он кириллический) в кодировке машины — на русской локали это cp1251, и
+`pip-audit` падает с `UnicodeDecodeError`, не дойдя до сети. В CI Ubuntu
+уже в UTF-8, поэтому там команда идёт без префикса.
+
 Для отладки генерации: `GEN_TRACE_LOG=true` включает пошаговый трейс отбора
 кандидатов независимо от `LOG_LEVEL` (см.
 [`docs/GENERATION_PIPELINE.md`](docs/GENERATION_PIPELINE.md)).
