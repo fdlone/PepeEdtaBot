@@ -142,6 +142,7 @@ class RuntimeTunables:
     reply_burst_suppress_mult: float
     reply_max_per_hour: int
     mention_cooldown_sec: int
+    mention_max_per_hour: int
 
 
 @dataclass(slots=True)

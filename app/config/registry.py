@@ -772,6 +772,13 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # unprompted-reply path. 0 disables the gate (legacy behaviour).
     FieldSpec("mention_cooldown_sec", "MENTION_COOLDOWN_SEC", "5",
               _int_in_range(0, 3600)),
+    # Per-chat ceiling on mention-triggered replies per rolling hour (O15). The
+    # per-user cooldown above does not bound the chat as a whole: ten people
+    # each within their window can still force a reply per message. A mention
+    # over the ceiling is demoted to the unprompted-reply path, like a mention
+    # in cooldown. 0 disables the ceiling.
+    FieldSpec("mention_max_per_hour", "MENTION_MAX_PER_HOUR", "20",
+              _int_in_range(0, 1000)),
 )
 
 

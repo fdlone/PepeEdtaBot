@@ -156,6 +156,57 @@ class TestObserve(ReplyPipelineTestCase):
         assert observation is not None
         self.assertEqual(observation.learn_source, "что там по погоде")
 
+    async def test_mention_over_hourly_cap_is_demoted(self) -> None:
+        state = _state(mention_max_per_hour=2)
+        state.recent_mention_reply_times[1] = deque([400.0, 800.0])
+        pipeline = self._pipeline(state)
+
+        observation = await pipeline.observe(_incoming(mentioned=True))
+
+        assert observation is not None
+        self.assertFalse(observation.address_reply)
+        self.assertEqual(self.generator.telemetry.mentions_capped, 1)
+        self.assertEqual(self.generator.telemetry.mentions_observed, 1)
+
+    async def test_mention_cap_forgets_replies_older_than_an_hour(self) -> None:
+        state = _state(mention_max_per_hour=2)
+        # Две метки: одна старше часа, одна свежая — в окне только одна.
+        state.recent_mention_reply_times[1] = deque([-3000.0, 800.0])
+        pipeline = self._pipeline(state)
+
+        observation = await pipeline.observe(_incoming(mentioned=True))
+
+        assert observation is not None
+        self.assertTrue(observation.address_reply)
+        self.assertEqual(self.generator.telemetry.mentions_capped, 0)
+
+    async def test_mention_cap_zero_disables_the_gate(self) -> None:
+        state = _state(mention_max_per_hour=0)
+        state.recent_mention_reply_times[1] = deque(
+            [float(t) for t in range(900, 1000)]
+        )
+        pipeline = self._pipeline(state)
+
+        observation = await pipeline.observe(_incoming(mentioned=True))
+
+        assert observation is not None
+        self.assertTrue(observation.address_reply)
+        self.assertEqual(self.generator.telemetry.mentions_capped, 0)
+
+    async def test_mention_in_cooldown_is_not_counted_as_capped(self) -> None:
+        # Одна причина на одно понижение: кулдаун сработал первым, потолок
+        # это обращение не видел и в срез не пишет.
+        state = _state(mention_cooldown_sec=60, mention_max_per_hour=1)
+        state.last_mention_reply_ts[(1, 5)] = 990.0
+        state.recent_mention_reply_times[1] = deque([990.0])
+        pipeline = self._pipeline(state)
+
+        observation = await pipeline.observe(_incoming(mentioned=True))
+
+        assert observation is not None
+        self.assertFalse(observation.address_reply)
+        self.assertEqual(self.generator.telemetry.mentions_capped, 0)
+
     async def test_mention_within_cooldown_is_demoted(self) -> None:
         state = _state(mention_cooldown_sec=60)
         state.last_mention_reply_ts[(1, 5)] = 990.0

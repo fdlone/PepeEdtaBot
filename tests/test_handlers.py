@@ -184,6 +184,9 @@ def _fake_state(**kwargs: object) -> MagicMock:
     # keep their guaranteed-reply behaviour; dedicated tests enable it.
     s.mention_cooldown_sec = 0
     s.last_mention_reply_ts = {}
+    # Per-chat mention ceiling off by default for the same reason (O15).
+    s.mention_max_per_hour = 0
+    s.recent_mention_reply_times = {}
     for k, v in kwargs.items():
         setattr(s, k, v)
     return s

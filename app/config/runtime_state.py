@@ -64,6 +64,12 @@ class RuntimeState(RuntimeTunables):
     # Anti-flood gate for mention-triggered replies: (chat_id, user_id) ->
     # monotonic timestamp of the last reply this user got by addressing the bot.
     last_mention_reply_ts: dict[tuple[int, int], float] = field(default_factory=dict)
+    # Per-chat rolling-hour window of mention replies (O15): the per-user
+    # cooldown above cannot bound the chat as a whole. Same shape and trimming
+    # as ``recent_reply_times``; checked with ``within_hourly_cap``.
+    recent_mention_reply_times: dict[int, deque[float]] = field(
+        default_factory=dict
+    )
     # L3: (ISO day, fired count) per chat for the combined daily budget of
     # rare events + false starts.
     rare_events_today: dict[int, tuple[str, int]] = field(default_factory=dict)
@@ -220,6 +226,14 @@ class RuntimeState(RuntimeTunables):
 
     def note_mention_reply(self, chat_id: int, user_id: int, now: float) -> None:
         self.last_mention_reply_ts[(chat_id, user_id)] = now
+        history = self.recent_mention_reply_times.get(chat_id)
+        if history is None:
+            history = deque()
+            self.recent_mention_reply_times[chat_id] = history
+        history.append(now)
+        cutoff = now - 3600.0
+        while history and history[0] < cutoff:
+            history.popleft()
 
     def can_fire_user_quirk(
         self, chat_id: int, user_id: int, today_iso: str
@@ -247,6 +261,7 @@ class RuntimeState(RuntimeTunables):
         self.recent_fallbacks.pop(chat_id, None)
         self.chat_mood.pop(chat_id, None)
         self.recent_reply_times.pop(chat_id, None)
+        self.recent_mention_reply_times.pop(chat_id, None)
         self.rare_events_today.pop(chat_id, None)
         for key in [k for k in self.last_mention_reply_ts if k[0] == chat_id]:
             self.last_mention_reply_ts.pop(key, None)

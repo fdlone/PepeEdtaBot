@@ -96,6 +96,11 @@ class TestBotMessages(unittest.TestCase):
         self.assertIn(
             "/set mention_cooldown_sec - пауза на упоминания, сек (0..3600)", text
         )
+        self.assertIn(
+            "/set mention_max_per_hour - потолок ответов на упоминания в час "
+            "(0..1000)",
+            text,
+        )
 
     def test_telegram_commands_are_registered(self) -> None:
         command_names = {command for command, _ in TELEGRAM_COMMANDS}
@@ -190,12 +195,16 @@ class TestBotMessages(unittest.TestCase):
             "mentions_observed": 2,
             "mention_answer_share": 0.5,
             "mention_answers_peak_hour": 1,
+            "mentions_capped": 0,
         }
 
         text = format_stats_message({"messages": 10, "volume": 250}, telemetry)
 
         self.assertIn("темп чата", text)
         self.assertIn("обращений: 2", text)
+        # Измеренный ноль печатается: потолок 0 неотличим от «не сработал»
+        # только если строку прятать.
+        self.assertIn("срезано потолком 0", text)
         self.assertNotIn("генераций с рестарта", text)
 
     def test_tempo_lines_absent_when_nothing_observed(self) -> None:
