@@ -90,8 +90,14 @@ def _round_entries(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Positions of one round, before shuffling, plus arms short of the minimum.
 
-    Each entry is ``{"text": ..., "arm": ..., "decoy": bool, "item": id}``;
-    repeats share an ``item`` with the position they duplicate.
+    Each entry is ``{"text": ..., "arm": ..., "arms": [...], "decoy": bool,
+    "item": id}``; repeats share an ``item`` with the position they duplicate.
+
+    Одинаковый текст из нескольких рук — одна запись: связность есть свойство
+    текста, и второе предъявление той же строки под другой рукой измеряло бы
+    дрейф оценщика, а не связность (в `l1-route-v4` таких групп было 29, на
+    них само-согласие 8/33). ``arms`` перечисляет все руки, породившие текст,
+    ``arm``/``item`` — первую из них, чтобы старые ключи читались как прежде.
     """
     rng = random.Random(seed)
     entries: list[dict[str, Any]] = []
@@ -103,8 +109,9 @@ def _round_entries(
         if len(sample) < rated_min:
             below_minimum.append(arm)
         for index, text in enumerate(sample):
-            entries.append(
-                {"text": text, "arm": arm, "decoy": False, "item": f"{arm}-{index}"}
+            _add_merging_identical(
+                entries,
+                {"text": text, "arm": arm, "arms": [arm], "decoy": False, "item": f"{arm}-{index}"},
             )
         # Decoys are built from replies of THIS arm's own run: a decoy has to
         # differ from a real reply in connectedness alone, so it keeps the
@@ -127,13 +134,15 @@ def _round_entries(
                     break
             else:
                 continue
-            entries.append(
+            _add_merging_identical(
+                entries,
                 {
                     "text": " ".join(shuffled),
                     "arm": arm,
+                    "arms": [arm],
                     "decoy": True,
                     "item": f"{arm}-decoy-{index}",
-                }
+                },
             )
 
     # Вверх, а не к ближайшему: валидность сверяет ДОЛЮ повторов с тем же
@@ -144,6 +153,22 @@ def _round_entries(
     for entry in rng.sample(entries, min(repeats, len(entries))):
         entries.append(dict(entry))
     return entries, below_minimum
+
+
+def _add_merging_identical(entries: list[dict[str, Any]], entry: dict[str, Any]) -> None:
+    """Append ``entry`` unless an entry with the same normalized text exists.
+
+    Equality is over ``tokenize`` output, so case and punctuation do not split
+    what the rater would read as the same reply. A decoy never merges with a
+    real reply: a decoy differs from every real text by construction.
+    """
+    normalized = tuple(tokenize(entry["text"]))
+    for other in entries:
+        if other["decoy"] == entry["decoy"] and tuple(tokenize(other["text"])) == normalized:
+            if entry["arm"] not in other["arms"]:
+                other["arms"].append(entry["arm"])
+            return
+    entries.append(entry)
 
 
 def _shuffle_spreading_repeats(
@@ -217,6 +242,7 @@ def build_round(
         "positions": {
             str(position): {
                 "arm": entry["arm"],
+                "arms": list(entry["arms"]),
                 "decoy": entry["decoy"],
                 "item": entry["item"],
             }
@@ -268,7 +294,7 @@ def score_round(
     positions: dict[str, dict[str, Any]] = key["positions"]
     arms: dict[str, dict[str, int]] = {}
     by_item: dict[str, list[int]] = {}
-    item_arm: dict[str, str] = {}
+    item_arms: dict[str, list[str]] = {}
     decoys = decoys_detected = 0
     failure_classes: dict[str, int] = {}
 
@@ -284,16 +310,19 @@ def score_round(
             decoys += 1
             decoys_detected += score < CONNECTED_MIN_SCORE
             continue
-        item_arm[meta["item"]] = meta["arm"]
+        # ``arms`` — все руки, породившие этот текст (склейка одинаковых);
+        # ключи до склейки несут только ``arm``.
+        item_arms[meta["item"]] = list(meta.get("arms") or [meta["arm"]])
 
     # Доля связных считается по РАЗЛИЧНЫМ ответам, а не по позициям: повтор
     # заведён, чтобы измерить оценщика, и взвешивать показанный дважды ответ
     # вдвое значило бы дать ему двойной голос в вердикте фазы. Из пары берётся
     # первая оценка — вторая уже потрачена на само-согласие.
-    for item, arm in item_arm.items():
-        counters = arms.setdefault(arm, {"rated": 0, "connected": 0})
-        counters["rated"] += 1
-        counters["connected"] += by_item[item][0] >= CONNECTED_MIN_SCORE
+    for item, item_arm_list in item_arms.items():
+        for arm in item_arm_list:
+            counters = arms.setdefault(arm, {"rated": 0, "connected": 0})
+            counters["rated"] += 1
+            counters["connected"] += by_item[item][0] >= CONNECTED_MIN_SCORE
 
     repeat_pairs = [scores for scores in by_item.values() if len(scores) > 1]
     agreements = [

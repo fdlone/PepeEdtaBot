@@ -136,6 +136,30 @@ class BuildRoundTest(unittest.TestCase):
                     f"{pairs}/{distinct} — раунд невалиден по построению",
                 )
 
+    def test_identical_text_across_arms_is_shown_once_and_counted_for_each(
+        self,
+    ) -> None:
+        """Связность — свойство текста: одна строка, одно предъявление, все руки."""
+        shared = _replies("shared", 4)
+        replies = {"C0": shared + _replies("C0", 4), "C4": shared + _replies("C4", 4)}
+        listing, key = build_round(replies, rated_min=8, repeat_share=0.0, seed=3)
+
+        body = listing.split("\n\n", 1)[1]
+        for text in shared:
+            self.assertEqual(body.count(f". {text}\n"), 1, text)
+        merged = [m for m in key["positions"].values() if len(m["arms"]) == 2]
+        self.assertEqual(len(merged), 4)
+        self.assertEqual(key["counts"]["positions"], 12 + key["counts"]["decoys"])
+
+        answers = {int(p): (3, None) for p in key["positions"]}
+        for position, meta in key["positions"].items():
+            if meta["decoy"]:
+                answers[int(position)] = (1, None)
+        aggregate = score_round(key, answers, {"phase9_interp": {"manual_rated_min": 8}})
+        self.assertEqual(aggregate["arms"]["C0"]["rated"], 8)
+        self.assertEqual(aggregate["arms"]["C4"]["rated"], 8)
+        self.assertNotIn("fewer than 8", " ".join(aggregate["invalid_reasons"]))
+
     def test_short_sample_is_named_in_the_key(self) -> None:
         _listing, key = build_round(
             {"C0": _replies("C0", 8), "C4": _replies("C4", 2)},
