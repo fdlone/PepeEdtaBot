@@ -1,6 +1,6 @@
 # Pin to a specific minor Python release for reproducibility.
 # Bump deliberately when upgrading Python.
-FROM python:3.14.0-slim
+FROM python:3.14.7-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
