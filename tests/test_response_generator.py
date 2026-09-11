@@ -37,6 +37,7 @@ def _runtime_state() -> MagicMock:
     state.context_relevance_weight = 1.6
     state.context_relevance_cap = 1.6
     state.selection_diversity_bonus = 0.0
+    state.selection_diversity_bonus_noctx = 0.0
     state.repetition_penalty_strength = 1.0
     state.markov_order = 3
     state.enable_backoff = True

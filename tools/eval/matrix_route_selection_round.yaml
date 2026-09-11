@@ -1,0 +1,22 @@
+# Solo connectedness round for the O20 arm (phrase-route-selection-arm):
+# C0 and C11s only. The control C11d is not rated — the gate's connectedness
+# condition is the arm's delta to C0, and every extra arm costs the owner
+# thirty more positions (O18: long lists drift). Overrides are identical to
+# matrix_route_selection.yaml; keep the two files in step.
+configurations:
+  - id: C0
+    description: "Markov 1.x frozen baseline (registry defaults, flavor/emoji silenced)"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+
+  - id: C11s
+    description: "O20 arm: phrase route 0.4 at support >= 2 + ctx diversity bonus 0.2, exemption on"
+    available: true
+    same_as: C0
+    overrides:
+      phrase_slot_ratio: 0.4
+      phrase_min_count: 2
+      selection_diversity_bonus: 0.2
+      verbatim_recognized_unit: true

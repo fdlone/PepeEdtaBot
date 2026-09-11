@@ -139,6 +139,7 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.context_relevance_weight = 1.6
     s.context_relevance_cap = 1.6
     s.selection_diversity_bonus = 0.0
+    s.selection_diversity_bonus_noctx = 0.0
     s.user_quirk_name_share = 0.0
     s.rare_events_today = {}
     # Bind the real cap methods so handler tests exercise actual budget logic.

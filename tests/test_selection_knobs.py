@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import random
 import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.config.registry import RUNTIME_FIELDS
 from app.core.candidate_scorer import (
@@ -19,6 +20,15 @@ from app.core.response_generator import (
     select_scored_candidate,
 )
 from app.core.trajectory import EDGE_OVERLAP_SIMILAR
+from tests.test_response_generator import (
+    GenerationRequest,
+    ResponseGenerator,
+    _learning_service,
+    _runtime_state,
+    _score,
+    _traced_generator,
+)
+from tests.test_route_slot_budget import PoolCompositionTestCase
 from tools.eval.config import load_thresholds
 
 
@@ -37,6 +47,10 @@ class TestKnobDefaults(unittest.TestCase):
         self.assertEqual(_default("context_relevance_weight"), CONTEXT_RELEVANCE_WEIGHT)
         self.assertEqual(_default("context_relevance_cap"), CONTEXT_RELEVANCE_CAP)
         self.assertEqual(_default("selection_diversity_bonus"), 0.0)
+        # O19: the noctx bonus is on by default and below the margin — a bonus
+        # above the margin narrows the window (selection-grid verdict, d40).
+        self.assertEqual(_default("selection_diversity_bonus_noctx"), 0.2)
+        self.assertLess(_default("selection_diversity_bonus_noctx"), SELECTION_SCORE_MARGIN)
 
     def test_similarity_threshold_equals_the_gate(self) -> None:
         gate = load_thresholds()["structural_escape"]["edge_overlap_similar"]
@@ -102,3 +116,48 @@ class TestDiversityBonus(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBonusByMode(PoolCompositionTestCase):
+    """O19 (split-diversity-bonus-by-mode): one knob per context mode."""
+
+    _TEXTS = (
+        "холодное пиво вечером зашло отлично",
+        "громкая музыка играла долго вчера",
+        "красный дракон летит над городом",
+        "старый кот ловит рыбу ловко",
+        "новая сборка сломала прогон снова",
+    )
+
+    async def _pool(self, *, context: list[str]) -> list[object]:
+        state = _runtime_state()
+        state.selection_diversity_bonus = 0.0
+        state.selection_diversity_bonus_noctx = 0.2
+        texts = iter(self._TEXTS)
+        generator = _traced_generator()
+        generator.generate_text = AsyncMock(side_effect=lambda *a, **k: next(texts))
+        learning_service = _learning_service()
+        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
+        response_generator = ResponseGenerator(
+            generator=generator,
+            learning_service=learning_service,
+            runtime_state=state,
+            scorer=MagicMock(return_value=_score(1.0)),
+        )
+        request = GenerationRequest(
+            chat_id=123, context_tokens=context, seed=None,
+            current_message_normalized="пиво сегодня",
+        )
+        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
+            await response_generator.generate_with_result(
+                request, rng=random.Random(5), candidate_target=5
+            )
+        return self.captured[-1]
+
+    async def test_reply_without_context_uses_the_noctx_knob(self) -> None:
+        pool = await self._pool(context=[])
+        self.assertTrue(any(c.score.diversity_bonus > 0 for c in pool), pool)
+
+    async def test_reply_with_context_uses_the_context_knob(self) -> None:
+        pool = await self._pool(context=["пиво", "сегодня"])
+        self.assertTrue(all(c.score.diversity_bonus == 0 for c in pool), pool)

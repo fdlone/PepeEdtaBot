@@ -53,6 +53,7 @@ class RuntimeTunables:
     context_relevance_weight: float
     context_relevance_cap: float
     selection_diversity_bonus: float
+    selection_diversity_bonus_noctx: float
     reply_flavor_strength: float
     emoji_append_chance: float
     repetition_penalty_strength: float

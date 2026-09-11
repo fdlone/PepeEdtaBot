@@ -143,6 +143,19 @@ punishes — and `C11v` carries the exemption alone, for attribution: the gate
 reads `insufficient data` for it by construction. Measured under the same
 `route_gate` block as every route; no thresholds of its own. Two modes.
 
+## Route + selection knob (O20)
+
+`matrix_route_selection.yaml` (arm `C11s`, control `C11d`) pairs the phrase
+route (0.4, support >= 2, recognized-unit exemption on) with the ctx
+diversity bonus 0.2 under the same `route_gate` block (phrase-route-
+selection-arm). Four measurements located the bottleneck in selection; the
+phrase route was the first with a large positive topicality signal, so it is
+the route lifted by the bonus. `C11d` carries the bonus and the exemption
+without the route — the gate reads `insufficient data` for it by
+construction; its deltas attribute the route's share on top of the knob.
+In noctx the bonus already sits in C0 (O19), so the arm differs from C0 by
+the route alone there. Two modes.
+
 ## Associative route pilot (M3R-200)
 
 `matrix_assoc_pilot.yaml` (arms `C10*`) moves `assoc_slot_ratio`, the slot
@@ -165,4 +178,12 @@ of the single-trajectory share (`window_escape < 2`, the form M3R-011
 promised); then the window escape must rise significantly while affinity
 without copies, copy and repetition may not worsen. Run both files in both
 modes.
+
+Since 2026-09-11 (O19, split-diversity-bonus-by-mode) the bonus is two knobs:
+`selection_diversity_bonus` for replies with context (default 0) and
+`selection_diversity_bonus_noctx` for replies without (default **0.2**, the
+arm d20 that passed the gate in noctx). C0 = registry defaults, so every
+**noctx** report from this date carries the bonus in its baseline: absolute
+noctx values are not comparable with reports before it, paired deltas within
+a report are.
 

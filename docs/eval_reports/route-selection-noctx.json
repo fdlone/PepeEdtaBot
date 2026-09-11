@@ -1,0 +1,92 @@
+{
+  "C0": {
+    "context_mode": "noctx",
+    "distinct_2": 0.709850623,
+    "distinct_3": 0.861364858,
+    "distinct_basis_tokens": {
+      "2": 14527,
+      "3": 13027
+    },
+    "metrics": {
+      "candidate_accept_rate": 0.999777778,
+      "context_affinity": 0.034430817,
+      "context_affinity_without_copy": 0.034525342,
+      "cycle_detection_rate": 0.0,
+      "cycle_harm_rate": 0.0,
+      "exact_context_copy_rate": 0.002666667,
+      "freshness_reflection": null,
+      "generation_success_rate": 1.0,
+      "historical_meme_rate": 0.082666667,
+      "mean_response_length": 10.684666667,
+      "repetition_rate": 0.0,
+      "seeded_present_rate": null,
+      "seeded_win_rate_given_present": null,
+      "structural_pool_ecb": 4.558,
+      "structural_pool_ecb_share": 0.9116,
+      "structural_window_escape": 3.298,
+      "unique_token_ratio": 0.98616743
+    },
+    "n_records": 1500,
+    "shared_with": null
+  },
+  "C11d": {
+    "context_mode": "noctx",
+    "distinct_2": 0.714993372,
+    "distinct_3": 0.865658848,
+    "distinct_basis_tokens": {
+      "2": 14333,
+      "3": 12833
+    },
+    "metrics": {
+      "candidate_accept_rate": 0.999777778,
+      "context_affinity": 0.034736967,
+      "context_affinity_without_copy": 0.034808443,
+      "cycle_detection_rate": 0.0,
+      "cycle_harm_rate": 0.0,
+      "exact_context_copy_rate": 0.002,
+      "freshness_reflection": null,
+      "generation_success_rate": 1.0,
+      "historical_meme_rate": 0.08,
+      "mean_response_length": 10.555333333,
+      "repetition_rate": 0.0,
+      "seeded_present_rate": null,
+      "seeded_win_rate_given_present": null,
+      "structural_pool_ecb": 4.558,
+      "structural_pool_ecb_share": 0.9116,
+      "structural_window_escape": 3.352666667,
+      "unique_token_ratio": 0.986981987
+    },
+    "n_records": 1500,
+    "shared_with": null
+  },
+  "C11s": {
+    "context_mode": "noctx",
+    "distinct_2": 0.674538488,
+    "distinct_3": 0.826837806,
+    "distinct_basis_tokens": {
+      "2": 14355,
+      "3": 12855
+    },
+    "metrics": {
+      "candidate_accept_rate": 0.999444444,
+      "context_affinity": 0.089775143,
+      "context_affinity_without_copy": 0.089898207,
+      "cycle_detection_rate": 0.0,
+      "cycle_harm_rate": 0.0,
+      "exact_context_copy_rate": 0.001333333,
+      "freshness_reflection": null,
+      "generation_success_rate": 1.0,
+      "historical_meme_rate": 0.125333333,
+      "mean_response_length": 10.57,
+      "repetition_rate": 0.0,
+      "seeded_present_rate": null,
+      "seeded_win_rate_given_present": null,
+      "structural_pool_ecb": 4.653333333,
+      "structural_pool_ecb_share": 0.930666667,
+      "structural_window_escape": 3.263333333,
+      "unique_token_ratio": 0.986868297
+    },
+    "n_records": 1500,
+    "shared_with": null
+  }
+}
