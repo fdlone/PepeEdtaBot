@@ -78,7 +78,23 @@ HEADER = """\
 
 Ответ одной строкой, например:  1:3 2:1/F1_irrelevant 3:2 ...
 
+Каждую позицию оценивайте как незнакомый текст, даже если кажется, что такой
+уже был: повтор в списке — намеренный контроль, и одинаковые тексты обязаны
+получить одинаковую оценку. «Уже видел» — не оценка.
+Список разбит на сессии: одна сессия — один присест, следующую — в другой день.
+
 """
+
+SESSION_HEADER = "=== Сессия {session} из {sessions} — оценивать отдельно, с перерывом ==="
+
+# Positions per session before repeats. A session is one sitting: the
+# 2026-09-11 rounds showed one rater does not hold a 75-position list —
+# the later presentation of an identical text was rated lower in 20 of 21
+# disagreeing pairs. Not a gate threshold: the validity bars are unchanged
+# and read over the whole round; sessions change where the repeats sit.
+DEFAULT_SESSION_SIZE = 25
+
+FORM_TEMPLATE_PATH = PROJECT_ROOT / "tools" / "rating_form_template.html"
 
 
 def _round_entries(
@@ -145,14 +161,48 @@ def _round_entries(
                 },
             )
 
-    # Вверх, а не к ближайшему: валидность сверяет ДОЛЮ повторов с тем же
-    # порогом, поэтому округление вниз собирает раунд, невалидный при любом
-    # качестве оценки (26/132 = 19.70% при пороге 20%). Промах систематический —
-    # при 2 и 4 руках он был, при 3 и 5 его не было.
-    repeats = math.ceil(len(entries) * repeat_share)
-    for entry in rng.sample(entries, min(repeats, len(entries))):
-        entries.append(dict(entry))
     return entries, below_minimum
+
+
+def _split_into_sessions(
+    entries: list[dict[str, Any]], *, session_size: int, rng: random.Random
+) -> list[list[dict[str, Any]]]:
+    """Distinct entries -> sessions of about ``session_size``, each with a decoy.
+
+    Decoys are dealt round-robin so no session is left without its control;
+    the rest is shuffled and cut evenly. Sessions are sittings, not arms: a
+    session mixes every arm the same way the whole list did.
+    """
+    decoys = [entry for entry in entries if entry["decoy"]]
+    reals = [entry for entry in entries if not entry["decoy"]]
+    # Never more sessions than decoys: a sitting without its decoy control
+    # would be a sitting nobody can validate, so a short round gets fewer,
+    # longer sessions instead.
+    sessions_count = max(1, min(math.ceil(len(entries) / session_size), len(decoys) or 1))
+    rng.shuffle(decoys)
+    rng.shuffle(reals)
+    sessions: list[list[dict[str, Any]]] = [[] for _ in range(sessions_count)]
+    for index, entry in enumerate(decoys):
+        sessions[index % sessions_count].append(entry)
+    # Fill the shortest session first so sizes stay even after the decoys.
+    for entry in reals:
+        min(sessions, key=len).append(entry)
+    return [session for session in sessions if session]
+
+
+def _add_repeats(
+    session: list[dict[str, Any]], *, repeat_share: float, rng: random.Random
+) -> list[dict[str, Any]]:
+    """Append the session's own repeats, rounded UP to the share.
+
+    Вверх, а не к ближайшему: валидность сверяет ДОЛЮ повторов с тем же
+    порогом, поэтому округление вниз собирает раунд, невалидный при любом
+    качестве оценки (26/132 = 19.70% при пороге 20%). Промах систематический —
+    при 2 и 4 руках он был, при 3 и 5 его не было. Повторы берутся внутри
+    сессии: контроль само-согласия обязан помещаться в один присест.
+    """
+    repeats = math.ceil(len(session) * repeat_share)
+    return session + [dict(entry) for entry in rng.sample(session, min(repeats, len(session)))]
 
 
 def _add_merging_identical(entries: list[dict[str, Any]], entry: dict[str, Any]) -> None:
@@ -214,22 +264,46 @@ def build_round(
     repeat_share: float,
     seed: int,
     context_mode: str = "ctx",
+    session_size: int = DEFAULT_SESSION_SIZE,
 ) -> tuple[str, dict[str, Any]]:
-    """The blind list and its key. Pure: no DB, no files, no clock."""
-    entries, below_minimum = _round_entries(
+    """The blind list and its key. Pure: no DB, no files, no clock.
+
+    The list is cut into sessions of about ``session_size`` distinct positions
+    (design D1 of round-sessions): repeats and decoys live inside a session,
+    positions are numbered through the whole list, and the key names the
+    session of every position so the aggregate can show the controls per
+    sitting. Validity is still read over the whole round.
+    """
+    distinct, below_minimum = _round_entries(
         replies_by_arm, rated_min=rated_min, repeat_share=repeat_share, seed=seed
     )
     rng = random.Random(seed + 1)
-    entries = _shuffle_spreading_repeats(entries, rng)
+    sessions = [
+        _shuffle_spreading_repeats(
+            _add_repeats(session, repeat_share=repeat_share, rng=rng), rng
+        )
+        for session in _split_into_sessions(distinct, session_size=session_size, rng=rng)
+    ]
+    entries: list[dict[str, Any]] = []
+    session_of: list[int] = []
+    for number, session in enumerate(sessions, 1):
+        entries.extend(session)
+        session_of.extend([number] * len(session))
 
     classes = ", ".join(item.value for item in FailureClass)
-    listing = HEADER.format(classes=classes) + "\n".join(
-        f"{position}. {entry['text']}" for position, entry in enumerate(entries, 1)
-    )
+    lines: list[str] = []
+    for position, (entry, session) in enumerate(zip(entries, session_of), 1):
+        if position == 1 or session_of[position - 2] != session:
+            lines.append("")
+            lines.append(SESSION_HEADER.format(session=session, sessions=len(sessions)))
+        lines.append(f"{position}. {entry['text']}")
+    listing = HEADER.format(classes=classes) + "\n".join(lines).lstrip("\n")
     key = {
         "seed": seed,
         "context_mode": context_mode,
         "rated_min": rated_min,
+        "session_size": session_size,
+        "sessions": len(sessions),
         # Arms whose sample fell short are named in the key, not left to be
         # noticed at scoring time: a round that cannot satisfy the minimum is
         # worth knowing about BEFORE the owner spends an evening on it.
@@ -238,6 +312,7 @@ def build_round(
             "positions": len(entries),
             "decoys": sum(1 for entry in entries if entry["decoy"]),
             "repeat_pairs": len(entries) - len({entry["item"] for entry in entries}),
+            "per_session": [len(session) for session in sessions],
         },
         "positions": {
             str(position): {
@@ -245,11 +320,36 @@ def build_round(
                 "arms": list(entry["arms"]),
                 "decoy": entry["decoy"],
                 "item": entry["item"],
+                "session": session,
             }
-            for position, entry in enumerate(entries, 1)
+            for position, (entry, session) in enumerate(zip(entries, session_of), 1)
         },
     }
     return listing + "\n", key
+
+
+def render_form(template: str, *, label: str, items: list[dict[str, Any]]) -> str:
+    """The rating form for one session: the template with its two placeholders
+    filled. ``items`` are ``{"n": global position, "text": ...}``; the form
+    stores progress under ``label``, so each session gets its own label."""
+    assert "__ITEMS__" in template and "__LABEL__" in template
+    return template.replace("__ITEMS__", json.dumps(items, ensure_ascii=False)).replace(
+        "__LABEL__", label
+    )
+
+
+def session_items(listing: str, key: dict[str, Any], session: int) -> list[dict[str, Any]]:
+    """Positions of one session as form items, read back from the list."""
+    texts = {
+        int(line.split(". ", 1)[0]): line.split(". ", 1)[1]
+        for line in listing.splitlines()
+        if ". " in line and line.split(". ", 1)[0].isdigit()
+    }
+    return [
+        {"n": int(position), "text": texts[int(position)]}
+        for position, meta in key["positions"].items()
+        if meta.get("session", 1) == session
+    ]
 
 
 ANSWER_RE = re.compile(r"(\d+)\s*:\s*([123])(?:\s*/\s*(\S+))?")
@@ -359,10 +459,42 @@ def score_round(
             f"fewer than {rated_min} replies rated for: {', '.join(short)}"
         )
 
+    # Per-session controls are diagnostics, not validity: the bars are
+    # pre-registered over the whole round. They show WHICH sitting drifted.
+    sessions: dict[str, dict[str, Any]] = {}
+    for position, meta in positions.items():
+        answer = answers.get(int(position))
+        session = str(meta.get("session", 1))
+        bucket = sessions.setdefault(
+            session, {"rated": 0, "decoys": 0, "decoys_detected": 0, "pairs": [], "_seen": {}}
+        )
+        if answer is None:
+            continue
+        bucket["rated"] += 1
+        if meta["decoy"]:
+            bucket["decoys"] += 1
+            bucket["decoys_detected"] += answer[0] < CONNECTED_MIN_SCORE
+        seen = bucket["_seen"]
+        if meta["item"] in seen:
+            bucket["pairs"].append(int(seen[meta["item"]] == answer[0]))
+        else:
+            seen[meta["item"]] = answer[0]
+    per_session = {
+        session: {
+            "rated": bucket["rated"],
+            "self_agreement": (
+                sum(bucket["pairs"]) / len(bucket["pairs"]) if bucket["pairs"] else None
+            ),
+            "decoys_detected": f"{bucket['decoys_detected']}/{bucket['decoys']}",
+        }
+        for session, bucket in sorted(sessions.items(), key=lambda item: int(item[0]))
+    }
+
     return {
         "context_mode": key.get("context_mode", "ctx"),
         "seed": key.get("seed"),
         "valid": not invalid_reasons,
+        "sessions": per_session,
         "invalid_reasons": invalid_reasons,
         "self_agreement": self_agreement,
         "repeat_pairs": len(repeat_pairs),
@@ -426,6 +558,7 @@ async def prepare(args: argparse.Namespace, out_dir: Path) -> None:
         repeat_share=float(config.get("manual_repeat_share_min", 0.20)),
         seed=args.seed,
         context_mode=args.context_mode,
+        session_size=args.session_size,
     )
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -435,8 +568,19 @@ async def prepare(args: argparse.Namespace, out_dir: Path) -> None:
     key_path.write_text(
         json.dumps(key, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    template = FORM_TEMPLATE_PATH.read_text(encoding="utf-8")
+    for session in range(1, key["sessions"] + 1):
+        form = render_form(
+            template,
+            label=f"{args.label} · сессия {session}/{key['sessions']}",
+            items=session_items(listing, key, session),
+        )
+        (out_dir / f"form_s{session}.html").write_text(form, encoding="utf-8")
     # Counts and paths only: every reply here is chat-derived text.
-    print(f"positions: {key['counts']['positions']}")
+    print(
+        f"positions: {key['counts']['positions']} in {key['sessions']} session(s) "
+        f"{key['counts']['per_session']}"
+    )
     print(
         f"decoys: {key['counts']['decoys']}, "
         f"repeat pairs: {key['counts']['repeat_pairs']}"
@@ -451,12 +595,16 @@ async def prepare(args: argparse.Namespace, out_dir: Path) -> None:
         print(f"cannot be scored: {reason}")
     print(f"list: {list_path}")
     print(f"key : {key_path}")
+    print(f"forms: {out_dir / 'form_s<N>.html'} — one per session, answers merge by position")
 
 
 def score(args: argparse.Namespace, out_dir: Path) -> None:
     thresholds = load_thresholds(Path(args.thresholds))
     key = json.loads((out_dir / "rating_key.json").read_text(encoding="utf-8"))
-    answers = parse_answers(Path(args.answers).read_text(encoding="utf-8"))
+    answers: dict[int, tuple[int, str | None]] = {}
+    paths = [args.answers] if isinstance(args.answers, str) else list(args.answers)
+    for path in paths:
+        answers.update(parse_answers(Path(path).read_text(encoding="utf-8")))
     aggregate = score_round(key, answers, thresholds)
     out_path = out_dir / "solo_rating.json"
     out_path.write_text(
@@ -466,6 +614,13 @@ def score(args: argparse.Namespace, out_dir: Path) -> None:
     print(f"valid: {aggregate['valid']}")
     for reason in aggregate["invalid_reasons"]:
         print(f"  - {reason}")
+    for session, controls in aggregate.get("sessions", {}).items():
+        agreement = controls["self_agreement"]
+        print(
+            f"session {session}: rated {controls['rated']}, self-agreement "
+            + ("n/a" if agreement is None else f"{agreement:.2f}")
+            + f", decoys {controls['decoys_detected']}"
+        )
     for arm, counters in aggregate["arms"].items():
         share = counters["connected_share"]
         print(
@@ -487,7 +642,19 @@ def main() -> None:
     parser.add_argument("--context-mode", type=str, default="ctx", choices=("ctx", "noctx"))
     parser.add_argument("--generations", type=int, default=60)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--answers", type=str, default=None)
+    parser.add_argument(
+        "--answers",
+        type=str,
+        action="append",
+        default=None,
+        help="answers file; repeat the flag for one file per session",
+    )
+    parser.add_argument(
+        "--session-size",
+        type=int,
+        default=DEFAULT_SESSION_SIZE,
+        help="distinct positions per sitting before repeats (default 25)",
+    )
     args = parser.parse_args()
 
     out_dir = PROJECT_ROOT / "rating_rounds" / args.label

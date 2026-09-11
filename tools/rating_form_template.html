@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Оценка связности — __LABEL__</title>
+<style>
+  :root {
+    --bg: #faf9f7; --fg: #1c1b1a; --muted: #6b6864; --line: #e0ddd8;
+    --card: #ffffff; --accent: #3b5bdb; --ok: #2f9e44; --mid: #f08c00; --bad: #c92a2a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #191817; --fg: #eceae6; --muted: #97928b; --line: #34322f;
+      --card: #232120; --accent: #748ffc; --ok: #51cf66; --mid: #ffa94d; --bad: #ff6b6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  .note { max-width: 720px; margin: 12px auto 0; padding: 0 20px; font-size: 14px; color: var(--muted); }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; min-height: 100vh;
+  }
+  header {
+    padding: 12px 20px; border-bottom: 1px solid var(--line);
+    display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+  }
+  .bar { flex: 1; height: 6px; background: var(--line); border-radius: 3px; min-width: 120px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width .15s; }
+  .counter { font-variant-numeric: tabular-nums; color: var(--muted); }
+  main { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 32px; max-width: 760px; width: 100%;
+  }
+  .num { color: var(--muted); font-size: 13px; letter-spacing: .04em; }
+  .text { font-size: 24px; line-height: 1.45; margin: 12px 0 28px; word-wrap: break-word; }
+  .keys { display: flex; gap: 12px; flex-wrap: wrap; }
+  button {
+    font: inherit; cursor: pointer; border-radius: 8px; padding: 12px 18px;
+    border: 1px solid var(--line); background: var(--card); color: var(--fg);
+  }
+  button:hover { border-color: var(--accent); }
+  button b { display: inline-block; min-width: 1.2em; }
+  .k3 b { color: var(--ok); } .k2 b { color: var(--mid); } .k1 b { color: var(--bad); }
+  .classes { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .classes[hidden] { display: none; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .chips button { padding: 6px 12px; font-size: 14px; }
+  footer {
+    padding: 12px 20px; border-top: 1px solid var(--line);
+    display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 14px;
+  }
+  footer .hint { color: var(--muted); flex: 1; min-width: 200px; }
+  textarea {
+    width: 100%; height: 140px; margin-top: 12px; font: 13px/1.5 ui-monospace, Consolas, monospace;
+    background: var(--card); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 12px; resize: vertical;
+  }
+  label.tog { display: flex; gap: 6px; align-items: center; color: var(--muted); cursor: pointer; }
+  .done { text-align: center; }
+  .done h2 { margin: 0 0 8px; }
+</style>
+</head>
+<body>
+<header>
+  <strong>__LABEL__</strong>
+  <div class="bar"><i id="fill" style="width:0"></i></div>
+  <span class="counter" id="counter"></span>
+</header>
+<div class="note">
+  Каждую позицию оценивайте как <b>незнакомый текст</b>, даже если кажется, что
+  такой уже был: повтор в списке — намеренный контроль, и одинаковые тексты
+  обязаны получить одинаковую оценку. «Уже видел» — не оценка.
+  Одна сессия — один присест; следующую сессию лучше в другой день.
+</div>
+
+<main>
+  <div class="card" id="card">
+    <div class="num" id="num"></div>
+    <div class="text" id="text"></div>
+    <div class="keys">
+      <button class="k3" data-score="3"><b>3</b> связный, читается как реплика</button>
+      <button class="k2" data-score="2"><b>2</b> небезупречно, но связно</button>
+      <button class="k1" data-score="1"><b>1</b> бессвязно</button>
+    </div>
+    <div class="classes" id="classes" hidden>
+      <div class="num">класс отказа — цифра, или Enter / пропустить</div>
+      <div class="chips" id="chips"></div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <span class="hint">
+    Клавиши <b>1 2 3</b> — оценка, <b>←</b> назад, <b>→</b> вперёд без оценки.
+    Прогресс сохраняется в браузере.
+  </span>
+  <label class="tog"><input type="checkbox" id="tagging"> тегировать классы отказа</label>
+  <button id="export">Показать ответ</button>
+  <button id="download">Скачать answers.txt</button>
+  <button id="reset">Сбросить</button>
+</footer>
+<div style="padding: 0 20px 20px"><textarea id="out" hidden readonly></textarea></div>
+
+<script>
+const ITEMS = __ITEMS__;
+const LABEL = "__LABEL__";
+const CLASSES = ["F1_irrelevant", "F2_context_copy", "F3_generic", "F4_stale", "F5_meme_miss", "F6_structural_repeat", "F7_malformed", "F8_route_collapse", "F9_scorer_error"];
+const KEY = "rating:" + LABEL;
+
+const $ = id => document.getElementById(id);
+
+function parseAnswers(text) {
+  const out = {};
+  const re = /(\d+)\s*:\s*([123])(?:\s*\/\s*(\S+))?/g;
+  let m;
+  while ((m = re.exec(text)) !== null) out[Number(m[1])] = { score: Number(m[2]), cls: m[3] || null };
+  return out;
+}
+
+function answersOf(source) {
+  try { return parseAnswers(source || ""); } catch (e) { return {}; }
+}
+
+// Два независимых хранилища намеренно: localStorage отключён на некоторых
+// origin (data:, приватные окна), и терять этим вечер из 119 позиций нельзя.
+// Хэш работает везде, где работает адресная строка.
+let answers = answersOf(decodeURIComponent(location.hash.slice(1)));
+if (!Object.keys(answers).length) {
+  try { answers = answersOf(localStorage.getItem(KEY)); } catch (e) {}
+}
+let i = ITEMS.findIndex(it => !answers[it.n]);
+if (i < 0) i = ITEMS.length - 1;
+let pendingClassFor = null;
+let exported = !Object.keys(answers).length;
+
+function answerString() {
+  return ITEMS.filter(it => answers[it.n])
+    .map(it => {
+      const a = answers[it.n];
+      return it.n + ":" + a.score + (a.cls ? "/" + a.cls : "");
+    })
+    .join(" ");
+}
+
+function save() {
+  const text = answerString();
+  exported = false;
+  try { localStorage.setItem(KEY, text); } catch (e) {}
+  try { history.replaceState(null, "", "#" + encodeURIComponent(text)); } catch (e) {}
+}
+
+window.addEventListener("beforeunload", e => {
+  if (!exported && Object.keys(answers).length) { e.preventDefault(); e.returnValue = ""; }
+});
+
+function render() {
+  const rated = Object.keys(answers).length;
+  $("counter").textContent = rated + " / " + ITEMS.length;
+  $("fill").style.width = (100 * rated / ITEMS.length) + "%";
+  const it = ITEMS[i];
+  const a = answers[it.n];
+  $("num").textContent = "№ " + it.n + (a ? "  — уже оценено: " + a.score + (a.cls ? "/" + a.cls : "") : "");
+  $("text").textContent = it.text;
+  $("classes").hidden = pendingClassFor === null;
+}
+
+function rate(score) {
+  const it = ITEMS[i];
+  answers[it.n] = { score: score, cls: null };
+  save();
+  if (score === 1 && $("tagging").checked) {
+    pendingClassFor = it.n;
+    render();
+    return;
+  }
+  next();
+}
+
+function next() {
+  pendingClassFor = null;
+  if (i < ITEMS.length - 1) { i++; render(); }
+  else { render(); finish(); }
+}
+
+function setClass(cls) {
+  if (pendingClassFor !== null && cls) { answers[pendingClassFor].cls = cls; save(); }
+  next();
+}
+
+function finish() {
+  if (Object.keys(answers).length === ITEMS.length) {
+    $("card").innerHTML = '<div class="done"><h2>Готово — ' + ITEMS.length + ' позиций</h2>' +
+      '<p class="num">Скачайте answers.txt и запустите score.</p></div>';
+    showOut();
+  }
+}
+
+function showOut() {
+  const out = $("out");
+  out.hidden = false;
+  out.value = answerString();
+  out.select();
+  exported = true;
+}
+
+CLASSES.forEach((cls, idx) => {
+  const b = document.createElement("button");
+  b.innerHTML = "<b>" + (idx + 1) + "</b> " + cls;
+  b.onclick = () => setClass(cls);
+  $("chips").appendChild(b);
+});
+
+document.querySelectorAll("[data-score]").forEach(b => {
+  b.onclick = () => rate(Number(b.dataset.score));
+});
+
+$("export").onclick = showOut;
+$("download").onclick = () => {
+  const blob = new Blob([answerString() + "\n"], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "answers.txt";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  exported = true;
+};
+$("reset").onclick = () => {
+  if (confirm("Стереть все оценки этого раунда?")) {
+    answers = {}; save(); exported = true;
+    location.hash = "";
+    location.reload();
+  }
+};
+
+// Кнопки и чекбокс забирают фокус кликом; без этого следующая же цифра ушла бы
+// в них, а не в оценку, и форма молча переставала бы отвечать на клавиатуру.
+document.addEventListener("click", e => {
+  if (e.target.closest("button, label.tog, input[type=checkbox]")) e.target.blur();
+});
+
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "TEXTAREA") return;
+  if (pendingClassFor !== null) {
+    const n = Number(e.key);
+    if (n >= 1 && n <= CLASSES.length) { e.preventDefault(); setClass(CLASSES[n - 1]); return; }
+    if (e.key === "Enter" || e.key === " " || e.key === "Escape") { e.preventDefault(); setClass(null); return; }
+    return;
+  }
+  if (e.key === "1" || e.key === "2" || e.key === "3") { e.preventDefault(); rate(Number(e.key)); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); if (i > 0) { i--; render(); } }
+  else if (e.key === "ArrowRight") { e.preventDefault(); if (i < ITEMS.length - 1) { i++; render(); } }
+});
+
+render();
+</script>
+</body>
+</html>

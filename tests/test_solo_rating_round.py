@@ -11,11 +11,14 @@ from typing import Any
 
 from tools.eval.report import _connectedness_part
 from tools.solo_rating_round import (
+    FORM_TEMPLATE_PATH,
     build_round,
     main,
     parse_answers,
+    render_form,
     score,
     score_round,
+    session_items,
     unusable_reasons,
 )
 
@@ -474,3 +477,79 @@ class CommandLineTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SessionsTest(unittest.TestCase):
+    """round-sessions: a round is cut into sittings; controls live inside one."""
+
+    def _round(self, arms: int = 3, count: int = 12, seed: int = 3, **kw: Any):
+        replies = {f"C{i}": _replies(f"C{i}", count) for i in range(arms)}
+        params: dict[str, Any] = {"rated_min": 10, "repeat_share": 0.20, "seed": seed}
+        params.update(kw)
+        return build_round(replies, **params)
+
+    def test_repeats_and_decoys_stay_inside_their_session(self) -> None:
+        for seed in range(30):
+            with self.subTest(seed=seed):
+                _listing, key = self._round(seed=seed, session_size=10)
+                self.assertGreater(key["sessions"], 1)
+                by_item: dict[str, set[int]] = {}
+                decoys_per_session: dict[int, int] = {}
+                for meta in key["positions"].values():
+                    by_item.setdefault(meta["item"], set()).add(meta["session"])
+                    if meta["decoy"]:
+                        decoys_per_session[meta["session"]] = (
+                            decoys_per_session.get(meta["session"], 0) + 1
+                        )
+                self.assertTrue(all(len(sessions) == 1 for sessions in by_item.values()))
+                self.assertEqual(set(decoys_per_session), set(range(1, key["sessions"] + 1)))
+
+    def test_positions_are_global_and_sessions_contiguous(self) -> None:
+        listing, key = self._round(session_size=10)
+        positions = sorted(int(p) for p in key["positions"])
+        self.assertEqual(positions, list(range(1, len(positions) + 1)))
+        sessions = [key["positions"][str(p)]["session"] for p in positions]
+        self.assertEqual(sessions, sorted(sessions))
+        self.assertEqual(listing.count("=== Сессия "), key["sessions"])
+        self.assertEqual(sum(key["counts"]["per_session"]), key["counts"]["positions"])
+
+    def test_repeat_share_holds_inside_every_session(self) -> None:
+        _listing, key = self._round(session_size=10)
+        for session in range(1, key["sessions"] + 1):
+            items = [m["item"] for m in key["positions"].values() if m["session"] == session]
+            pairs = len(items) - len(set(items))
+            self.assertGreaterEqual(pairs / len(set(items)), 0.20)
+
+    def test_one_session_when_the_list_is_short(self) -> None:
+        _listing, key = self._round(arms=2, count=6, rated_min=4, session_size=25)
+        self.assertEqual(key["sessions"], 1)
+
+    def test_instruction_says_a_repeat_is_rated_afresh(self) -> None:
+        listing, _key = self._round()
+        self.assertIn("как незнакомый текст", listing)
+        self.assertIn("Уже видел", listing)
+
+    def test_score_reports_controls_per_session(self) -> None:
+        _listing, key = self._round(session_size=10)
+        answers = {
+            int(p): (1 if meta["decoy"] else 3, None) for p, meta in key["positions"].items()
+        }
+        aggregate = score_round(key, answers, THRESHOLDS)
+        self.assertTrue(aggregate["valid"])
+        expected = {str(s) for s in range(1, key["sessions"] + 1)}
+        self.assertEqual(set(aggregate["sessions"]), expected)
+        for controls in aggregate["sessions"].values():
+            self.assertEqual(controls["self_agreement"], 1.0)
+
+    def test_form_is_rendered_per_session_from_the_repo_template(self) -> None:
+        listing, key = self._round(session_size=10)
+        template = FORM_TEMPLATE_PATH.read_text(encoding="utf-8")
+        self.assertIn("незнакомый текст", template)
+        items = session_items(listing, key, 2)
+        self.assertTrue(items)
+        self.assertTrue(all(key["positions"][str(item["n"])]["session"] == 2 for item in items))
+        form = render_form(template, label="t · сессия 2/3", items=items)
+        self.assertNotIn("__ITEMS__", form)
+        self.assertNotIn("__LABEL__", form)
+        self.assertIn(items[0]["text"], form)
+        self.assertIn("t · сессия 2/3", form)
