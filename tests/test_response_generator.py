@@ -31,6 +31,8 @@ def _runtime_state() -> MagicMock:
     state.generation_attempts_with_context = GENERATION_ATTEMPTS_WITH_CONTEXT
     state.hot_ngram_slot_ratio = 0.0
     state.assoc_slot_ratio = 0.0
+    state.phrase_slot_ratio = 0.0
+    state.phrase_min_count = 3
     state.selection_score_margin = 0.3
     state.context_relevance_weight = 1.6
     state.context_relevance_cap = 1.6

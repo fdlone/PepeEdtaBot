@@ -8,7 +8,7 @@ from collections import deque
 from collections.abc import Callable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.config.runtime_state import RuntimeState
 from app.core import gen_trace_log
@@ -52,7 +52,9 @@ from app.core.mood import (
     SLEEPY,
     MoodModifiers,
 )
+from app.core.phrase_route import PHRASE_ANCHORS_MAX, rank_phrases
 from app.core.reply_flavor import apply_reply_flavor
+from app.core.seed import is_scorable
 from app.core.shadow_order import shadow_order4_stats
 from app.core.slot_mutation import mutate_candidate_tokens
 from app.core.temporal import TemporalBlend
@@ -156,6 +158,9 @@ class VerbatimCopyChecker(Protocol):
     async def get_word_frequencies_by_ending(
         self, chat_id: int
     ) -> Mapping[str, Mapping[str, int]]: ...
+    async def get_phrases_containing(
+        self, chat_id: int, tokens: list[str], *, min_count: int
+    ) -> list[tuple[tuple[str, ...], int]]: ...
     async def get_hot_ngrams(
         self,
         chat_id: int,
@@ -806,13 +811,84 @@ class ResponseGenerator:
             rng=rng,
         )
 
+    async def _append_phrase_candidates(
+        self,
+        request: GenerationRequest,
+        candidates: list[_ScoredCandidate],
+        seen_candidates: set[str],
+        *,
+        length_mode: str,
+        max_tokens: int,
+        context_idf: Mapping[str, float],
+        recent_trigrams: set[tuple[str, ...]],
+        recent_penalty_strength: float,
+        corpus_ngrams: AbstractSet[tuple[str, ...]],
+        verbatim_penalty_strength: float,
+        active_collocations: frozenset[tuple[str, str]],
+        entropy_sampling: EntropySampling,
+        temporal_blend: TemporalBlend,
+        now: int,
+        slots: int,
+        rng: random.Random,
+    ) -> set[str]:
+        """Grow candidates around PHRASES of the index that contain an anchor
+        of the message (M3R-210, phrase-route).
+
+        One index read per generation for every anchor at once, a deterministic
+        pick (``rank_phrases``), then the common anchored assembler with the
+        phrase as the core. The draw counter records an empty read so a route
+        starved by data stays distinguishable from one switched off.
+        """
+        state = self.runtime_state
+        message_tokens = tokenize(
+            request.current_message_normalized,
+            normalize_lower=state.normalize_lower,
+        )
+        anchors = [
+            token
+            for token in dict.fromkeys(message_tokens)
+            if is_scorable(token, min_token_len=state.markov_seed_min_token_len)
+        ][:PHRASE_ANCHORS_MAX]
+        rows = (
+            await self.learning_service.get_phrases_containing(
+                request.chat_id, anchors, min_count=state.phrase_min_count
+            )
+            if anchors
+            else []
+        )
+        phrases = rank_phrases(
+            rows, anchors=anchors, message_tokens=message_tokens, slots=slots
+        )
+        self.generator.telemetry.note_phrase_draw(empty=not phrases)
+        if not phrases:
+            return set()
+        return await self._append_anchored_candidates(
+            request,
+            candidates,
+            seen_candidates,
+            anchors=phrases,
+            route=CandidateRoute.PHRASE,
+            length_mode=length_mode,
+            max_tokens=max_tokens,
+            context_idf=context_idf,
+            recent_trigrams=recent_trigrams,
+            recent_penalty_strength=recent_penalty_strength,
+            corpus_ngrams=corpus_ngrams,
+            verbatim_penalty_strength=verbatim_penalty_strength,
+            active_collocations=active_collocations,
+            entropy_sampling=entropy_sampling,
+            temporal_blend=temporal_blend,
+            now=now,
+            rng=rng,
+        )
+
     async def _append_anchored_candidates(
         self,
         request: GenerationRequest,
         candidates: list[_ScoredCandidate],
         seen_candidates: set[str],
         *,
-        anchors: list[str],
+        anchors: list[str] | list[tuple[str, ...]],
         route: str,
         length_mode: str,
         max_tokens: int,
@@ -829,10 +905,12 @@ class ResponseGenerator:
     ) -> set[str]:
         """Assemble one bidirectional candidate per anchor and admit survivors.
 
-        Shared by the seeded and the associative routes (assoc-route-pilot,
-        design D1): one assembler, one tail pipeline, the same four form gates,
-        the same staleness and verbatim screens, a full score and no priority
-        in the pool. Returns the texts admitted, for telemetry.
+        Shared by the seeded, associative and phrase routes (assoc-route-pilot
+        design D1, phrase-route design D2): one assembler, one tail pipeline,
+        the same four form gates, the same staleness and verbatim screens, a
+        full score and no priority in the pool. A string anchor is a token the
+        assembler bootstraps a pair from; a tuple anchor is a whole phrase it
+        grows around as a unit. Returns the texts admitted, for telemetry.
 
         The "same gates" claim is load-bearing and was false until M3R-101: the
         seeded branch went straight to ``detokenize``, so it skipped the tail
@@ -847,20 +925,26 @@ class ResponseGenerator:
         strength = max(0.0, min(3.0, state.randomness_strength))
         next_explore = min(0.98, 0.12 + 0.18 * strength)
         admitted: set[str] = set()
+        assembly: dict[str, Any] = dict(
+            max_tokens=max_tokens,
+            head_share=state.markov_seed_head_share,
+            next_explore=next_explore,
+            next_power=1.0,
+            repetition_penalty_strength=state.repetition_penalty_strength,
+            entropy_sampling=entropy_sampling,
+            temporal_blend=temporal_blend,
+            now=now,
+            rng=rng,
+        )
         for anchor in anchors:
-            tokens = await self.generator.generate_seeded_candidate(
-                request.chat_id,
-                anchor,
-                max_tokens=max_tokens,
-                head_share=state.markov_seed_head_share,
-                next_explore=next_explore,
-                next_power=1.0,
-                repetition_penalty_strength=state.repetition_penalty_strength,
-                entropy_sampling=entropy_sampling,
-                temporal_blend=temporal_blend,
-                now=now,
-                rng=rng,
-            )
+            if isinstance(anchor, tuple):
+                tokens = await self.generator.generate_phrase_candidate(
+                    request.chat_id, anchor, **assembly
+                )
+            else:
+                tokens = await self.generator.generate_seeded_candidate(
+                    request.chat_id, anchor, **assembly
+                )
             if not tokens:
                 continue
             # Тот же хвостовой конвейер и те же четыре гейта формы, что у
@@ -1214,6 +1298,33 @@ class ResponseGenerator:
                 rng=generation_rng,
             )
 
+        # M3R-210 (phrase-route): a phrase of the index as the core of an
+        # anchored candidate. Same clamp as assoc (design D4): the walk keeps
+        # a slot whatever combination of routes is on.
+        phrase_budget = min(
+            route_slot_budget(target, self.runtime_state.phrase_slot_ratio),
+            max(0, target - 1 - seeded_budget - hot_budget - assoc_budget),
+        )
+        if phrase_budget > 0:
+            await self._append_phrase_candidates(
+                request,
+                candidates,
+                seen_candidates,
+                length_mode=length_mode,
+                max_tokens=max_tokens,
+                context_idf=context_idf,
+                recent_trigrams=recent_trigrams,
+                recent_penalty_strength=recent_penalty_strength,
+                corpus_ngrams=corpus_ngrams,
+                verbatim_penalty_strength=verbatim_penalty_strength,
+                active_collocations=active_collocations,
+                entropy_sampling=entropy_sampling,
+                temporal_blend=temporal_blend,
+                now=now,
+                slots=phrase_budget,
+                rng=generation_rng,
+            )
+
         # M3R-141: a generation that starts with context and runs past the
         # with-context budget finishes on a different mechanism than the one it
         # was asked with — measured at 37% of ctx-answers (map §1.3) and, until
@@ -1517,6 +1628,8 @@ class ResponseGenerator:
             attempted.add(CandidateRoute.HOT)
         if assoc_budget > 0:
             attempted.add(CandidateRoute.ASSOC)
+        if phrase_budget > 0:
+            attempted.add(CandidateRoute.PHRASE)
         if self.runtime_state.slot_mutation_probability > 0.0:
             attempted.add(CandidateRoute.MUTATED)
 

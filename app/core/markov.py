@@ -1962,7 +1962,6 @@ class MarkovGenerator:
         would have to mirror the incremental-learning fold for no measured
         gain.
         """
-        budget = max(2, max_tokens)
         forward = await self.db.get_seed_forward(chat_id, seed)
         if not forward:
             return None
@@ -1970,12 +1969,89 @@ class MarkovGenerator:
         # long count (one draw; the blend governs the per-step walk, not this).
         weights = [max(cnt, 1) ** next_power for _, cnt in forward]
         second = forward[weighted_index_choice(weights, exploring=False, rng=rng)][0]
+        return await self._grow_around(
+            chat_id,
+            [seed, second],
+            max_tokens=max_tokens,
+            head_share=head_share,
+            next_explore=next_explore,
+            next_power=next_power,
+            repetition_penalty_strength=repetition_penalty_strength,
+            entropy_sampling=entropy_sampling,
+            temporal_blend=temporal_blend,
+            now=now,
+            rng=rng,
+        )
 
+    async def generate_phrase_candidate(
+        self,
+        chat_id: int,
+        phrase: tuple[str, ...],
+        *,
+        max_tokens: int,
+        head_share: float,
+        next_explore: float,
+        next_power: float,
+        repetition_penalty_strength: float,
+        entropy_sampling: EntropySampling = EntropySampling(),
+        temporal_blend: TemporalBlend = TemporalBlend(),
+        now: int = 0,
+        rng: random.Random,
+    ) -> list[str] | None:
+        """Assemble one candidate around a whole phrase (M3R-210, phrase-route).
+
+        The phrase — a bigram or trigram of the chat's phrase index — is the
+        core the seeded assembler grows around, as a unit: the tail continues
+        after its last pair, the head precedes its first, nothing touches the
+        middle (design D1). No bootstrap draw: the phrase already is a pair.
+        Returns ``None`` when nothing grew on either side — a bare phrase would
+        be a quotation, not a candidate.
+        """
+        if len(phrase) < 2:
+            return None
+        tokens = await self._grow_around(
+            chat_id,
+            list(phrase),
+            max_tokens=max_tokens,
+            head_share=head_share,
+            next_explore=next_explore,
+            next_power=next_power,
+            repetition_penalty_strength=repetition_penalty_strength,
+            entropy_sampling=entropy_sampling,
+            temporal_blend=temporal_blend,
+            now=now,
+            rng=rng,
+        )
+        return None if len(tokens) == len(phrase) else tokens
+
+    async def _grow_around(
+        self,
+        chat_id: int,
+        core: list[str],
+        *,
+        max_tokens: int,
+        head_share: float,
+        next_explore: float,
+        next_power: float,
+        repetition_penalty_strength: float,
+        entropy_sampling: EntropySampling,
+        temporal_blend: TemporalBlend,
+        now: int,
+        rng: random.Random,
+    ) -> list[str]:
+        """Grow a tail forward from the core's last pair and a head backward
+        from its first pair (M2R-410 assembly, shared by seeded and phrase).
+
+        Budgets are the seeded ones: ``head_share`` of ``max_tokens`` for the
+        head, the rest for the tail including the core. A core longer than
+        the tail budget simply grows no tail.
+        """
+        budget = max(2, max_tokens)
         head_budget = max(0, min(budget - 2, int(budget * head_share)))
         tail_budget = budget - head_budget
 
-        tail = [seed, second]
-        a, b = seed, second
+        tail = list(core)
+        a, b = core[-2], core[-1]
         while len(tail) < tail_budget:
             pool = await self._get2(chat_id, a, b)
             if not pool:
@@ -1998,7 +2074,7 @@ class MarkovGenerator:
             a, b = b, nxt
 
         head: list[str] = []
-        left0, left1 = seed, second
+        left0, left1 = core[0], core[1]
         while len(head) < head_budget:
             pool = await self.db.get_reverse_transitions(chat_id, left0, left1)
             if not pool:
@@ -2015,7 +2091,7 @@ class MarkovGenerator:
                 rng=rng,
             )
             head.append(prev)
-            if has_degraded_recent_window([*reversed(head), seed]):
+            if has_degraded_recent_window([*reversed(head), core[0]]):
                 head.pop()
                 break
             left0, left1 = prev, left0

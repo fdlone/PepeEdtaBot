@@ -112,6 +112,7 @@ GATED_BY: dict[str, dict[str, Any]] = {
     "hot_ngram_min_count": {"hot_ngram_slot_ratio": 0.4},
     "hot_ngram_recency_share": {"hot_ngram_slot_ratio": 0.4},
     "markov_hot_ngram_meme_ordering": {"hot_ngram_slot_ratio": 0.4},
+    "phrase_min_count": {"phrase_slot_ratio": 0.4},
 }
 
 # The frozen baseline convention: flavor and emoji silenced (matrix.yaml C0).

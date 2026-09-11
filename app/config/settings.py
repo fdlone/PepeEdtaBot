@@ -89,6 +89,8 @@ class RuntimeTunables:
     markov_seeded_candidate_ratio: float
     hot_ngram_slot_ratio: float
     assoc_slot_ratio: float
+    phrase_slot_ratio: float
+    phrase_min_count: int
     markov_seed_branch_min: float
     markov_seed_branch_ideal: float
     markov_seed_branch_max: float

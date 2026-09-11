@@ -39,6 +39,9 @@ class CandidateRoute(StrEnum):
     # M3R-200 pilot: a candidate assembled around an associate of the
     # message's anchors (assoc-route-pilot).
     ASSOC = "assoc"
+    # M3R-210: a candidate assembled around a phrase of the cumulative phrase
+    # index, inserted as a unit (phrase-route).
+    PHRASE = "phrase"
 
 
 class UserQuirkGate(StrEnum):
@@ -198,6 +201,8 @@ class GenerationTelemetry:
     hot_ngram_empty: int = 0
     assoc_draws: int = 0
     assoc_empty: int = 0
+    phrase_draws: int = 0
+    phrase_empty: int = 0
     # Denominator of this one is ctx_generations: only a generation that
     # started with context can lose it.
     context_dropped: int = 0
@@ -334,6 +339,14 @@ class GenerationTelemetry:
         self.assoc_draws += 1
         if empty:
             self.assoc_empty += 1
+
+    def note_phrase_draw(self, *, empty: bool) -> None:
+        """One index read for the phrase route and whether it came back empty
+        (M3R-210). Same rule as the assoc pair: a route starved by data must
+        not read as a route switched off."""
+        self.phrase_draws += 1
+        if empty:
+            self.phrase_empty += 1
 
     def note_context_dropped(self) -> None:
         """One generation that started with context and ran out of with-context
@@ -532,6 +545,10 @@ class GenerationTelemetry:
             "assoc_draws": self.assoc_draws,
             "assoc_empty_rate": (
                 self.assoc_empty / self.assoc_draws if self.assoc_draws else None
+            ),
+            "phrase_draws": self.phrase_draws,
+            "phrase_empty_rate": (
+                self.phrase_empty / self.phrase_draws if self.phrase_draws else None
             ),
             "context_dropped_rate": (
                 self.context_dropped / self.ctx_generations

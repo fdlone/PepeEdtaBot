@@ -134,6 +134,7 @@ class TestNumericKnobsAreBoundedBothWays(unittest.TestCase):
         ("reply_burst_boost_sec", 3600),
         ("reply_burst_suppress_sec", 3600),
         ("hot_ngram_min_count", 1000),
+        ("phrase_min_count", 10000),
         ("rare_event_daily_cap", 100),
         ("user_quirk_min_interactions", 10000),
         ("reply_context_max_tokens", 300),

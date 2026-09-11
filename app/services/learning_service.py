@@ -407,6 +407,19 @@ class LearningService:
             meme_ordering=meme_ordering,
         )
 
+    async def get_phrases_containing(
+        self, chat_id: int, tokens: list[str], *, min_count: int
+    ) -> list[tuple[tuple[str, ...], int]]:
+        """Indexed phrases containing any of ``tokens`` (phrase route, M3R-210).
+
+        Read from SQL on every call, no cache: the index changes only in the
+        daily rebuild, and a per-chat cache would be one more structure for
+        ``forget_chat`` to remember (CLAUDE.md §5).
+        """
+        return await self._db.chat_phrase_ngrams.get_phrases_containing(
+            chat_id, tokens, min_count=min_count
+        )
+
     async def get_active_collocations(
         self, chat_id: int
     ) -> frozenset[tuple[str, str]]:

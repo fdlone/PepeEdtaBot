@@ -458,6 +458,19 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # a promotion gate, decides whether it is worth a grid (assoc_pilot).
     FieldSpec("assoc_slot_ratio", "ASSOC_SLOT_RATIO",
               "0", _float_in_range(0.0, 0.7)),
+    # M3R-210 (phrase-route): the phrase route. Share of the pool assembled
+    # around a phrase of the chat's cumulative phrase index — a content
+    # bigram/trigram with all-time support — inserted as a unit and grown on
+    # both sides by the seeded assembler. Default 0 — inert, generation
+    # byte-identical, the index is not read; promotion needs the route_gate.
+    FieldSpec("phrase_slot_ratio", "PHRASE_SLOT_RATIO",
+              "0", _float_in_range(0.0, 0.7)),
+    # Support threshold of a phrase the route may use — the grid arm of the
+    # route's measurement (2 / 3 / 5), not a start condition. Floor 2: a
+    # phrase seen once is the support-1 lottery (R4). Ceiling: no phrase
+    # recurs ten thousand times in a chat.
+    FieldSpec("phrase_min_count", "PHRASE_MIN_COUNT", "3",
+              _int_in_range(2, 10000)),
     # Branching band for seed choice (trapezoid, TZ §9.4): a seed below the
     # minimum stalls generation, one far above the ideal is an anchor about
     # nothing. min <= ideal <= max is enforced cross-field.

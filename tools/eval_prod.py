@@ -205,6 +205,17 @@ class _ProdVerbatimChecker:
             )
         return self._hot_ngrams
 
+    async def get_phrases_containing(
+        self, chat_id: int, tokens: list[str], *, min_count: int
+    ) -> list[tuple[tuple[str, ...], int]]:
+        # M3R-210 (phrase-route): read per generation like the runtime
+        # LearningService — no cache, the read is what the gate's p95 prices.
+        if self._db is None:
+            return []
+        return await self._db.chat_phrase_ngrams.get_phrases_containing(
+            chat_id, tokens, min_count=min_count
+        )
+
     async def get_active_collocations(
         self, chat_id: int
     ) -> frozenset[tuple[str, str]]:
