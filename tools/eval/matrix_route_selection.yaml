@@ -1,0 +1,54 @@
+# O20 (change phrase-route-selection-arm): the phrase route TOGETHER with the
+# selection knob under the route gate. Four independent measurements (M3R-011,
+# M3R-100, route_gate on assoc, route_gate on phrase) located the bottleneck
+# in selection: a route creates trajectories in the pool and not in the
+# window. The phrase route was the first to carry a large positive topicality
+# signal in both modes (affinity without copy +0.06*), so it is the route
+# paired with the diversity bonus — the lifted candidate is a topical phrase,
+# not a random walk, and the bonus's topicality cost (-0.011* on the bare
+# walk, O19) may turn into a gain next to it. Owner decision 2026-09-11 (O20).
+#
+# Arm ids start with C11: the prefix routes an arm to the route_gate block
+# (registered 2026-09-02, no new thresholds). The route under test is read
+# from the data — present in the arm's pools, absent from C0's.
+#
+# C11s: phrase route 0.4 (2 slots of 5) at support >= 2, ctx diversity bonus
+# 0.2 (= selection_diversity_bonus; the noctx knob is 0.2 by default since
+# O19 and sits in C0 as well), recognized-unit verbatim exemption on (M3R-120,
+# the route's mandatory companion). C11d: bonus + exemption without the route
+# — no new route in its pools, so the gate reads `insufficient data` for it by
+# construction; it is the attribution control for the route's own share of
+# the effect on top of the knob.
+#
+# Expectation written before the run: ctx single-trajectory share (36% at C0)
+# drops -12..-16 p.p. (the bonus alone gave -12.8*, the route alone -1.3..-2.5
+# n.s.); affinity without copy: bonus alone -0.011*, route alone +0.057* — the
+# pair is expected at or above C0, which is the whole hypothesis; copy falls
+# (both halves lowered it); ECB pool +0.15* from the route (the bonus does not
+# touch the pool); p95 <= 40 ms. noctx: the bonus is already in C0, so the arm
+# should read like the phrase-only arm C11p2 (single share -2 p.p.*, affinity
+# +0.06*), and the must-improve there is out of reach by construction.
+configurations:
+  - id: C0
+    description: "Markov 1.x frozen baseline (registry defaults, flavor/emoji silenced)"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+
+  - id: C11d
+    description: "control: ctx diversity bonus 0.2 + recognized-unit exemption, no route"
+    available: true
+    same_as: C0
+    overrides:
+      selection_diversity_bonus: 0.2
+      verbatim_recognized_unit: true
+  - id: C11s
+    description: "O20 arm: phrase route 0.4 at support >= 2 + ctx diversity bonus 0.2, exemption on"
+    available: true
+    same_as: C0
+    overrides:
+      phrase_slot_ratio: 0.4
+      phrase_min_count: 2
+      selection_diversity_bonus: 0.2
+      verbatim_recognized_unit: true
