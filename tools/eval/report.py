@@ -20,12 +20,6 @@ from .metrics import distinct_n, latency_percentiles, meme_regression, metric_va
 from .prompts import PromptSet
 from .run import ConfigRun, DfCorpusFacts
 
-# Phase 2 arms (doc 05 §2 + the "one arm per knob" rule): the shipped
-# combination C1, each knob alone (C1a/C1b), the flat-temperature control
-# (C1flat), and any calibration variant of the grid. Prefix-matched so a
-# calibration run gets a per-arm verdict without editing this list.
-PHASE2_ARM_PREFIX = "C1"
-
 # Phase 3 arms (temporal blend), same prefix-matching convention: the shipped C2
 # plus every calibration variant of the grid.
 PHASE3_ARM_PREFIX = "C2"
@@ -1293,77 +1287,6 @@ def _connectedness_part(
         failures.append("connectedness fell below the pre-registered floor")
 
 
-def _phase2_arm_verdict(
-    baseline: ConfigRun, arm: ConfigRun, thresholds: dict[str, Any]
-) -> tuple[str, str]:
-    """Four-part Phase 2 gate for one arm (verdict, detail).
-
-    All four parts must pass. Two are "must not worsen" (copy, affinity) where
-    only a *significant* move against us fails; two are "must improve"
-    (distinct-2/3) where an insignificant move is a fail — an unmeasurable
-    effect is not the diversity this phase promised.
-    """
-    if arm.shared_with is not None:
-        return INSUFFICIENT, f"arm resolves to the same overrides as {arm.shared_with}"
-
-    config = thresholds.get("phase2_entropy", {})
-    base_values = metric_values(baseline.records)
-    arm_values = metric_values(arm.records)
-    parts: list[str] = []
-    failures: list[str] = []
-    missing: list[str] = []
-
-    copy_max = float(config.get("exact_copy_delta_max", 0.0))
-    copy_delta = _delta_part(
-        "copy",
-        base_values.get("exact_context_copy_rate"),
-        arm_values.get("exact_context_copy_rate"),
-        parts=parts,
-        missing=missing,
-    )
-    if copy_delta is not None:
-        point, significant = copy_delta
-        if significant and point > copy_max:
-            failures.append("copy rose significantly")
-
-    base_replies = [r.reply_content for r in baseline.records if r.success]
-    arm_replies = [r.reply_content for r in arm.records if r.success]
-    for n, key in ((2, "distinct2_delta_min"), (3, "distinct3_delta_min")):
-        minimum = float(config.get(key, 0.0))
-        result = distinct_delta_ci(base_replies, arm_replies, n)
-        if result is None:
-            missing.append(f"distinct-{n} basis")
-            continue
-        point, lo, hi, significant = result
-        parts.append(
-            f"distinct-{n} Δ {_fmt(point)} [{_fmt(lo)}, {_fmt(hi)}]"
-            f"{' *' if significant else ''}"
-        )
-        if not (significant and point > minimum):
-            failures.append(f"distinct-{n} did not rise significantly")
-
-    floor = float(config.get("affinity_without_copy_delta_floor", 0.0))
-    affinity_delta = _delta_part(
-        "affinity_without_copy",
-        base_values.get("context_affinity_without_copy"),
-        arm_values.get("context_affinity_without_copy"),
-        parts=parts,
-        missing=missing,
-    )
-    if affinity_delta is not None:
-        point, significant = affinity_delta
-        if significant and point < floor:
-            failures.append("affinity without copies dropped significantly")
-
-    _latency_part(
-        arm,
-        float(config.get("latency_p95_ms_max", 150)),
-        parts=parts,
-        missing=missing,
-        failures=failures,
-    )
-    return _verdict(parts, failures, missing)
-
 
 def _phase3_arm_verdict(
     baseline: ConfigRun, arm: ConfigRun, thresholds: dict[str, Any]
@@ -1780,21 +1703,6 @@ def evaluate_gates(
     rows: list[tuple[str, str, str]] = []
     baseline = runs.get("C0")
 
-    phase2_arms = sorted(
-        arm for arm in runs if arm.startswith(PHASE2_ARM_PREFIX)
-    )
-    if baseline is None or not phase2_arms:
-        rows.append(
-            (
-                "phase2_entropy",
-                INSUFFICIENT,
-                "no Phase 2 arm in this run (entropy sampling not enabled)",
-            )
-        )
-    else:
-        for arm_id in phase2_arms:
-            verdict, detail = _phase2_arm_verdict(baseline, runs[arm_id], thresholds)
-            rows.append((f"phase2_entropy[{arm_id}]", verdict, detail))
 
     phase3_arms = sorted(arm for arm in runs if arm.startswith(PHASE3_ARM_PREFIX))
     if baseline is None or not phase3_arms:

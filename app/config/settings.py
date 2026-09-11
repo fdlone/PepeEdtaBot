@@ -63,12 +63,6 @@ class RuntimeTunables:
     length_context_adaptation: float
     markov_order: int
     markov_cache_incremental: bool
-    markov_entropy_temp_gain: float
-    markov_entropy_pivot: float
-    markov_entropy_temp_min: float
-    markov_entropy_temp_max: float
-    markov_branching_degenerate_max: float
-    markov_branching_candidate_floor: int
     markov_short_half_life_days: float
     markov_long_compression: str
     markov_long_compression_beta: float

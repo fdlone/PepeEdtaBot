@@ -56,7 +56,6 @@ def make_state() -> SimpleNamespace:
             "normalize_lower": False,
             "context_jump_boost": 1.0,
             "markov_jump_probability": 0.04,
-            "markov_entropy_pivot": 0.5,
             "order_mix_probability": 0.0,
             "slot_mutation_probability": 0.0,
             "verbatim_penalty_strength": 1.0,
@@ -249,7 +248,7 @@ class TestBotMessages(unittest.TestCase):
 
         self.assertIn("Дополнительно:", text)
         self.assertIn("reply_context_start_bias=2.2", text)
-        self.assertIn("markov_entropy_temp_gain=0.0", text)
+        self.assertIn("selection_score_margin=0.3", text)
 
     def test_config_message_full_includes_collocation_knobs(self) -> None:
         """Task 7.4: the Phase 4 scoring knobs are readable in /config full."""

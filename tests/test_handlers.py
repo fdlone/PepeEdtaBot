@@ -97,12 +97,6 @@ def _fake_state(**kwargs: object) -> MagicMock:
     # Phase 2 knobs neutral by default: gain 0 is the 1.x sampler and a
     # degenerate bound of 0 leaves the candidate target fixed, so handler tests
     # keep asserting the pre-Phase-2 candidate flow.
-    s.markov_entropy_temp_gain = 0.0
-    s.markov_entropy_pivot = 0.5
-    s.markov_entropy_temp_min = 0.5
-    s.markov_entropy_temp_max = 12.0
-    s.markov_branching_degenerate_max = 0.0
-    s.markov_branching_candidate_floor = 2
     # Phase 4 collocation weights neutral: non-zero (or a bare MagicMock, which
     # does not support ordering comparisons) would send the pipeline to the
     # collocation registry on a mock.

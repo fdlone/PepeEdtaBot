@@ -134,7 +134,6 @@ class TestSeededBranchUsesIt(unittest.IsolatedAsyncioTestCase):
 
     async def _seeded_texts(self, assembled: list[str]) -> set[str]:
         """Run the seeded branch with a fixed assembly and collect its texts."""
-        from app.core.markov import EntropySampling
         from app.core.seed import SeedScore
         from app.core.temporal import TemporalBlend
 
@@ -171,7 +170,6 @@ class TestSeededBranchUsesIt(unittest.IsolatedAsyncioTestCase):
                 corpus_ngrams=frozenset(),
                 verbatim_penalty_strength=0.0,
                 active_collocations=frozenset(),
-                entropy_sampling=EntropySampling(),
                 temporal_blend=TemporalBlend(),
                 now=0,
                 slots=2,

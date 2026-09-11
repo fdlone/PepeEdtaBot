@@ -36,9 +36,6 @@ PUNCT_SET = {".", ",", "!", "?", ";", ":"}
 DEFAULT_GENERATION_ATTEMPT_BUDGET = 1
 EXPLORATION_FLATTENING = 1.5
 EXPLORATION_POWER_FLOOR = 0.02
-# Floor under the entropy-adjusted temperature: a large negative gain can drive
-# T to zero or below, and 1/T is taken right after.
-_MIN_SAMPLING_TEMPERATURE = 0.01
 SHORT_REPLY_MAX_CONTENT_TOKENS = 3
 # M3R-200 pilot (assoc-route-pilot, design D2): how many anchors of the message
 # are looked at, how many neighbours per anchor get a marginal read, and the
@@ -215,53 +212,6 @@ def pool_diagnostics(counts: Sequence[float]) -> tuple[float, float, int, float]
     return entropy, normalized, branching, 1.0 - normalized
 
 
-@dataclass(frozen=True, slots=True)
-class EntropySampling:
-    """Entropy-aware sampling temperature (M2R-100, TZ §6).
-
-    The sampler weights candidates as ``cnt ** power``, so ``power`` is an
-    inverse temperature: ``T_base = 1/power``, and ``randomness_strength``
-    keeps its established meaning as the scale of ``T_base``. This applies the
-    per-pool term of TZ §6 — ``T = T_base·(1 + gain·(H_norm − pivot))``,
-    clamped — and hands back a power for the existing machinery.
-
-    The default instance is the neutral one: a generation that never builds a
-    tuned instance behaves exactly like Markov 1.x.
-    """
-
-    gain: float = 0.0
-    pivot: float = 0.5
-    temp_min: float = 0.5
-    temp_max: float = 12.0
-
-    def power_for(self, power: float, normalized_entropy: float) -> float:
-        """Entropy-adjusted frequency power for one pool.
-
-        Zero gain returns the input unchanged through an explicit branch taken
-        before any arithmetic. Relying on ``x * 1.0 == x`` would still be exact,
-        but the clamp is not: a ``T_base`` outside ``[temp_min, temp_max]``
-        would be pulled to a bound even at zero gain, and this phase's contract
-        is that zero gain is byte-identical to 1.x. The early return makes that
-        structural instead of a float coincidence. No random draw either way,
-        so the RNG stream is untouched.
-        """
-        if self.gain == 0.0 or power <= 0.0:
-            return power
-        # Two individually valid /set calls can leave min above max; ordering
-        # the pair beats pinning every step to a nonsense constant.
-        low, high = (
-            (self.temp_min, self.temp_max)
-            if self.temp_min <= self.temp_max
-            else (self.temp_max, self.temp_min)
-        )
-        low = max(low, _MIN_SAMPLING_TEMPERATURE)
-        high = max(high, low)
-        temperature = (1.0 / power) * (
-            1.0 + self.gain * (normalized_entropy - self.pivot)
-        )
-        return 1.0 / max(low, min(high, temperature))
-
-
 @dataclass(slots=True)
 class _DiagnosticsAccumulator:
     """Per-attempt sums of step-pool diagnostics (M2R-010)."""
@@ -336,39 +286,24 @@ def _step_power(
     diagnostics: _DiagnosticsAccumulator | None,
     pool: Sequence[TransitionRow],
     base_power: float,
-    entropy_sampling: EntropySampling,
     blended: BlendedPool | None = None,
 ) -> float:
-    """Frequency power for one walk step: telemetry in, temperature out.
+    """Frequency power for one walk step, with the pool's diagnostics noted.
 
-    Keeping both here is deliberate — the entropy the telemetry reports and the
-    entropy the sampler consumes are the same number by construction, and the
-    temperature actually applied is recorded rather than inferred.
-
-    With the temporal blend on, both read the blended weights rather than the
-    raw counts (design D5): entropy has to describe the distribution actually
-    being sampled, otherwise Phase 2's temperature responds to a distribution
-    that no longer exists.
-
-    Telemetry (M2R-010) needs the diagnostics for every step anyway, so the
-    accumulator is the source. Without one (test doubles pass no accumulator)
-    entropy is computed only when sampling actually consumes it.
+    The entropy temperature of Phase 2 (M2R-100) used to be applied here; it
+    was removed 2026-09-11 (remove-phase2-machinery) after its gate failed on
+    every arm, so the power is the base power and the step only feeds the
+    M2R-010 telemetry. With the temporal blend on the diagnostics read the
+    blended weights (design D5): entropy has to describe the distribution
+    actually being sampled.
     """
-    if diagnostics is None and entropy_sampling.gain == 0.0:
-        normalized = 0.0
-    else:
+    if diagnostics is not None:
         weights: Sequence[float] = (
             blended.weights if blended is not None else [row[1] for row in pool]
         )
-        normalized = (
-            diagnostics.note_pool(weights)
-            if diagnostics is not None
-            else pool_diagnostics(weights)[1]
-        )
-    power = entropy_sampling.power_for(base_power, normalized)
-    if diagnostics is not None:
-        diagnostics.note_temperature(power)
-    return power
+        diagnostics.note_pool(weights)
+        diagnostics.note_temperature(base_power)
+    return base_power
 
 
 @dataclass(frozen=True, slots=True)
@@ -1431,7 +1366,6 @@ class MarkovGenerator:
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
         context_anchor_splice_probability: float = 0.0,
-        entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
         interpolation: OrderInterpolation = OrderInterpolation(),
         now: int = 0,
@@ -1462,7 +1396,6 @@ class MarkovGenerator:
             context_jump_boost=context_jump_boost,
             order_mix_probability=order_mix_probability,
             context_anchor_splice_probability=context_anchor_splice_probability,
-            entropy_sampling=entropy_sampling,
             temporal_blend=temporal_blend,
             interpolation=interpolation,
             now=now,
@@ -1495,7 +1428,6 @@ class MarkovGenerator:
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
         context_anchor_splice_probability: float = 0.0,
-        entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
         interpolation: OrderInterpolation = OrderInterpolation(),
         now: int = 0,
@@ -1528,7 +1460,6 @@ class MarkovGenerator:
                 context_jump_boost=context_jump_boost,
                 order_mix_probability=order_mix_probability,
                 context_anchor_splice_probability=context_anchor_splice_probability,
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 interpolation=interpolation,
                 now=now,
@@ -1826,7 +1757,6 @@ class MarkovGenerator:
         next_explore: float,
         next_power: float,
         repetition_penalty_strength: float,
-        entropy_sampling: EntropySampling,
         temporal_blend: TemporalBlend,
         now: int,
         recent: list[str],
@@ -1842,7 +1772,7 @@ class MarkovGenerator:
         not by the message.
         """
         blended = temporal_blend.blend(pool, now)
-        step_power = _step_power(None, pool, next_power, entropy_sampling, blended)
+        step_power = _step_power(None, pool, next_power, blended)
         return weighted_next_choice(
             pool,
             next_explore,
@@ -1863,7 +1793,6 @@ class MarkovGenerator:
         next_explore: float,
         next_power: float,
         repetition_penalty_strength: float,
-        entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
         now: int = 0,
         rng: random.Random,
@@ -1896,7 +1825,6 @@ class MarkovGenerator:
             next_explore=next_explore,
             next_power=next_power,
             repetition_penalty_strength=repetition_penalty_strength,
-            entropy_sampling=entropy_sampling,
             temporal_blend=temporal_blend,
             now=now,
             rng=rng,
@@ -1912,7 +1840,6 @@ class MarkovGenerator:
         next_explore: float,
         next_power: float,
         repetition_penalty_strength: float,
-        entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
         now: int = 0,
         rng: random.Random,
@@ -1936,7 +1863,6 @@ class MarkovGenerator:
             next_explore=next_explore,
             next_power=next_power,
             repetition_penalty_strength=repetition_penalty_strength,
-            entropy_sampling=entropy_sampling,
             temporal_blend=temporal_blend,
             now=now,
             rng=rng,
@@ -1953,7 +1879,6 @@ class MarkovGenerator:
         next_explore: float,
         next_power: float,
         repetition_penalty_strength: float,
-        entropy_sampling: EntropySampling,
         temporal_blend: TemporalBlend,
         now: int,
         rng: random.Random,
@@ -1980,7 +1905,6 @@ class MarkovGenerator:
                 next_explore=next_explore,
                 next_power=next_power,
                 repetition_penalty_strength=repetition_penalty_strength,
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 now=now,
                 recent=tail[-10:],
@@ -2003,7 +1927,6 @@ class MarkovGenerator:
                 next_explore=next_explore,
                 next_power=next_power,
                 repetition_penalty_strength=repetition_penalty_strength,
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 now=now,
                 recent=head[-10:],
@@ -2209,7 +2132,6 @@ class MarkovGenerator:
         anchor_target_tokens: int = 0,
         rng: random.Random,
         diagnostics: _DiagnosticsAccumulator | None = None,
-        entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
         interpolation: OrderInterpolation = OrderInterpolation(),
         now: int = 0,
@@ -2397,7 +2319,7 @@ class MarkovGenerator:
                     pool = merged.rows
                     blended = BlendedPool(merged.weights, 0.0)
                 step_power = _step_power(
-                    diagnostics, pool, next_power, entropy_sampling, blended
+                    diagnostics, pool, next_power, blended
                 )
                 w4 = weighted_next_choice(
                     pool,
@@ -2429,7 +2351,7 @@ class MarkovGenerator:
                     if diagnostics is not None:
                         diagnostics.note_blend(blended2)
                     step_power = _step_power(
-                        diagnostics, pool2, next_power, entropy_sampling, blended2
+                        diagnostics, pool2, next_power, blended2
                     )
                     w4 = weighted_next_choice(
                         pool2,
@@ -2498,7 +2420,6 @@ class MarkovGenerator:
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
         context_anchor_splice_probability: float = 0.0,
-        entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
         interpolation: OrderInterpolation = OrderInterpolation(),
         now: int = 0,
@@ -2699,7 +2620,6 @@ class MarkovGenerator:
                 anchor_target_tokens=anchor_target_tokens,
                 rng=generation_rng,
                 diagnostics=diagnostics,
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 interpolation=interpolation,
                 now=now,

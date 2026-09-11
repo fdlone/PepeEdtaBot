@@ -29,7 +29,6 @@ from app.core.intonation import IntonationProfile, blend_length_weights
 from app.core.markov import (
     JUMP_CONNECTIVE_TOKENS,
     PUNCT_SET,
-    EntropySampling,
     MarkovGenerator,
     content_tokens,
     detokenize,
@@ -68,31 +67,6 @@ GENERATION_ATTEMPT_BUDGET = 10
 GENERATION_ATTEMPTS_WITH_CONTEXT = 5
 CANDIDATE_TARGET = 5
 
-
-def branching_aware_target(
-    base_target: int,
-    branching_samples: list[float],
-    *,
-    degenerate_max: float,
-    floor: int,
-) -> int:
-    """Candidate target for a chain whose branching has been observed (M2R-110).
-
-    On a near-degenerate chain, candidates 2..N are near-duplicates of the
-    first — the scorer ends up choosing between copies of one walk — so the
-    target drops to the floor and the generation stops early. Everything else
-    keeps the configured target. The attempt budget is untouched either way, so
-    a chain that keeps failing the gates still gets all of its tries.
-
-    ``degenerate_max <= 0`` disables the rule (no pool has branching <= 0),
-    restoring the fixed target this project shipped before Phase 2.
-    """
-    if degenerate_max <= 0.0 or not branching_samples:
-        return base_target
-    mean_branching = sum(branching_samples) / len(branching_samples)
-    if mean_branching > degenerate_max:
-        return base_target
-    return max(1, min(base_target, floor))
 
 
 def route_slot_budget(target: int, ratio: float) -> int:
@@ -360,22 +334,6 @@ class ResponseGenerator:
         return result.text
 
     @property
-    def entropy_sampling(self) -> EntropySampling:
-        """M2R-100 settings for this chat, resolved from the runtime knobs.
-
-        Applied to every walk that produces user-visible text, the verbatim
-        extension included — a setting that governs "how the chain sounds"
-        would otherwise stop at the sentence boundary where an extension begins.
-        """
-        state = self.runtime_state
-        return EntropySampling(
-            gain=state.markov_entropy_temp_gain,
-            pivot=state.markov_entropy_pivot,
-            temp_min=state.markov_entropy_temp_min,
-            temp_max=state.markov_entropy_temp_max,
-        )
-
-    @property
     def interpolation(self) -> OrderInterpolation:
         """M2R-900 interpolation weight for this chat, from the runtime knob.
 
@@ -587,7 +545,6 @@ class ResponseGenerator:
             enable_backoff=state.enable_backoff,
             jump_probability=0.0,
             order_mix_probability=state.order_mix_probability,
-            entropy_sampling=self.entropy_sampling,
             temporal_blend=self.temporal_blend,
             interpolation=self.interpolation,
             now=now,
@@ -679,7 +636,6 @@ class ResponseGenerator:
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
         active_collocations: frozenset[tuple[str, str]],
-        entropy_sampling: EntropySampling,
         temporal_blend: TemporalBlend,
         now: int,
         slots: int,
@@ -733,7 +689,6 @@ class ResponseGenerator:
             corpus_ngrams=corpus_ngrams,
             verbatim_penalty_strength=verbatim_penalty_strength,
             active_collocations=active_collocations,
-            entropy_sampling=entropy_sampling,
             temporal_blend=temporal_blend,
             now=now,
             rng=rng,
@@ -751,7 +706,6 @@ class ResponseGenerator:
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
         active_collocations: frozenset[tuple[str, str]],
-        entropy_sampling: EntropySampling,
         temporal_blend: TemporalBlend,
         now: int,
         slots: int,
@@ -791,7 +745,6 @@ class ResponseGenerator:
             corpus_ngrams=corpus_ngrams,
             verbatim_penalty_strength=verbatim_penalty_strength,
             active_collocations=active_collocations,
-            entropy_sampling=entropy_sampling,
             temporal_blend=temporal_blend,
             now=now,
             rng=rng,
@@ -809,7 +762,6 @@ class ResponseGenerator:
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
         active_collocations: frozenset[tuple[str, str]],
-        entropy_sampling: EntropySampling,
         temporal_blend: TemporalBlend,
         now: int,
         slots: int,
@@ -858,7 +810,6 @@ class ResponseGenerator:
             corpus_ngrams=corpus_ngrams,
             verbatim_penalty_strength=verbatim_penalty_strength,
             active_collocations=active_collocations,
-            entropy_sampling=entropy_sampling,
             temporal_blend=temporal_blend,
             now=now,
             rng=rng,
@@ -878,7 +829,6 @@ class ResponseGenerator:
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
         active_collocations: frozenset[tuple[str, str]],
-        entropy_sampling: EntropySampling,
         temporal_blend: TemporalBlend,
         now: int,
         rng: random.Random,
@@ -911,7 +861,6 @@ class ResponseGenerator:
             next_explore=next_explore,
             next_power=1.0,
             repetition_penalty_strength=state.repetition_penalty_strength,
-            entropy_sampling=entropy_sampling,
             temporal_blend=temporal_blend,
             now=now,
             rng=rng,
@@ -1096,7 +1045,6 @@ class ResponseGenerator:
         # actually had. Starts at the configured value and is recomputed after
         # each accepted candidate.
         effective_target = target
-        branching_samples: list[float] = []
         candidates: list[_ScoredCandidate] = []
         seen_candidates: set[str] = set()
         # Quote detection: candidates whose content 4-grams all exist in the
@@ -1159,7 +1107,6 @@ class ResponseGenerator:
         effective_randomness = max(
             0.0, self.runtime_state.randomness_strength + modifiers.randomness_delta
         )
-        entropy_sampling = self.entropy_sampling
         temporal_blend = self.temporal_blend
         interpolation = self.interpolation
         # M2R-210 / design D3: one moment for the whole generation. Reading the
@@ -1208,7 +1155,6 @@ class ResponseGenerator:
                 corpus_ngrams=corpus_ngrams,
                 verbatim_penalty_strength=verbatim_penalty_strength,
                 active_collocations=active_collocations,
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 now=now,
                 slots=seeded_budget,
@@ -1251,7 +1197,6 @@ class ResponseGenerator:
                 corpus_ngrams=corpus_ngrams,
                 verbatim_penalty_strength=verbatim_penalty_strength,
                 active_collocations=active_collocations,
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 now=now,
                 slots=assoc_budget,
@@ -1276,7 +1221,6 @@ class ResponseGenerator:
                 corpus_ngrams=corpus_ngrams,
                 verbatim_penalty_strength=verbatim_penalty_strength,
                 active_collocations=active_collocations,
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 now=now,
                 slots=phrase_budget,
@@ -1330,7 +1274,6 @@ class ResponseGenerator:
                 context_anchor_splice_probability=(
                     self.runtime_state.context_anchor_splice_probability
                 ),
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 interpolation=interpolation,
                 now=now,
@@ -1467,23 +1410,6 @@ class ResponseGenerator:
                                     else CandidateRoute.VANILLA
                                 ),
                             )
-                        )
-                        # M2R-110: the accepted candidate's own mean branching
-                        # is what tells us whether more attempts would produce
-                        # anything different. getattr-guarded like the jump
-                        # count above — test doubles stub the trace.
-                        candidate_branching = float(
-                            getattr(candidate_trace, "mean_branching", 0.0) or 0.0
-                        )
-                        if candidate_branching > 0.0:
-                            branching_samples.append(candidate_branching)
-                        effective_target = branching_aware_target(
-                            target,
-                            branching_samples,
-                            degenerate_max=(
-                                self.runtime_state.markov_branching_degenerate_max
-                            ),
-                            floor=self.runtime_state.markov_branching_candidate_floor,
                         )
                         gen_trace_log.log_attempt_accepted(
                             request.chat_id,

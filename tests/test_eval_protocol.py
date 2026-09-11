@@ -265,7 +265,6 @@ class TestConfigFiles(unittest.TestCase):
     def test_thresholds_preregistered_gates_present(self) -> None:
         thresholds = load_thresholds()
         for gate in (
-            "phase2_entropy",
             "phase5_promotion",
             "phase6_anticycle",
             # Опечатка в имени блока не ловится нигде больше: report.py читает
@@ -1173,7 +1172,7 @@ class TestTwoModeRequirement(unittest.TestCase):
     def test_undeclared_gate_is_left_alone(self) -> None:
         """Закрытые фазы не переоткрываются задним числом: правило действует
         только на гейты, которые сами его объявили."""
-        row = ("phase2_entropy[C1]", "fail", "distinct-2 delta insignificant")
+        row = ("some_closed_gate[C1]", "fail", "distinct-2 delta insignificant")
         self.assertEqual(
             _apply_mode_requirement(row, load_thresholds(), "ctx"), row
         )
@@ -1189,105 +1188,6 @@ class TestTwoModeRequirement(unittest.TestCase):
         self.assertTrue(
             load_thresholds()["phase5_promotion"].get("requires_both_modes")
         )
-
-
-class TestPhase2Gate(unittest.TestCase):
-    """The Phase 2 gate is four-part and asymmetric (doc 03 Phase 2 acceptance,
-    thresholds pre-registered in eval_thresholds.yaml)."""
-
-    @staticmethod
-    def _run(
-        config_id: str,
-        replies: list[str],
-        *,
-        copy_share: float = 0.0,
-        latency_ms: float = 10.0,
-    ) -> ConfigRun:
-        records = [
-            _record(
-                reply_text=reply,
-                reply_content=tuple(reply.split()),
-                affinity=0.2,
-                is_copy=index < round(copy_share * len(replies)),
-                latency_ms=latency_ms,
-            )
-            for index, reply in enumerate(replies)
-        ]
-        return ConfigRun(config_id=config_id, records=records)
-
-    @staticmethod
-    def _varied(count: int, *, unique: bool) -> list[str]:
-        if unique:
-            return [f"токен{i} слово{i} хвост{i}" for i in range(count)]
-        return ["одно и то же"] * count
-
-    def test_no_arm_reports_insufficient(self) -> None:
-        rows = evaluate_gates({"C0": self._run("C0", self._varied(10, unique=False))},
-                              load_thresholds())
-        gate, verdict, _ = next(row for row in rows if row[0].startswith("phase2"))
-        self.assertEqual(gate, "phase2_entropy")
-        self.assertEqual(verdict, "insufficient data")
-
-    def test_aliased_arm_is_not_a_verdict(self) -> None:
-        baseline = self._run("C0", self._varied(10, unique=False))
-        arm = ConfigRun(config_id="C1", records=baseline.records, shared_with="C0")
-        rows = evaluate_gates({"C0": baseline, "C1": arm}, load_thresholds())
-        verdict = next(row[1] for row in rows if row[0] == "phase2_entropy[C1]")
-        self.assertEqual(verdict, "insufficient data")
-
-    def test_diversity_gain_passes(self) -> None:
-        rows = evaluate_gates(
-            {
-                "C0": self._run("C0", self._varied(60, unique=False)),
-                "C1": self._run("C1", self._varied(60, unique=True)),
-            },
-            load_thresholds(),
-        )
-        verdict, detail = next(
-            (row[1], row[2]) for row in rows if row[0] == "phase2_entropy[C1]"
-        )
-        self.assertEqual(verdict, "pass", detail)
-        self.assertIn("distinct-2", detail)
-
-    def test_no_measurable_effect_is_a_fail_not_a_pass(self) -> None:
-        replies = self._varied(60, unique=False)
-        rows = evaluate_gates(
-            {"C0": self._run("C0", replies), "C1": self._run("C1", list(replies))},
-            load_thresholds(),
-        )
-        verdict, detail = next(
-            (row[1], row[2]) for row in rows if row[0] == "phase2_entropy[C1]"
-        )
-        self.assertEqual(verdict, "fail", detail)
-        self.assertIn("did not rise", detail)
-
-    def test_copy_rise_disqualifies_despite_diversity(self) -> None:
-        rows = evaluate_gates(
-            {
-                "C0": self._run("C0", self._varied(60, unique=False)),
-                "C1": self._run("C1", self._varied(60, unique=True), copy_share=0.5),
-            },
-            load_thresholds(),
-        )
-        verdict, detail = next(
-            (row[1], row[2]) for row in rows if row[0] == "phase2_entropy[C1]"
-        )
-        self.assertEqual(verdict, "fail", detail)
-        self.assertIn("copy rose", detail)
-
-    def test_latency_over_budget_disqualifies(self) -> None:
-        rows = evaluate_gates(
-            {
-                "C0": self._run("C0", self._varied(60, unique=False)),
-                "C1": self._run("C1", self._varied(60, unique=True), latency_ms=900.0),
-            },
-            load_thresholds(),
-        )
-        verdict, detail = next(
-            (row[1], row[2]) for row in rows if row[0] == "phase2_entropy[C1]"
-        )
-        self.assertEqual(verdict, "fail", detail)
-        self.assertIn("p95 over budget", detail)
 
 
 class TestManualEvalSummary(unittest.TestCase):

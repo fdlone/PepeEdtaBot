@@ -37,7 +37,6 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
             "context_jump_boost": 1.0,
             "context_anchor_splice_probability": 0.0,
             "markov_jump_probability": 0.04,
-            "markov_entropy_pivot": 0.5,
             "order_mix_probability": 0.0,
             "slot_mutation_probability": 0.0,
             "verbatim_penalty_strength": 1.0,

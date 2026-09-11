@@ -254,12 +254,6 @@ async def evaluate_generation(
                     # Neutral Phase 2 knobs keep the committed baselines
                     # byte-identical: gain 0 is the 1.x sampler, and a degenerate
                     # bound of 0 leaves the candidate target fixed.
-                    "markov_entropy_temp_gain": 0.0,
-                    "markov_entropy_pivot": 0.5,
-                    "markov_entropy_temp_min": 0.5,
-                    "markov_entropy_temp_max": 12.0,
-                    "markov_branching_degenerate_max": 0.0,
-                    "markov_branching_candidate_floor": 2,
                     # M2R-210: neutral temporal blend — every alpha 0, so this
                     # baseline keeps measuring the word model alone.
                     "markov_short_half_life_days": 3.0,

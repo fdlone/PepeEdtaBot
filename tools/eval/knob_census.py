@@ -92,10 +92,6 @@ NOT_SWEPT: dict[str, str] = {
 # Values are the ones the phase grids used, so the "parent on" arm is a
 # configuration the project has already measured, not an invention.
 GATED_BY: dict[str, dict[str, Any]] = {
-    "markov_entropy_pivot": {"markov_entropy_temp_gain": 0.6},
-    "markov_entropy_temp_min": {"markov_entropy_temp_gain": 0.6},
-    "markov_entropy_temp_max": {"markov_entropy_temp_gain": 0.6},
-    "markov_branching_candidate_floor": {"markov_branching_degenerate_max": 2.5},
     "markov_long_compression_beta": {
         "markov_alpha_calm": 0.5,
         "markov_long_compression": "pow",
