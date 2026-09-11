@@ -1,0 +1,69 @@
+# M3R-210 phrase route (change phrase-route): the route's arms under the
+# route gate. The route grows candidates around a PHRASE of the chat's
+# cumulative phrase index (chat_phrase_ngrams: content bigrams/trigrams with
+# all-time support) that contains an anchor of the message, inserted as a
+# unit and grown on both sides by the seeded assembler; it displaces walk
+# slots inside the pool (route_slot_budget), so pool size stays 5.
+#
+# Arm ids start with C11: the prefix routes an arm to the route_gate block,
+# registered 2026-09-02 — one block for every route, the route under test
+# read from the data (present in the arm's pools, absent from C0's). No new
+# thresholds for this route.
+#
+# The support threshold is the grid (2 / 3 / 5, decision of 2026-08-23): it
+# pulls coverage and quality in opposite directions, so it is measured, not
+# chosen. One slot ratio (0.4 = 2 slots of 5, the ratio the hot route passed
+# its automatic conditions at).
+#
+# Every route arm carries the recognized-unit verbatim exemption (M3R-120)
+# switched on: inserting a corpus phrase is exactly what the anti-quote
+# penalty punishes, and measuring the route without it would measure a
+# deliberately handicapped configuration. C11v carries the exemption alone —
+# no new route in its pools, so the gate reads `insufficient data` for it by
+# construction; its breakdown and deltas are for attribution only.
+#
+# Expectation written before the run (design D6): coverage falls with the
+# threshold — 15-30% of pools at cnt>=2, 10-20% at cnt>=3, below 10% at
+# cnt>=5 (likely insufficient data); single-trajectory share in ctx (36% at
+# C0) -2..-5 p.p. at cnt>=2, weakening with the threshold; copy flat (a
+# phrase made of the input's tokens is never chosen); affinity without copies
+# flat or above; pool ECB >= 4 holds; p95 well inside 150 ms (one index read
+# per generation).
+configurations:
+  - id: C0
+    description: "Markov 1.x frozen baseline (registry defaults, flavor/emoji silenced)"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+
+  - id: C11v
+    description: "control: recognized-unit verbatim exemption alone, no route"
+    available: true
+    same_as: C0
+    overrides:
+      verbatim_recognized_unit: true
+  - id: C11p2
+    description: "M3R-210 phrase route ratio 0.4 (2 slots of 5), support >= 2, exemption on"
+    available: true
+    same_as: C0
+    overrides:
+      phrase_slot_ratio: 0.4
+      phrase_min_count: 2
+      verbatim_recognized_unit: true
+  - id: C11p3
+    description: "M3R-210 phrase route ratio 0.4 (2 slots of 5), support >= 3, exemption on"
+    available: true
+    same_as: C0
+    overrides:
+      phrase_slot_ratio: 0.4
+      phrase_min_count: 3
+      verbatim_recognized_unit: true
+  - id: C11p5
+    description: "M3R-210 phrase route ratio 0.4 (2 slots of 5), support >= 5, exemption on"
+    available: true
+    same_as: C0
+    overrides:
+      phrase_slot_ratio: 0.4
+      phrase_min_count: 5
+      verbatim_recognized_unit: true

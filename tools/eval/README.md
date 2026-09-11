@@ -129,6 +129,20 @@ window escape is one C0 already takes; affinity without copies, copy and
 repetition must not worsen; pool ECB >= 4; p95 <= 150; connectedness from
 the solo round in ctx (`rating_rounds/assoc-gate`). Two modes.
 
+## Phrase route (M3R-210)
+
+`matrix_phrase_route.yaml` (arms `C11p*`, control `C11v`) moves
+`phrase_slot_ratio` and `phrase_min_count`: the route grows candidates around
+a phrase of the chat's cumulative phrase index (`chat_phrase_ngrams`, content
+bigrams/trigrams with all-time support) that contains an anchor of the
+message, inserted as a unit (phrase-route). The support threshold is the
+grid (2 / 3 / 5): it pulls coverage and quality in opposite directions, so
+it is measured, not chosen. Every route arm carries the recognized-unit
+verbatim exemption (M3R-120) — a corpus phrase is what the anti-quote penalty
+punishes — and `C11v` carries the exemption alone, for attribution: the gate
+reads `insufficient data` for it by construction. Measured under the same
+`route_gate` block as every route; no thresholds of its own. Two modes.
+
 ## Associative route pilot (M3R-200)
 
 `matrix_assoc_pilot.yaml` (arms `C10*`) moves `assoc_slot_ratio`, the slot

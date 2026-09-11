@@ -133,6 +133,8 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.generation_attempts_with_context = 5
     s.hot_ngram_slot_ratio = 0.0
     s.assoc_slot_ratio = 0.0
+    s.phrase_slot_ratio = 0.0
+    s.phrase_min_count = 3
     s.selection_score_margin = 0.3
     s.context_relevance_weight = 1.6
     s.context_relevance_cap = 1.6

@@ -50,6 +50,42 @@ class ChatPhraseNgramsRepo(BaseRepo):
             for w1, w2, w3, cnt in rows
         ]
 
+    async def get_phrases_containing(
+        self, chat_id: int, tokens: list[str], *, min_count: int
+    ) -> list[tuple[tuple[str, ...], int]]:
+        """Phrases of the chat that contain any of ``tokens`` at any position,
+        with support of at least ``min_count`` (M3R-210, phrase-route).
+
+        One query per generation for every anchor at once. The plan is the
+        primary-key prefix on ``chat_id`` followed by a scan of the chat's
+        rows: ``w2``/``w3`` have no index and ``cnt`` has none either.
+        # ponytail: full scan of the chat's phrase rows per call (50k on the
+        # prod copy); add an index on (chat_id, cnt) or a token->phrase table
+        # if the route gate's p95 says so.
+
+        Same full ``ORDER BY`` as ``get_phrases`` and for the same reason: the
+        result feeds a deterministic pick, and a tie without an order is a
+        draw nobody registered.
+        """
+        anchors = list(dict.fromkeys(tokens))
+        if not anchors or min_count < 1:
+            return []
+        marks = ", ".join("?" * len(anchors))
+        rows = await self._fetch_all(
+            f"""
+            SELECT w1, w2, w3, cnt
+            FROM chat_phrase_ngrams
+            WHERE chat_id = ? AND cnt >= ?
+              AND (w1 IN ({marks}) OR w2 IN ({marks}) OR w3 IN ({marks}))
+            ORDER BY cnt DESC, w1, w2, w3
+            """,
+            (chat_id, min_count, *anchors, *anchors, *anchors),
+        )
+        return [
+            ((str(w1), str(w2), str(w3)) if w3 else (str(w1), str(w2)), int(cnt))
+            for w1, w2, w3, cnt in rows
+        ]
+
     async def rebuild_chat(self, chat_id: int) -> int:
         """Recompute the chat's phrases from ``transitions``; return row count.
 
