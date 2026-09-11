@@ -1,0 +1,39 @@
+# Acceptance check of the 2026-09-11 promotion package
+# (promote-hot-and-phrase-routes): the seven registry defaults that moved —
+# hot route 0.4 at hotness 2 / 0.25, phrase route 0.4 at support 2, ctx
+# diversity bonus 0.2, recognized-unit exemption on — measured TOGETHER
+# against the previous defaults. Not a new gate: the pairing was gated in ctx
+# (route-selection, C11s) and the hot route in noctx (l1-route, C7r40), but
+# hot + phrase never shared a noctx pool before (2 + 2 slots of 5, the walk
+# keeps one). Conditions are the safety ones every gate already registers:
+# pool ECB >= 4.0, copy and repetition must not rise significantly, affinity
+# without copy must not drop significantly, p95 <= 150 ms. A significant
+# worsening stops the package before the baseline is refrozen.
+#
+# C0 here is the PREVIOUS defaults, spelled out as overrides on top of the
+# new registry; CP is the new registry defaults (flavor/emoji silenced as in
+# every C0). Expectation written before the run: ctx reproduces C11s
+# (single-trajectory share -16 p.p., affinity +0.04, copy -5 p.p., ECB +0.16);
+# noctx: ECB below either half alone but above 4.0, meme rate up (hot +0.30,
+# phrase +0.05), copy/repetition flat, p95 <= 40 ms.
+configurations:
+  - id: C0
+    description: "previous defaults (before the 2026-09-11 promotion), flavor/emoji silenced"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+      hot_ngram_slot_ratio: 0.0
+      hot_ngram_min_count: 3
+      hot_ngram_recency_share: 0.5
+      phrase_slot_ratio: 0.0
+      phrase_min_count: 3
+      selection_diversity_bonus: 0.0
+      verbatim_recognized_unit: false
+
+  - id: CP
+    description: "new registry defaults (promotion package), flavor/emoji silenced"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
