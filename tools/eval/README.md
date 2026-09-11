@@ -166,3 +166,11 @@ promised); then the window escape must rise significantly while affinity
 without copies, copy and repetition may not worsen. Run both files in both
 modes.
 
+Since 2026-09-11 (O19, split-diversity-bonus-by-mode) the bonus is two knobs:
+`selection_diversity_bonus` for replies with context (default 0) and
+`selection_diversity_bonus_noctx` for replies without (default **0.2**, the
+arm d20 that passed the gate in noctx). C0 = registry defaults, so every
+**noctx** report from this date carries the bonus in its baseline: absolute
+noctx values are not comparable with reports before it, paired deltas within
+a report are.
+

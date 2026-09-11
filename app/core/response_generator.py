@@ -1658,8 +1658,14 @@ class ResponseGenerator:
         # M3R-100: the diversity bonus is applied to the pool before the
         # window is read — the trace, the telemetry and the eval capture the
         # lifted scores, so the gate sees exactly what the draw saw.
+        # O19 (split-diversity-bonus-by-mode): one knob per context mode — the
+        # bonus passed the selection_window gate without context and failed
+        # it with context, so the two modes carry different defaults.
         candidates = apply_diversity_bonus(
-            candidates, self.runtime_state.selection_diversity_bonus
+            candidates,
+            self.runtime_state.selection_diversity_bonus
+            if request.context_tokens
+            else self.runtime_state.selection_diversity_bonus_noctx,
         )
         selected = select_scored_candidate(
             candidates,

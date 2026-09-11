@@ -223,6 +223,15 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # 0 disables: nothing computed, no RNG draw, byte-identical generation.
     FieldSpec("selection_diversity_bonus", "SELECTION_DIVERSITY_BONUS", "0",
               _float_in_range(0.0, 1.0)),
+    # O19 (split-diversity-bonus-by-mode, 2026-09-11): the same bonus for
+    # replies WITHOUT context. Split by mode because the selection_window gate
+    # passed the bonus at 0.2 in noctx (coverage -6.1 p.p.*, escape +0.41*,
+    # copy/repetition flat) and failed it in ctx (affinity -0.011*). Keep it
+    # below selection_score_margin: a bonus above the margin narrows the window
+    # (d40 in noctx). The ctx knob above stays 0, so generation_hash (context
+    # generations only) does not move.
+    FieldSpec("selection_diversity_bonus_noctx", "SELECTION_DIVERSITY_BONUS_NOCTX",
+              "0.2", _float_in_range(0.0, 1.0)),
     FieldSpec("reply_flavor_strength", "REPLY_FLAVOR_STRENGTH", "1.0",
               _float_in_range(0.0, 2.0)),
     # M3 emoji channel: chance to append a frequency-sampled emoji (from this
