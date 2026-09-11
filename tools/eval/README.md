@@ -143,6 +143,18 @@ punishes — and `C11v` carries the exemption alone, for attribution: the gate
 reads `insufficient data` for it by construction. Measured under the same
 `route_gate` block as every route; no thresholds of its own. Two modes.
 
+## Baseline epochs
+
+C0 is the registry defaults with flavor/emoji silenced, so it moves when a
+promotion moves the defaults. Reports compare within an epoch by absolute
+values and across epochs by paired deltas only:
+
+- until 2026-09-11 — no routes, no diversity bonus, exemption off;
+- since 2026-09-11 (promote-hot-and-phrase-routes, `eval_2026-09-11_promotion-check.md`)
+  — hot route 0.4 at hotness 2 / 0.25 (noctx), phrase route 0.4 at support 2,
+  diversity bonus 0.2 in both modes, recognized-unit exemption on. Every
+  future gate is measured against this C0.
+
 ## Route + selection knob (O20)
 
 `matrix_route_selection.yaml` (arm `C11s`, control `C11d`) pairs the phrase

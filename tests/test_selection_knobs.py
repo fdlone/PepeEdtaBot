@@ -46,10 +46,12 @@ class TestKnobDefaults(unittest.TestCase):
         self.assertEqual(_default("selection_score_margin"), SELECTION_SCORE_MARGIN)
         self.assertEqual(_default("context_relevance_weight"), CONTEXT_RELEVANCE_WEIGHT)
         self.assertEqual(_default("context_relevance_cap"), CONTEXT_RELEVANCE_CAP)
-        self.assertEqual(_default("selection_diversity_bonus"), 0.0)
-        # O19: the noctx bonus is on by default and below the margin — a bonus
-        # above the margin narrows the window (selection-grid verdict, d40).
+        # Promoted 2026-09-11 (O20): 0.2 in ctx next to the phrase route; O19:
+        # 0.2 in noctx. Both below the margin — a bonus above the margin
+        # narrows the window (selection-grid verdict, d40).
+        self.assertEqual(_default("selection_diversity_bonus"), 0.2)
         self.assertEqual(_default("selection_diversity_bonus_noctx"), 0.2)
+        self.assertLess(_default("selection_diversity_bonus"), SELECTION_SCORE_MARGIN)
         self.assertLess(_default("selection_diversity_bonus_noctx"), SELECTION_SCORE_MARGIN)
 
     def test_similarity_threshold_equals_the_gate(self) -> None:

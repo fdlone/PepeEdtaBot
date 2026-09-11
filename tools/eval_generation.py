@@ -62,6 +62,24 @@ class _NoVerbatimCopies:
         # generator never calls this.
         return frozenset()
 
+    async def get_hot_ngrams(
+        self,
+        chat_id: int,
+        *,
+        min_count: int,
+        recency_share: float,
+        meme_ordering: bool = False,
+    ) -> list[tuple[str, ...]]:
+        # Routes are on by default since 2026-09-11; the synthetic corpus has
+        # no hot window and no phrase index, so both routes read empty and
+        # hand their slots back to the walk.
+        return []
+
+    async def get_phrases_containing(
+        self, chat_id: int, tokens: list[str], *, min_count: int
+    ) -> list[tuple[tuple[str, ...], int]]:
+        return []
+
     async def get_context_idf(self, chat_id: int) -> dict[str, float]:
         # Empty IDF makes idf_context_relevance fall back to the length-normalized
         # formula, which is what the committed baselines below encode.

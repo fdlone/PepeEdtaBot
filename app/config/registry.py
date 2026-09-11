@@ -221,7 +221,11 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # (edge overlap below EDGE_OVERLAP_SIMILAR) gains bonus x (1 - overlap) —
     # a candidate-level lift of distinct walks into the selection window.
     # 0 disables: nothing computed, no RNG draw, byte-identical generation.
-    FieldSpec("selection_diversity_bonus", "SELECTION_DIVERSITY_BONUS", "0",
+    # Promoted 2026-09-11 (promote-hot-and-phrase-routes, O20): 0.2 next to
+    # the phrase route took every route_gate condition in ctx (single-
+    # trajectory share -15.9 p.p.*, affinity without copy +0.040*). Keep it
+    # below selection_score_margin.
+    FieldSpec("selection_diversity_bonus", "SELECTION_DIVERSITY_BONUS", "0.2",
               _float_in_range(0.0, 1.0)),
     # O19 (split-diversity-bonus-by-mode, 2026-09-11): the same bonus for
     # replies WITHOUT context. Split by mode because the selection_window gate
@@ -272,8 +276,11 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # its effect separately (roadmap M2R-430). The phrase route M3R-210
     # inherits it: inserting a corpus phrase as a unit is exactly what the
     # anti-quote penalty would otherwise punish.
+    # On by default since 2026-09-11 (promote-hot-and-phrase-routes): the
+    # phrase route inserts a corpus phrase as a unit, and the route was
+    # gated with the exemption on. false restores the pre-guard penalty.
     FieldSpec("verbatim_recognized_unit", "VERBATIM_RECOGNIZED_UNIT",
-              "false", _bool()),
+              "true", _bool()),
     FieldSpec("length_mode_weights", "LENGTH_MODE_WEIGHTS", "0.25,0.55,0.2",
               _length_weights()),
     # Length mirroring: tilt of the short/long weights above toward the length
@@ -457,8 +464,12 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # selection at the current hotness thresholds. Self-initiated replies only:
     # the pipeline never seeds addressed replies (L1 rule). Default 0 — inert,
     # generation byte-identical; raising it needs the l1_hot_channel gate.
+    # Promoted 2026-09-11 (promote-hot-and-phrase-routes, O18): the arm
+    # C7r40 (0.4 at hotness 2 / 0.25) took l1_hot_channel — meme rate
+    # +0.299*, window escape +0.091*, connectedness +3.3 p.p. 0 restores the
+    # pre-route generation byte for byte.
     FieldSpec("hot_ngram_slot_ratio", "HOT_NGRAM_SLOT_RATIO",
-              "0", _float_in_range(0.0, 0.7)),
+              "0.4", _float_in_range(0.0, 0.7)),
     # M3R-200 pilot (assoc-route-pilot, 2026-09-02): the associative route.
     # Share of the pool assembled around ASSOCIATES of the message's anchors —
     # distance-1 neighbours by normalized PMI over the chain's own transition
@@ -472,13 +483,16 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # bigram/trigram with all-time support — inserted as a unit and grown on
     # both sides by the seeded assembler. Default 0 — inert, generation
     # byte-identical, the index is not read; promotion needs the route_gate.
+    # Promoted 2026-09-11 (promote-hot-and-phrase-routes, O20) together with
+    # selection_diversity_bonus 0.2 and phrase_min_count 2 — the arm C11s. 0
+    # restores the pre-route generation byte for byte.
     FieldSpec("phrase_slot_ratio", "PHRASE_SLOT_RATIO",
-              "0", _float_in_range(0.0, 0.7)),
+              "0.4", _float_in_range(0.0, 0.7)),
     # Support threshold of a phrase the route may use — the grid arm of the
     # route's measurement (2 / 3 / 5), not a start condition. Floor 2: a
     # phrase seen once is the support-1 lottery (R4). Ceiling: no phrase
     # recurs ten thousand times in a chat.
-    FieldSpec("phrase_min_count", "PHRASE_MIN_COUNT", "3",
+    FieldSpec("phrase_min_count", "PHRASE_MIN_COUNT", "2",
               _int_in_range(2, 10000)),
     # Branching band for seed choice (trapezoid, TZ §9.4): a seed below the
     # minimum stalls generation, one far above the ideal is an anchor about
@@ -592,11 +606,14 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # Minimum window occurrences before an n-gram can be considered hot.
     # Ceiling: no n-gram repeats a thousand times inside a chat's retention
     # window, so anything near it silently switches local memes off.
-    FieldSpec("hot_ngram_min_count", "HOT_NGRAM_MIN_COUNT", "3",
+    # 2 / 0.25 since 2026-09-11: the hotness thresholds the promoted hot
+    # route was gated at (M3R-145: 3 / 0.5 left the hot pool empty on the
+    # prod copy).
+    FieldSpec("hot_ngram_min_count", "HOT_NGRAM_MIN_COUNT", "2",
               _int_in_range(1, 1000)),
     # Hot = window count / all-time count >= this share; 0.5 means at least
     # half of all recorded occurrences happened inside the decay window.
-    FieldSpec("hot_ngram_recency_share", "HOT_NGRAM_RECENCY_SHARE", "0.5",
+    FieldSpec("hot_ngram_recency_share", "HOT_NGRAM_RECENCY_SHARE", "0.25",
               _float_in_range(0.0, 1.0)),
     # L3 rare events: chance that a generated reply becomes a "shape break" —
     # one-word verdict, ALL-CAPS, or a double message. Uniform among the three.
