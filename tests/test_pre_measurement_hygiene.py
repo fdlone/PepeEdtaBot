@@ -9,10 +9,8 @@ from __future__ import annotations
 
 import random
 import unittest
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app import log_masking
 from app.core.generation_telemetry import GenerationTelemetry
 from app.core.markov import MarkovGenerator
 from app.core.response_generator import (
@@ -106,7 +104,6 @@ def _request(*, with_context: bool) -> GenerationRequest:
     return GenerationRequest(
         chat_id=CHAT,
         context_tokens=["контекст", "из", "трёх"] if with_context else [],
-        seed=None,
         current_message_normalized="исходное сообщение",
     )
 
@@ -269,63 +266,6 @@ class TestSeedRankingCountsWhereItStarves(unittest.IsolatedAsyncioTestCase):
                 min_token_len=3,
             )
         )
-
-
-class TestHotNgramDrawIsCounted(unittest.IsolatedAsyncioTestCase):
-    """Пустой `get_hot` — канал, выключенный данными (карта §3.2б)."""
-
-    def setUp(self) -> None:
-        # Путь непустой затравки пишет отладочную строку с маскированным
-        # chat_id; без инициализации маскирование падает намеренно.
-        log_masking.init_masking("test-secret-for-measurement-hygiene")
-
-    def _pipeline(self, hot: list[tuple[str, ...]]) -> tuple[object, MagicMock]:
-        from app.services.reply_pipeline import ReplyPipeline
-
-        generator = MagicMock()
-        generator.telemetry = GenerationTelemetry()
-        learning_service = AsyncMock()
-        learning_service.get_hot_ngrams = AsyncMock(return_value=hot)
-        state = SimpleNamespace(
-            hot_ngram_seed_chance=1.0,
-            hot_ngram_min_count=3,
-            hot_ngram_recency_share=0.5,
-            markov_hot_ngram_meme_ordering=False,
-        )
-        pipeline = ReplyPipeline.__new__(ReplyPipeline)
-        pipeline._runtime_state = state  # type: ignore[attr-defined]
-        pipeline._generator = generator  # type: ignore[attr-defined]
-        pipeline._learning_service = learning_service  # type: ignore[attr-defined]
-        return pipeline, generator
-
-    async def _draw(self, hot: list[tuple[str, ...]]) -> GenerationTelemetry:
-        pipeline, generator = self._pipeline(hot)
-        msg = SimpleNamespace(chat_id=CHAT)
-        obs = SimpleNamespace(address_reply=False)
-        await pipeline._hot_ngram_seed(msg, obs)  # type: ignore[attr-defined]
-        return generator.telemetry
-
-    async def test_empty_selection_is_counted(self) -> None:
-        telemetry = await self._draw([])
-        snap = telemetry.snapshot()
-        self.assertEqual(snap["hot_ngram_draws"], 1)
-        self.assertEqual(snap["hot_ngram_empty_rate"], 1.0)
-
-    async def test_non_empty_selection_is_counted(self) -> None:
-        telemetry = await self._draw([("горячая", "фраза")])
-        snap = telemetry.snapshot()
-        self.assertEqual(snap["hot_ngram_draws"], 1)
-        self.assertEqual(snap["hot_ngram_empty_rate"], 0.0)
-
-    async def test_channel_off_never_draws(self) -> None:
-        pipeline, generator = self._pipeline([("горячая", "фраза")])
-        pipeline._runtime_state.hot_ngram_seed_chance = 0.0  # type: ignore[attr-defined]
-        await pipeline._hot_ngram_seed(  # type: ignore[attr-defined]
-            SimpleNamespace(chat_id=CHAT), SimpleNamespace(address_reply=False)
-        )
-        snap = generator.telemetry.snapshot()
-        self.assertEqual(snap["hot_ngram_draws"], 0)
-        self.assertIsNone(snap["hot_ngram_empty_rate"])
 
 
 if __name__ == "__main__":

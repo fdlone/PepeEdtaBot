@@ -147,7 +147,7 @@ class TestBonusByMode(PoolCompositionTestCase):
             scorer=MagicMock(return_value=_score(1.0)),
         )
         request = GenerationRequest(
-            chat_id=123, context_tokens=context, seed=None,
+            chat_id=123, context_tokens=context,
             current_message_normalized="пиво сегодня",
         )
         with patch("app.core.response_generator.mask_chat_id", return_value="chat"):

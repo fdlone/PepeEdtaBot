@@ -149,7 +149,6 @@ class VerbatimCopyChecker(Protocol):
 class GenerationRequest:
     chat_id: int
     context_tokens: list[str]
-    seed: list[str] | None
     current_message_normalized: str
     # M2R-210: the moment the temporal layer is evaluated at, as Unix seconds.
     # None means "now" — the bot's own path. The eval runner and the tests pass
@@ -1039,7 +1038,6 @@ class ResponseGenerator:
             with_context=bool(request.context_tokens)
         )
         modifiers = self.mood_modifiers or NEUTRAL_MODIFIERS
-        seed = request.seed
         target = max(1, min(candidate_target, GENERATION_ATTEMPT_BUDGET))
         # M2R-110: the target may shrink once the walk shows how much choice it
         # actually had. Starts at the configured value and is recomputed after
@@ -1236,7 +1234,7 @@ class ResponseGenerator:
             # M3R-230: the route's slots are the first attempts; a hot attempt
             # carries its own seed and its own route attribution.
             hot_attempt = bool(hot_seeds)
-            attempt_seed = hot_seeds.pop(0) if hot_attempt else seed
+            attempt_seed = hot_seeds.pop(0) if hot_attempt else None
             attempt_context_tokens = (
                 request.context_tokens
                 if attempt < attempts_with_context
@@ -1473,7 +1471,6 @@ class ResponseGenerator:
                             context_used=bool(attempt_context_tokens),
                         )
 
-            seed = None
 
         if context_dropped:
             self.generator.telemetry.note_context_dropped()

@@ -1,0 +1,28 @@
+# HISTORICAL RECORD — this matrix cannot run any more: hot_ngram_seed_chance was
+# removed by the change it justified. Kept next to its report
+# (eval_2026-09-11_legacy-seed-check_noctx.md) so the check stays reproducible
+# from git history (checkout before 2026-09-11 hot-channel-write-gate).
+# O22 group 4 (change hot-channel-write-gate): the legacy L1 seed draw
+# (hot_ngram_seed_chance, one attempt per self-initiated reply with chance
+# 0.25) next to the promoted hot route (2 attempts of 5 seeded by the route).
+# The route was gated with the legacy draw at its default, so switching the
+# draw off is an unmeasured change in noctx. One arm, noctx only (ctx never
+# seeds): must-not-worsen on copy / repetition / affinity, meme rate and
+# window escape printed. Expectation written before the run: flat on every
+# metric within the protocol's resolution — the route already seeds the first
+# two attempts from the same selection, and the third attempt's seed lands in
+# a pool the route's candidates already cover.
+configurations:
+  - id: C0
+    description: "registry defaults (route on, legacy draw 0.25), flavor/emoji silenced"
+    available: true
+    overrides:
+      reply_flavor_strength: 0.0
+      emoji_append_chance: 0.0
+
+  - id: CL0
+    description: "legacy L1 seed draw off (hot_ngram_seed_chance 0), route unchanged"
+    available: true
+    same_as: C0
+    overrides:
+      hot_ngram_seed_chance: 0.0

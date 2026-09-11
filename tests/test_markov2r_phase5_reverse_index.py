@@ -216,7 +216,6 @@ class TestNothingReadsReverseInGeneration(_DatabaseCase):
             GenerationRequest(
                 chat_id=CHAT,
                 context_tokens=["пробное", "сообщение"],
-                seed=None,
                 current_message_normalized="совсем другой текст",
             ),
             rng=random.Random(7),

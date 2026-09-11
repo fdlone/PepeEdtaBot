@@ -622,7 +622,6 @@ async def evaluate(
                     GenerationRequest(
                         chat_id=resolved_chat,
                         context_tokens=context_tokens,
-                        seed=None,
                         current_message_normalized=sanitize_text(context_message).lower(),
                     ),
                     rng=rng,

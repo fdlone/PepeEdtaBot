@@ -603,13 +603,12 @@ def _l1_arm_verdict(
         successful = [record for record in arm.records if record.success]
         if not successful:
             return INSUFFICIENT, "no successful generations in the arm"
-        drawn = sum(1 for record in successful if record.seed_drawn)
         seeded = sum(1 for record in successful if record.start_source == "seed")
         share = seeded / len(successful)
         floor = float(config.get("seed_start_share_min", 0.05))
         parts.append(
             f"coverage: seeded starts {share:.1%} of {len(successful)} "
-            f"(seeds drawn {drawn}; floor {floor:.0%})"
+            f"(floor {floor:.0%})"
         )
         if share < floor:
             return (

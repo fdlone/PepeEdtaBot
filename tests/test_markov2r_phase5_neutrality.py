@@ -61,7 +61,6 @@ class TestSeededNeutralDefault(unittest.IsolatedAsyncioTestCase):
             GenerationRequest(
                 chat_id=CHAT,
                 context_tokens=["дракон", "город"],
-                seed=None,
                 current_message_normalized="красный дракон летит",
             ),
             rng=random.Random(11),
@@ -82,7 +81,6 @@ class TestSeededNeutralDefault(unittest.IsolatedAsyncioTestCase):
         req = GenerationRequest(
             chat_id=CHAT,
             context_tokens=["дракон"],
-            seed=None,
             current_message_normalized="синий кот сидит",
         )
         first = await pipeline.generate(req, rng=random.Random(7))

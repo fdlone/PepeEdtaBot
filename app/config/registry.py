@@ -402,20 +402,25 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # Share of the best-of-N pool filled by seeded candidates (an anchor token
     # the chat uses, a reply grown around it). Default 0 — the feature is inert,
     # generation byte-identical; raising it needs the phase's promotion gate.
+    # Ceiling 0.5 for every *_slot_ratio (narrow-knob-domains, 2026-09-11):
+    # route_slot_budget caps a route at half the pool, so 0.7 was the same two
+    # slots as 0.4 — the knob census measured the old extreme inert.
     FieldSpec("markov_seeded_candidate_ratio", "MARKOV_SEEDED_CANDIDATE_RATIO",
-              "0", _float_in_range(0.0, 0.7)),
+              "0", _float_in_range(0.0, 0.5)),
     # M3R-230 (l1-hot-route, 2026-09-02): L1 "local memes" as a route with a
     # slot budget (the O10 mechanism). Share of the pool built from walks
     # seeded by a hot n-gram — each slot draws its own n-gram from the hot
     # selection at the current hotness thresholds. Self-initiated replies only:
-    # the pipeline never seeds addressed replies (L1 rule). Default 0 — inert,
-    # generation byte-identical; raising it needs the l1_hot_channel gate.
+    # the pipeline never seeds addressed replies (L1 rule). Also the write gate
+    # of the hot-n-gram window on the learn path (hot-channel-write-gate,
+    # 2026-09-11): at 0 nothing is recorded and nothing is read. Default 0 —
+    # inert, generation byte-identical; raising it needs the l1_hot_channel gate.
     # Promoted 2026-09-11 (promote-hot-and-phrase-routes, O18): the arm
     # C7r40 (0.4 at hotness 2 / 0.25) took l1_hot_channel — meme rate
     # +0.299*, window escape +0.091*, connectedness +3.3 p.p. 0 restores the
     # pre-route generation byte for byte.
     FieldSpec("hot_ngram_slot_ratio", "HOT_NGRAM_SLOT_RATIO",
-              "0.4", _float_in_range(0.0, 0.7)),
+              "0.4", _float_in_range(0.0, 0.5)),
     # M3R-200 pilot (assoc-route-pilot, 2026-09-02): the associative route.
     # Share of the pool assembled around ASSOCIATES of the message's anchors —
     # distance-1 neighbours by normalized PMI over the chain's own transition
@@ -423,7 +428,7 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # pipeline. Default 0 — inert, generation byte-identical; a pilot bar, not
     # a promotion gate, decides whether it is worth a grid (assoc_pilot).
     FieldSpec("assoc_slot_ratio", "ASSOC_SLOT_RATIO",
-              "0", _float_in_range(0.0, 0.7)),
+              "0", _float_in_range(0.0, 0.5)),
     # M3R-210 (phrase-route): the phrase route. Share of the pool assembled
     # around a phrase of the chat's cumulative phrase index — a content
     # bigram/trigram with all-time support — inserted as a unit and grown on
@@ -433,7 +438,7 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # selection_diversity_bonus 0.2 and phrase_min_count 2 — the arm C11s. 0
     # restores the pre-route generation byte for byte.
     FieldSpec("phrase_slot_ratio", "PHRASE_SLOT_RATIO",
-              "0.4", _float_in_range(0.0, 0.7)),
+              "0.4", _float_in_range(0.0, 0.5)),
     # Support threshold of a phrase the route may use — the grid arm of the
     # route's measurement (2 / 3 / 5), not a start condition. Floor 2: a
     # phrase seen once is the support-1 lottery (R4). Ceiling: no phrase
@@ -539,24 +544,15 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # morphology, so the pymorphy3 guard cannot catch it.
     FieldSpec("slot_mutation_probability", "SLOT_MUTATION_PROBABILITY", "0.15",
               _float_in_range(0.0, 1.0)),
-    # L1 running jokes: chance to seed an *unprompted* reply from a currently
-    # hot n-gram (a phrase the chat picked up in the last ~7 days). 0 disables
-    # the whole channel (no recording, no reads) — same gate pattern as
-    # emoji_append_chance. Mention replies are never seeded.
-    # 0.25 (2026-07-12): at 0.05 the channel fired ~once a week in a live chat
-    # (dialogue-simulation audit: 1-2 lookups per 900 messages); ~every 4th
-    # unprompted reply now rolls for a seed, actual fires still gated by a hot
-    # n-gram existing in the window.
-    FieldSpec("hot_ngram_seed_chance", "HOT_NGRAM_SEED_CHANCE", "0.25",
-              _float_in_range(0.0, 1.0)),
     # Minimum window occurrences before an n-gram can be considered hot.
-    # Ceiling: no n-gram repeats a thousand times inside a chat's retention
-    # window, so anything near it silently switches local memes off.
+    # Ceiling 100 (narrow-knob-domains, 2026-09-11): the census measured 1000
+    # as a data switch — the hot pool is empty there and the route falls
+    # silent, which is the §5 trap of a channel switched off by data.
     # 2 / 0.25 since 2026-09-11: the hotness thresholds the promoted hot
     # route was gated at (M3R-145: 3 / 0.5 left the hot pool empty on the
     # prod copy).
     FieldSpec("hot_ngram_min_count", "HOT_NGRAM_MIN_COUNT", "2",
-              _int_in_range(1, 1000)),
+              _int_in_range(1, 100)),
     # Hot = window count / all-time count >= this share; 0.5 means at least
     # half of all recorded occurrences happened inside the decay window.
     FieldSpec("hot_ngram_recency_share", "HOT_NGRAM_RECENCY_SHARE", "0.25",
@@ -582,7 +578,7 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # L2 user quirks: chance to precede a generated answer to a "regular"'s
     # direct address with a short vocative message ("опять ты"). 0 disables
     # the whole channel — no interaction-counter writes, no reads (same gate
-    # pattern as emoji_append_chance / hot_ngram_seed_chance). Additionally
+    # pattern as emoji_append_chance). Additionally
     # capped in code at one quirk per (chat, user) per UTC day.
     # 0.3 since 2026-09-01 (tune-user-quirk-channel): the live funnel of
     # 24.08->01.09 showed the roll rejecting 41 of 44 addressed replies that
@@ -802,6 +798,19 @@ def validate_cross_fields(obj: Any) -> None:
         raise ValueError(
             "MARKOV_SEED_BRANCH_MIN <= MARKOV_SEED_BRANCH_IDEAL <= "
             "MARKOV_SEED_BRANCH_MAX must hold"
+        )
+    # narrow-knob-domains (2026-09-11): a diversity bonus above the selection
+    # margin makes the lifted candidate the maximum and drops the previous best
+    # out of the window — the window narrows instead of widening (selection
+    # grid 02.09, d40; census 11.09 at 1.0: window escape -0.321*). Both mode
+    # knobs are checked against the one margin.
+    if (
+        obj.selection_diversity_bonus > obj.selection_score_margin
+        or obj.selection_diversity_bonus_noctx > obj.selection_score_margin
+    ):
+        raise ValueError(
+            "SELECTION_DIVERSITY_BONUS and SELECTION_DIVERSITY_BONUS_NOCTX "
+            "must be <= SELECTION_SCORE_MARGIN"
         )
 
 

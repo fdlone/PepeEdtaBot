@@ -309,7 +309,6 @@ async def evaluate_generation(
                     GenerationRequest(
                         chat_id=SYNTHETIC_CHAT_ID,
                         context_tokens=context_tokens,
-                        seed=None,
                         current_message_normalized="__synthetic_evaluation_input__",
                     ),
                     rng=rng,

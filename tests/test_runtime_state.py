@@ -42,7 +42,6 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
             "verbatim_penalty_strength": 1.0,
             "verbatim_extension_share": 0.0,
             "length_context_adaptation": 0.0,
-            "hot_ngram_seed_chance": 0.05,
             "rare_event_chance": 0.005,
             "false_start_chance": 0.03,
             "mood_mention_heated_share": 0.0,

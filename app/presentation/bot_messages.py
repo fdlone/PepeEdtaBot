@@ -22,7 +22,7 @@ _DIALOGUE_HELP_KNOBS: tuple[tuple[str, str], ...] = (
     ("mention_max_per_hour", "потолок ответов на упоминания в час"),
     ("emoji_append_chance", "эмодзи в ответах"),
     ("markov_jump_probability", "дрейф темы"),
-    ("hot_ngram_seed_chance", "подхват мемов чата"),
+    ("hot_ngram_slot_ratio", "подхват мемов чата (hot-маршрут)"),
     ("rare_event_chance", "редкие фишки в ответах"),
     ("false_start_chance", "фальстарты"),
     ("pivo_temporal_flavor_chance", "вариации /pivo"),

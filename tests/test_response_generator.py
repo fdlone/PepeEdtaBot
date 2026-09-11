@@ -125,7 +125,6 @@ def _request() -> GenerationRequest:
     return GenerationRequest(
         chat_id=123,
         context_tokens=["reply", "context", "tokens"],
-        seed=["reply", "context"],
         current_message_normalized="same current message",
     )
 
@@ -492,7 +491,9 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertIsNone(calls[GENERATION_ATTEMPTS_WITH_CONTEXT].kwargs["context_tokens"])
-        self.assertEqual(calls[0].kwargs["seed_tokens"], request.seed)
+        # No route draws here, so no attempt carries a seed (the legacy
+        # per-reply seed was removed 2026-09-11, hot-channel-write-gate).
+        self.assertIsNone(calls[0].kwargs["seed_tokens"])
         self.assertTrue(
             all(call.kwargs["seed_tokens"] is None for call in calls[1:])
         )

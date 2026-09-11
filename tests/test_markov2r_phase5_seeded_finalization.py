@@ -159,7 +159,6 @@ class TestSeededBranchUsesIt(unittest.IsolatedAsyncioTestCase):
                 GenerationRequest(
                     chat_id=CHAT,
                     context_tokens=["дракон"],
-                    seed=None,
                     current_message_normalized="красный дракон летит",
                 ),
                 [],

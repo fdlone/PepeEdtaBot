@@ -746,35 +746,6 @@ class TestRouteBreakdownSection(unittest.TestCase):
         self.assertEqual(flat["route_seeded_rejected_unmapped"], 1)
 
 
-class TestHotSeedDraw(unittest.TestCase):
-    """M3R-145: the harness draws L1 seeds the pipeline's way."""
-
-    def test_roll_first_then_choose(self) -> None:
-        from tools.eval.run import draw_hot_seed
-
-        pool = [("пиво", "сегодня"), ("опять", "ты")]
-        self.assertEqual(draw_hot_seed(pool, 0.0, random.Random(1)), (False, None))
-        self.assertEqual(draw_hot_seed([], 1.0, random.Random(1)), (True, None))
-        rolled, seed = draw_hot_seed(pool, 1.0, random.Random(1))
-        self.assertTrue(rolled)
-        self.assertIn(tuple(seed or ()), pool)
-
-    def test_zero_chance_consumes_no_draw(self) -> None:
-        from tools.eval.run import draw_hot_seed
-
-        rng = random.Random(7)
-        draw_hot_seed([("а", "б")], 0.0, rng)
-        self.assertEqual(rng.random(), random.Random(7).random())
-
-    def test_same_seed_same_choice(self) -> None:
-        from tools.eval.run import draw_hot_seed
-
-        pool = [(f"w{i}", "x") for i in range(20)]
-        first = draw_hot_seed(pool, 1.0, random.Random(42))
-        second = draw_hot_seed(pool, 1.0, random.Random(42))
-        self.assertEqual(first, second)
-
-
 class TestL1Gate(unittest.TestCase):
     """M3R-145 gate: coverage gates the verdict, the meme rate is must-improve
     in noctx, copy is must-not-worsen in both modes, and no round means no
@@ -797,7 +768,6 @@ class TestL1Gate(unittest.TestCase):
                     meme_hits=frozenset({0}) if meme else frozenset(),
                     is_copy=copy,
                     affinity=affinity,
-                    seed_drawn=index < seeded,
                     start_source="seed" if index < seeded else "global",
                 )
             )
@@ -1362,14 +1332,11 @@ class TestSyntheticProtocol(unittest.IsolatedAsyncioTestCase):
                 noctx_runs["C0"].telemetry[0]["ctx_generation_share"], 0.0
             )
             self.assertEqual(ctx_runs["C0"].telemetry[0]["ctx_generation_share"], 1.0)
-            # M3R-145: the L1 seed draw exists in noctx only — the pipeline
-            # never seeds addressed replies. In ctx nothing is drawn and the
-            # draw counter stays at zero; in noctx the roll is taken, and on
-            # the synthetic snapshot (hot selection empty at the defaults) the
-            # draws that happened all came back empty.
-            self.assertTrue(all(not r.seed_drawn for r in ctx_records))
+            # M3R-230: the hot route draws in noctx only — the pipeline never
+            # seeds addressed replies. In ctx the draw counter stays at zero;
+            # in noctx the route draws, and on the synthetic snapshot (hot
+            # selection empty) the draws that happened all came back empty.
             self.assertEqual(ctx_runs["C0"].telemetry[0]["hot_ngram_draws"], 0)
-            self.assertTrue(all(not r.seed_drawn for r in noctx_records))
             noctx_snapshot = noctx_runs["C0"].telemetry[0]
             if noctx_snapshot["hot_ngram_draws"]:
                 self.assertEqual(noctx_snapshot["hot_ngram_empty_rate"], 1.0)

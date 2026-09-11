@@ -539,13 +539,10 @@ class ReplyPipeline:
             mood_modifiers=obs.mood_modifiers,
             mood=obs.mood,
         )
-        seed = await self._hot_ngram_seed(msg, obs)
-
         reply_text = await response_generator.generate(
             GenerationRequest(
                 chat_id=msg.chat_id,
                 context_tokens=context_tokens,
-                seed=seed,
                 current_message_normalized=obs.current_message_normalized,
             ),
             rng=random.Random(),
@@ -618,9 +615,10 @@ class ReplyPipeline:
             short_half_life_days=state.markov_short_half_life_days,
         )
         # L1 running jokes: fold the learned message's content n-grams into the
-        # sliding hot-ngram window. Gated on the channel knob so a zero chance
-        # keeps the learn path write-free (M3 pattern).
-        if state.hot_ngram_seed_chance > 0.0:
+        # sliding hot-ngram window. Gated on the hot route's slot ratio (its
+        # only reader since 2026-09-11, hot-channel-write-gate) so a switched-
+        # off route keeps the learn path write-free (M3 pattern).
+        if state.hot_ngram_slot_ratio > 0.0:
             content_ngrams = extract_content_ngrams(obs.tokens)
             if content_ngrams:
                 await self._learning_service.record_hot_ngrams(
@@ -778,45 +776,6 @@ class ReplyPipeline:
             only_for_replies=only_for_replies,
             include_current_message=include_current,
         )
-
-    async def _hot_ngram_seed(
-        self, msg: IncomingMessage, obs: MessageObservation
-    ) -> list[str] | None:
-        """L1 running jokes: изредка открыть самостоятельный ответ «горячей» фразой.
-
-        Ответ на прямое обращение никогда не сидируется — адресованный вопрос
-        должен отвечать человеку, а не мему.
-        """
-        state = self._runtime_state
-        if (
-            obs.address_reply
-            or state.hot_ngram_seed_chance <= 0.0
-            or random.random() >= state.hot_ngram_seed_chance
-        ):
-            return None
-        hot_ngrams = await self._learning_service.get_hot_ngrams(
-            msg.chat_id,
-            min_count=state.hot_ngram_min_count,
-            recency_share=state.hot_ngram_recency_share,
-            meme_ordering=state.markov_hot_ngram_meme_ordering,
-        )
-        # M3R-141: counted only once the roll has already decided to seed, so
-        # the denominator is "draws that asked for a hot n-gram". At the default
-        # thresholds this selection returns nothing at all (map §3.2б) — a
-        # channel switched off by data, indistinguishable until now from one
-        # switched off by its knob.
-        self._generator.telemetry.note_hot_ngram_draw(empty=not hot_ngrams)
-        if not hot_ngrams:
-            return None
-        # Only the length is logged, never the n-gram text: chat content stays
-        # out of logs (project log-masking policy).
-        seed = list(random.choice(hot_ngrams))
-        logger.debug(
-            "Hot-ngram seed picked: chat=%s ngram_len=%s",
-            mask_chat_id(msg.chat_id),
-            len(seed),
-        )
-        return seed
 
     async def _apply_user_quirk(
         self,

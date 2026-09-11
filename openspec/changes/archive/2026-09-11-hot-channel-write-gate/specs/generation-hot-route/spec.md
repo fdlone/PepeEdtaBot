@@ -1,9 +1,4 @@
-# generation-hot-route Specification
-
-## Purpose
-TBD - created by archiving change l1-hot-route. Update Purpose after archive.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Hot n-grams enter the pool as a route with a slot budget
 

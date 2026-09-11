@@ -133,7 +133,6 @@ async def run(db_path: Path, seeds: tuple[int, ...], per_seed: int) -> str:
                     GenerationRequest(
                         chat_id=chat,
                         context_tokens=context,
-                        seed=None,
                         current_message_normalized=sanitize_text(source).lower(),
                     ),
                     # A fresh RNG per generation keeps runs paired across

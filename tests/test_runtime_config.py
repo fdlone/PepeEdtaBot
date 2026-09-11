@@ -34,7 +34,6 @@ def make_state() -> SimpleNamespace:
             "verbatim_penalty_strength": 1.0,
             "verbatim_extension_share": 0.0,
             "length_context_adaptation": 0.0,
-            "hot_ngram_seed_chance": 0.05,
             "rare_event_chance": 0.005,
             "false_start_chance": 0.03,
         },

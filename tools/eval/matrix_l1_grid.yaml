@@ -7,9 +7,10 @@
 # and the prefix is what routes an arm to its gate in report.py.
 #
 # Flavor/emoji stay silenced exactly as in C0, so the metrics measure the word
-# model alone. hot_ngram_seed_chance stays at the registry default (0.25): the
-# grid moves the SELECTION thresholds, not the draw probability. The question
-# is whether the channel has anything to say, not how often it speaks.
+# model alone. The grid moves the SELECTION thresholds; the legacy draw
+# probability (hot_ngram_seed_chance, 0.25 at the time) was removed 2026-09-11
+# with the hot route as the channel's only reader. The question is whether the
+# channel has anything to say, not how often it speaks.
 #
 # The axis is what the prod copy (2026-09-01) makes measurable. chat_hot_ngrams
 # holds 1097 rows, 18 with cnt >= 2 and 2 with cnt >= 3; at the default 3/0.5

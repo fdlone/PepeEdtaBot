@@ -326,39 +326,6 @@ class TestRespond(ReplyPipelineTestCase):
         self.assertEqual(self.outbox.sent, [])
 
 
-class TestHotNgramSeed(ReplyPipelineTestCase):
-    async def test_seed_is_taken_for_an_unprompted_reply(self) -> None:
-        state = _state(
-            reply_probability=1.0,
-            min_cooldown_sec=0,
-            reply_director_enabled=False,
-            hot_ngram_seed_chance=1.0,
-        )
-        self.learning_service.get_hot_ngrams.return_value = [("горячая", "фраза")]
-
-        with self._generated("ответ") as response_gen_cls:
-            await self._run(state, _incoming())
-
-        request = response_gen_cls.return_value.generate.await_args.args[0]
-        self.assertEqual(request.seed, ["горячая", "фраза"])
-
-    async def test_address_reply_is_never_seeded(self) -> None:
-        state = _state(
-            reply_probability=1.0,
-            min_cooldown_sec=0,
-            reply_director_enabled=False,
-            hot_ngram_seed_chance=1.0,
-        )
-        self.learning_service.get_hot_ngrams.return_value = [("горячая", "фраза")]
-
-        with self._generated("ответ") as response_gen_cls:
-            await self._run(state, _incoming(mentioned=True))
-
-        request = response_gen_cls.return_value.generate.await_args.args[0]
-        self.assertIsNone(request.seed)
-        self.learning_service.get_hot_ngrams.assert_not_awaited()
-
-
 class TestUserQuirkAndRareEvent(ReplyPipelineTestCase):
     def _quirk_state(self) -> RuntimeState:
         return _state(
