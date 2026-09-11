@@ -65,14 +65,3 @@ class TestGenerationEvaluation(unittest.IsolatedAsyncioTestCase):
         }
 
         self.assertEqual(first_metrics, second_metrics)
-
-    async def test_casefold_profile_records_casefold_resolution(self) -> None:
-        actual = await evaluate_generation(
-            seed=20260620,
-            generations=100,
-            normalize_lower=False,
-            fuzzy_context_casefold=True,
-        )
-
-        self.assertGreater(actual["context_casefold_match_rate"], 0.0)
-        self.assertEqual(actual["leading_punctuation_rate"], 0.0)

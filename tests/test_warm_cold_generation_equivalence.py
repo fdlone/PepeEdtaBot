@@ -176,7 +176,6 @@ class TestWarmCacheGeneratesLikeAColdRead(unittest.IsolatedAsyncioTestCase):
                 GenerationRequest(
                     chat_id=CHAT_ID,
                     context_tokens=self.contexts[index % len(self.contexts)],
-                    seed=None,
                     current_message_normalized=sanitize_text(source).lower(),
                 ),
                 rng=random.Random(900_000 + index),

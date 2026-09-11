@@ -106,7 +106,6 @@ class _InstrumentedMarkovGenerator(MarkovGenerator):
         super().__init__(db)
         self.leading_punctuation_stripped = 0
         self.context_exact_matches = 0
-        self.context_casefold_matches = 0
         self.hidden_context_fallbacks = 0
 
     async def generate_text_with_trace(
@@ -115,7 +114,6 @@ class _InstrumentedMarkovGenerator(MarkovGenerator):
         text, trace = await super().generate_text_with_trace(*args, **kwargs)
         self.leading_punctuation_stripped += trace.leading_punctuation_stripped
         self.context_exact_matches += trace.context_exact_matches
-        self.context_casefold_matches += trace.context_casefold_matches
         self.hidden_context_fallbacks += trace.hidden_context_fallbacks
         return text, trace
 
@@ -194,8 +192,6 @@ async def evaluate_generation(
     generations: int = DEFAULT_GENERATIONS,
     candidate_target: int = CANDIDATE_TARGET,
     normalize_lower: bool = True,
-    fuzzy_context_casefold: bool = False,
-    recent_reply_penalty_strength: float = 0.5,
     length_mode_weights: tuple[float, float, float] = (0.25, 0.55, 0.2),
 ) -> dict[str, int | float]:
     if generations <= 0:
@@ -245,7 +241,6 @@ async def evaluate_generation(
                     # affinity boost is measured on the prod-copy eval instead.
                     "context_start_affinity": 1.0,
                     "repetition_penalty_strength": 1.0,
-                    "recent_reply_penalty_strength": recent_reply_penalty_strength,
                     # Off in the synthetic eval: there is no prod corpus index here,
                     # the baselines measure the word model alone.
                     "verbatim_penalty_strength": 0.0,
@@ -259,12 +254,6 @@ async def evaluate_generation(
                     # Neutral Phase 2 knobs keep the committed baselines
                     # byte-identical: gain 0 is the 1.x sampler, and a degenerate
                     # bound of 0 leaves the candidate target fixed.
-                    "markov_entropy_temp_gain": 0.0,
-                    "markov_entropy_pivot": 0.5,
-                    "markov_entropy_temp_min": 0.5,
-                    "markov_entropy_temp_max": 12.0,
-                    "markov_branching_degenerate_max": 0.0,
-                    "markov_branching_candidate_floor": 2,
                     # M2R-210: neutral temporal blend — every alpha 0, so this
                     # baseline keeps measuring the word model alone.
                     "markov_short_half_life_days": 3.0,
@@ -301,8 +290,6 @@ async def evaluate_generation(
                     "context_anchor_splice_probability": 0.0,
                     "emoji_append_chance": 0.0,
                     "normalize_lower": normalize_lower,
-                    "fuzzy_context_casefold": fuzzy_context_casefold,
-                    "auto_capitalize_replies": False,
                     "recent_short_replies": {},
                     "recent_replies": {},
                 }
@@ -317,21 +304,11 @@ async def evaluate_generation(
                     corpus[index % len(corpus)],
                     normalize_lower=normalize_lower,
                 )
-                if (
-                    fuzzy_context_casefold
-                    and not normalize_lower
-                    and index % 10 == 0
-                ):
-                    context_tokens = [
-                        token.swapcase() if token not in PUNCT_SET else token
-                        for token in context_tokens
-                    ]
                 started_at = time.perf_counter()
                 selection = await response_generator.generate_with_result(
                     GenerationRequest(
                         chat_id=SYNTHETIC_CHAT_ID,
                         context_tokens=context_tokens,
-                        seed=None,
                         current_message_normalized="__synthetic_evaluation_input__",
                     ),
                     rng=rng,
@@ -370,7 +347,6 @@ async def evaluate_generation(
     empty_count = sum(1 for output in outputs if not output)
     context_resolution_attempts = (
         generator.context_exact_matches
-        + generator.context_casefold_matches
         + generator.hidden_context_fallbacks
     )
     return {
@@ -379,7 +355,6 @@ async def evaluate_generation(
         "generations": generations,
         "corpus_messages": len(corpus),
         "normalize_lower": normalize_lower,
-        "fuzzy_context_casefold": fuzzy_context_casefold,
         "candidate_target": effective_candidate_target,
         "empty_result_rate": empty_count / generations,
         "distinct_1": distinct_ratio(outputs, 1),
@@ -397,11 +372,6 @@ async def evaluate_generation(
         "leading_punctuation_stripped": generator.leading_punctuation_stripped,
         "context_exact_match_rate": (
             generator.context_exact_matches / context_resolution_attempts
-            if context_resolution_attempts
-            else 0.0
-        ),
-        "context_casefold_match_rate": (
-            generator.context_casefold_matches / context_resolution_attempts
             if context_resolution_attempts
             else 0.0
         ),
@@ -428,10 +398,6 @@ def parse_args() -> argparse.Namespace:
         choices=("normalize-lower", "case-preserved"),
         default="normalize-lower",
     )
-    parser.add_argument("--fuzzy-context-casefold", action="store_true")
-    parser.add_argument(
-        "--recent-reply-penalty-strength", type=float, default=0.5
-    )
     return parser.parse_args()
 
 
@@ -443,8 +409,6 @@ def main() -> None:
             generations=args.generations,
             candidate_target=args.candidate_target,
             normalize_lower=args.profile == "normalize-lower",
-            fuzzy_context_casefold=args.fuzzy_context_casefold,
-            recent_reply_penalty_strength=args.recent_reply_penalty_strength,
         )
     )
     print(json.dumps(report, indent=2, sort_keys=True))

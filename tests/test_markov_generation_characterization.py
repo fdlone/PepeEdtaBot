@@ -18,12 +18,10 @@ import random
 import unittest
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
-from app.core.context_state_matcher import ContextStateMatch
 from app.core.markov import (
     MarkovGenerator,
-    _ContextualStateSelection,
 )
 from app.infrastructure.database import Database
 
@@ -198,22 +196,7 @@ class TestGenerateTextOnceCharacterization(_GenerationCharacterizationBase):
         )
         self.assertEqual(attempt.start_source, "context")
         self.assertEqual(attempt.context_exact_matches, 1)
-        self.assertEqual(attempt.context_casefold_matches, 0)
         self.assertEqual(attempt.markov_order_used, 3)
-
-    async def test_contextual_start_casefold_match(self) -> None:
-        attempt = await self.generator._generate_text_once(
-            chat_id=CHAT_ID, max_chars=200, max_tokens=12,
-            context_tokens=["ПАПА", "ЧИНИЛ", "МАШИНУ"],
-            context_start_bias=4.0, randomness_strength=0.0,
-            fuzzy_context_casefold=True, rng=random.Random(3), emit_start=True,
-        )
-        self.assertEqual(
-            attempt.text, "чинил машину в гараже целый выходной день."
-        )
-        self.assertEqual(attempt.start_source, "context")
-        self.assertEqual(attempt.context_exact_matches, 0)
-        self.assertEqual(attempt.context_casefold_matches, 1)
 
     async def test_contextual_start_falls_back_when_context_absent(self) -> None:
         attempt = await self.generator._generate_text_once(
@@ -459,24 +442,6 @@ class TestGenerateTextWithTraceCharacterization(_GenerationCharacterizationBase)
         self.assertEqual(trace.jump_count, 0)
 
 
-class TestContextualMatchCounts(unittest.TestCase):
-    """Pure mapping of contextual match kind to trace counters (audit R8)."""
-
-    def _counts(self, match_kind: str) -> tuple[int, ...]:
-        selection = _ContextualStateSelection(
-            state=("a", "b", "c"),
-            order=3,
-            match_kind=match_kind,
-        )
-        return MarkovGenerator._contextual_match_counts(selection)
-
-    def test_exact(self) -> None:
-        self.assertEqual(self._counts("exact"), (1, 0))
-
-    def test_casefold(self) -> None:
-        self.assertEqual(self._counts("casefold"), (0, 1))
-
-
 class TestFinalizeAttempt(unittest.TestCase):
     """Direct tests for the finalize/quality-gate tail (audit R8).
 
@@ -495,7 +460,6 @@ class TestFinalizeAttempt(unittest.TestCase):
             jump_count=1,
             start_source="seed",
             context_exact_matches=3,
-            context_casefold_matches=4,
             hidden_context_fallbacks=7,
         )
 
@@ -509,7 +473,6 @@ class TestFinalizeAttempt(unittest.TestCase):
         self.assertEqual(attempt.jump_count, 1)
         self.assertEqual(attempt.start_source, "seed")
         self.assertEqual(attempt.context_exact_matches, 3)
-        self.assertEqual(attempt.context_casefold_matches, 4)
         self.assertEqual(attempt.hidden_context_fallbacks, 7)
 
     def test_success_returns_text_and_token_count(self) -> None:
@@ -521,55 +484,6 @@ class TestFinalizeAttempt(unittest.TestCase):
         self.assertEqual(attempt.token_count, 8)
         self.assertEqual(attempt.start_source, "seed")
         self.assertEqual(attempt.markov_order_used, 2)
-
-
-class TestCasefoldCandidateBuilders(unittest.IsolatedAsyncioTestCase):
-    """Mocked-matcher tests for the casefold candidate builders (audit R8):
-    filtering by match kind and count/recency weighting."""
-
-    def _generator(self, matches: list[ContextStateMatch]) -> MarkovGenerator:
-        generator = MarkovGenerator(MagicMock())
-        generator._context_state_matcher = MagicMock()
-        generator._context_state_matcher.match = AsyncMock(return_value=matches)
-        return generator
-
-    async def test_casefold3_skips_exact_and_weights_by_count(self) -> None:
-        matches = [
-            ContextStateMatch(("a", "b", "c"), "exact", transition_count=9),
-            ContextStateMatch(("d", "e", "f"), "casefold", transition_count=4),
-        ]
-        generator = self._generator(matches)
-        out = await generator._build_casefold3_candidates(1, [("x", "y", "z")], 1, 1.0)
-        # The exact match belongs to the caller's own tier; weight = 4 * (1 + 1*0.35).
-        self.assertEqual(len(out), 1)
-        state, weight, count = out[0]
-        self.assertEqual(state, ("d", "e", "f"))
-        self.assertEqual(count, 4)
-        self.assertAlmostEqual(weight, 4 * 1.35)
-        generator._context_state_matcher.match.assert_awaited_with(1, ("x", "y", "z"), 3)
-
-    async def test_casefold2_returns_states_with_transitions(self) -> None:
-        matches = [
-            ContextStateMatch(("a", "b"), "casefold", transition_count=1),
-        ]
-        generator = self._generator(matches)
-        with patch.object(MarkovGenerator, "_get2", AsyncMock(return_value=[("c", 2)])):
-            additions = await generator._build_casefold2_candidates(
-                1, [("x", "y")], 1, 1.0
-            )
-        self.assertEqual(len(additions), 1)
-        self.assertEqual(additions[0][0], ("a", "b"))
-
-    async def test_casefold2_skips_states_without_transitions(self) -> None:
-        matches = [
-            ContextStateMatch(("a", "b"), "casefold", transition_count=3),
-        ]
-        generator = self._generator(matches)
-        with patch.object(MarkovGenerator, "_get2", AsyncMock(return_value=[])):
-            additions = await generator._build_casefold2_candidates(
-                1, [("x", "y")], 1, 1.0
-            )
-        self.assertEqual(additions, [])
 
 
 if __name__ == "__main__":

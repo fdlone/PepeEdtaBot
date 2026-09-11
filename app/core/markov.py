@@ -36,9 +36,6 @@ PUNCT_SET = {".", ",", "!", "?", ";", ":"}
 DEFAULT_GENERATION_ATTEMPT_BUDGET = 1
 EXPLORATION_FLATTENING = 1.5
 EXPLORATION_POWER_FLOOR = 0.02
-# Floor under the entropy-adjusted temperature: a large negative gain can drive
-# T to zero or below, and 1/T is taken right after.
-_MIN_SAMPLING_TEMPERATURE = 0.01
 SHORT_REPLY_MAX_CONTENT_TOKENS = 3
 # M3R-200 pilot (assoc-route-pilot, design D2): how many anchors of the message
 # are looked at, how many neighbours per anchor get a marginal read, and the
@@ -93,9 +90,6 @@ SILENT_SPLICE_PROBABILITY = 0.35
 JUMP_MAX_PER_REPLY = 1
 
 # Insurance for a raised cap: a further jump may not fire until the reply has
-# grown this many tokens past the previous splice, so asides cannot chain
-# back-to-back. Dead while JUMP_MAX_PER_REPLY is 1.
-JUMP_MIN_TOKENS_BETWEEN = 6
 
 # Tokens dropped from the tail of the walk right before a connective splice: a
 # dangling comma, conjunction or preposition at the splice point yields ",,",
@@ -218,53 +212,6 @@ def pool_diagnostics(counts: Sequence[float]) -> tuple[float, float, int, float]
     return entropy, normalized, branching, 1.0 - normalized
 
 
-@dataclass(frozen=True, slots=True)
-class EntropySampling:
-    """Entropy-aware sampling temperature (M2R-100, TZ §6).
-
-    The sampler weights candidates as ``cnt ** power``, so ``power`` is an
-    inverse temperature: ``T_base = 1/power``, and ``randomness_strength``
-    keeps its established meaning as the scale of ``T_base``. This applies the
-    per-pool term of TZ §6 — ``T = T_base·(1 + gain·(H_norm − pivot))``,
-    clamped — and hands back a power for the existing machinery.
-
-    The default instance is the neutral one: a generation that never builds a
-    tuned instance behaves exactly like Markov 1.x.
-    """
-
-    gain: float = 0.0
-    pivot: float = 0.5
-    temp_min: float = 0.5
-    temp_max: float = 12.0
-
-    def power_for(self, power: float, normalized_entropy: float) -> float:
-        """Entropy-adjusted frequency power for one pool.
-
-        Zero gain returns the input unchanged through an explicit branch taken
-        before any arithmetic. Relying on ``x * 1.0 == x`` would still be exact,
-        but the clamp is not: a ``T_base`` outside ``[temp_min, temp_max]``
-        would be pulled to a bound even at zero gain, and this phase's contract
-        is that zero gain is byte-identical to 1.x. The early return makes that
-        structural instead of a float coincidence. No random draw either way,
-        so the RNG stream is untouched.
-        """
-        if self.gain == 0.0 or power <= 0.0:
-            return power
-        # Two individually valid /set calls can leave min above max; ordering
-        # the pair beats pinning every step to a nonsense constant.
-        low, high = (
-            (self.temp_min, self.temp_max)
-            if self.temp_min <= self.temp_max
-            else (self.temp_max, self.temp_min)
-        )
-        low = max(low, _MIN_SAMPLING_TEMPERATURE)
-        high = max(high, low)
-        temperature = (1.0 / power) * (
-            1.0 + self.gain * (normalized_entropy - self.pivot)
-        )
-        return 1.0 / max(low, min(high, temperature))
-
-
 @dataclass(slots=True)
 class _DiagnosticsAccumulator:
     """Per-attempt sums of step-pool diagnostics (M2R-010)."""
@@ -339,39 +286,24 @@ def _step_power(
     diagnostics: _DiagnosticsAccumulator | None,
     pool: Sequence[TransitionRow],
     base_power: float,
-    entropy_sampling: EntropySampling,
     blended: BlendedPool | None = None,
 ) -> float:
-    """Frequency power for one walk step: telemetry in, temperature out.
+    """Frequency power for one walk step, with the pool's diagnostics noted.
 
-    Keeping both here is deliberate — the entropy the telemetry reports and the
-    entropy the sampler consumes are the same number by construction, and the
-    temperature actually applied is recorded rather than inferred.
-
-    With the temporal blend on, both read the blended weights rather than the
-    raw counts (design D5): entropy has to describe the distribution actually
-    being sampled, otherwise Phase 2's temperature responds to a distribution
-    that no longer exists.
-
-    Telemetry (M2R-010) needs the diagnostics for every step anyway, so the
-    accumulator is the source. Without one (test doubles pass no accumulator)
-    entropy is computed only when sampling actually consumes it.
+    The entropy temperature of Phase 2 (M2R-100) used to be applied here; it
+    was removed 2026-09-11 (remove-phase2-machinery) after its gate failed on
+    every arm, so the power is the base power and the step only feeds the
+    M2R-010 telemetry. With the temporal blend on the diagnostics read the
+    blended weights (design D5): entropy has to describe the distribution
+    actually being sampled.
     """
-    if diagnostics is None and entropy_sampling.gain == 0.0:
-        normalized = 0.0
-    else:
+    if diagnostics is not None:
         weights: Sequence[float] = (
             blended.weights if blended is not None else [row[1] for row in pool]
         )
-        normalized = (
-            diagnostics.note_pool(weights)
-            if diagnostics is not None
-            else pool_diagnostics(weights)[1]
-        )
-    power = entropy_sampling.power_for(base_power, normalized)
-    if diagnostics is not None:
-        diagnostics.note_temperature(power)
-    return power
+        diagnostics.note_pool(weights)
+        diagnostics.note_temperature(base_power)
+    return base_power
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,7 +316,6 @@ class GenerationTrace:
     start_source: str
     leading_punctuation_stripped: int = 0
     context_exact_matches: int = 0
-    context_casefold_matches: int = 0
     hidden_context_fallbacks: int = 0
     # M2R-010: diagnostics of the winning attempt's step pools (walk steps
     # only; start pools are not sampled per step and stay uninstrumented).
@@ -431,7 +362,6 @@ class _GenerationAttempt(NamedTuple):
     start_source: str
     leading_punctuation_stripped: int = 0
     context_exact_matches: int = 0
-    context_casefold_matches: int = 0
     hidden_context_fallbacks: int = 0
     mean_entropy_bits: float = 0.0
     mean_normalized_entropy: float = 0.0
@@ -1341,58 +1271,6 @@ class MarkovGenerator:
                 candidates2.append(((window[0], window[1]), transitions, weight))
         return candidates2
 
-    async def _build_casefold3_candidates(
-        self,
-        chat_id: int,
-        windows3: list[tuple[str, ...]],
-        total3: int,
-        frequency_power: float,
-    ) -> list[tuple[tuple[str, str, str], float, int]]:
-        """Casefold 3-gram start candidates via the context-state matcher,
-        weighted by count and recency. Each entry keeps its transition count.
-        """
-        candidates: list[tuple[tuple[str, str, str], float, int]] = []
-        for index, window in enumerate(windows3):
-            matches = await self._context_state_matcher.match(chat_id, window, 3)
-            recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
-            for match in matches:
-                if match.match_kind != "casefold":
-                    continue
-                state3 = (match.state[0], match.state[1], match.state[2])
-                weight = (
-                    max(match.transition_count, 1) ** frequency_power
-                    * recency_bonus
-                )
-                candidates.append((state3, weight, match.transition_count))
-        return candidates
-
-    async def _build_casefold2_candidates(
-        self,
-        chat_id: int,
-        windows2: list[tuple[str, ...]],
-        total2: int,
-        frequency_power: float,
-    ) -> list[tuple[tuple[str, str], list[TransitionRow], float]]:
-        """Casefold 2-gram start candidates that still have stored
-        transitions."""
-        additions: list[tuple[tuple[str, str], list[TransitionRow], float]] = []
-        for index, window in enumerate(windows2):
-            matches = await self._context_state_matcher.match(chat_id, window, 2)
-            recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
-            for match in matches:
-                if match.match_kind != "casefold":
-                    continue
-                state2 = (match.state[0], match.state[1])
-                transitions = await self._get2(chat_id, state2[0], state2[1])
-                if not transitions:
-                    continue
-                weight = (
-                    max(match.transition_count, 1) ** frequency_power
-                    * recency_bonus
-                )
-                additions.append((state2, transitions, weight))
-        return additions
-
     @staticmethod
     def _select_state3(
         candidates: list[tuple[tuple[str, str, str], float, int]],
@@ -1423,7 +1301,6 @@ class MarkovGenerator:
         context_triplets: set[tuple[str, ...]],
         context_bias: float,
         repetition_penalty_strength: float,
-        fuzzy_context_casefold: bool,
         rng: random.Random,
     ) -> _ContextualStateSelection | None:
         exploring, frequency_power = _roll_exploration(
@@ -1447,21 +1324,6 @@ class MarkovGenerator:
         )
 
         match_kind = "exact"
-        if not candidates2 and fuzzy_context_casefold:
-            casefold_candidates3 = await self._build_casefold3_candidates(
-                chat_id, windows3, total3, frequency_power
-            )
-            if casefold_candidates3:
-                return self._select_state3(
-                    casefold_candidates3, "casefold", exploring=exploring, rng=rng
-                )
-
-            additions = await self._build_casefold2_candidates(
-                chat_id, windows2, total2, frequency_power
-            )
-            candidates2.extend(additions)
-            match_kind = "casefold"
-
         if not candidates2:
             return None
         population2 = list(range(len(candidates2)))
@@ -1500,12 +1362,10 @@ class MarkovGenerator:
         repetition_penalty_strength: float = 1.0,
         markov_order: int = 3,
         enable_backoff: bool = True,
-        fuzzy_context_casefold: bool = False,
         jump_probability: float = 0.0,
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
         context_anchor_splice_probability: float = 0.0,
-        entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
         interpolation: OrderInterpolation = OrderInterpolation(),
         now: int = 0,
@@ -1532,12 +1392,10 @@ class MarkovGenerator:
             repetition_penalty_strength=repetition_penalty_strength,
             markov_order=markov_order,
             enable_backoff=enable_backoff,
-            fuzzy_context_casefold=fuzzy_context_casefold,
             jump_probability=jump_probability,
             context_jump_boost=context_jump_boost,
             order_mix_probability=order_mix_probability,
             context_anchor_splice_probability=context_anchor_splice_probability,
-            entropy_sampling=entropy_sampling,
             temporal_blend=temporal_blend,
             interpolation=interpolation,
             now=now,
@@ -1566,12 +1424,10 @@ class MarkovGenerator:
         repetition_penalty_strength: float = 1.0,
         markov_order: int = 3,
         enable_backoff: bool = True,
-        fuzzy_context_casefold: bool = False,
         jump_probability: float = 0.0,
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
         context_anchor_splice_probability: float = 0.0,
-        entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
         interpolation: OrderInterpolation = OrderInterpolation(),
         now: int = 0,
@@ -1600,12 +1456,10 @@ class MarkovGenerator:
                 repetition_penalty_strength=repetition_penalty_strength,
                 markov_order=markov_order,
                 enable_backoff=enable_backoff,
-                fuzzy_context_casefold=fuzzy_context_casefold,
                 jump_probability=jump_probability,
                 context_jump_boost=context_jump_boost,
                 order_mix_probability=order_mix_probability,
                 context_anchor_splice_probability=context_anchor_splice_probability,
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 interpolation=interpolation,
                 now=now,
@@ -1631,9 +1485,6 @@ class MarkovGenerator:
                 a.leading_punctuation_stripped for a in attempts
             ),
             context_exact_matches=sum(a.context_exact_matches for a in attempts),
-            context_casefold_matches=sum(
-                a.context_casefold_matches for a in attempts
-            ),
             hidden_context_fallbacks=sum(
                 a.hidden_context_fallbacks for a in attempts
             ),
@@ -1685,7 +1536,7 @@ class MarkovGenerator:
         logger.debug(
             "Generation trace: attempts=%s order=%s jumps=%s rejection=%s tokens=%s "
             "start_source=%s leading_punctuation_stripped=%s context_exact=%s "
-            "context_casefold=%s hidden_context_fallbacks=%s "
+            "hidden_context_fallbacks=%s "
             "entropy=%.3f norm_entropy=%.3f branching=%.1f confidence_min=%.3f "
             "temperature=%.2f diag_steps=%s",
             trace.attempts_used,
@@ -1696,7 +1547,6 @@ class MarkovGenerator:
             trace.start_source,
             trace.leading_punctuation_stripped,
             trace.context_exact_matches,
-            trace.context_casefold_matches,
             trace.hidden_context_fallbacks,
             trace.mean_entropy_bits,
             trace.mean_normalized_entropy,
@@ -1907,7 +1757,6 @@ class MarkovGenerator:
         next_explore: float,
         next_power: float,
         repetition_penalty_strength: float,
-        entropy_sampling: EntropySampling,
         temporal_blend: TemporalBlend,
         now: int,
         recent: list[str],
@@ -1923,7 +1772,7 @@ class MarkovGenerator:
         not by the message.
         """
         blended = temporal_blend.blend(pool, now)
-        step_power = _step_power(None, pool, next_power, entropy_sampling, blended)
+        step_power = _step_power(None, pool, next_power, blended)
         return weighted_next_choice(
             pool,
             next_explore,
@@ -1944,7 +1793,6 @@ class MarkovGenerator:
         next_explore: float,
         next_power: float,
         repetition_penalty_strength: float,
-        entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
         now: int = 0,
         rng: random.Random,
@@ -1977,7 +1825,6 @@ class MarkovGenerator:
             next_explore=next_explore,
             next_power=next_power,
             repetition_penalty_strength=repetition_penalty_strength,
-            entropy_sampling=entropy_sampling,
             temporal_blend=temporal_blend,
             now=now,
             rng=rng,
@@ -1993,7 +1840,6 @@ class MarkovGenerator:
         next_explore: float,
         next_power: float,
         repetition_penalty_strength: float,
-        entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
         now: int = 0,
         rng: random.Random,
@@ -2017,7 +1863,6 @@ class MarkovGenerator:
             next_explore=next_explore,
             next_power=next_power,
             repetition_penalty_strength=repetition_penalty_strength,
-            entropy_sampling=entropy_sampling,
             temporal_blend=temporal_blend,
             now=now,
             rng=rng,
@@ -2034,7 +1879,6 @@ class MarkovGenerator:
         next_explore: float,
         next_power: float,
         repetition_penalty_strength: float,
-        entropy_sampling: EntropySampling,
         temporal_blend: TemporalBlend,
         now: int,
         rng: random.Random,
@@ -2061,7 +1905,6 @@ class MarkovGenerator:
                 next_explore=next_explore,
                 next_power=next_power,
                 repetition_penalty_strength=repetition_penalty_strength,
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 now=now,
                 recent=tail[-10:],
@@ -2084,7 +1927,6 @@ class MarkovGenerator:
                 next_explore=next_explore,
                 next_power=next_power,
                 repetition_penalty_strength=repetition_penalty_strength,
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 now=now,
                 recent=head[-10:],
@@ -2174,7 +2016,6 @@ class MarkovGenerator:
         context_triplets: set[tuple[str, ...]],
         context_bias: float,
         repetition_penalty_strength: float,
-        fuzzy_context_casefold: bool,
         rng: random.Random,
     ) -> _ContextualStateSelection | None:
         """Select a hidden start state anchored on the reply context.
@@ -2197,19 +2038,8 @@ class MarkovGenerator:
             context_triplets=context_triplets,
             context_bias=context_bias,
             repetition_penalty_strength=repetition_penalty_strength,
-            fuzzy_context_casefold=fuzzy_context_casefold,
             rng=rng,
         )
-
-    @staticmethod
-    def _contextual_match_counts(
-        selection: _ContextualStateSelection,
-    ) -> tuple[int, int]:
-        """Map a contextual match kind to its ``(exact, casefold)`` trace
-        counters."""
-        if selection.match_kind == "exact":
-            return 1, 0
-        return 0, 1
 
     def _finalize_attempt(
         self,
@@ -2221,7 +2051,6 @@ class MarkovGenerator:
         jump_count: int,
         start_source: str,
         context_exact_matches: int,
-        context_casefold_matches: int,
         hidden_context_fallbacks: int,
         diagnostics: _DiagnosticsAccumulator | None = None,
         applied_alpha: float = 0.0,
@@ -2248,7 +2077,6 @@ class MarkovGenerator:
             start_source=start_source,
             leading_punctuation_stripped=final.leading_punctuation_stripped,
             context_exact_matches=context_exact_matches,
-            context_casefold_matches=context_casefold_matches,
             hidden_context_fallbacks=hidden_context_fallbacks,
             mean_entropy_bits=diag.entropy_bits_sum / steps if steps else 0.0,
             mean_normalized_entropy=(
@@ -2304,7 +2132,6 @@ class MarkovGenerator:
         anchor_target_tokens: int = 0,
         rng: random.Random,
         diagnostics: _DiagnosticsAccumulator | None = None,
-        entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
         interpolation: OrderInterpolation = OrderInterpolation(),
         now: int = 0,
@@ -2341,7 +2168,6 @@ class MarkovGenerator:
             build_windows(dedup_seed, 3)
         )
         jump_count = 0
-        last_jump_end = 0
         used_connectives: list[tuple[str, ...]] = []
         anchor_pending = anchor_state is not None
 
@@ -2353,7 +2179,7 @@ class MarkovGenerator:
             finalize pass trims the reply to the last sentence end, so a
             silent marker whose tail earns no own terminal punctuation would
             cut the anchor right back out while the trace still claims it."""
-            nonlocal w1, w2, w3, jump_count, last_jump_end, anchor_pending
+            nonlocal w1, w2, w3, jump_count, anchor_pending
             assert anchor_state is not None
             emit = anchor_emit_tokens or []
             trim_splice_tail(generated)
@@ -2369,7 +2195,6 @@ class MarkovGenerator:
             used_connectives.append(connective)
             generated.extend(splice_marker_tokens(generated, connective))
             generated.extend(emit)
-            last_jump_end = len(generated)
             w1, w2, w3 = anchor_state
             remember_bounded(visited_triplets, (w1, w2, w3), 40)
             if len(generated) >= 2:
@@ -2393,10 +2218,6 @@ class MarkovGenerator:
                 not anchor_pending
                 and len(generated) >= JUMP_MIN_GENERATED_TOKENS
                 and jump_count < JUMP_MAX_PER_REPLY
-                and (
-                    jump_count == 0
-                    or len(generated) - last_jump_end >= JUMP_MIN_TOKENS_BETWEEN
-                )
                 and rng.random() < jump_probability
                 and starts3
                 and order >= 3
@@ -2434,7 +2255,6 @@ class MarkovGenerator:
                 used_connectives.append(connective)
                 generated.extend(splice_marker_tokens(generated, connective))
                 generated.extend((nw1, nw2, nw3))
-                last_jump_end = len(generated)
                 w1, w2, w3 = nw1, nw2, nw3
                 remember_bounded(visited_triplets, (w1, w2, w3), 40)
                 remember_bounded(seen_pairs, (generated[-2], generated[-1]), 80)
@@ -2499,7 +2319,7 @@ class MarkovGenerator:
                     pool = merged.rows
                     blended = BlendedPool(merged.weights, 0.0)
                 step_power = _step_power(
-                    diagnostics, pool, next_power, entropy_sampling, blended
+                    diagnostics, pool, next_power, blended
                 )
                 w4 = weighted_next_choice(
                     pool,
@@ -2531,7 +2351,7 @@ class MarkovGenerator:
                     if diagnostics is not None:
                         diagnostics.note_blend(blended2)
                     step_power = _step_power(
-                        diagnostics, pool2, next_power, entropy_sampling, blended2
+                        diagnostics, pool2, next_power, blended2
                     )
                     w4 = weighted_next_choice(
                         pool2,
@@ -2596,12 +2416,10 @@ class MarkovGenerator:
         repetition_penalty_strength: float = 1.0,
         markov_order: int = 3,
         enable_backoff: bool = True,
-        fuzzy_context_casefold: bool = False,
         jump_probability: float = 0.0,
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
         context_anchor_splice_probability: float = 0.0,
-        entropy_sampling: EntropySampling = EntropySampling(),
         temporal_blend: TemporalBlend = TemporalBlend(),
         interpolation: OrderInterpolation = OrderInterpolation(),
         now: int = 0,
@@ -2645,7 +2463,6 @@ class MarkovGenerator:
         deferred_anchor: _ContextualStateSelection | None = None
         deferred_anchor_emit: list[str] = []
         context_exact_matches = 0
-        context_casefold_matches = 0
         hidden_context_fallbacks = 0
         seed_start = await self._pick_seed_start(
             chat_id,
@@ -2681,7 +2498,6 @@ class MarkovGenerator:
                 context_triplets=context_triplets,
                 context_bias=context_bias,
                 repetition_penalty_strength=repetition_penalty_strength,
-                fuzzy_context_casefold=fuzzy_context_casefold,
                 rng=generation_rng,
             )
             if contextual_state is not None:
@@ -2715,10 +2531,7 @@ class MarkovGenerator:
                     start_source = (
                         "context" if contextual_emit_tokens else "hidden_context"
                     )
-                (
-                    context_exact_matches,
-                    context_casefold_matches,
-                ) = self._contextual_match_counts(contextual_state)
+                context_exact_matches = 1
             elif context_tokens and use_contextual_start:
                 hidden_context_fallbacks = 1
 
@@ -2751,7 +2564,6 @@ class MarkovGenerator:
                     start_source=start_source,
                     leading_punctuation_stripped=0,
                     context_exact_matches=context_exact_matches,
-                    context_casefold_matches=context_casefold_matches,
                     hidden_context_fallbacks=hidden_context_fallbacks,
                 )
             start3, order_used = global_start
@@ -2808,7 +2620,6 @@ class MarkovGenerator:
                 anchor_target_tokens=anchor_target_tokens,
                 rng=generation_rng,
                 diagnostics=diagnostics,
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 interpolation=interpolation,
                 now=now,
@@ -2828,7 +2639,6 @@ class MarkovGenerator:
             start_source = "context_spliced" if anchor_spliced else "global"
             if not anchor_spliced:
                 context_exact_matches = 0
-                context_casefold_matches = 0
 
         return self._finalize_attempt(
             generated,
@@ -2838,7 +2648,6 @@ class MarkovGenerator:
             jump_count=jump_count,
             start_source=start_source,
             context_exact_matches=context_exact_matches,
-            context_casefold_matches=context_casefold_matches,
             hidden_context_fallbacks=hidden_context_fallbacks,
             diagnostics=diagnostics,
             applied_alpha=temporal_blend.alpha,

@@ -14,10 +14,8 @@ from app.config.runtime_state import RuntimeState
 from app.core import gen_trace_log
 from app.core.candidate_scorer import (
     CandidateScore,
-    build_recent_reply_trigrams,
     context_length_weights,
     idf_context_relevance,
-    recent_reply_overlap,
     sample_length_mode,
     score_candidate,
     verbatim_ngram_overlap,
@@ -31,7 +29,6 @@ from app.core.intonation import IntonationProfile, blend_length_weights
 from app.core.markov import (
     JUMP_CONNECTIVE_TOKENS,
     PUNCT_SET,
-    EntropySampling,
     MarkovGenerator,
     content_tokens,
     detokenize,
@@ -55,10 +52,9 @@ from app.core.mood import (
 from app.core.phrase_route import PHRASE_ANCHORS_MAX, rank_phrases
 from app.core.reply_flavor import apply_reply_flavor
 from app.core.seed import is_scorable
-from app.core.shadow_order import shadow_order4_stats
 from app.core.slot_mutation import mutate_candidate_tokens
 from app.core.temporal import TemporalBlend
-from app.core.text import capitalize_reply_sentences, sanitize_text
+from app.core.text import sanitize_text
 from app.core.trajectory import EDGE_OVERLAP_SIMILAR, edge_overlap, trajectory_edges
 from app.log_masking import mask_chat_id
 
@@ -71,31 +67,6 @@ GENERATION_ATTEMPT_BUDGET = 10
 GENERATION_ATTEMPTS_WITH_CONTEXT = 5
 CANDIDATE_TARGET = 5
 
-
-def branching_aware_target(
-    base_target: int,
-    branching_samples: list[float],
-    *,
-    degenerate_max: float,
-    floor: int,
-) -> int:
-    """Candidate target for a chain whose branching has been observed (M2R-110).
-
-    On a near-degenerate chain, candidates 2..N are near-duplicates of the
-    first — the scorer ends up choosing between copies of one walk — so the
-    target drops to the floor and the generation stops early. Everything else
-    keeps the configured target. The attempt budget is untouched either way, so
-    a chain that keeps failing the gates still gets all of its tries.
-
-    ``degenerate_max <= 0`` disables the rule (no pool has branching <= 0),
-    restoring the fixed target this project shipped before Phase 2.
-    """
-    if degenerate_max <= 0.0 or not branching_samples:
-        return base_target
-    mean_branching = sum(branching_samples) / len(branching_samples)
-    if mean_branching > degenerate_max:
-        return base_target
-    return max(1, min(base_target, floor))
 
 
 def route_slot_budget(target: int, ratio: float) -> int:
@@ -169,9 +140,6 @@ class VerbatimCopyChecker(Protocol):
         recency_share: float,
         meme_ordering: bool = False,
     ) -> list[tuple[str, ...]]: ...
-    async def get_order4_shadow_index(
-        self, chat_id: int
-    ) -> Mapping[tuple[str, str, str, str], Mapping[str, int]]: ...
     async def get_active_collocations(
         self, chat_id: int
     ) -> frozenset[tuple[str, str]]: ...
@@ -181,7 +149,6 @@ class VerbatimCopyChecker(Protocol):
 class GenerationRequest:
     chat_id: int
     context_tokens: list[str]
-    seed: list[str] | None
     current_message_normalized: str
     # M2R-210: the moment the temporal layer is evaluated at, as Unix seconds.
     # None means "now" — the bot's own path. The eval runner and the tests pass
@@ -364,22 +331,6 @@ class ResponseGenerator:
             candidate_target=candidate_target,
         )
         return result.text
-
-    @property
-    def entropy_sampling(self) -> EntropySampling:
-        """M2R-100 settings for this chat, resolved from the runtime knobs.
-
-        Applied to every walk that produces user-visible text, the verbatim
-        extension included — a setting that governs "how the chain sounds"
-        would otherwise stop at the sentence boundary where an extension begins.
-        """
-        state = self.runtime_state
-        return EntropySampling(
-            gain=state.markov_entropy_temp_gain,
-            pivot=state.markov_entropy_pivot,
-            temp_min=state.markov_entropy_temp_min,
-            temp_max=state.markov_entropy_temp_max,
-        )
 
     @property
     def interpolation(self) -> OrderInterpolation:
@@ -593,7 +544,6 @@ class ResponseGenerator:
             enable_backoff=state.enable_backoff,
             jump_probability=0.0,
             order_mix_probability=state.order_mix_probability,
-            entropy_sampling=self.entropy_sampling,
             temporal_blend=self.temporal_blend,
             interpolation=self.interpolation,
             now=now,
@@ -682,12 +632,9 @@ class ResponseGenerator:
         length_mode: str,
         max_tokens: int,
         context_idf: Mapping[str, float],
-        recent_trigrams: set[tuple[str, ...]],
-        recent_penalty_strength: float,
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
         active_collocations: frozenset[tuple[str, str]],
-        entropy_sampling: EntropySampling,
         temporal_blend: TemporalBlend,
         now: int,
         slots: int,
@@ -738,12 +685,9 @@ class ResponseGenerator:
             length_mode=length_mode,
             max_tokens=max_tokens,
             context_idf=context_idf,
-            recent_trigrams=recent_trigrams,
-            recent_penalty_strength=recent_penalty_strength,
             corpus_ngrams=corpus_ngrams,
             verbatim_penalty_strength=verbatim_penalty_strength,
             active_collocations=active_collocations,
-            entropy_sampling=entropy_sampling,
             temporal_blend=temporal_blend,
             now=now,
             rng=rng,
@@ -758,12 +702,9 @@ class ResponseGenerator:
         length_mode: str,
         max_tokens: int,
         context_idf: Mapping[str, float],
-        recent_trigrams: set[tuple[str, ...]],
-        recent_penalty_strength: float,
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
         active_collocations: frozenset[tuple[str, str]],
-        entropy_sampling: EntropySampling,
         temporal_blend: TemporalBlend,
         now: int,
         slots: int,
@@ -800,12 +741,9 @@ class ResponseGenerator:
             length_mode=length_mode,
             max_tokens=max_tokens,
             context_idf=context_idf,
-            recent_trigrams=recent_trigrams,
-            recent_penalty_strength=recent_penalty_strength,
             corpus_ngrams=corpus_ngrams,
             verbatim_penalty_strength=verbatim_penalty_strength,
             active_collocations=active_collocations,
-            entropy_sampling=entropy_sampling,
             temporal_blend=temporal_blend,
             now=now,
             rng=rng,
@@ -820,12 +758,9 @@ class ResponseGenerator:
         length_mode: str,
         max_tokens: int,
         context_idf: Mapping[str, float],
-        recent_trigrams: set[tuple[str, ...]],
-        recent_penalty_strength: float,
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
         active_collocations: frozenset[tuple[str, str]],
-        entropy_sampling: EntropySampling,
         temporal_blend: TemporalBlend,
         now: int,
         slots: int,
@@ -871,12 +806,9 @@ class ResponseGenerator:
             length_mode=length_mode,
             max_tokens=max_tokens,
             context_idf=context_idf,
-            recent_trigrams=recent_trigrams,
-            recent_penalty_strength=recent_penalty_strength,
             corpus_ngrams=corpus_ngrams,
             verbatim_penalty_strength=verbatim_penalty_strength,
             active_collocations=active_collocations,
-            entropy_sampling=entropy_sampling,
             temporal_blend=temporal_blend,
             now=now,
             rng=rng,
@@ -893,12 +825,9 @@ class ResponseGenerator:
         length_mode: str,
         max_tokens: int,
         context_idf: Mapping[str, float],
-        recent_trigrams: set[tuple[str, ...]],
-        recent_penalty_strength: float,
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
         active_collocations: frozenset[tuple[str, str]],
-        entropy_sampling: EntropySampling,
         temporal_blend: TemporalBlend,
         now: int,
         rng: random.Random,
@@ -931,7 +860,6 @@ class ResponseGenerator:
             next_explore=next_explore,
             next_power=1.0,
             repetition_penalty_strength=state.repetition_penalty_strength,
-            entropy_sampling=entropy_sampling,
             temporal_blend=temporal_blend,
             now=now,
             rng=rng,
@@ -983,8 +911,6 @@ class ResponseGenerator:
                 request.context_tokens,
                 length_mode,
                 context_idf=context_idf,
-                recent_trigrams=recent_trigrams,
-                recent_penalty_strength=recent_penalty_strength,
                 corpus_ngrams=corpus_ngrams,
                 verbatim_penalty_strength=verbatim_penalty_strength,
                 chat_id=request.chat_id,
@@ -1001,8 +927,6 @@ class ResponseGenerator:
         length_mode: str,
         *,
         context_idf: Mapping[str, float],
-        recent_trigrams: set[tuple[str, ...]],
-        recent_penalty_strength: float,
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
         chat_id: int,
@@ -1024,8 +948,6 @@ class ResponseGenerator:
                 weight=self.runtime_state.context_relevance_weight,
                 cap=self.runtime_state.context_relevance_cap,
             ),
-            recent_penalty=recent_penalty_strength
-            * recent_reply_overlap(tokens, recent_trigrams),
             # M3R-120: гард «одной признанной единицы» применяется здесь и
             # только здесь. Триггер verbatim-дописки ниже намеренно остаётся
             # на сырой доле: дописка существует, чтобы добавить отсебятину к
@@ -1116,24 +1038,13 @@ class ResponseGenerator:
             with_context=bool(request.context_tokens)
         )
         modifiers = self.mood_modifiers or NEUTRAL_MODIFIERS
-        seed = request.seed
         target = max(1, min(candidate_target, GENERATION_ATTEMPT_BUDGET))
         # M2R-110: the target may shrink once the walk shows how much choice it
         # actually had. Starts at the configured value and is recomputed after
         # each accepted candidate.
         effective_target = target
-        branching_samples: list[float] = []
         candidates: list[_ScoredCandidate] = []
         seen_candidates: set[str] = set()
-        attempt_jump_counts: dict[str, int] = {}
-        recent_penalty_strength = self.runtime_state.recent_reply_penalty_strength
-        recent_trigrams = (
-            build_recent_reply_trigrams(
-                self.runtime_state.recent_replies.get(request.chat_id) or ()
-            )
-            if recent_penalty_strength > 0.0
-            else set()
-        )
         # Quote detection: candidates whose content 4-grams all exist in the
         # corpus are verbatim replays and lose score to recombined candidates.
         # The index read is skipped entirely when the penalty is off.
@@ -1194,7 +1105,6 @@ class ResponseGenerator:
         effective_randomness = max(
             0.0, self.runtime_state.randomness_strength + modifiers.randomness_delta
         )
-        entropy_sampling = self.entropy_sampling
         temporal_blend = self.temporal_blend
         interpolation = self.interpolation
         # M2R-210 / design D3: one moment for the whole generation. Reading the
@@ -1214,7 +1124,6 @@ class ResponseGenerator:
             target=target,
             budget=GENERATION_ATTEMPT_BUDGET,
             attempts_with_context=attempts_with_context,
-            recent_penalty_strength=recent_penalty_strength,
             verbatim_penalty_strength=verbatim_penalty_strength,
         )
 
@@ -1241,12 +1150,9 @@ class ResponseGenerator:
                 length_mode=length_mode,
                 max_tokens=max_tokens,
                 context_idf=context_idf,
-                recent_trigrams=recent_trigrams,
-                recent_penalty_strength=recent_penalty_strength,
                 corpus_ngrams=corpus_ngrams,
                 verbatim_penalty_strength=verbatim_penalty_strength,
                 active_collocations=active_collocations,
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 now=now,
                 slots=seeded_budget,
@@ -1286,12 +1192,9 @@ class ResponseGenerator:
                 length_mode=length_mode,
                 max_tokens=max_tokens,
                 context_idf=context_idf,
-                recent_trigrams=recent_trigrams,
-                recent_penalty_strength=recent_penalty_strength,
                 corpus_ngrams=corpus_ngrams,
                 verbatim_penalty_strength=verbatim_penalty_strength,
                 active_collocations=active_collocations,
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 now=now,
                 slots=assoc_budget,
@@ -1313,12 +1216,9 @@ class ResponseGenerator:
                 length_mode=length_mode,
                 max_tokens=max_tokens,
                 context_idf=context_idf,
-                recent_trigrams=recent_trigrams,
-                recent_penalty_strength=recent_penalty_strength,
                 corpus_ngrams=corpus_ngrams,
                 verbatim_penalty_strength=verbatim_penalty_strength,
                 active_collocations=active_collocations,
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 now=now,
                 slots=phrase_budget,
@@ -1334,7 +1234,7 @@ class ResponseGenerator:
             # M3R-230: the route's slots are the first attempts; a hot attempt
             # carries its own seed and its own route attribution.
             hot_attempt = bool(hot_seeds)
-            attempt_seed = hot_seeds.pop(0) if hot_attempt else seed
+            attempt_seed = hot_seeds.pop(0) if hot_attempt else None
             attempt_context_tokens = (
                 request.context_tokens
                 if attempt < attempts_with_context
@@ -1366,28 +1266,18 @@ class ResponseGenerator:
                 repetition_penalty_strength=self.runtime_state.repetition_penalty_strength,
                 markov_order=self.runtime_state.markov_order,
                 enable_backoff=self.runtime_state.enable_backoff,
-                fuzzy_context_casefold=self.runtime_state.fuzzy_context_casefold,
                 jump_probability=self.runtime_state.markov_jump_probability,
                 context_jump_boost=self.runtime_state.context_jump_boost,
                 order_mix_probability=self.runtime_state.order_mix_probability,
                 context_anchor_splice_probability=(
                     self.runtime_state.context_anchor_splice_probability
                 ),
-                entropy_sampling=entropy_sampling,
                 temporal_blend=temporal_blend,
                 interpolation=interpolation,
                 now=now,
                 rng=generation_rng,
                 attempt_budget=1,
             )
-            if candidate:
-                # M2R-020: jump count per candidate text — the shadow selector
-                # below skips replies whose token adjacency crosses a splice.
-                # getattr-guarded: test doubles stub the trace with namespaces;
-                # an unknown jump count (-1) simply skips the shadow measure.
-                attempt_jump_counts[candidate] = getattr(
-                    candidate_trace, "jump_count", -1
-                )
             if not candidate:
                 logger.debug(
                     "Generation attempt failed: chat=%s attempt=%s context=%s seed_len=%s",
@@ -1501,8 +1391,6 @@ class ResponseGenerator:
                             request.context_tokens,
                             length_mode,
                             context_idf=context_idf,
-                            recent_trigrams=recent_trigrams,
-                            recent_penalty_strength=recent_penalty_strength,
                             corpus_ngrams=corpus_ngrams,
                             verbatim_penalty_strength=verbatim_penalty_strength,
                             chat_id=request.chat_id,
@@ -1520,23 +1408,6 @@ class ResponseGenerator:
                                     else CandidateRoute.VANILLA
                                 ),
                             )
-                        )
-                        # M2R-110: the accepted candidate's own mean branching
-                        # is what tells us whether more attempts would produce
-                        # anything different. getattr-guarded like the jump
-                        # count above — test doubles stub the trace.
-                        candidate_branching = float(
-                            getattr(candidate_trace, "mean_branching", 0.0) or 0.0
-                        )
-                        if candidate_branching > 0.0:
-                            branching_samples.append(candidate_branching)
-                        effective_target = branching_aware_target(
-                            target,
-                            branching_samples,
-                            degenerate_max=(
-                                self.runtime_state.markov_branching_degenerate_max
-                            ),
-                            floor=self.runtime_state.markov_branching_candidate_floor,
                         )
                         gen_trace_log.log_attempt_accepted(
                             request.chat_id,
@@ -1571,8 +1442,6 @@ class ResponseGenerator:
                                     request.context_tokens,
                                     length_mode,
                                     context_idf=context_idf,
-                                    recent_trigrams=recent_trigrams,
-                                    recent_penalty_strength=recent_penalty_strength,
                                     corpus_ngrams=corpus_ngrams,
                                     verbatim_penalty_strength=verbatim_penalty_strength,
                                     chat_id=request.chat_id,
@@ -1602,7 +1471,6 @@ class ResponseGenerator:
                             context_used=bool(attempt_context_tokens),
                         )
 
-            seed = None
 
         if context_dropped:
             self.generator.telemetry.note_context_dropped()
@@ -1691,31 +1559,7 @@ class ResponseGenerator:
             selection_margin_used=True,
             selected=selected,
         )
-        # M2R-020 shadow order-4 selector: measurement only, after selection,
-        # over the winner's raw token sequence. Skipped for replies with jumps
-        # or texts not produced by a single walk (extensions/mutations) — their
-        # adjacency crosses splice boundaries. getattr-guarded: test doubles
-        # and older harnesses may not implement the protocol method yet.
-        if (
-            getattr(self.runtime_state, "markov_shadow_order4_enabled", False)
-            and attempt_jump_counts.get(selected.text) == 0
-        ):
-            shadow_index_getter = getattr(
-                self.learning_service, "get_order4_shadow_index", None
-            )
-            if shadow_index_getter is not None:
-                shadow_index = await shadow_index_getter(request.chat_id)
-                eligible, chosen = shadow_order4_stats(
-                    tokenize(selected.text), shadow_index
-                )
-                self.generator.telemetry.note_shadow(
-                    eligible=eligible, selected=chosen
-                )
-        text = (
-            capitalize_reply_sentences(selected.text)
-            if self.runtime_state.auto_capitalize_replies
-            else selected.text
-        )
+        text = selected.text
         text = apply_reply_flavor(
             text,
             generation_rng,

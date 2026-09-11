@@ -167,7 +167,6 @@ def _request() -> GenerationRequest:
     return GenerationRequest(
         chat_id=123,
         context_tokens=["пиво", "сегодня"],
-        seed=None,
         current_message_normalized="пиво музыка",
     )
 

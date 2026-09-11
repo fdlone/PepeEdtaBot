@@ -42,11 +42,8 @@ def _runtime_state() -> MagicMock:
     state.markov_order = 3
     state.enable_backoff = True
     state.normalize_lower = False
-    state.fuzzy_context_casefold = False
-    state.auto_capitalize_replies = False
     state.recent_short_replies = {}
     state.recent_replies = {}
-    state.recent_reply_penalty_strength = 1.0
     state.verbatim_penalty_strength = 0.0
     state.length_mode_weights = (0.25, 0.55, 0.2)
     state.length_context_adaptation = 0.0
@@ -69,12 +66,6 @@ def _runtime_state() -> MagicMock:
     state.intonation_profile_strength = 0.0
     # Phase 2 knobs neutral, for the same reason as slot_mutation_probability
     # above: a bare MagicMock would silently turn both features on.
-    state.markov_entropy_temp_gain = 0.0
-    state.markov_entropy_pivot = 0.5
-    state.markov_entropy_temp_min = 0.5
-    state.markov_entropy_temp_max = 12.0
-    state.markov_branching_degenerate_max = 0.0
-    state.markov_branching_candidate_floor = 2
     # Phase 4 collocation weights neutral, same MagicMock-truthiness reason:
     # non-zero would send the pipeline to get_active_collocations on a mock.
     state.markov_collocation_bonus = 0.0
@@ -134,7 +125,6 @@ def _request() -> GenerationRequest:
     return GenerationRequest(
         chat_id=123,
         context_tokens=["reply", "context", "tokens"],
-        seed=["reply", "context"],
         current_message_normalized="same current message",
     )
 
@@ -396,8 +386,6 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             [],
             "medium",
             context_idf={},
-            recent_trigrams=set(),
-            recent_penalty_strength=0.0,
             corpus_ngrams=corpus,
             verbatim_penalty_strength=1.5,
             chat_id=123,
@@ -409,8 +397,6 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             [],
             "medium",
             context_idf={},
-            recent_trigrams=set(),
-            recent_penalty_strength=0.0,
             corpus_ngrams=corpus,
             verbatim_penalty_strength=1.5,
             chat_id=123,
@@ -505,7 +491,9 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertIsNone(calls[GENERATION_ATTEMPTS_WITH_CONTEXT].kwargs["context_tokens"])
-        self.assertEqual(calls[0].kwargs["seed_tokens"], request.seed)
+        # No route draws here, so no attempt carries a seed (the legacy
+        # per-reply seed was removed 2026-09-11, hot-channel-write-gate).
+        self.assertIsNone(calls[0].kwargs["seed_tokens"])
         self.assertTrue(
             all(call.kwargs["seed_tokens"] is None for call in calls[1:])
         )
@@ -738,71 +726,6 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "свежий ответ на этот раз")
         scorer.assert_called_once()
 
-    async def test_recent_trigram_overlap_penalizes_candidate(self) -> None:
-        state = _runtime_state()
-        state.recent_replies = {
-            123: deque(["один два три четыре пять"], maxlen=20)
-        }
-        generator = _traced_generator()
-        generator.generate_text = AsyncMock(
-            side_effect=[
-                "один два три четыре шесть",
-                "совсем другой свежий ответ",
-            ]
-        )
-        learning_service = _learning_service()
-        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        scorer = MagicMock(return_value=_score(1.0))
-        response_generator = ResponseGenerator(
-            generator=generator,
-            learning_service=learning_service,
-            runtime_state=state,
-            scorer=scorer,
-        )
-
-        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
-            result = await response_generator.generate(
-                _request(),
-                rng=random.Random(43),
-                candidate_target=2,
-            )
-
-        # Equal base scores: the trigram-overlap penalty must flip argmax
-        # away from the first-seen (overlapping) candidate.
-        self.assertEqual(result, "совсем другой свежий ответ")
-
-    async def test_zero_recent_penalty_strength_disables_soft_penalty(self) -> None:
-        state = _runtime_state()
-        state.recent_reply_penalty_strength = 0.0
-        state.recent_replies = {
-            123: deque(["один два три четыре пять"], maxlen=20)
-        }
-        generator = _traced_generator()
-        generator.generate_text = AsyncMock(
-            side_effect=[
-                "один два три четыре шесть",
-                "совсем другой свежий ответ",
-            ]
-        )
-        learning_service = _learning_service()
-        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        response_generator = ResponseGenerator(
-            generator=generator,
-            learning_service=learning_service,
-            runtime_state=state,
-            scorer=MagicMock(return_value=_score(1.0)),
-        )
-
-        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
-            result = await response_generator.generate(
-                _request(),
-                rng=random.Random(47),
-                candidate_target=2,
-            )
-
-        # Penalty off: ties resolve to the first-seen candidate again.
-        self.assertEqual(result, "один два три четыре шесть")
-
     async def test_short_length_mode_caps_generator_max_tokens(self) -> None:
         from app.core.response_generator import SHORT_MODE_MAX_TOKENS
 
@@ -979,143 +902,6 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(result.startswith("стабильный ответ"))
                 endings.add(result.removeprefix("стабильный ответ"))
         self.assertGreater(len(endings), 1)
-
-    async def test_auto_capitalization_only_changes_final_selected_text(self) -> None:
-        candidate = "привет. hello!"
-        scorer = MagicMock(return_value=_score(1.0))
-
-        async def generate_with_flag(enabled: bool) -> str | None:
-            state = _runtime_state()
-            state.auto_capitalize_replies = enabled
-            generator = _traced_generator()
-            generator.generate_text = AsyncMock(return_value=candidate)
-            response_generator = ResponseGenerator(
-                generator=generator,
-                learning_service=_learning_service(),
-                runtime_state=state,
-                scorer=scorer,
-            )
-            return await response_generator.generate(
-                _request(),
-                rng=random.Random(29),
-                candidate_target=1,
-            )
-
-        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
-            self.assertEqual(await generate_with_flag(False), candidate)
-            self.assertEqual(await generate_with_flag(True), "Привет. Hello!")
-        self.assertEqual(
-            [call.args[0] for call in scorer.call_args_list],
-            [candidate, candidate],
-        )
-
-
-class TestEntropySamplingSettings(unittest.TestCase):
-    """M2R-100: the rollback path is a /set away, with no restart."""
-
-    def _generator(self) -> ResponseGenerator:
-        return ResponseGenerator(
-            generator=_traced_generator(),
-            learning_service=_learning_service(),
-            runtime_state=_runtime_state(),
-        )
-
-    def test_settings_follow_the_runtime_state(self) -> None:
-        response_generator = self._generator()
-        self.assertEqual(response_generator.entropy_sampling.gain, 0.0)
-
-        response_generator.runtime_state.markov_entropy_temp_gain = 0.6
-        self.assertEqual(response_generator.entropy_sampling.gain, 0.6)
-
-        # Reverting is the same path in reverse: no restart, no rebuild.
-        response_generator.runtime_state.markov_entropy_temp_gain = 0.0
-        self.assertEqual(response_generator.entropy_sampling.gain, 0.0)
-
-    def test_clamp_and_pivot_come_from_the_state_too(self) -> None:
-        response_generator = self._generator()
-        state = response_generator.runtime_state
-        state.markov_entropy_pivot = 0.42
-        state.markov_entropy_temp_min = 1.0
-        state.markov_entropy_temp_max = 8.0
-        sampling = response_generator.entropy_sampling
-        self.assertEqual(
-            (sampling.pivot, sampling.temp_min, sampling.temp_max),
-            (0.42, 1.0, 8.0),
-        )
-
-
-class TestBranchingAwareCandidateTarget(unittest.IsolatedAsyncioTestCase):
-    """M2R-110: how much choice the walk had decides how many candidates to ask
-    for. The unit-level rule lives in tests/test_markov2r_phase2.py; this checks
-    that the candidate loop actually obeys it."""
-
-    @staticmethod
-    def _generator(branching: float) -> AsyncMock:
-        generator = AsyncMock()
-
-        async def _delegate(*args: object, **kwargs: object):
-            text = await generator.generate_text(*args, **kwargs)
-            return text, SimpleNamespace(
-                markov_order_used=3,
-                start_source="global",
-                mean_branching=branching,
-            )
-
-        generator.generate_text_with_trace = AsyncMock(side_effect=_delegate)
-        return generator
-
-    async def _run(self, *, branching: float, degenerate_max: float) -> int:
-        state = _runtime_state()
-        state.markov_branching_degenerate_max = degenerate_max
-        state.markov_branching_candidate_floor = 2
-        generator = self._generator(branching)
-        generator.generate_text = AsyncMock(
-            side_effect=[f"кандидат номер {index}" for index in range(10)]
-        )
-        response_generator = ResponseGenerator(
-            generator=generator,
-            learning_service=_learning_service(),
-            runtime_state=state,
-            scorer=MagicMock(side_effect=lambda *_: _score(1.0)),
-        )
-        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
-            result = await response_generator.generate_with_result(
-                _request(), rng=random.Random(17), candidate_target=5
-            )
-        return result.candidates_scored
-
-    async def test_degenerate_chain_stops_at_the_floor(self) -> None:
-        self.assertEqual(await self._run(branching=1.0, degenerate_max=1.5), 2)
-
-    async def test_wide_chain_reaches_the_full_target(self) -> None:
-        self.assertEqual(await self._run(branching=9.0, degenerate_max=1.5), 5)
-
-    async def test_disabled_knob_reaches_the_full_target(self) -> None:
-        """Even on a maximally degenerate chain, 0 restores the old behaviour."""
-        self.assertEqual(await self._run(branching=1.0, degenerate_max=0.0), 5)
-
-    async def test_early_stop_never_returns_an_empty_reply(self) -> None:
-        """A reduced target is a cap on accepted candidates, not on attempts:
-        a chain that keeps failing the gates still gets the whole budget."""
-        state = _runtime_state()
-        state.markov_branching_degenerate_max = 1.5
-        state.markov_branching_candidate_floor = 2
-        generator = self._generator(1.0)
-        # Nine dead attempts, then one usable candidate on the last try.
-        generator.generate_text = AsyncMock(
-            side_effect=[""] * 9 + ["единственный выживший кандидат"]
-        )
-        response_generator = ResponseGenerator(
-            generator=generator,
-            learning_service=_learning_service(),
-            runtime_state=state,
-            scorer=MagicMock(side_effect=lambda *_: _score(1.0)),
-        )
-        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
-            result = await response_generator.generate_with_result(
-                _request(), rng=random.Random(17), candidate_target=5
-            )
-        self.assertEqual(result.text, "единственный выживший кандидат")
 
 
 class TestResponseGeneratorSlotMutation(unittest.IsolatedAsyncioTestCase):

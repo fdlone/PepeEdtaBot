@@ -31,20 +31,6 @@ Diagnostics SHALL be computed from the model's raw-count proportions, not from t
 - **WHEN** a consumer changes the sampling weights based on a pool's entropy
 - **THEN** the entropy reported for that pool is unchanged, because it is computed from raw counts rather than from the adjusted weights
 
-### Requirement: Shadow order-4 selection is measured without an order-4 index
-
-The system SHALL estimate, for each order-3 walk step with at least 4 tokens of history, whether a variable-order 4→3→2 selector would have chosen order 4 — using order-4 support estimated from the retained message window (no order-4 storage exists before Phase 7; the estimate feeds that phase's pre-registered gate). The shadow computation SHALL NOT alter the walk, SHALL NOT consume random draws, and SHALL be disableable by a runtime knob. Telemetry SHALL publish both the number of eligible steps and the share where order 4 would have been selected, and SHALL record that the estimator is window-based (a conservative lower bound).
-
-#### Scenario: Shadow counters accumulate
-
-- **WHEN** generations run with the shadow selector enabled
-- **THEN** telemetry reports eligible-step count and would-select-order-4 share for the process lifetime
-
-#### Scenario: Shadow disabled
-
-- **WHEN** the shadow knob is off
-- **THEN** no shadow computation runs and generation output is unchanged either way
-
 ### Requirement: Cache effectiveness is observable
 
 The distribution caches SHALL count hits and misses, and `/stats` SHALL report the hit-rate alongside the model volume. Counters SHALL be per-process (reset on restart) and cheap enough to leave always on.

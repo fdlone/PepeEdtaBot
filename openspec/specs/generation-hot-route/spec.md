@@ -24,6 +24,13 @@ read for the route, and generation SHALL be byte-identical to the pre-route
 behaviour. With context present the route SHALL NOT run and SHALL NOT be
 counted as attempted.
 
+The route SHALL be the hot channel's only reader, and its slot ratio SHALL
+also gate the channel's write: the learn path SHALL record a message's content
+n-grams into the hot window only while `hot_ngram_slot_ratio` is above zero,
+so a switched-off route leaves the learn path write-free and a channel cannot
+be silenced by a knob that no reader depends on (the former per-reply seed
+draw and its knob were removed 2026-09-11).
+
 #### Scenario: Route on, self-initiated reply
 
 - **WHEN** the ratio is 0.4, the pool target is 5 and the request has no context
@@ -45,3 +52,10 @@ counted as attempted.
 
 - **WHEN** the ratio is set to 0
 - **THEN** generation is byte-identical to the pre-route behaviour for the same seed
+
+#### Scenario: Window written only while the route can read it
+
+- **WHEN** a message is learned with the ratio above zero
+- **THEN** its content n-grams are recorded into the hot window
+- **WHEN** a message is learned with the ratio at zero
+- **THEN** nothing is recorded

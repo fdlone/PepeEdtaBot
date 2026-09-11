@@ -170,11 +170,15 @@ Telegram message (F.text)
 Контекст влияет только через выбор стартового состояния и биасы шага —
 литеральный seed из контекста не строится (иначе бот попугайничает).
 
-### 3.2 Hot-ngram seed (L1): `reply_pipeline.py`
-Только для **непрошеных** ответов, с шансом `hot_ngram_seed_chance`.
-`learning_service.get_hot_ngrams` → n-граммы с ≥ `hot_ngram_min_count`
-попаданиями в окне и долей окна ≥ `hot_ngram_recency_share`; случайная
-становится `seed` генерации (реплика «в тему локального мема»).
+### 3.2 Hot-ngram канал (L1): запись окна в `reply_pipeline.py`, чтение — hot-маршрутом
+На пути обучения контентные n-граммы сообщения складываются в горячее окно
+(`record_hot_ngrams`), пока `hot_ngram_slot_ratio > 0` — с 2026-09-11 это
+единственный гейт записи (`hot-channel-write-gate`). Чтение — только
+hot-маршрутом внутри генератора (§4, 5c): n-граммы с ≥ `hot_ngram_min_count`
+попаданиями в окне и долей окна ≥ `hot_ngram_recency_share` сидируют первые
+попытки цикла для непрошеных ответов. Легаси-розыгрыш одной затравки на
+ответ (`hot_ngram_seed_chance`, `GenerationRequest.seed`) удалён: при
+включённом маршруте он до прогулки не доходил.
 
 ---
 
@@ -209,11 +213,10 @@ Telegram message (F.text)
 3. **До 10 попыток**, каждая — один вызов `MarkovGenerator.generate_text`
    (attempt_budget=1) с эскалацией случайности `escalated_randomness_strength`
    (линейно от базы к 3.0 по номеру попытки; `markov.py`). Цель по кандидатам —
-   `CANDIDATE_TARGET=5`; Markov 2.0R Phase 2 (M2R-110,
-   `branching_aware_target`) умеет опускать её до пола, если наблюдаемая
-   ветвимость принятых кандидатов не выше `markov_branching_degenerate_max`.
-   **По умолчанию выключено (0)**: на прод-копии этот размен даёт −0.039 копий
-   ценой −0.040 тематичности (оба значимы) и гейт фазы его отвергает. Бюджет
+   `CANDIDATE_TARGET=5`. Ранняя остановка по ветвимости (Phase 2, M2R-110,
+   `branching_aware_target`) удалена 2026-09-11 (`remove-phase2-machinery`):
+   на прод-копии размен давал −0.039 копий ценой −0.040 тематичности, гейт
+   фазы его отверг, при нуле механизм не срабатывал. Бюджет
    попыток ручка не трогает — только цель, поэтому ранняя остановка не может
    привести к пустому ответу.
 4. **Отбраковка кандидата** (до скоринга):
@@ -224,9 +227,7 @@ Telegram message (F.text)
      и пунктуации);
    - не-короткий кандидат, начинающийся как обучающий сэмпл —
      `learning_service.is_verbatim_copy` (кэш последних `TEXT_CACHE_MAX_MESSAGES` normalized-текстов).
-5. **Скоринг** уникальных кандидатов (`score_candidate`, §5) + штраф
-   `recent_penalty = recent_reply_penalty_strength × доля триграмм,
-   совпавших с последними 20 ответами` (`recent_reply_overlap`) +
+5. **Скоринг** уникальных кандидатов (`score_candidate`, §5) +
    слагаемое коллокаций `collocation_delta` (Markov 2.0R Phase 4, M2R-320,
    `core/collocations.py::collocation_effect`): бонус
    `markov_collocation_bonus` за целостное воспроизведение активной пары из
@@ -361,8 +362,6 @@ Telegram message (F.text)
    Именно `SELECTION_SCORE_MARGIN`, а не температура, решает, победит ли лучший
    кандидат: окно отсекает слабых до того, как софтмаксу есть что размазывать.
 7. **Пост-обработка**:
-   - `capitalize_reply_sentences` (только при `auto_capitalize_replies`,
-     по умолчанию false);
    - `apply_reply_flavor` (§6.1) с силой `reply_flavor_strength`;
    - `append_emoji_flavor` (§6.2) с шансом `emoji_append_chance`
      (×1.5 при heated), подавляется после `?`.
@@ -392,15 +391,12 @@ Telegram message (F.text)
 floor 0.02); выбор — через `rng.expovariate` (`exploration_weighted_choice`).
 
 Степень — это обратная температура: вес кандидата `count ** power`, то есть
-`T_base = 1/power`, а `randomness_strength` задаёт её масштаб. Markov 2.0R
-Phase 2 (`EntropySampling`, `markov.py`) умеет домножать эту температуру на
-`1 + GAIN·(H_norm − pivot)` с зажимом — по энтропии того самого пула, который
-уже меряет Phase 1, и **до** ролла исследования, чтобы сплющивание работало
-поверх, а не вместо. **По умолчанию выключено** (`markov_entropy_temp_gain=0`,
-ранний возврат ⇒ бит-в-бит 1.x): гейт фазы провален, потому что на этом
-корпусе энтропия шага бимодальна — 78.8% шагов безальтернативны, 20.9% почти
-равномерны, и температуре негде работать. Цифры и механизм:
-`docs/eval_reports/eval_2026-08-12_phase2-verdict.md`.
+`T_base = 1/power`, а `randomness_strength` задаёт её масштаб. Энтропийная
+температура Phase 2 (`EntropySampling`, домножение на `1 + GAIN·(H_norm − pivot)`)
+удалена 2026-09-11 (`remove-phase2-machinery`): гейт фазы провален, потому что
+на этом корпусе энтропия шага бимодальна — 78.8% шагов безальтернативны, 20.9%
+почти равномерны, в середине 0.3% (`eval_2026-08-12_phase2-verdict.md`);
+энтропия шага по-прежнему считается для телеметрии M2R-010.
 
 Markov 2.0R Phase 3 (`TemporalBlend`, `app/core/temporal.py`) заменяет источник
 веса: вместо сырого `count` — смесь `P = α·P_short + (1−α)·P_long` по
@@ -433,11 +429,11 @@ order-2 добавляет в пул кандидатов, которых у ord
    `(bias−1)/bias` от `reply_context_start_bias` (≈0.545). Каскад:
    - exact 3-граммные окна контекста с переходами (вес: transition_count^power ×
      recency-бонус до +35% для хвостовых окон);
-   - exact 2-граммные (+30% recency);
-   - casefold 3/2-граммы (при `fuzzy_context_casefold`) через
-     `ContextStateMatcher`.
+   - exact 2-граммные (+30% recency).
    Стем-тир здесь был третьим уровнем каскада и удалён 2026-07-14: на проде он
-   не давал ни одного старта (замер — в [CLOSED.md](CLOSED.md)). Морфология
+   не давал ни одного старта (замер — в [CLOSED.md](CLOSED.md)); casefold-тир
+   удалён 2026-09-11 (`remove-dead-knobs`): корпус учится в нижнем регистре,
+   перепись 11.09 измерила его inert в обоих режимах. Морфология
    осталась там, где работает: `context_start_affinity` и IDF-релевантность.
    Гейт: контекстный старт вообще пробуется лишь с вероятностью
    `context_start_probability(2.2)≈0.545` за попытку (`use_contextual_start`);
@@ -492,13 +488,9 @@ order-2 добавляет в пул кандидатов, которых у ord
 (`app/core/generation_telemetry.py::GenerationTelemetry.note_seed_ranking`,
 `::note_hot_ngram_draw`, `::note_context_dropped`). Знаменатель обязателен:
 `None` читается как «не спрашивали», измеренный ноль — как «спросили и
-ответил». После отбора победителя
-поверх его токенов работает теневой селектор order-4 (M2R-020,
-`app/core/shadow_order.py`): по оконному индексу «4 токена → продолжения»
-оценивается, выбрался бы order-4 при пороге поддержки и confidence из ТЗ §5;
-ответы с джампами/вклейками пропускаются (их смежность токенов пересекает
-шов). Это чистый замер для гейта Phase 7, `estimator=window` — консервативная
-нижняя оценка; ручка `markov_shadow_order4_enabled`.
+ответил». Теневой селектор order-4 (M2R-020) удалён 2026-09-11
+(`remove-dead-knobs`): фаза 7 закрыта 12.08 вердиктом «0 выборов на 5937
+шагов», и замер поверх победителя больше ничего не питал.
 
 Каждый шаг:
 - **Прыжок темы M4**: при ≥5 токенах (`JUMP_MIN_GENERATED_TOKENS`), order 3,
@@ -571,7 +563,7 @@ order-2 добавляет в пул кандидатов, которых у ord
 
 `GenerationTrace` пишется в debug-лог: attempts, order_used, jumps, rejection,
 start_source (**global / seed / context / hidden_context / context_spliced**),
-счётчики exact/casefold матчей и фолбэков, а также `route` — происхождение
+счётчики exact-матчей и фолбэков, а также `route` — происхождение
 кандидата (`CandidateRoute`: VANILLA/EXTENSION/SEEDED/MUTATED,
 `app/core/generation_telemetry.py::CandidateRoute`); маршрут печатается и у
 выживших, и у отклонённых кандидатов, телеметрия разбивается по маршрутам
@@ -586,7 +578,7 @@ start_source (**global / seed / context / hidden_context / context_spliced**),
 
 ### 6.1 `score_candidate` (`core/candidate_scorer.py`)
 `total = completion_quality + natural_length +
-context_relevance − repetition_penalty − recent_penalty − verbatim_penalty`:
+context_relevance − repetition_penalty − verbatim_penalty`:
 - **completion_quality**: +0.35 за терминальную пунктуацию, ±0.25/−0.50 за
   (не)сбалансированные скобки/кавычки, −0.80 за плохое последнее слово
   (BAD_ENDING_WORDS) или открывающую скобку в конце;

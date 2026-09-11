@@ -22,7 +22,7 @@ _DIALOGUE_HELP_KNOBS: tuple[tuple[str, str], ...] = (
     ("mention_max_per_hour", "потолок ответов на упоминания в час"),
     ("emoji_append_chance", "эмодзи в ответах"),
     ("markov_jump_probability", "дрейф темы"),
-    ("hot_ngram_seed_chance", "подхват мемов чата"),
+    ("hot_ngram_slot_ratio", "подхват мемов чата (hot-маршрут)"),
     ("rare_event_chance", "редкие фишки в ответах"),
     ("false_start_chance", "фальстарты"),
     ("pivo_temporal_flavor_chance", "вариации /pivo"),
@@ -256,13 +256,6 @@ def format_stats_message(
         hit_rate = telemetry.get("cache_hit_rate")
         if hit_rate is not None:
             lines.append(f"кэш распределений: {hit_rate:.0%} попаданий")
-        eligible = telemetry.get("shadow_order4_eligible")
-        share = telemetry.get("shadow_order4_selected_share")
-        if eligible and share is not None:
-            lines.append(
-                f"order-4 (тень, оценка по окну): выбрался бы в {share:.0%} "
-                f"из {eligible} шагов"
-            )
         # M2R-410: два раздельных знаменателя — присутствовал ли seeded-кандидат
         # в пуле и, отдельно, выиграл ли при наличии. Слитая в одну ставка
         # скрыла бы, редко ли он появляется или появляется, но проигрывает.
@@ -394,7 +387,6 @@ def format_config_message(
         f"температура отбора: {state.candidate_selection_temperature}",
         f"вариатор формы: {state.reply_flavor_strength}",
         f"штраф повторов: {state.repetition_penalty_strength}",
-        f"штраф недавних ответов: {state.recent_reply_penalty_strength}",
         "веса длины ответа (short,medium,long): "
         + ",".join(str(weight) for weight in state.length_mode_weights),
         f"reply-контекст: {state.use_reply_context}",

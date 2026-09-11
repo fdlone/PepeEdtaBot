@@ -41,7 +41,6 @@ def _request() -> GenerationRequest:
     return GenerationRequest(
         chat_id=123,
         context_tokens=["reply", "context", "tokens"],
-        seed=None,
         current_message_normalized="другое сообщение",
     )
 

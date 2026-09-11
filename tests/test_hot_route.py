@@ -28,7 +28,6 @@ def _self_initiated() -> GenerationRequest:
     return GenerationRequest(
         chat_id=123,
         context_tokens=[],
-        seed=None,
         current_message_normalized="что-то в чате",
     )
 
@@ -37,7 +36,6 @@ def _addressed() -> GenerationRequest:
     return GenerationRequest(
         chat_id=123,
         context_tokens=["reply", "context"],
-        seed=None,
         current_message_normalized="эй бот",
     )
 

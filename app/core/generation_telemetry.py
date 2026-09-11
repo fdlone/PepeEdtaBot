@@ -110,8 +110,6 @@ class GenerationTelemetry:
     diagnostic_steps: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
-    shadow_order4_eligible: int = 0
-    shadow_order4_selected: int = 0
     # M2R-320: what the active collocations did to candidates. Withheld counts
     # breaks that were NOT penalized because the chain never offered the right
     # token there — reported separately because it is the evidence that the
@@ -246,10 +244,6 @@ class GenerationTelemetry:
         self.interp_covered_steps += interp_covered_steps
         self.interp_displacement_sum += interp_displacement_sum
         self.diagnostic_steps += steps
-
-    def note_shadow(self, *, eligible: int, selected: int) -> None:
-        self.shadow_order4_eligible += eligible
-        self.shadow_order4_selected += selected
 
     def note_collocations(
         self, *, bonus_hits: int, penalty_hits: int, withheld: int
@@ -520,7 +514,6 @@ class GenerationTelemetry:
         """Aggregates for ``/stats``; ``None`` where no data exists yet."""
         steps = self.diagnostic_steps
         lookups = self.cache_hits + self.cache_misses
-        eligible = self.shadow_order4_eligible
         modes = self.ctx_generations + self.noctx_generations
         values: dict[str, float | int | None] = {
             # M3R-140/141: every one of these is a rate with its own
@@ -580,10 +573,6 @@ class GenerationTelemetry:
                 self.interp_displacement_sum / steps if steps else None
             ),
             "cache_hit_rate": self.cache_hits / lookups if lookups else None,
-            "shadow_order4_eligible": eligible,
-            "shadow_order4_selected_share": (
-                self.shadow_order4_selected / eligible if eligible else None
-            ),
             "collocation_bonus_hits": self.collocation_bonus_hits,
             "collocation_penalty_hits": self.collocation_penalty_hits,
             "collocation_withheld": self.collocation_withheld,

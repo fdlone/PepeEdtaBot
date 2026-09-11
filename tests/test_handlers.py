@@ -74,7 +74,6 @@ def _fake_state(**kwargs: object) -> MagicMock:
     # Hourly-cap guard neutral by default: an empty history never trips the cap.
     s.reply_max_per_hour = 20
     s.recent_reply_times = {}
-    s.recent_reply_penalty_strength = 1.0
     s.verbatim_penalty_strength = 0.0
     s.length_mode_weights = (0.25, 0.55, 0.2)
     s.intonation_profile_strength = 0.0
@@ -98,12 +97,6 @@ def _fake_state(**kwargs: object) -> MagicMock:
     # Phase 2 knobs neutral by default: gain 0 is the 1.x sampler and a
     # degenerate bound of 0 leaves the candidate target fixed, so handler tests
     # keep asserting the pre-Phase-2 candidate flow.
-    s.markov_entropy_temp_gain = 0.0
-    s.markov_entropy_pivot = 0.5
-    s.markov_entropy_temp_min = 0.5
-    s.markov_entropy_temp_max = 12.0
-    s.markov_branching_degenerate_max = 0.0
-    s.markov_branching_candidate_floor = 2
     # Phase 4 collocation weights neutral: non-zero (or a bare MagicMock, which
     # does not support ordering comparisons) would send the pipeline to the
     # collocation registry on a mock.
@@ -120,7 +113,6 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.markov_seed_head_share = 0.4
     # L1 hot-ngram channel off by default so learn/reply tests stay
     # deterministic; dedicated hot-ngram tests enable it explicitly.
-    s.hot_ngram_seed_chance = 0.0
     s.hot_ngram_min_count = 3
     s.hot_ngram_recency_share = 0.5
     # L3 rare events off by default so reply tests assert a single message;
@@ -182,7 +174,6 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.reply_director_enabled = False
     # Off by default so generated reply text is asserted verbatim; a bare
     # MagicMock attribute would be truthy and trigger reply capitalization.
-    s.auto_capitalize_replies = False
     # Mention anti-flood gate off by default so existing mention-driven tests
     # keep their guaranteed-reply behaviour; dedicated tests enable it.
     s.mention_cooldown_sec = 0
@@ -1901,7 +1892,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             "last_reply_ts": {},
             "reply_probability": 0.0,
             "use_reply_context": False,
-            "fuzzy_context_casefold": False,
             "reply_context_bias": 1.8,
             "reply_context_start_bias": 2.2,
             "context_start_affinity": 3.0,
@@ -1909,7 +1899,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             "max_reply_tokens": 45,
             "randomness_strength": 0.0,
             "repetition_penalty_strength": 1.0,
-            "recent_reply_penalty_strength": 1.0,
             "length_mode_weights": (0.25, 0.55, 0.2),
             "intonation_profile_strength": 0.0,
             "length_context_adaptation": 0.0,
@@ -2234,7 +2223,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             last_reply_ts={},
             reply_probability=0.0,
             use_reply_context=False,
-            fuzzy_context_casefold=False,
             reply_context_bias=1.8,
             reply_context_start_bias=2.2,
             context_start_affinity=3.0,
@@ -2242,7 +2230,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             max_reply_tokens=45,
             randomness_strength=0.0,
             repetition_penalty_strength=1.0,
-            recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
             intonation_profile_strength=0.0,
             length_context_adaptation=0.0,
@@ -2285,7 +2272,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             last_reply_ts={},
             reply_probability=0.0,
             use_reply_context=False,
-            fuzzy_context_casefold=False,
             reply_context_bias=1.8,
             reply_context_start_bias=2.2,
             context_start_affinity=3.0,
@@ -2293,7 +2279,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             max_reply_tokens=45,
             randomness_strength=0.0,
             repetition_penalty_strength=1.0,
-            recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
             intonation_profile_strength=0.0,
             length_context_adaptation=0.0,
@@ -2338,7 +2323,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             last_reply_ts={},
             reply_probability=0.0,
             use_reply_context=False,
-            fuzzy_context_casefold=False,
             reply_context_bias=1.8,
             reply_context_start_bias=2.2,
             context_start_affinity=3.0,
@@ -2346,7 +2330,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             max_reply_tokens=45,
             randomness_strength=0.0,
             repetition_penalty_strength=1.0,
-            recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
             intonation_profile_strength=0.0,
             length_context_adaptation=0.0,
@@ -2616,7 +2599,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
         generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="")
-        state = self._reply_state(hot_ngram_seed_chance=0.05)
+        state = self._reply_state(hot_ngram_slot_ratio=0.4)
 
         with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
@@ -2632,7 +2615,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             msg.chat.id, expected
         )
 
-    async def test_hot_ngram_recording_disabled_at_zero_chance(self) -> None:
+    async def test_hot_ngram_recording_disabled_when_the_route_is_off(self) -> None:
         from app.handlers.learning import on_text_message
 
         msg = _fake_message(text="крутой бобёр пришёл")
@@ -2642,7 +2625,7 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
         learning_service.is_verbatim_copy = AsyncMock(return_value=False)
         generator = _traced_generator()
         generator.generate_text = AsyncMock(return_value="")
-        state = self._reply_state()  # hot_ngram_seed_chance = 0.0 default
+        state = self._reply_state(hot_ngram_slot_ratio=0.0)  # route off
 
         with patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"):
             await on_text_message(
@@ -2652,108 +2635,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             )
 
         learning_service.record_hot_ngrams.assert_not_awaited()
-
-    async def test_unprompted_reply_seeded_on_roll(self) -> None:
-        from app.handlers.learning import on_text_message
-
-        # No mention; reply_probability 1.0 and the patched roll 0.0 win both
-        # the reply gate and the seed gate.
-        msg = _fake_message(text="обычное сообщение в чате")
-        learning_service = AsyncMock()
-        learning_service.get_token_volume = AsyncMock(return_value=100)
-        learning_service.record_message = AsyncMock(return_value=101)
-        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        learning_service.get_hot_ngrams = AsyncMock(
-            return_value=[("крутой", "бобёр")]
-        )
-        generator = _traced_generator()
-        generator.generate_text = AsyncMock(return_value="ответ бота готов")
-        state = self._reply_state(
-            reply_probability=1.0,
-            hot_ngram_seed_chance=1.0,
-            recent_replies={},
-        )
-
-        with (
-            patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"),
-            patch("app.services.reply_pipeline.random.random", return_value=0.0),
-        ):
-            await on_text_message(
-                msg, learning_service, generator, state,
-                "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
-                _pivo_stub(),
-            )
-
-        learning_service.get_hot_ngrams.assert_awaited_once_with(
-            msg.chat.id,
-            min_count=state.hot_ngram_min_count,
-            recency_share=state.hot_ngram_recency_share,
-            meme_ordering=state.markov_hot_ngram_meme_ordering,
-        )
-        first_call = generator.generate_text.await_args_list[0]
-        self.assertEqual(first_call.kwargs["seed_tokens"], ["крутой", "бобёр"])
-        msg.reply.assert_awaited_once()
-
-    async def test_mention_reply_never_seeded(self) -> None:
-        from app.handlers.learning import on_text_message
-
-        msg = _fake_message(text="pepe ответь развёрнуто")
-        learning_service = AsyncMock()
-        learning_service.get_token_volume = AsyncMock(return_value=100)
-        learning_service.record_message = AsyncMock(return_value=101)
-        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        generator = _traced_generator()
-        generator.generate_text = AsyncMock(return_value="ответ бота готов")
-        state = self._reply_state(
-            hot_ngram_seed_chance=1.0,
-            recent_replies={},
-        )
-
-        with (
-            patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"),
-            patch("app.services.reply_pipeline.random.random", return_value=0.0),
-        ):
-            await on_text_message(
-                msg, learning_service, generator, state,
-                "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
-                _pivo_stub(),
-            )
-
-        learning_service.get_hot_ngrams.assert_not_awaited()
-        first_call = generator.generate_text.await_args_list[0]
-        self.assertIsNone(first_call.kwargs["seed_tokens"])
-        msg.reply.assert_awaited_once()
-
-    async def test_no_hot_ngrams_means_no_seed(self) -> None:
-        from app.handlers.learning import on_text_message
-
-        msg = _fake_message(text="обычное сообщение в чате")
-        learning_service = AsyncMock()
-        learning_service.get_token_volume = AsyncMock(return_value=100)
-        learning_service.record_message = AsyncMock(return_value=101)
-        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        learning_service.get_hot_ngrams = AsyncMock(return_value=[])
-        generator = _traced_generator()
-        generator.generate_text = AsyncMock(return_value="ответ бота готов")
-        state = self._reply_state(
-            reply_probability=1.0,
-            hot_ngram_seed_chance=1.0,
-            recent_replies={},
-        )
-
-        with (
-            patch("app.services.reply_pipeline.mask_chat_id", return_value="chat"),
-            patch("app.services.reply_pipeline.random.random", return_value=0.0),
-        ):
-            await on_text_message(
-                msg, learning_service, generator, state,
-                "PepeEdtaBot", 777, frozenset({"pepe", "пепе"}),
-                _pivo_stub(),
-            )
-
-        first_call = generator.generate_text.await_args_list[0]
-        self.assertIsNone(first_call.kwargs["seed_tokens"])
-        msg.reply.assert_awaited_once()
 
     async def test_rare_event_false_start_sends_filler_then_reply(self) -> None:
         from app.core.reply_flavor import FALSE_START_FILLERS
@@ -2907,7 +2788,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             last_reply_ts={},
             reply_probability=0.0,
             use_reply_context=False,
-            fuzzy_context_casefold=False,
             reply_context_bias=1.8,
             reply_context_start_bias=2.2,
             context_start_affinity=3.0,
@@ -2915,7 +2795,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             max_reply_tokens=45,
             randomness_strength=0.5,
             repetition_penalty_strength=1.0,
-            recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
             intonation_profile_strength=0.0,
             length_context_adaptation=0.0,
@@ -2970,7 +2849,6 @@ class TestMentionCooldownGate(unittest.IsolatedAsyncioTestCase):
             "last_reply_ts": {},
             "reply_probability": 0.0,
             "use_reply_context": False,
-            "fuzzy_context_casefold": False,
             "reply_context_bias": 1.8,
             "reply_context_start_bias": 2.2,
             "context_start_affinity": 3.0,
@@ -2978,7 +2856,6 @@ class TestMentionCooldownGate(unittest.IsolatedAsyncioTestCase):
             "max_reply_tokens": 45,
             "randomness_strength": 0.0,
             "repetition_penalty_strength": 1.0,
-            "recent_reply_penalty_strength": 1.0,
             "length_mode_weights": (0.25, 0.55, 0.2),
             "intonation_profile_strength": 0.0,
             "length_context_adaptation": 0.0,
@@ -3093,7 +2970,6 @@ class TestUserQuirks(unittest.IsolatedAsyncioTestCase):
             "last_reply_ts": {},
             "reply_probability": 0.0,
             "use_reply_context": False,
-            "fuzzy_context_casefold": False,
             "reply_context_bias": 1.8,
             "reply_context_start_bias": 2.2,
             "context_start_affinity": 3.0,
@@ -3101,7 +2977,6 @@ class TestUserQuirks(unittest.IsolatedAsyncioTestCase):
             "max_reply_tokens": 45,
             "randomness_strength": 0.0,
             "repetition_penalty_strength": 1.0,
-            "recent_reply_penalty_strength": 1.0,
             "length_mode_weights": (0.25, 0.55, 0.2),
             "intonation_profile_strength": 0.0,
             "length_context_adaptation": 0.0,

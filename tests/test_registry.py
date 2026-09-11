@@ -48,6 +48,9 @@ def _make_state(**overrides: object) -> SimpleNamespace:
         "markov_seed_branch_min": 2.0,
         "markov_seed_branch_ideal": 6.0,
         "markov_seed_branch_max": 50.0,
+        "selection_score_margin": 0.3,
+        "selection_diversity_bonus": 0.2,
+        "selection_diversity_bonus_noctx": 0.2,
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -133,7 +136,8 @@ class TestNumericKnobsAreBoundedBothWays(unittest.TestCase):
         ("min_tokens_for_model", 1000000),
         ("reply_burst_boost_sec", 3600),
         ("reply_burst_suppress_sec", 3600),
-        ("hot_ngram_min_count", 1000),
+        ("hot_ngram_min_count", 100),
+        ("phrase_slot_ratio", 0.5),
         ("phrase_min_count", 10000),
         ("rare_event_daily_cap", 100),
         ("user_quirk_min_interactions", 10000),
@@ -380,6 +384,18 @@ class TestValidateCrossFields(unittest.TestCase):
     def test_typing_min_must_not_exceed_max(self) -> None:
         with self.assertRaises(ValueError):
             validate_cross_fields(_make_state(typing_min_ms=2000))
+
+    def test_diversity_bonus_may_not_exceed_the_margin(self) -> None:
+        # narrow-knob-domains: a bonus above the margin narrows the window.
+        validate_cross_fields(_make_state(selection_diversity_bonus=0.3))  # at the margin
+        with self.assertRaises(ValueError):
+            validate_cross_fields(_make_state(selection_diversity_bonus=0.31))
+        with self.assertRaises(ValueError):
+            validate_cross_fields(_make_state(selection_diversity_bonus_noctx=0.5))
+        # Raising the margin lifts the ceiling with it.
+        validate_cross_fields(
+            _make_state(selection_score_margin=0.6, selection_diversity_bonus=0.5)
+        )
 
 
 class TestTryApply(unittest.TestCase):

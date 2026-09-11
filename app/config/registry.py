@@ -169,12 +169,6 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("max_reply_tokens", "MAX_REPLY_TOKENS", "45",
               _int_in_range(1, 300)),
     FieldSpec("normalize_lower", "NORMALIZE_LOWER", "true", _bool()),
-    FieldSpec(
-        "auto_capitalize_replies",
-        "AUTO_CAPITALIZE_REPLIES",
-        "false",
-        _bool(),
-    ),
     # No explicit ceiling needed: validate_cross_fields enforces
     # typing_min_ms <= typing_max_ms, so this is bounded by the one below.
     FieldSpec("typing_min_ms", "TYPING_MIN_MS", "350", _int_min(0)),
@@ -245,11 +239,6 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _float_in_range(0.0, 1.0)),
     FieldSpec("repetition_penalty_strength", "REPETITION_PENALTY_STRENGTH", "1.0",
               _float_in_range(0.0, 3.0)),
-    # 0.5 chosen by eval sweep (2026-07-02): in the case-preserved profile
-    # strength 1.0 collapsed context_token_overlap 0.21->0.09; 0.5 keeps it at
-    # 0.14 with the same distinct-1/2 gain and ~1% empty-result rate.
-    FieldSpec("recent_reply_penalty_strength", "RECENT_REPLY_PENALTY_STRENGTH",
-              "0.5", _float_in_range(0.0, 3.0)),
     # Score penalty for candidates that replay training messages verbatim:
     # strength × severity, where severity ramps linearly from 0 at a corpus
     # 4-gram share of VERBATIM_TOLERATED_SHARE (0.6, candidate_scorer.py) to 1
@@ -322,49 +311,6 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # redeploy; both positions produce byte-identical generation output.
     FieldSpec("markov_cache_incremental", "MARKOV_CACHE_INCREMENTAL", "true",
               _bool()),
-    # Markov 2.0R Phase 1 (M2R-020): shadow order-4 selector. Pure
-    # measurement for the Phase 7 gate (estimator over the retained message
-    # window); generation output does not depend on the knob position.
-    FieldSpec("markov_shadow_order4_enabled", "MARKOV_SHADOW_ORDER4_ENABLED",
-              "true", _bool()),
-    # Markov 2.0R Phase 2 (M2R-100, TZ §6): entropy-aware sampling temperature.
-    # Per walk step T = T_base * (1 + GAIN * (H_norm - pivot)), clamped; the
-    # weights are cnt ** (1/T), so T_base is the existing frequency power
-    # inverted and RANDOMNESS_STRENGTH keeps its meaning as its scale.
-    # 0 disables (the established "0 disables" convention of this registry) and
-    # is byte-identical to Markov 1.x — TZ §6 defines GAIN=0 as that identity,
-    # so a separate MARKOV_ENTROPY_ENABLED boolean would be a second switch for
-    # the same thing (deviation from TZ §18 recorded in the phase's design.md).
-    # Sign is an open question answered by the Phase 2 grid: positive sharpens
-    # confident pools and loosens open ones, negative does the reverse.
-    FieldSpec("markov_entropy_temp_gain", "MARKOV_ENTROPY_TEMP_GAIN", "0",
-              _float_in_range(-2.0, 2.0)),
-    # Normalized entropy at which the temperature is left alone. Set from the
-    # measured mean H_norm of the corpus so the knob redistributes temperature
-    # between confident and open steps instead of shifting every step at once.
-    # 0.21 measured on db_prod_copy via the eval runner (mean branching 3.09):
-    # this chat's pools are wide but sharply peaked. A hand-picked 0.5 would
-    # have put almost every step below the pivot, turning the knob into a
-    # global temperature shift — exactly the confound the pivot exists to avoid.
-    FieldSpec("markov_entropy_pivot", "MARKOV_ENTROPY_PIVOT", "0.21",
-              _float_in_range(0.0, 1.0)),
-    # Safety clamp on the resulting temperature. Defaults bracket the reachable
-    # T_base range (~1.4..4.2 for RANDOMNESS_STRENGTH 0..3) with margin, so at
-    # sane gains the clamp never binds; it exists so no combination of knobs
-    # can produce a degenerate or exploding temperature.
-    FieldSpec("markov_entropy_temp_min", "MARKOV_ENTROPY_TEMP_MIN", "0.5",
-              _float_in_range(0.05, 50.0)),
-    FieldSpec("markov_entropy_temp_max", "MARKOV_ENTROPY_TEMP_MAX", "12.0",
-              _float_in_range(0.05, 50.0)),
-    # Markov 2.0R Phase 2 (M2R-110): branching-aware candidate target. Mean
-    # branching at or below which a chain counts as degenerate — further
-    # best-of-N attempts on it return near-duplicates of the first candidate,
-    # so the target drops to the floor and the generation stops early.
-    # 0 disables (no pool has branching <= 0), restoring the fixed target.
-    FieldSpec("markov_branching_degenerate_max", "MARKOV_BRANCHING_DEGENERATE_MAX",
-              "0", _float_in_range(0.0, 20.0)),
-    FieldSpec("markov_branching_candidate_floor", "MARKOV_BRANCHING_CANDIDATE_FLOOR",
-              "2", _int_in_range(1, 5)),
     # Markov 2.0R Phase 3 (M2R-210, TZ §7-8): the temporal blend.
     #
     # Half-life of the short layer in days. The stored counter is mathematically
@@ -456,20 +402,25 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # Share of the best-of-N pool filled by seeded candidates (an anchor token
     # the chat uses, a reply grown around it). Default 0 — the feature is inert,
     # generation byte-identical; raising it needs the phase's promotion gate.
+    # Ceiling 0.5 for every *_slot_ratio (narrow-knob-domains, 2026-09-11):
+    # route_slot_budget caps a route at half the pool, so 0.7 was the same two
+    # slots as 0.4 — the knob census measured the old extreme inert.
     FieldSpec("markov_seeded_candidate_ratio", "MARKOV_SEEDED_CANDIDATE_RATIO",
-              "0", _float_in_range(0.0, 0.7)),
+              "0", _float_in_range(0.0, 0.5)),
     # M3R-230 (l1-hot-route, 2026-09-02): L1 "local memes" as a route with a
     # slot budget (the O10 mechanism). Share of the pool built from walks
     # seeded by a hot n-gram — each slot draws its own n-gram from the hot
     # selection at the current hotness thresholds. Self-initiated replies only:
-    # the pipeline never seeds addressed replies (L1 rule). Default 0 — inert,
-    # generation byte-identical; raising it needs the l1_hot_channel gate.
+    # the pipeline never seeds addressed replies (L1 rule). Also the write gate
+    # of the hot-n-gram window on the learn path (hot-channel-write-gate,
+    # 2026-09-11): at 0 nothing is recorded and nothing is read. Default 0 —
+    # inert, generation byte-identical; raising it needs the l1_hot_channel gate.
     # Promoted 2026-09-11 (promote-hot-and-phrase-routes, O18): the arm
     # C7r40 (0.4 at hotness 2 / 0.25) took l1_hot_channel — meme rate
     # +0.299*, window escape +0.091*, connectedness +3.3 p.p. 0 restores the
     # pre-route generation byte for byte.
     FieldSpec("hot_ngram_slot_ratio", "HOT_NGRAM_SLOT_RATIO",
-              "0.4", _float_in_range(0.0, 0.7)),
+              "0.4", _float_in_range(0.0, 0.5)),
     # M3R-200 pilot (assoc-route-pilot, 2026-09-02): the associative route.
     # Share of the pool assembled around ASSOCIATES of the message's anchors —
     # distance-1 neighbours by normalized PMI over the chain's own transition
@@ -477,7 +428,7 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # pipeline. Default 0 — inert, generation byte-identical; a pilot bar, not
     # a promotion gate, decides whether it is worth a grid (assoc_pilot).
     FieldSpec("assoc_slot_ratio", "ASSOC_SLOT_RATIO",
-              "0", _float_in_range(0.0, 0.7)),
+              "0", _float_in_range(0.0, 0.5)),
     # M3R-210 (phrase-route): the phrase route. Share of the pool assembled
     # around a phrase of the chat's cumulative phrase index — a content
     # bigram/trigram with all-time support — inserted as a unit and grown on
@@ -487,7 +438,7 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # selection_diversity_bonus 0.2 and phrase_min_count 2 — the arm C11s. 0
     # restores the pre-route generation byte for byte.
     FieldSpec("phrase_slot_ratio", "PHRASE_SLOT_RATIO",
-              "0.4", _float_in_range(0.0, 0.7)),
+              "0.4", _float_in_range(0.0, 0.5)),
     # Support threshold of a phrase the route may use — the grid arm of the
     # route's measurement (2 / 3 / 5), not a start condition. Floor 2: a
     # phrase seen once is the support-1 lottery (R4). Ceiling: no phrase
@@ -593,24 +544,15 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # morphology, so the pymorphy3 guard cannot catch it.
     FieldSpec("slot_mutation_probability", "SLOT_MUTATION_PROBABILITY", "0.15",
               _float_in_range(0.0, 1.0)),
-    # L1 running jokes: chance to seed an *unprompted* reply from a currently
-    # hot n-gram (a phrase the chat picked up in the last ~7 days). 0 disables
-    # the whole channel (no recording, no reads) — same gate pattern as
-    # emoji_append_chance. Mention replies are never seeded.
-    # 0.25 (2026-07-12): at 0.05 the channel fired ~once a week in a live chat
-    # (dialogue-simulation audit: 1-2 lookups per 900 messages); ~every 4th
-    # unprompted reply now rolls for a seed, actual fires still gated by a hot
-    # n-gram existing in the window.
-    FieldSpec("hot_ngram_seed_chance", "HOT_NGRAM_SEED_CHANCE", "0.25",
-              _float_in_range(0.0, 1.0)),
     # Minimum window occurrences before an n-gram can be considered hot.
-    # Ceiling: no n-gram repeats a thousand times inside a chat's retention
-    # window, so anything near it silently switches local memes off.
+    # Ceiling 100 (narrow-knob-domains, 2026-09-11): the census measured 1000
+    # as a data switch — the hot pool is empty there and the route falls
+    # silent, which is the §5 trap of a channel switched off by data.
     # 2 / 0.25 since 2026-09-11: the hotness thresholds the promoted hot
     # route was gated at (M3R-145: 3 / 0.5 left the hot pool empty on the
     # prod copy).
     FieldSpec("hot_ngram_min_count", "HOT_NGRAM_MIN_COUNT", "2",
-              _int_in_range(1, 1000)),
+              _int_in_range(1, 100)),
     # Hot = window count / all-time count >= this share; 0.5 means at least
     # half of all recorded occurrences happened inside the decay window.
     FieldSpec("hot_ngram_recency_share", "HOT_NGRAM_RECENCY_SHARE", "0.25",
@@ -636,7 +578,7 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # L2 user quirks: chance to precede a generated answer to a "regular"'s
     # direct address with a short vocative message ("опять ты"). 0 disables
     # the whole channel — no interaction-counter writes, no reads (same gate
-    # pattern as emoji_append_chance / hot_ngram_seed_chance). Additionally
+    # pattern as emoji_append_chance). Additionally
     # capped in code at one quirk per (chat, user) per UTC day.
     # 0.3 since 2026-09-01 (tune-user-quirk-channel): the live funnel of
     # 24.08->01.09 showed the roll rejecting 41 of 44 addressed replies that
@@ -663,12 +605,6 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("user_quirk_name_share", "USER_QUIRK_NAME_SHARE", "0",
               _float_in_range(0.0, 1.0)),
     FieldSpec("use_reply_context", "USE_REPLY_CONTEXT", "true", _bool()),
-    FieldSpec(
-        "fuzzy_context_casefold",
-        "FUZZY_CONTEXT_CASEFOLD",
-        "true",
-        _bool(),
-    ),
     # Ceiling matches the scale of max_reply_tokens (1..300): context longer
     # than the longest possible reply buys the matcher nothing and costs
     # latency on every generation.
@@ -862,6 +798,19 @@ def validate_cross_fields(obj: Any) -> None:
         raise ValueError(
             "MARKOV_SEED_BRANCH_MIN <= MARKOV_SEED_BRANCH_IDEAL <= "
             "MARKOV_SEED_BRANCH_MAX must hold"
+        )
+    # narrow-knob-domains (2026-09-11): a diversity bonus above the selection
+    # margin makes the lifted candidate the maximum and drops the previous best
+    # out of the window — the window narrows instead of widening (selection
+    # grid 02.09, d40; census 11.09 at 1.0: window escape -0.321*). Both mode
+    # knobs are checked against the one margin.
+    if (
+        obj.selection_diversity_bonus > obj.selection_score_margin
+        or obj.selection_diversity_bonus_noctx > obj.selection_score_margin
+    ):
+        raise ValueError(
+            "SELECTION_DIVERSITY_BONUS and SELECTION_DIVERSITY_BONUS_NOCTX "
+            "must be <= SELECTION_SCORE_MARGIN"
         )
 
 

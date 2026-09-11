@@ -43,19 +43,6 @@ STATS_REBUILD_EVERY_MESSAGES = 50
 logger = logging.getLogger("chat_markov")
 
 
-def _fold_shadow_order4(
-    index: dict[tuple[str, str, str, str], dict[str, int]],
-    tokens: list[str],
-) -> None:
-    """Учесть одно сообщение в теневом order-4 индексе (casefold, M2R-020)."""
-    if len(tokens) < 5:
-        return
-    folded = [token.casefold() for token in tokens]
-    for i in range(len(folded) - 4):
-        state = (folded[i], folded[i + 1], folded[i + 2], folded[i + 3])
-        bucket = index.setdefault(state, {})
-        continuation = folded[i + 4]
-        bucket[continuation] = bucket.get(continuation, 0) + 1
 
 # Сколько сбой обслуживания должен продержаться, прежде чем о нём стоит
 # беспокоить владельца. Разовая неудача — это обычная занятая база (бэкап,
@@ -134,13 +121,6 @@ class LearningService:
         # order-2 цепи (не только окно ретенции messages). Пополняется словами
         # нового сообщения.
         self._word_frequencies: dict[int, dict[str, int]] = {}
-        # Теневой order-4 индекс (M2R-020): casefold-4-грамма -> продолжения
-        # по окну удержанных сообщений. Оценка снизу против полной истории —
-        # ровно то, что нужно консервативному гейту Phase 7. Строится лениво,
-        # пополняется в _absorb_message, вытесняется наравне с остальными.
-        self._shadow_order4: dict[
-            int, dict[tuple[str, str, str, str], dict[str, int]]
-        ] = {}
         # Тот же словарь, разложенный по двухбуквенному окончанию: подбор
         # замены смотрит только корзину своего окончания, а не весь словарь.
         # Держится в синхроне с плоским словарём в одном месте — _absorb_message.
@@ -576,7 +556,6 @@ class LearningService:
         self._intonation_pending.pop(chat_id, None)
         self._word_frequencies.pop(chat_id, None)
         self._frequencies_by_ending.pop(chat_id, None)
-        self._shadow_order4.pop(chat_id, None)
         self._last_touch.pop(chat_id, None)
 
     # --- приватные методы ---
@@ -651,10 +630,6 @@ class LearningService:
                     )
                     bucket[token] = frequencies[token]
 
-        shadow = self._shadow_order4.get(chat_id)
-        if shadow is not None:
-            _fold_shadow_order4(shadow, tokens)
-
         if chat_id in self._token_idf:
             self._idf_pending[chat_id] = self._idf_pending.get(chat_id, 0) + 1
         if chat_id in self._intonation:
@@ -686,25 +661,3 @@ class LearningService:
             normalized, maxlen=self._text_cache_max_messages
         )
         self._text_counts[chat_id] = Counter(self._text_window[chat_id])
-
-    async def get_order4_shadow_index(
-        self, chat_id: int
-    ) -> Mapping[tuple[str, str, str, str], Mapping[str, int]]:
-        """Оконная оценка поддержки order-4 для теневого селектора (M2R-020).
-
-        Документная база — те же удержанные сообщения, что у остальных
-        кэшей; casefold с обеих сторон. После первого построения индекс
-        пополняется новыми сообщениями (см. ``_absorb_message``): строго
-        говоря, это «окно на момент построения плюс всё выученное после»,
-        что по-прежнему не превышает полную историю — оценка остаётся
-        нижней границей.
-        """
-        self._touch(chat_id)
-        cached = self._shadow_order4.get(chat_id)
-        if cached is not None:
-            return cached
-        index: dict[tuple[str, str, str, str], dict[str, int]] = {}
-        for text in await self._get_recent_texts(chat_id):
-            _fold_shadow_order4(index, tokenize(text))
-        self._shadow_order4[chat_id] = index
-        return index

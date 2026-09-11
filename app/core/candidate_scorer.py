@@ -8,7 +8,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 
 from app.core.lexicon import BAD_ENDING_WORDS, STOPWORDS
-from app.core.markov import build_windows, content_tokens, tokenize
+from app.core.markov import build_windows, content_tokens
 from app.core.morphology import stem_token
 
 SHORT_REPLY_MAX_TOKENS = 3
@@ -133,7 +133,6 @@ class CandidateScore:
     natural_length: float
     context_relevance: float
     repetition_penalty: float
-    recent_penalty: float = 0.0
     verbatim_penalty: float = 0.0
     # M2R-320: bonus minus penalty from the chat's active collocations. Signed
     # on purpose — the components are counted separately in telemetry, and the
@@ -153,7 +152,6 @@ class CandidateScore:
             + self.collocation_delta
             + self.diversity_bonus
             - self.repetition_penalty
-            - self.recent_penalty
             - self.verbatim_penalty
         )
 
@@ -343,29 +341,6 @@ def repetition_penalty(tokens: list[str]) -> float:
         + _repeated_ngram_ratio(content, 3) * REPEATED_TRIGRAM_WEIGHT
         + (SHORT_REPLY_SCORE_OFFSET if is_short else 0.0)
     )
-
-
-def build_recent_reply_trigrams(
-    recent_texts: Iterable[str],
-) -> set[tuple[str, ...]]:
-    """Collect content trigrams of recently sent replies for overlap penalties."""
-    trigrams: set[tuple[str, ...]] = set()
-    for text in recent_texts:
-        trigrams.update(build_windows(_normalized_content(tokenize(text)), 3))
-    return trigrams
-
-
-def recent_reply_overlap(
-    tokens: list[str],
-    recent_trigrams: set[tuple[str, ...]],
-) -> float:
-    """Share of the candidate's content trigrams already seen in recent replies."""
-    if not recent_trigrams:
-        return 0.0
-    candidate_trigrams = set(build_windows(_normalized_content(tokens), 3))
-    if not candidate_trigrams:
-        return 0.0
-    return len(candidate_trigrams & recent_trigrams) / len(candidate_trigrams)
 
 
 def verbatim_ngram_overlap(

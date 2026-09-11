@@ -167,32 +167,6 @@ class TestPoolStopsGrowing(PoolCompositionTestCase):
         self.assertLessEqual(len(pool), 5)
         self.assertIn("vanilla", [candidate.route for candidate in pool])
 
-    async def test_degenerate_chain_still_leaves_a_walk_candidate(self) -> None:
-        # branching_aware_target ужимает цель ниже уже занятых слотов: цикл
-        # прервётся сразу после первого принятого кандидата обхода. Проверяем,
-        # что это не падение и не пул без обхода (риск из design).
-        state = _runtime_state()
-        state.markov_seeded_candidate_ratio = 0.3
-        state.markov_branching_degenerate_max = 10.0  # любая цепь «вырождена»
-        state.markov_branching_candidate_floor = 1
-        generator = self._seeded_generator(
-            seeded_tokens=["затравочный", "кандидат", "из", "четырёх"]
-        )
-        async def _walk_with_branching(*_a: object, **_k: object):
-            """Проходка с ненулевым ветвлением — вход branching_aware_target."""
-            text = await generator.generate_text()
-            return text, SimpleNamespace(
-                markov_order_used=3, start_source="global", mean_branching=1.0
-            )
-
-        generator.generate_text_with_trace = AsyncMock(
-            side_effect=_walk_with_branching
-        )
-
-        pool = await self._pool(state, generator, target=5)
-
-        self.assertIn("vanilla", [candidate.route for candidate in pool])
-
 
 class TestNeutralRatioIsUnchanged(PoolCompositionTestCase):
     async def test_zero_ratio_never_runs_the_route(self) -> None:

@@ -43,7 +43,6 @@ class RuntimeTunables:
     max_reply_chars: int
     max_reply_tokens: int
     normalize_lower: bool
-    auto_capitalize_replies: bool
     typing_min_ms: int
     typing_max_ms: int
     typing_per_char_ms: int
@@ -57,7 +56,6 @@ class RuntimeTunables:
     reply_flavor_strength: float
     emoji_append_chance: float
     repetition_penalty_strength: float
-    recent_reply_penalty_strength: float
     verbatim_penalty_strength: float
     verbatim_recognized_unit: bool
     length_mode_weights: tuple[float, float, float]
@@ -65,13 +63,6 @@ class RuntimeTunables:
     length_context_adaptation: float
     markov_order: int
     markov_cache_incremental: bool
-    markov_shadow_order4_enabled: bool
-    markov_entropy_temp_gain: float
-    markov_entropy_pivot: float
-    markov_entropy_temp_min: float
-    markov_entropy_temp_max: float
-    markov_branching_degenerate_max: float
-    markov_branching_candidate_floor: int
     markov_short_half_life_days: float
     markov_long_compression: str
     markov_long_compression_beta: float
@@ -105,7 +96,6 @@ class RuntimeTunables:
     verbatim_extension_share: float
     order_mix_probability: float
     slot_mutation_probability: float
-    hot_ngram_seed_chance: float
     hot_ngram_min_count: int
     hot_ngram_recency_share: float
     rare_event_chance: float
@@ -115,7 +105,6 @@ class RuntimeTunables:
     user_quirk_min_interactions: int
     user_quirk_name_share: float
     use_reply_context: bool
-    fuzzy_context_casefold: bool
     reply_context_max_tokens: int
     reply_context_bias: float
     reply_context_start_bias: float
