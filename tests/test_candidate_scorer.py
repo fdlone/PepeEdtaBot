@@ -8,14 +8,12 @@ from app.core.candidate_scorer import (
     CONTEXT_LENGTH_SHORT_TOKENS,
     CONTEXT_RELEVANCE_CAP,
     LENGTH_MODES,
-    build_recent_reply_trigrams,
     build_token_idf,
     completion_quality,
     context_length_weights,
     context_relevance,
     idf_context_relevance,
     natural_length,
-    recent_reply_overlap,
     repetition_penalty,
     sample_length_mode,
     score_candidate,
@@ -355,38 +353,5 @@ class TestCandidateScorer(unittest.TestCase):
             first.completion_quality
             + first.natural_length
             + first.context_relevance
-            - first.repetition_penalty
-            - first.recent_penalty,
+            - first.repetition_penalty,
         )
-        self.assertEqual(first.recent_penalty, 0.0)
-
-    def test_recent_reply_overlap_measures_shared_trigrams(self) -> None:
-        recent = build_recent_reply_trigrams(["один два три четыре пять"])
-
-        full = recent_reply_overlap(
-            tokenize("один два три четыре пять"), recent
-        )
-        partial = recent_reply_overlap(
-            tokenize("один два три совсем другое"), recent
-        )
-        fresh = recent_reply_overlap(
-            tokenize("совсем новый текст ответа"), recent
-        )
-
-        self.assertEqual(full, 1.0)
-        self.assertGreater(partial, 0.0)
-        self.assertLess(partial, 1.0)
-        self.assertEqual(fresh, 0.0)
-
-    def test_recent_reply_overlap_is_case_and_punctuation_insensitive(self) -> None:
-        recent = build_recent_reply_trigrams(["Один Два Три!"])
-
-        self.assertEqual(
-            recent_reply_overlap(tokenize("один два три"), recent), 1.0
-        )
-
-    def test_recent_reply_overlap_ignores_short_candidates(self) -> None:
-        recent = build_recent_reply_trigrams(["один два три четыре"])
-
-        self.assertEqual(recent_reply_overlap(tokenize("один два"), recent), 0.0)
-        self.assertEqual(recent_reply_overlap(tokenize("один два три"), set()), 0.0)

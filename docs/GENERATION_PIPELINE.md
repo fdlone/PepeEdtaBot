@@ -224,9 +224,7 @@ Telegram message (F.text)
      и пунктуации);
    - не-короткий кандидат, начинающийся как обучающий сэмпл —
      `learning_service.is_verbatim_copy` (кэш последних `TEXT_CACHE_MAX_MESSAGES` normalized-текстов).
-5. **Скоринг** уникальных кандидатов (`score_candidate`, §5) + штраф
-   `recent_penalty = recent_reply_penalty_strength × доля триграмм,
-   совпавших с последними 20 ответами` (`recent_reply_overlap`) +
+5. **Скоринг** уникальных кандидатов (`score_candidate`, §5) +
    слагаемое коллокаций `collocation_delta` (Markov 2.0R Phase 4, M2R-320,
    `core/collocations.py::collocation_effect`): бонус
    `markov_collocation_bonus` за целостное воспроизведение активной пары из
@@ -361,8 +359,6 @@ Telegram message (F.text)
    Именно `SELECTION_SCORE_MARGIN`, а не температура, решает, победит ли лучший
    кандидат: окно отсекает слабых до того, как софтмаксу есть что размазывать.
 7. **Пост-обработка**:
-   - `capitalize_reply_sentences` (только при `auto_capitalize_replies`,
-     по умолчанию false);
    - `apply_reply_flavor` (§6.1) с силой `reply_flavor_strength`;
    - `append_emoji_flavor` (§6.2) с шансом `emoji_append_chance`
      (×1.5 при heated), подавляется после `?`.
@@ -433,11 +429,11 @@ order-2 добавляет в пул кандидатов, которых у ord
    `(bias−1)/bias` от `reply_context_start_bias` (≈0.545). Каскад:
    - exact 3-граммные окна контекста с переходами (вес: transition_count^power ×
      recency-бонус до +35% для хвостовых окон);
-   - exact 2-граммные (+30% recency);
-   - casefold 3/2-граммы (при `fuzzy_context_casefold`) через
-     `ContextStateMatcher`.
+   - exact 2-граммные (+30% recency).
    Стем-тир здесь был третьим уровнем каскада и удалён 2026-07-14: на проде он
-   не давал ни одного старта (замер — в [CLOSED.md](CLOSED.md)). Морфология
+   не давал ни одного старта (замер — в [CLOSED.md](CLOSED.md)); casefold-тир
+   удалён 2026-09-11 (`remove-dead-knobs`): корпус учится в нижнем регистре,
+   перепись 11.09 измерила его inert в обоих режимах. Морфология
    осталась там, где работает: `context_start_affinity` и IDF-релевантность.
    Гейт: контекстный старт вообще пробуется лишь с вероятностью
    `context_start_probability(2.2)≈0.545` за попытку (`use_contextual_start`);
@@ -492,13 +488,9 @@ order-2 добавляет в пул кандидатов, которых у ord
 (`app/core/generation_telemetry.py::GenerationTelemetry.note_seed_ranking`,
 `::note_hot_ngram_draw`, `::note_context_dropped`). Знаменатель обязателен:
 `None` читается как «не спрашивали», измеренный ноль — как «спросили и
-ответил». После отбора победителя
-поверх его токенов работает теневой селектор order-4 (M2R-020,
-`app/core/shadow_order.py`): по оконному индексу «4 токена → продолжения»
-оценивается, выбрался бы order-4 при пороге поддержки и confidence из ТЗ §5;
-ответы с джампами/вклейками пропускаются (их смежность токенов пересекает
-шов). Это чистый замер для гейта Phase 7, `estimator=window` — консервативная
-нижняя оценка; ручка `markov_shadow_order4_enabled`.
+ответил». Теневой селектор order-4 (M2R-020) удалён 2026-09-11
+(`remove-dead-knobs`): фаза 7 закрыта 12.08 вердиктом «0 выборов на 5937
+шагов», и замер поверх победителя больше ничего не питал.
 
 Каждый шаг:
 - **Прыжок темы M4**: при ≥5 токенах (`JUMP_MIN_GENERATED_TOKENS`), order 3,
@@ -571,7 +563,7 @@ order-2 добавляет в пул кандидатов, которых у ord
 
 `GenerationTrace` пишется в debug-лог: attempts, order_used, jumps, rejection,
 start_source (**global / seed / context / hidden_context / context_spliced**),
-счётчики exact/casefold матчей и фолбэков, а также `route` — происхождение
+счётчики exact-матчей и фолбэков, а также `route` — происхождение
 кандидата (`CandidateRoute`: VANILLA/EXTENSION/SEEDED/MUTATED,
 `app/core/generation_telemetry.py::CandidateRoute`); маршрут печатается и у
 выживших, и у отклонённых кандидатов, телеметрия разбивается по маршрутам
@@ -586,7 +578,7 @@ start_source (**global / seed / context / hidden_context / context_spliced**),
 
 ### 6.1 `score_candidate` (`core/candidate_scorer.py`)
 `total = completion_quality + natural_length +
-context_relevance − repetition_penalty − recent_penalty − verbatim_penalty`:
+context_relevance − repetition_penalty − verbatim_penalty`:
 - **completion_quality**: +0.35 за терминальную пунктуацию, ±0.25/−0.50 за
   (не)сбалансированные скобки/кавычки, −0.80 за плохое последнее слово
   (BAD_ENDING_WORDS) или открывающую скобку в конце;

@@ -61,7 +61,6 @@ CORE_MODULES = (
     "slot_mutation",
     "interpolation",
     "temporal",
-    "shadow_order",
     "seed",
     "collocations",
 )

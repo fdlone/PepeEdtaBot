@@ -140,9 +140,6 @@ class _ProdVerbatimChecker:
         self._word_frequencies: dict[str, int] | None = None
         self._frequencies_by_ending: dict[str, dict[str, int]] | None = None
         self._hot_ngrams: list[tuple[str, ...]] | None = None
-        self._shadow_order4: (
-            dict[tuple[str, str, str, str], dict[str, int]] | None
-        ) = None
 
     async def is_verbatim_copy(self, chat_id: int, text: str) -> bool:
         normalized = normalize_for_verbatim(text)
@@ -225,29 +222,6 @@ class _ProdVerbatimChecker:
             return frozenset()
         return frozenset(await self._db.collocations.get_active(chat_id))
 
-    async def get_order4_shadow_index(
-        self, chat_id: int
-    ) -> dict[tuple[str, str, str, str], dict[str, int]]:
-        # M2R-020 (Phase 1): window-estimated order-4 support, mirroring
-        # LearningService.get_order4_shadow_index over the same message set —
-        # eval runs are where the Phase 7 gate data comes from.
-        if self._shadow_order4 is None:
-            index: dict[tuple[str, str, str, str], dict[str, int]] = {}
-            for message in self._messages:
-                folded = [token.casefold() for token in tokenize(message)]
-                for i in range(len(folded) - 4):
-                    state = (
-                        folded[i],
-                        folded[i + 1],
-                        folded[i + 2],
-                        folded[i + 3],
-                    )
-                    bucket = index.setdefault(state, {})
-                    continuation = folded[i + 4]
-                    bucket[continuation] = bucket.get(continuation, 0) + 1
-            self._shadow_order4 = index
-        return self._shadow_order4
-
 
 class _TraceCapturingGenerator(MarkovGenerator):
     """Accumulates per-attempt trace stats across the whole eval run.
@@ -264,7 +238,6 @@ class _TraceCapturingGenerator(MarkovGenerator):
         self.order_used: Counter[int] = Counter()
         self.rejections: Counter[str] = Counter()
         self.context_exact = 0
-        self.context_casefold = 0
         self.hidden_context_fallbacks = 0
         self.attempt_sources: dict[str, str] = {}
         self.attempt_orders: dict[str, int] = {}
@@ -287,7 +260,6 @@ class _TraceCapturingGenerator(MarkovGenerator):
         elif trace.rejection_reason is not None:
             self.rejections[trace.rejection_reason] += 1
         self.context_exact += trace.context_exact_matches
-        self.context_casefold += trace.context_casefold_matches
         self.hidden_context_fallbacks += trace.hidden_context_fallbacks
         return text, trace
 
@@ -730,7 +702,6 @@ async def evaluate(
     lengths = [len(output) for output in outputs]
     total_context = (
         generator.context_exact
-        + generator.context_casefold
         + generator.hidden_context_fallbacks
     )
     return {
@@ -868,7 +839,6 @@ async def evaluate(
         "order_used": dict(sorted(generator.order_used.items())),
         "rejections": dict(generator.rejections.most_common()),
         "context_exact": generator.context_exact,
-        "context_casefold": generator.context_casefold,
         "hidden_context_fallbacks": generator.hidden_context_fallbacks,
         "hidden_context_fallback_rate": round(
             generator.hidden_context_fallbacks / total_context, 4

@@ -116,7 +116,7 @@ class ConfigRun:
     config_id: str
     records: list[GenRecord]
     shared_with: str | None = None  # set when records are aliased, not re-run
-    # Per-seed generator telemetry snapshots (cache hit-rate, shadow order-4);
+    # Per-seed generator telemetry snapshots (cache hit-rate, route draws);
     # deliberately kept out of metrics_summary — telemetry describes the
     # machinery, not the content, and must not break cross-revision
     # content-identity comparisons.
@@ -229,7 +229,7 @@ async def run_config_seed(
     """One (configuration, seed) protocol run — fresh DB copy, cold process state.
 
     Returns the generation records plus the generator's telemetry snapshot
-    (cache hit-rate, shadow order-4 counters) for the report's machinery
+    (cache hit-rate, route draw counters) for the report's machinery
     section."""
     log_masking.init_masking("markov2r-eval-protocol")
     if context_mode not in CONTEXT_MODES:

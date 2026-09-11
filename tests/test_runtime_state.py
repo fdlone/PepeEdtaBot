@@ -33,7 +33,6 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
             "runtime_state_max_chats": 2,
             # Отклонения от дефолтов реестра, сохранённые дословно.
             "normalize_lower": False,
-            "fuzzy_context_casefold": False,
             "context_start_affinity": 3.0,
             "context_jump_boost": 1.0,
             "context_anchor_splice_probability": 0.0,
@@ -43,7 +42,6 @@ def make_runtime_state(**overrides: object) -> RuntimeState:
             "slot_mutation_probability": 0.0,
             "verbatim_penalty_strength": 1.0,
             "verbatim_extension_share": 0.0,
-            "recent_reply_penalty_strength": 1.0,
             "length_context_adaptation": 0.0,
             "hot_ngram_seed_chance": 0.05,
             "rare_event_chance": 0.005,

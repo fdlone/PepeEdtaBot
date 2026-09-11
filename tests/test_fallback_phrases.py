@@ -27,7 +27,7 @@ def _make_runtime_state() -> RuntimeState:
     """
     from tests.test_runtime_state import make_runtime_state
 
-    return make_runtime_state(fuzzy_context_casefold=True, runtime_state_max_chats=8)
+    return make_runtime_state(runtime_state_max_chats=8)
 
 
 class TestFallbackPools(unittest.TestCase):

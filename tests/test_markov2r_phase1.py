@@ -1,4 +1,4 @@
-"""Markov 2.0R Phase 1: diagnostics, shadow order-4, incremental cache.
+"""Markov 2.0R Phase 1: diagnostics, incremental cache (shadow order-4 removed 2026-09-11).
 
 The load-bearing suite is the equivalence block: a cache updated by folding
 learned-message deltas must be indistinguishable — content-wise and
@@ -24,10 +24,6 @@ from app.core.markov import (
     _fold_transition,
     pool_diagnostics,
     tokenize,
-)
-from app.core.shadow_order import (
-    SHADOW_ORDER4_MIN_COUNT,
-    shadow_order4_stats,
 )
 from app.infrastructure.database import Database
 from app.presentation.bot_messages import format_stats_message
@@ -66,44 +62,12 @@ class TestPoolDiagnostics(unittest.TestCase):
         self.assertAlmostEqual(confidence, 1.0 - normalized)
 
 
-class TestShadowOrder4(unittest.TestCase):
-    def test_planted_high_support_state_selected(self) -> None:
-        # One 4-token state seen 5 times, always continuing the same way:
-        # support >= threshold, confidence 1.0 -> the shadow selector fires.
-        index = {("а", "б", "в", "г"): {"д": 5}}
-        eligible, selected = shadow_order4_stats(
-            ["а", "б", "в", "г", "д", "е"], index
-        )
-        self.assertEqual(eligible, 2)  # positions 4 and 5
-        self.assertEqual(selected, 1)
-
-    def test_low_support_not_selected(self) -> None:
-        index = {("а", "б", "в", "г"): {"д": SHADOW_ORDER4_MIN_COUNT - 1}}
-        _eligible, selected = shadow_order4_stats(["а", "б", "в", "г", "д"], index)
-        self.assertEqual(selected, 0)
-
-    def test_high_entropy_pool_not_selected(self) -> None:
-        # Plenty of support but a uniform continuation pool: confidence 0.
-        index = {("а", "б", "в", "г"): {"д": 3, "е": 3, "ж": 3, "з": 3}}
-        _eligible, selected = shadow_order4_stats(["а", "б", "в", "г", "д"], index)
-        self.assertEqual(selected, 0)
-
-    def test_short_reply_has_no_eligible_steps(self) -> None:
-        self.assertEqual(shadow_order4_stats(["а", "б", "в", "г"], {}), (0, 0))
-
-    def test_casefold_matching(self) -> None:
-        index = {("а", "б", "в", "г"): {"д": 5}}
-        _eligible, selected = shadow_order4_stats(["А", "Б", "В", "Г", "Д"], index)
-        self.assertEqual(selected, 1)
-
-
 class TestTelemetryAndStats(unittest.TestCase):
     def test_snapshot_empty(self) -> None:
         snapshot = GenerationTelemetry().snapshot()
         self.assertEqual(snapshot["generations"], 0)
         self.assertIsNone(snapshot["mean_entropy_bits"])
         self.assertIsNone(snapshot["cache_hit_rate"])
-        self.assertIsNone(snapshot["shadow_order4_selected_share"])
 
     def test_snapshot_aggregates(self) -> None:
         telemetry = GenerationTelemetry()
@@ -116,14 +80,10 @@ class TestTelemetryAndStats(unittest.TestCase):
             branching_sum=6.0,
             steps=2,
         )
-        telemetry.note_shadow(eligible=10, selected=3)
         snapshot = telemetry.snapshot()
         self.assertAlmostEqual(snapshot["cache_hit_rate"] or 0.0, 2 / 3)
         self.assertAlmostEqual(snapshot["mean_entropy_bits"] or 0.0, 2.0)
         self.assertAlmostEqual(snapshot["mean_branching"] or 0.0, 3.0)
-        self.assertAlmostEqual(
-            snapshot["shadow_order4_selected_share"] or 0.0, 0.3
-        )
 
     def test_stats_message_without_telemetry(self) -> None:
         # Строка сборки печатается всегда (см. test_bot_messages), поэтому
@@ -142,11 +102,9 @@ class TestTelemetryAndStats(unittest.TestCase):
             branching_sum=3.0,
             steps=1,
         )
-        telemetry.note_shadow(eligible=20, selected=2)
         text = format_stats_message({"volume": 7}, telemetry.snapshot())
         self.assertIn("объём модели: 7", text)
         self.assertIn("кэш распределений", text)
-        self.assertIn("order-4 (тень", text)
 
 
 class TestFoldHelpers(unittest.TestCase):
@@ -279,10 +237,6 @@ class TestIncrementalCacheEquivalence(_Phase1DbCase):
             folded_index = matcher._cache[(CHAT_ID, order)]
             fresh_index = await fresh_matcher._get_index(CHAT_ID, order)
             self.assertEqual(folded_index.exact, fresh_index.exact)
-            for key, bucket in fresh_index.casefolded.items():
-                self.assertEqual(
-                    folded_index.casefolded.get(key), bucket, (order, key)
-                )
 
     async def test_generation_identical_warm_vs_cold(self) -> None:
         for message in CORPUS:
@@ -312,24 +266,6 @@ class TestIncrementalCacheEquivalence(_Phase1DbCase):
             [k for k in self.generator._cache3 if k[0] == CHAT_ID]
         )
         self.assertNotIn(CHAT_ID, self.generator._cache_starts3)
-
-
-class TestShadowIndexService(_Phase1DbCase):
-    async def test_window_index_and_incremental_fold(self) -> None:
-        for message in CORPUS:
-            await self._learn(message, incremental=False)
-        index = await self.learning.get_order4_shadow_index(CHAT_ID)
-        self.assertIn(("коты", "любят", "тёплое", "молоко"), index)
-        self.assertEqual(
-            index[("коты", "любят", "тёплое", "молоко")], {"утром": 1}
-        )
-        # A new message folds into the cached index without a rebuild.
-        await self._learn("коты любят тёплое молоко днём", incremental=True)
-        folded = await self.learning.get_order4_shadow_index(CHAT_ID)
-        self.assertEqual(
-            folded[("коты", "любят", "тёплое", "молоко")],
-            {"утром": 1, "днём": 1},
-        )
 
 
 if __name__ == "__main__":

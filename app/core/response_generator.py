@@ -14,10 +14,8 @@ from app.config.runtime_state import RuntimeState
 from app.core import gen_trace_log
 from app.core.candidate_scorer import (
     CandidateScore,
-    build_recent_reply_trigrams,
     context_length_weights,
     idf_context_relevance,
-    recent_reply_overlap,
     sample_length_mode,
     score_candidate,
     verbatim_ngram_overlap,
@@ -55,10 +53,9 @@ from app.core.mood import (
 from app.core.phrase_route import PHRASE_ANCHORS_MAX, rank_phrases
 from app.core.reply_flavor import apply_reply_flavor
 from app.core.seed import is_scorable
-from app.core.shadow_order import shadow_order4_stats
 from app.core.slot_mutation import mutate_candidate_tokens
 from app.core.temporal import TemporalBlend
-from app.core.text import capitalize_reply_sentences, sanitize_text
+from app.core.text import sanitize_text
 from app.core.trajectory import EDGE_OVERLAP_SIMILAR, edge_overlap, trajectory_edges
 from app.log_masking import mask_chat_id
 
@@ -169,9 +166,6 @@ class VerbatimCopyChecker(Protocol):
         recency_share: float,
         meme_ordering: bool = False,
     ) -> list[tuple[str, ...]]: ...
-    async def get_order4_shadow_index(
-        self, chat_id: int
-    ) -> Mapping[tuple[str, str, str, str], Mapping[str, int]]: ...
     async def get_active_collocations(
         self, chat_id: int
     ) -> frozenset[tuple[str, str]]: ...
@@ -682,8 +676,6 @@ class ResponseGenerator:
         length_mode: str,
         max_tokens: int,
         context_idf: Mapping[str, float],
-        recent_trigrams: set[tuple[str, ...]],
-        recent_penalty_strength: float,
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
         active_collocations: frozenset[tuple[str, str]],
@@ -738,8 +730,6 @@ class ResponseGenerator:
             length_mode=length_mode,
             max_tokens=max_tokens,
             context_idf=context_idf,
-            recent_trigrams=recent_trigrams,
-            recent_penalty_strength=recent_penalty_strength,
             corpus_ngrams=corpus_ngrams,
             verbatim_penalty_strength=verbatim_penalty_strength,
             active_collocations=active_collocations,
@@ -758,8 +748,6 @@ class ResponseGenerator:
         length_mode: str,
         max_tokens: int,
         context_idf: Mapping[str, float],
-        recent_trigrams: set[tuple[str, ...]],
-        recent_penalty_strength: float,
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
         active_collocations: frozenset[tuple[str, str]],
@@ -800,8 +788,6 @@ class ResponseGenerator:
             length_mode=length_mode,
             max_tokens=max_tokens,
             context_idf=context_idf,
-            recent_trigrams=recent_trigrams,
-            recent_penalty_strength=recent_penalty_strength,
             corpus_ngrams=corpus_ngrams,
             verbatim_penalty_strength=verbatim_penalty_strength,
             active_collocations=active_collocations,
@@ -820,8 +806,6 @@ class ResponseGenerator:
         length_mode: str,
         max_tokens: int,
         context_idf: Mapping[str, float],
-        recent_trigrams: set[tuple[str, ...]],
-        recent_penalty_strength: float,
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
         active_collocations: frozenset[tuple[str, str]],
@@ -871,8 +855,6 @@ class ResponseGenerator:
             length_mode=length_mode,
             max_tokens=max_tokens,
             context_idf=context_idf,
-            recent_trigrams=recent_trigrams,
-            recent_penalty_strength=recent_penalty_strength,
             corpus_ngrams=corpus_ngrams,
             verbatim_penalty_strength=verbatim_penalty_strength,
             active_collocations=active_collocations,
@@ -893,8 +875,6 @@ class ResponseGenerator:
         length_mode: str,
         max_tokens: int,
         context_idf: Mapping[str, float],
-        recent_trigrams: set[tuple[str, ...]],
-        recent_penalty_strength: float,
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
         active_collocations: frozenset[tuple[str, str]],
@@ -983,8 +963,6 @@ class ResponseGenerator:
                 request.context_tokens,
                 length_mode,
                 context_idf=context_idf,
-                recent_trigrams=recent_trigrams,
-                recent_penalty_strength=recent_penalty_strength,
                 corpus_ngrams=corpus_ngrams,
                 verbatim_penalty_strength=verbatim_penalty_strength,
                 chat_id=request.chat_id,
@@ -1001,8 +979,6 @@ class ResponseGenerator:
         length_mode: str,
         *,
         context_idf: Mapping[str, float],
-        recent_trigrams: set[tuple[str, ...]],
-        recent_penalty_strength: float,
         corpus_ngrams: AbstractSet[tuple[str, ...]],
         verbatim_penalty_strength: float,
         chat_id: int,
@@ -1024,8 +1000,6 @@ class ResponseGenerator:
                 weight=self.runtime_state.context_relevance_weight,
                 cap=self.runtime_state.context_relevance_cap,
             ),
-            recent_penalty=recent_penalty_strength
-            * recent_reply_overlap(tokens, recent_trigrams),
             # M3R-120: гард «одной признанной единицы» применяется здесь и
             # только здесь. Триггер verbatim-дописки ниже намеренно остаётся
             # на сырой доле: дописка существует, чтобы добавить отсебятину к
@@ -1125,15 +1099,6 @@ class ResponseGenerator:
         branching_samples: list[float] = []
         candidates: list[_ScoredCandidate] = []
         seen_candidates: set[str] = set()
-        attempt_jump_counts: dict[str, int] = {}
-        recent_penalty_strength = self.runtime_state.recent_reply_penalty_strength
-        recent_trigrams = (
-            build_recent_reply_trigrams(
-                self.runtime_state.recent_replies.get(request.chat_id) or ()
-            )
-            if recent_penalty_strength > 0.0
-            else set()
-        )
         # Quote detection: candidates whose content 4-grams all exist in the
         # corpus are verbatim replays and lose score to recombined candidates.
         # The index read is skipped entirely when the penalty is off.
@@ -1214,7 +1179,6 @@ class ResponseGenerator:
             target=target,
             budget=GENERATION_ATTEMPT_BUDGET,
             attempts_with_context=attempts_with_context,
-            recent_penalty_strength=recent_penalty_strength,
             verbatim_penalty_strength=verbatim_penalty_strength,
         )
 
@@ -1241,8 +1205,6 @@ class ResponseGenerator:
                 length_mode=length_mode,
                 max_tokens=max_tokens,
                 context_idf=context_idf,
-                recent_trigrams=recent_trigrams,
-                recent_penalty_strength=recent_penalty_strength,
                 corpus_ngrams=corpus_ngrams,
                 verbatim_penalty_strength=verbatim_penalty_strength,
                 active_collocations=active_collocations,
@@ -1286,8 +1248,6 @@ class ResponseGenerator:
                 length_mode=length_mode,
                 max_tokens=max_tokens,
                 context_idf=context_idf,
-                recent_trigrams=recent_trigrams,
-                recent_penalty_strength=recent_penalty_strength,
                 corpus_ngrams=corpus_ngrams,
                 verbatim_penalty_strength=verbatim_penalty_strength,
                 active_collocations=active_collocations,
@@ -1313,8 +1273,6 @@ class ResponseGenerator:
                 length_mode=length_mode,
                 max_tokens=max_tokens,
                 context_idf=context_idf,
-                recent_trigrams=recent_trigrams,
-                recent_penalty_strength=recent_penalty_strength,
                 corpus_ngrams=corpus_ngrams,
                 verbatim_penalty_strength=verbatim_penalty_strength,
                 active_collocations=active_collocations,
@@ -1366,7 +1324,6 @@ class ResponseGenerator:
                 repetition_penalty_strength=self.runtime_state.repetition_penalty_strength,
                 markov_order=self.runtime_state.markov_order,
                 enable_backoff=self.runtime_state.enable_backoff,
-                fuzzy_context_casefold=self.runtime_state.fuzzy_context_casefold,
                 jump_probability=self.runtime_state.markov_jump_probability,
                 context_jump_boost=self.runtime_state.context_jump_boost,
                 order_mix_probability=self.runtime_state.order_mix_probability,
@@ -1380,14 +1337,6 @@ class ResponseGenerator:
                 rng=generation_rng,
                 attempt_budget=1,
             )
-            if candidate:
-                # M2R-020: jump count per candidate text — the shadow selector
-                # below skips replies whose token adjacency crosses a splice.
-                # getattr-guarded: test doubles stub the trace with namespaces;
-                # an unknown jump count (-1) simply skips the shadow measure.
-                attempt_jump_counts[candidate] = getattr(
-                    candidate_trace, "jump_count", -1
-                )
             if not candidate:
                 logger.debug(
                     "Generation attempt failed: chat=%s attempt=%s context=%s seed_len=%s",
@@ -1501,8 +1450,6 @@ class ResponseGenerator:
                             request.context_tokens,
                             length_mode,
                             context_idf=context_idf,
-                            recent_trigrams=recent_trigrams,
-                            recent_penalty_strength=recent_penalty_strength,
                             corpus_ngrams=corpus_ngrams,
                             verbatim_penalty_strength=verbatim_penalty_strength,
                             chat_id=request.chat_id,
@@ -1571,8 +1518,6 @@ class ResponseGenerator:
                                     request.context_tokens,
                                     length_mode,
                                     context_idf=context_idf,
-                                    recent_trigrams=recent_trigrams,
-                                    recent_penalty_strength=recent_penalty_strength,
                                     corpus_ngrams=corpus_ngrams,
                                     verbatim_penalty_strength=verbatim_penalty_strength,
                                     chat_id=request.chat_id,
@@ -1691,31 +1636,7 @@ class ResponseGenerator:
             selection_margin_used=True,
             selected=selected,
         )
-        # M2R-020 shadow order-4 selector: measurement only, after selection,
-        # over the winner's raw token sequence. Skipped for replies with jumps
-        # or texts not produced by a single walk (extensions/mutations) — their
-        # adjacency crosses splice boundaries. getattr-guarded: test doubles
-        # and older harnesses may not implement the protocol method yet.
-        if (
-            getattr(self.runtime_state, "markov_shadow_order4_enabled", False)
-            and attempt_jump_counts.get(selected.text) == 0
-        ):
-            shadow_index_getter = getattr(
-                self.learning_service, "get_order4_shadow_index", None
-            )
-            if shadow_index_getter is not None:
-                shadow_index = await shadow_index_getter(request.chat_id)
-                eligible, chosen = shadow_order4_stats(
-                    tokenize(selected.text), shadow_index
-                )
-                self.generator.telemetry.note_shadow(
-                    eligible=eligible, selected=chosen
-                )
-        text = (
-            capitalize_reply_sentences(selected.text)
-            if self.runtime_state.auto_capitalize_replies
-            else selected.text
-        )
+        text = selected.text
         text = apply_reply_flavor(
             text,
             generation_rng,

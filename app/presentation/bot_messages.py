@@ -256,13 +256,6 @@ def format_stats_message(
         hit_rate = telemetry.get("cache_hit_rate")
         if hit_rate is not None:
             lines.append(f"кэш распределений: {hit_rate:.0%} попаданий")
-        eligible = telemetry.get("shadow_order4_eligible")
-        share = telemetry.get("shadow_order4_selected_share")
-        if eligible and share is not None:
-            lines.append(
-                f"order-4 (тень, оценка по окну): выбрался бы в {share:.0%} "
-                f"из {eligible} шагов"
-            )
         # M2R-410: два раздельных знаменателя — присутствовал ли seeded-кандидат
         # в пуле и, отдельно, выиграл ли при наличии. Слитая в одну ставка
         # скрыла бы, редко ли он появляется или появляется, но проигрывает.
@@ -394,7 +387,6 @@ def format_config_message(
         f"температура отбора: {state.candidate_selection_temperature}",
         f"вариатор формы: {state.reply_flavor_strength}",
         f"штраф повторов: {state.repetition_penalty_strength}",
-        f"штраф недавних ответов: {state.recent_reply_penalty_strength}",
         "веса длины ответа (short,medium,long): "
         + ",".join(str(weight) for weight in state.length_mode_weights),
         f"reply-контекст: {state.use_reply_context}",

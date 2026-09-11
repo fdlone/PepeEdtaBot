@@ -93,9 +93,6 @@ SILENT_SPLICE_PROBABILITY = 0.35
 JUMP_MAX_PER_REPLY = 1
 
 # Insurance for a raised cap: a further jump may not fire until the reply has
-# grown this many tokens past the previous splice, so asides cannot chain
-# back-to-back. Dead while JUMP_MAX_PER_REPLY is 1.
-JUMP_MIN_TOKENS_BETWEEN = 6
 
 # Tokens dropped from the tail of the walk right before a connective splice: a
 # dangling comma, conjunction or preposition at the splice point yields ",,",
@@ -384,7 +381,6 @@ class GenerationTrace:
     start_source: str
     leading_punctuation_stripped: int = 0
     context_exact_matches: int = 0
-    context_casefold_matches: int = 0
     hidden_context_fallbacks: int = 0
     # M2R-010: diagnostics of the winning attempt's step pools (walk steps
     # only; start pools are not sampled per step and stay uninstrumented).
@@ -431,7 +427,6 @@ class _GenerationAttempt(NamedTuple):
     start_source: str
     leading_punctuation_stripped: int = 0
     context_exact_matches: int = 0
-    context_casefold_matches: int = 0
     hidden_context_fallbacks: int = 0
     mean_entropy_bits: float = 0.0
     mean_normalized_entropy: float = 0.0
@@ -1341,58 +1336,6 @@ class MarkovGenerator:
                 candidates2.append(((window[0], window[1]), transitions, weight))
         return candidates2
 
-    async def _build_casefold3_candidates(
-        self,
-        chat_id: int,
-        windows3: list[tuple[str, ...]],
-        total3: int,
-        frequency_power: float,
-    ) -> list[tuple[tuple[str, str, str], float, int]]:
-        """Casefold 3-gram start candidates via the context-state matcher,
-        weighted by count and recency. Each entry keeps its transition count.
-        """
-        candidates: list[tuple[tuple[str, str, str], float, int]] = []
-        for index, window in enumerate(windows3):
-            matches = await self._context_state_matcher.match(chat_id, window, 3)
-            recency_bonus = 1.0 + ((index + 1) / total3) * 0.35
-            for match in matches:
-                if match.match_kind != "casefold":
-                    continue
-                state3 = (match.state[0], match.state[1], match.state[2])
-                weight = (
-                    max(match.transition_count, 1) ** frequency_power
-                    * recency_bonus
-                )
-                candidates.append((state3, weight, match.transition_count))
-        return candidates
-
-    async def _build_casefold2_candidates(
-        self,
-        chat_id: int,
-        windows2: list[tuple[str, ...]],
-        total2: int,
-        frequency_power: float,
-    ) -> list[tuple[tuple[str, str], list[TransitionRow], float]]:
-        """Casefold 2-gram start candidates that still have stored
-        transitions."""
-        additions: list[tuple[tuple[str, str], list[TransitionRow], float]] = []
-        for index, window in enumerate(windows2):
-            matches = await self._context_state_matcher.match(chat_id, window, 2)
-            recency_bonus = 1.0 + ((index + 1) / total2) * 0.30
-            for match in matches:
-                if match.match_kind != "casefold":
-                    continue
-                state2 = (match.state[0], match.state[1])
-                transitions = await self._get2(chat_id, state2[0], state2[1])
-                if not transitions:
-                    continue
-                weight = (
-                    max(match.transition_count, 1) ** frequency_power
-                    * recency_bonus
-                )
-                additions.append((state2, transitions, weight))
-        return additions
-
     @staticmethod
     def _select_state3(
         candidates: list[tuple[tuple[str, str, str], float, int]],
@@ -1423,7 +1366,6 @@ class MarkovGenerator:
         context_triplets: set[tuple[str, ...]],
         context_bias: float,
         repetition_penalty_strength: float,
-        fuzzy_context_casefold: bool,
         rng: random.Random,
     ) -> _ContextualStateSelection | None:
         exploring, frequency_power = _roll_exploration(
@@ -1447,21 +1389,6 @@ class MarkovGenerator:
         )
 
         match_kind = "exact"
-        if not candidates2 and fuzzy_context_casefold:
-            casefold_candidates3 = await self._build_casefold3_candidates(
-                chat_id, windows3, total3, frequency_power
-            )
-            if casefold_candidates3:
-                return self._select_state3(
-                    casefold_candidates3, "casefold", exploring=exploring, rng=rng
-                )
-
-            additions = await self._build_casefold2_candidates(
-                chat_id, windows2, total2, frequency_power
-            )
-            candidates2.extend(additions)
-            match_kind = "casefold"
-
         if not candidates2:
             return None
         population2 = list(range(len(candidates2)))
@@ -1500,7 +1427,6 @@ class MarkovGenerator:
         repetition_penalty_strength: float = 1.0,
         markov_order: int = 3,
         enable_backoff: bool = True,
-        fuzzy_context_casefold: bool = False,
         jump_probability: float = 0.0,
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
@@ -1532,7 +1458,6 @@ class MarkovGenerator:
             repetition_penalty_strength=repetition_penalty_strength,
             markov_order=markov_order,
             enable_backoff=enable_backoff,
-            fuzzy_context_casefold=fuzzy_context_casefold,
             jump_probability=jump_probability,
             context_jump_boost=context_jump_boost,
             order_mix_probability=order_mix_probability,
@@ -1566,7 +1491,6 @@ class MarkovGenerator:
         repetition_penalty_strength: float = 1.0,
         markov_order: int = 3,
         enable_backoff: bool = True,
-        fuzzy_context_casefold: bool = False,
         jump_probability: float = 0.0,
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
@@ -1600,7 +1524,6 @@ class MarkovGenerator:
                 repetition_penalty_strength=repetition_penalty_strength,
                 markov_order=markov_order,
                 enable_backoff=enable_backoff,
-                fuzzy_context_casefold=fuzzy_context_casefold,
                 jump_probability=jump_probability,
                 context_jump_boost=context_jump_boost,
                 order_mix_probability=order_mix_probability,
@@ -1631,9 +1554,6 @@ class MarkovGenerator:
                 a.leading_punctuation_stripped for a in attempts
             ),
             context_exact_matches=sum(a.context_exact_matches for a in attempts),
-            context_casefold_matches=sum(
-                a.context_casefold_matches for a in attempts
-            ),
             hidden_context_fallbacks=sum(
                 a.hidden_context_fallbacks for a in attempts
             ),
@@ -1685,7 +1605,7 @@ class MarkovGenerator:
         logger.debug(
             "Generation trace: attempts=%s order=%s jumps=%s rejection=%s tokens=%s "
             "start_source=%s leading_punctuation_stripped=%s context_exact=%s "
-            "context_casefold=%s hidden_context_fallbacks=%s "
+            "hidden_context_fallbacks=%s "
             "entropy=%.3f norm_entropy=%.3f branching=%.1f confidence_min=%.3f "
             "temperature=%.2f diag_steps=%s",
             trace.attempts_used,
@@ -1696,7 +1616,6 @@ class MarkovGenerator:
             trace.start_source,
             trace.leading_punctuation_stripped,
             trace.context_exact_matches,
-            trace.context_casefold_matches,
             trace.hidden_context_fallbacks,
             trace.mean_entropy_bits,
             trace.mean_normalized_entropy,
@@ -2174,7 +2093,6 @@ class MarkovGenerator:
         context_triplets: set[tuple[str, ...]],
         context_bias: float,
         repetition_penalty_strength: float,
-        fuzzy_context_casefold: bool,
         rng: random.Random,
     ) -> _ContextualStateSelection | None:
         """Select a hidden start state anchored on the reply context.
@@ -2197,19 +2115,8 @@ class MarkovGenerator:
             context_triplets=context_triplets,
             context_bias=context_bias,
             repetition_penalty_strength=repetition_penalty_strength,
-            fuzzy_context_casefold=fuzzy_context_casefold,
             rng=rng,
         )
-
-    @staticmethod
-    def _contextual_match_counts(
-        selection: _ContextualStateSelection,
-    ) -> tuple[int, int]:
-        """Map a contextual match kind to its ``(exact, casefold)`` trace
-        counters."""
-        if selection.match_kind == "exact":
-            return 1, 0
-        return 0, 1
 
     def _finalize_attempt(
         self,
@@ -2221,7 +2128,6 @@ class MarkovGenerator:
         jump_count: int,
         start_source: str,
         context_exact_matches: int,
-        context_casefold_matches: int,
         hidden_context_fallbacks: int,
         diagnostics: _DiagnosticsAccumulator | None = None,
         applied_alpha: float = 0.0,
@@ -2248,7 +2154,6 @@ class MarkovGenerator:
             start_source=start_source,
             leading_punctuation_stripped=final.leading_punctuation_stripped,
             context_exact_matches=context_exact_matches,
-            context_casefold_matches=context_casefold_matches,
             hidden_context_fallbacks=hidden_context_fallbacks,
             mean_entropy_bits=diag.entropy_bits_sum / steps if steps else 0.0,
             mean_normalized_entropy=(
@@ -2341,7 +2246,6 @@ class MarkovGenerator:
             build_windows(dedup_seed, 3)
         )
         jump_count = 0
-        last_jump_end = 0
         used_connectives: list[tuple[str, ...]] = []
         anchor_pending = anchor_state is not None
 
@@ -2353,7 +2257,7 @@ class MarkovGenerator:
             finalize pass trims the reply to the last sentence end, so a
             silent marker whose tail earns no own terminal punctuation would
             cut the anchor right back out while the trace still claims it."""
-            nonlocal w1, w2, w3, jump_count, last_jump_end, anchor_pending
+            nonlocal w1, w2, w3, jump_count, anchor_pending
             assert anchor_state is not None
             emit = anchor_emit_tokens or []
             trim_splice_tail(generated)
@@ -2369,7 +2273,6 @@ class MarkovGenerator:
             used_connectives.append(connective)
             generated.extend(splice_marker_tokens(generated, connective))
             generated.extend(emit)
-            last_jump_end = len(generated)
             w1, w2, w3 = anchor_state
             remember_bounded(visited_triplets, (w1, w2, w3), 40)
             if len(generated) >= 2:
@@ -2393,10 +2296,6 @@ class MarkovGenerator:
                 not anchor_pending
                 and len(generated) >= JUMP_MIN_GENERATED_TOKENS
                 and jump_count < JUMP_MAX_PER_REPLY
-                and (
-                    jump_count == 0
-                    or len(generated) - last_jump_end >= JUMP_MIN_TOKENS_BETWEEN
-                )
                 and rng.random() < jump_probability
                 and starts3
                 and order >= 3
@@ -2434,7 +2333,6 @@ class MarkovGenerator:
                 used_connectives.append(connective)
                 generated.extend(splice_marker_tokens(generated, connective))
                 generated.extend((nw1, nw2, nw3))
-                last_jump_end = len(generated)
                 w1, w2, w3 = nw1, nw2, nw3
                 remember_bounded(visited_triplets, (w1, w2, w3), 40)
                 remember_bounded(seen_pairs, (generated[-2], generated[-1]), 80)
@@ -2596,7 +2494,6 @@ class MarkovGenerator:
         repetition_penalty_strength: float = 1.0,
         markov_order: int = 3,
         enable_backoff: bool = True,
-        fuzzy_context_casefold: bool = False,
         jump_probability: float = 0.0,
         context_jump_boost: float = 1.0,
         order_mix_probability: float = 0.0,
@@ -2645,7 +2542,6 @@ class MarkovGenerator:
         deferred_anchor: _ContextualStateSelection | None = None
         deferred_anchor_emit: list[str] = []
         context_exact_matches = 0
-        context_casefold_matches = 0
         hidden_context_fallbacks = 0
         seed_start = await self._pick_seed_start(
             chat_id,
@@ -2681,7 +2577,6 @@ class MarkovGenerator:
                 context_triplets=context_triplets,
                 context_bias=context_bias,
                 repetition_penalty_strength=repetition_penalty_strength,
-                fuzzy_context_casefold=fuzzy_context_casefold,
                 rng=generation_rng,
             )
             if contextual_state is not None:
@@ -2715,10 +2610,7 @@ class MarkovGenerator:
                     start_source = (
                         "context" if contextual_emit_tokens else "hidden_context"
                     )
-                (
-                    context_exact_matches,
-                    context_casefold_matches,
-                ) = self._contextual_match_counts(contextual_state)
+                context_exact_matches = 1
             elif context_tokens and use_contextual_start:
                 hidden_context_fallbacks = 1
 
@@ -2751,7 +2643,6 @@ class MarkovGenerator:
                     start_source=start_source,
                     leading_punctuation_stripped=0,
                     context_exact_matches=context_exact_matches,
-                    context_casefold_matches=context_casefold_matches,
                     hidden_context_fallbacks=hidden_context_fallbacks,
                 )
             start3, order_used = global_start
@@ -2828,7 +2719,6 @@ class MarkovGenerator:
             start_source = "context_spliced" if anchor_spliced else "global"
             if not anchor_spliced:
                 context_exact_matches = 0
-                context_casefold_matches = 0
 
         return self._finalize_attempt(
             generated,
@@ -2838,7 +2728,6 @@ class MarkovGenerator:
             jump_count=jump_count,
             start_source=start_source,
             context_exact_matches=context_exact_matches,
-            context_casefold_matches=context_casefold_matches,
             hidden_context_fallbacks=hidden_context_fallbacks,
             diagnostics=diagnostics,
             applied_alpha=temporal_blend.alpha,

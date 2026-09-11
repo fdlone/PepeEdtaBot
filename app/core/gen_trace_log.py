@@ -66,7 +66,6 @@ def log_request_header(
     target: int,
     budget: int,
     attempts_with_context: int,
-    recent_penalty_strength: float,
     verbatim_penalty_strength: float,
 ) -> None:
     if not enabled():
@@ -77,7 +76,7 @@ def log_request_header(
         "  goal: collect up to %d candidates (attempt budget=%d, "
         "first %d attempts use context)\n"
         "  length_mode=%s  base_randomness=%.3f  selection_temperature=%.3f\n"
-        "  penalties: recent=%.2f verbatim=%.2f",
+        "  penalties: verbatim=%.2f",
         mask_chat_id(chat_id),
         target,
         budget,
@@ -85,7 +84,6 @@ def log_request_header(
         length_mode,
         randomness,
         temperature,
-        recent_penalty_strength,
         verbatim_penalty_strength,
     )
 
@@ -94,8 +92,6 @@ def _route(trace: GenerationTrace) -> str:
     """One-line description of which branches the generator walked."""
     if trace.context_exact_matches:
         ctx = f"context=EXACTx{trace.context_exact_matches}"
-    elif trace.context_casefold_matches:
-        ctx = f"context=CASEFOLDx{trace.context_casefold_matches}"
     elif trace.hidden_context_fallbacks:
         ctx = f"context=HIDDEN_FALLBACKx{trace.hidden_context_fallbacks}"
     else:
@@ -264,7 +260,7 @@ def log_attempt_accepted(
         "        score: total=%+.3f = "
         "completion=%+.3f + natural_len=%+.3f + context_rel=%+.3f "
         "+ collocation=%+.3f\n"
-        "               - repetition=%.3f - recent=%.3f - verbatim=%.3f",
+        "               - repetition=%.3f - verbatim=%.3f",
         attempt,
         "on" if context_used else "off",
         index,
@@ -276,7 +272,6 @@ def log_attempt_accepted(
         score.context_relevance,
         score.collocation_delta,
         score.repetition_penalty,
-        score.recent_penalty,
         score.verbatim_penalty,
     )
 

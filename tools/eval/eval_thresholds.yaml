@@ -19,7 +19,7 @@ phase2_entropy:
   # confusing the two is how a null result gets read as a win.
   #
   # must-not-worsen: a SIGNIFICANT increase in copying disqualifies the arm
-  # (same convention as phase7_order4). An insignificant rise is not a fail —
+  # (the convention every later gate follows). An insignificant rise is not a fail —
   # the protocol cannot resolve deltas below ~3 p.p. (doc 05 §8).
   exact_copy_delta_max: 0.0
   # must-improve: distinct-2 and distinct-3 must rise AND the rise must be
@@ -204,12 +204,6 @@ phase6_anticycle:
   # Two-dimensional gate (ADR-015): BOTH must exceed. Cycle != harm.
   cycle_detection_rate_min: 0.05
   cycle_harm_rate_min: 0.02
-
-phase7_order4:
-  # Shadow selector (Phase 1) must show order-4 actually being chosen, and the
-  # exact-copy rate must not rise significantly in the shadow projection.
-  order4_selected_share_min: 0.10
-  exact_copy_delta_max: 0.0      # significant increase disqualifies
 
 phase9_interp:
   # Registered 2026-08-14, BEFORE the Phase 9 grid was run and before a single

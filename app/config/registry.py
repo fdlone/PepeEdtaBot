@@ -169,12 +169,6 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("max_reply_tokens", "MAX_REPLY_TOKENS", "45",
               _int_in_range(1, 300)),
     FieldSpec("normalize_lower", "NORMALIZE_LOWER", "true", _bool()),
-    FieldSpec(
-        "auto_capitalize_replies",
-        "AUTO_CAPITALIZE_REPLIES",
-        "false",
-        _bool(),
-    ),
     # No explicit ceiling needed: validate_cross_fields enforces
     # typing_min_ms <= typing_max_ms, so this is bounded by the one below.
     FieldSpec("typing_min_ms", "TYPING_MIN_MS", "350", _int_min(0)),
@@ -245,11 +239,6 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
               _float_in_range(0.0, 1.0)),
     FieldSpec("repetition_penalty_strength", "REPETITION_PENALTY_STRENGTH", "1.0",
               _float_in_range(0.0, 3.0)),
-    # 0.5 chosen by eval sweep (2026-07-02): in the case-preserved profile
-    # strength 1.0 collapsed context_token_overlap 0.21->0.09; 0.5 keeps it at
-    # 0.14 with the same distinct-1/2 gain and ~1% empty-result rate.
-    FieldSpec("recent_reply_penalty_strength", "RECENT_REPLY_PENALTY_STRENGTH",
-              "0.5", _float_in_range(0.0, 3.0)),
     # Score penalty for candidates that replay training messages verbatim:
     # strength × severity, where severity ramps linearly from 0 at a corpus
     # 4-gram share of VERBATIM_TOLERATED_SHARE (0.6, candidate_scorer.py) to 1
@@ -322,11 +311,6 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     # redeploy; both positions produce byte-identical generation output.
     FieldSpec("markov_cache_incremental", "MARKOV_CACHE_INCREMENTAL", "true",
               _bool()),
-    # Markov 2.0R Phase 1 (M2R-020): shadow order-4 selector. Pure
-    # measurement for the Phase 7 gate (estimator over the retained message
-    # window); generation output does not depend on the knob position.
-    FieldSpec("markov_shadow_order4_enabled", "MARKOV_SHADOW_ORDER4_ENABLED",
-              "true", _bool()),
     # Markov 2.0R Phase 2 (M2R-100, TZ §6): entropy-aware sampling temperature.
     # Per walk step T = T_base * (1 + GAIN * (H_norm - pivot)), clamped; the
     # weights are cnt ** (1/T), so T_base is the existing frequency power
@@ -663,12 +647,6 @@ RUNTIME_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("user_quirk_name_share", "USER_QUIRK_NAME_SHARE", "0",
               _float_in_range(0.0, 1.0)),
     FieldSpec("use_reply_context", "USE_REPLY_CONTEXT", "true", _bool()),
-    FieldSpec(
-        "fuzzy_context_casefold",
-        "FUZZY_CONTEXT_CASEFOLD",
-        "true",
-        _bool(),
-    ),
     # Ceiling matches the scale of max_reply_tokens (1..300): context longer
     # than the longest possible reply buys the matcher nothing and costs
     # latency on every generation.

@@ -54,7 +54,6 @@ def make_state() -> SimpleNamespace:
         **{
             **{spec.name: spec.parse(spec.default) for spec in RUNTIME_FIELDS},
             "normalize_lower": False,
-            "fuzzy_context_casefold": False,
             "context_jump_boost": 1.0,
             "markov_jump_probability": 0.04,
             "markov_entropy_pivot": 0.5,
@@ -62,7 +61,6 @@ def make_state() -> SimpleNamespace:
             "slot_mutation_probability": 0.0,
             "verbatim_penalty_strength": 1.0,
             "verbatim_extension_share": 0.0,
-            "recent_reply_penalty_strength": 1.0,
             "length_context_adaptation": 0.0,
             "hot_ngram_seed_chance": 0.05,
             "rare_event_chance": 0.005,

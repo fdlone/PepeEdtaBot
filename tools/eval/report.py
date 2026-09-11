@@ -1950,44 +1950,6 @@ def evaluate_gates(
 
     rows.append(("phase6_anticycle", *_phase6_verdict(baseline, thresholds)))
 
-    phase7 = thresholds.get("phase7_order4", {})
-    shadow_eligible = 0
-    shadow_selected_share: float | None = None
-    if baseline is not None and baseline.telemetry:
-        eligible_counts = [
-            int(snapshot.get("shadow_order4_eligible") or 0)
-            for snapshot in baseline.telemetry
-        ]
-        shares = [
-            float(share)
-            for snapshot in baseline.telemetry
-            if (share := snapshot.get("shadow_order4_selected_share")) is not None
-        ]
-        shadow_eligible = sum(eligible_counts)
-        if shares:
-            shadow_selected_share = mean(shares)
-    if shadow_selected_share is None or shadow_eligible < 1000:
-        rows.append(
-            (
-                "phase7_order4",
-                INSUFFICIENT,
-                f"shadow data: {shadow_eligible} eligible steps "
-                "(need >= 1000 for a verdict; estimator=window)",
-            )
-        )
-    else:
-        threshold = float(phase7.get("order4_selected_share_min", 0.10))
-        verdict = "pass" if shadow_selected_share >= threshold else "fail"
-        rows.append(
-            (
-                "phase7_order4",
-                verdict,
-                f"shadow order-4 share {shadow_selected_share:.1%} vs "
-                f"threshold {threshold:.0%} over {shadow_eligible} eligible "
-                "steps (estimator=window — conservative lower bound); the "
-                "exact-copy condition is checked at Phase 7 proposal time",
-            )
-        )
 
     perf = thresholds.get("performance", {})
     budget = float(perf.get("generation_p95_ms_max", 150))
@@ -2196,11 +2158,6 @@ def build_report(
         temperature_line = (
             f"{mean(temperatures):.2f}" if temperatures else INSUFFICIENT
         )
-        shadow_shares = [
-            snapshot["shadow_order4_selected_share"]
-            for snapshot in run.telemetry
-            if snapshot.get("shadow_order4_selected_share") is not None
-        ]
         # M2R-210: intent (alpha) is in the matrix; these two are the effect.
         coverages = [
             float(value)
@@ -2238,12 +2195,6 @@ def build_report(
             if interp_coverages and interp_displacements
             else INSUFFICIENT
         )
-        shadow_line = (
-            f"{mean([float(share) for share in shadow_shares]):.1%} "
-            "(estimator=window)"
-            if shadow_shares
-            else INSUFFICIENT
-        )
         # M3R-145: the L1 draw counters (M3R-141 pair) — "switched off by data"
         # is visible in the report itself, not only in /stats. Draws are
         # summed over seeds, the empty share averaged over seeds that drew.
@@ -2273,7 +2224,7 @@ def build_report(
             f"mean applied temperature: {temperature_line}; "
             f"temporal blend: {blend_line}; "
             f"order interpolation: {interp_line}; "
-            f"shadow order-4 share: {shadow_line}; hot-ngram seeds: {hot_line}; "
+            f"hot-ngram seeds: {hot_line}; "
             "storage_delta: n/a."
         )
     lines.append("")

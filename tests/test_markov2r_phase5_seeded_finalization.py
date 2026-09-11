@@ -168,8 +168,6 @@ class TestSeededBranchUsesIt(unittest.IsolatedAsyncioTestCase):
                 length_mode="medium",
                 max_tokens=24,
                 context_idf={},
-                recent_trigrams=set(),
-                recent_penalty_strength=0.0,
                 corpus_ngrams=frozenset(),
                 verbatim_penalty_strength=0.0,
                 active_collocations=frozenset(),

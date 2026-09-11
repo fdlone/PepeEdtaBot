@@ -74,7 +74,6 @@ def _fake_state(**kwargs: object) -> MagicMock:
     # Hourly-cap guard neutral by default: an empty history never trips the cap.
     s.reply_max_per_hour = 20
     s.recent_reply_times = {}
-    s.recent_reply_penalty_strength = 1.0
     s.verbatim_penalty_strength = 0.0
     s.length_mode_weights = (0.25, 0.55, 0.2)
     s.intonation_profile_strength = 0.0
@@ -182,7 +181,6 @@ def _fake_state(**kwargs: object) -> MagicMock:
     s.reply_director_enabled = False
     # Off by default so generated reply text is asserted verbatim; a bare
     # MagicMock attribute would be truthy and trigger reply capitalization.
-    s.auto_capitalize_replies = False
     # Mention anti-flood gate off by default so existing mention-driven tests
     # keep their guaranteed-reply behaviour; dedicated tests enable it.
     s.mention_cooldown_sec = 0
@@ -1901,7 +1899,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             "last_reply_ts": {},
             "reply_probability": 0.0,
             "use_reply_context": False,
-            "fuzzy_context_casefold": False,
             "reply_context_bias": 1.8,
             "reply_context_start_bias": 2.2,
             "context_start_affinity": 3.0,
@@ -1909,7 +1906,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             "max_reply_tokens": 45,
             "randomness_strength": 0.0,
             "repetition_penalty_strength": 1.0,
-            "recent_reply_penalty_strength": 1.0,
             "length_mode_weights": (0.25, 0.55, 0.2),
             "intonation_profile_strength": 0.0,
             "length_context_adaptation": 0.0,
@@ -2234,7 +2230,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             last_reply_ts={},
             reply_probability=0.0,
             use_reply_context=False,
-            fuzzy_context_casefold=False,
             reply_context_bias=1.8,
             reply_context_start_bias=2.2,
             context_start_affinity=3.0,
@@ -2242,7 +2237,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             max_reply_tokens=45,
             randomness_strength=0.0,
             repetition_penalty_strength=1.0,
-            recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
             intonation_profile_strength=0.0,
             length_context_adaptation=0.0,
@@ -2285,7 +2279,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             last_reply_ts={},
             reply_probability=0.0,
             use_reply_context=False,
-            fuzzy_context_casefold=False,
             reply_context_bias=1.8,
             reply_context_start_bias=2.2,
             context_start_affinity=3.0,
@@ -2293,7 +2286,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             max_reply_tokens=45,
             randomness_strength=0.0,
             repetition_penalty_strength=1.0,
-            recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
             intonation_profile_strength=0.0,
             length_context_adaptation=0.0,
@@ -2338,7 +2330,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             last_reply_ts={},
             reply_probability=0.0,
             use_reply_context=False,
-            fuzzy_context_casefold=False,
             reply_context_bias=1.8,
             reply_context_start_bias=2.2,
             context_start_affinity=3.0,
@@ -2346,7 +2337,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             max_reply_tokens=45,
             randomness_strength=0.0,
             repetition_penalty_strength=1.0,
-            recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
             intonation_profile_strength=0.0,
             length_context_adaptation=0.0,
@@ -2907,7 +2897,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             last_reply_ts={},
             reply_probability=0.0,
             use_reply_context=False,
-            fuzzy_context_casefold=False,
             reply_context_bias=1.8,
             reply_context_start_bias=2.2,
             context_start_affinity=3.0,
@@ -2915,7 +2904,6 @@ class TestLearningHandler(unittest.IsolatedAsyncioTestCase):
             max_reply_tokens=45,
             randomness_strength=0.5,
             repetition_penalty_strength=1.0,
-            recent_reply_penalty_strength=1.0,
             length_mode_weights=(0.25, 0.55, 0.2),
             intonation_profile_strength=0.0,
             length_context_adaptation=0.0,
@@ -2970,7 +2958,6 @@ class TestMentionCooldownGate(unittest.IsolatedAsyncioTestCase):
             "last_reply_ts": {},
             "reply_probability": 0.0,
             "use_reply_context": False,
-            "fuzzy_context_casefold": False,
             "reply_context_bias": 1.8,
             "reply_context_start_bias": 2.2,
             "context_start_affinity": 3.0,
@@ -2978,7 +2965,6 @@ class TestMentionCooldownGate(unittest.IsolatedAsyncioTestCase):
             "max_reply_tokens": 45,
             "randomness_strength": 0.0,
             "repetition_penalty_strength": 1.0,
-            "recent_reply_penalty_strength": 1.0,
             "length_mode_weights": (0.25, 0.55, 0.2),
             "intonation_profile_strength": 0.0,
             "length_context_adaptation": 0.0,
@@ -3093,7 +3079,6 @@ class TestUserQuirks(unittest.IsolatedAsyncioTestCase):
             "last_reply_ts": {},
             "reply_probability": 0.0,
             "use_reply_context": False,
-            "fuzzy_context_casefold": False,
             "reply_context_bias": 1.8,
             "reply_context_start_bias": 2.2,
             "context_start_affinity": 3.0,
@@ -3101,7 +3086,6 @@ class TestUserQuirks(unittest.IsolatedAsyncioTestCase):
             "max_reply_tokens": 45,
             "randomness_strength": 0.0,
             "repetition_penalty_strength": 1.0,
-            "recent_reply_penalty_strength": 1.0,
             "length_mode_weights": (0.25, 0.55, 0.2),
             "intonation_profile_strength": 0.0,
             "length_context_adaptation": 0.0,

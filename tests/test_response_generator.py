@@ -42,11 +42,8 @@ def _runtime_state() -> MagicMock:
     state.markov_order = 3
     state.enable_backoff = True
     state.normalize_lower = False
-    state.fuzzy_context_casefold = False
-    state.auto_capitalize_replies = False
     state.recent_short_replies = {}
     state.recent_replies = {}
-    state.recent_reply_penalty_strength = 1.0
     state.verbatim_penalty_strength = 0.0
     state.length_mode_weights = (0.25, 0.55, 0.2)
     state.length_context_adaptation = 0.0
@@ -396,8 +393,6 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             [],
             "medium",
             context_idf={},
-            recent_trigrams=set(),
-            recent_penalty_strength=0.0,
             corpus_ngrams=corpus,
             verbatim_penalty_strength=1.5,
             chat_id=123,
@@ -409,8 +404,6 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
             [],
             "medium",
             context_idf={},
-            recent_trigrams=set(),
-            recent_penalty_strength=0.0,
             corpus_ngrams=corpus,
             verbatim_penalty_strength=1.5,
             chat_id=123,
@@ -738,71 +731,6 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "свежий ответ на этот раз")
         scorer.assert_called_once()
 
-    async def test_recent_trigram_overlap_penalizes_candidate(self) -> None:
-        state = _runtime_state()
-        state.recent_replies = {
-            123: deque(["один два три четыре пять"], maxlen=20)
-        }
-        generator = _traced_generator()
-        generator.generate_text = AsyncMock(
-            side_effect=[
-                "один два три четыре шесть",
-                "совсем другой свежий ответ",
-            ]
-        )
-        learning_service = _learning_service()
-        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        scorer = MagicMock(return_value=_score(1.0))
-        response_generator = ResponseGenerator(
-            generator=generator,
-            learning_service=learning_service,
-            runtime_state=state,
-            scorer=scorer,
-        )
-
-        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
-            result = await response_generator.generate(
-                _request(),
-                rng=random.Random(43),
-                candidate_target=2,
-            )
-
-        # Equal base scores: the trigram-overlap penalty must flip argmax
-        # away from the first-seen (overlapping) candidate.
-        self.assertEqual(result, "совсем другой свежий ответ")
-
-    async def test_zero_recent_penalty_strength_disables_soft_penalty(self) -> None:
-        state = _runtime_state()
-        state.recent_reply_penalty_strength = 0.0
-        state.recent_replies = {
-            123: deque(["один два три четыре пять"], maxlen=20)
-        }
-        generator = _traced_generator()
-        generator.generate_text = AsyncMock(
-            side_effect=[
-                "один два три четыре шесть",
-                "совсем другой свежий ответ",
-            ]
-        )
-        learning_service = _learning_service()
-        learning_service.is_verbatim_copy = AsyncMock(return_value=False)
-        response_generator = ResponseGenerator(
-            generator=generator,
-            learning_service=learning_service,
-            runtime_state=state,
-            scorer=MagicMock(return_value=_score(1.0)),
-        )
-
-        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
-            result = await response_generator.generate(
-                _request(),
-                rng=random.Random(47),
-                candidate_target=2,
-            )
-
-        # Penalty off: ties resolve to the first-seen candidate again.
-        self.assertEqual(result, "один два три четыре шесть")
-
     async def test_short_length_mode_caps_generator_max_tokens(self) -> None:
         from app.core.response_generator import SHORT_MODE_MAX_TOKENS
 
@@ -979,35 +907,6 @@ class TestResponseGenerator(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(result.startswith("стабильный ответ"))
                 endings.add(result.removeprefix("стабильный ответ"))
         self.assertGreater(len(endings), 1)
-
-    async def test_auto_capitalization_only_changes_final_selected_text(self) -> None:
-        candidate = "привет. hello!"
-        scorer = MagicMock(return_value=_score(1.0))
-
-        async def generate_with_flag(enabled: bool) -> str | None:
-            state = _runtime_state()
-            state.auto_capitalize_replies = enabled
-            generator = _traced_generator()
-            generator.generate_text = AsyncMock(return_value=candidate)
-            response_generator = ResponseGenerator(
-                generator=generator,
-                learning_service=_learning_service(),
-                runtime_state=state,
-                scorer=scorer,
-            )
-            return await response_generator.generate(
-                _request(),
-                rng=random.Random(29),
-                candidate_target=1,
-            )
-
-        with patch("app.core.response_generator.mask_chat_id", return_value="chat"):
-            self.assertEqual(await generate_with_flag(False), candidate)
-            self.assertEqual(await generate_with_flag(True), "Привет. Hello!")
-        self.assertEqual(
-            [call.args[0] for call in scorer.call_args_list],
-            [candidate, candidate],
-        )
 
 
 class TestEntropySamplingSettings(unittest.TestCase):

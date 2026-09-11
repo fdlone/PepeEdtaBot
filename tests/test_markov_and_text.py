@@ -30,59 +30,9 @@ from app.core.markov import (
     weighted_start3_choice,
 )
 from app.core.reply_policy import bot_is_mentioned
-from app.core.text import capitalize_reply_sentences, sanitize_text
+from app.core.text import sanitize_text
 from app.infrastructure.database import Database
 from app.services.reply_pipeline import extract_context_tokens
-
-
-class TestCapitalizeReplySentences(unittest.TestCase):
-    def test_empty_whitespace_and_punctuation_only_are_unchanged(self) -> None:
-        for text in ("", "   ", "...?!", " \t!? "):
-            with self.subTest(text=text):
-                self.assertEqual(capitalize_reply_sentences(text), text)
-
-    def test_capitalizes_cyrillic_latin_and_mixed_sentences(self) -> None:
-        cases = {
-            "привет": "Привет",
-            "hello": "Hello",
-            "привет. hello! пока? bye": "Привет. Hello! Пока? Bye",
-        }
-        for text, expected in cases.items():
-            with self.subTest(text=text):
-                self.assertEqual(capitalize_reply_sentences(text), expected)
-
-    def test_skips_non_letters_before_sentence_start(self) -> None:
-        cases = {
-            '  "привет': '  "Привет',
-            "🙂[hello": "🙂[Hello",
-            "42... (ответ": "42... (Ответ",
-        }
-        for text, expected in cases.items():
-            with self.subTest(text=text):
-                self.assertEqual(capitalize_reply_sentences(text), expected)
-
-    def test_treats_sentence_ending_runs_as_one_boundary(self) -> None:
-        self.assertEqual(
-            capitalize_reply_sentences("что?! правда... да!? конечно"),
-            "Что?! Правда... Да!? Конечно",
-        )
-
-    def test_preserves_existing_uppercase_and_mid_token_letters(self) -> None:
-        cases = {
-            "Already Uppercase. OK": "Already Uppercase. OK",
-            "3d printer. abc_def works": "3d printer. abc_def works",
-            "_name stays. 7zip archive": "_name stays. 7zip archive",
-        }
-        for text, expected in cases.items():
-            with self.subTest(text=text):
-                self.assertEqual(capitalize_reply_sentences(text), expected)
-
-    def test_is_idempotent_and_preserves_length(self) -> None:
-        for text in ("ßeta. привет", "🙂 «hello?!» пока", "3d abc_def"):
-            with self.subTest(text=text):
-                result = capitalize_reply_sentences(text)
-                self.assertEqual(capitalize_reply_sentences(result), result)
-                self.assertEqual(len(result), len(text))
 
 
 class TestContextStartProbability(unittest.TestCase):
@@ -626,37 +576,6 @@ class TestMarkovAndText(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.start_source, "context")
         self.assertEqual(trace.markov_order_used, 3)
         self.assertEqual(trace.context_exact_matches, 1)
-        self.assertEqual(trace.context_casefold_matches, 0)
-
-    async def test_context_trigram_uses_casefold_fallback_when_enabled(self) -> None:
-        await self.db.save_message_and_update_model(
-            chat_id=5554,
-            raw_text="global lead Alpha Beta Gamma continues safely",
-            tokens=[
-                "global",
-                "lead",
-                "Alpha",
-                "Beta",
-                "Gamma",
-                "continues",
-                "safely",
-            ],
-        )
-
-        text, trace = await self.generator.generate_text_with_trace(
-            chat_id=5554,
-            max_chars=100,
-            context_tokens=["alpha", "beta", "gamma"],
-            context_start_bias=4.0,
-            randomness_strength=0.0,
-            fuzzy_context_casefold=True,
-            rng=random.Random(11),
-        )
-
-        self.assertTrue(text.startswith("Beta Gamma continues safely"))
-        self.assertEqual(trace.start_source, "context")
-        self.assertEqual(trace.context_exact_matches, 0)
-        self.assertEqual(trace.context_casefold_matches, 1)
 
     async def test_context_start_bias_gates_contextual_start_path(self) -> None:
         chat_id = 5556
